@@ -1,0 +1,510 @@
+"""Replaying a recipe against a backend.
+
+Everything the tool layer does to the model funnels through :func:`apply_operation`,
+whether it arrived as one operation from a granular tool or as the tenth step of
+a whole-part recipe.  One code path means the incremental and declarative ways
+of working cannot drift apart.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Sequence
+
+from .backend.base import (
+    AxisSpec,
+    Backend,
+    ChamferRequest,
+    CircularPatternRequest,
+    Driven,
+    ExtrudeRequest,
+    FeatureInfo,
+    FilletRequest,
+    HoleRequest,
+    LoftRequest,
+    MirrorRequest,
+    RectangularPatternRequest,
+    ResolvedSelector,
+    RevolveRequest,
+    ShellRequest,
+    SweepRequest,
+    ThreadRequest,
+    WorkPlaneRequest,
+)
+from .errors import FeatureError, ParameterError, RecipeError, SelectionError
+from .expressions import RESERVED_NAMES
+from .geometry import plan_sketch
+from .plan import PLine
+from .resolve import Resolved, Resolver
+from .schema import (
+    ChamferOp,
+    CircularPatternOp,
+    ExtrudeOp,
+    FilletOp,
+    HoleOp,
+    LoftOp,
+    MaterialOp,
+    MirrorOp,
+    Operation,
+    ParameterSpec,
+    PartRecipe,
+    RectangularPatternOp,
+    RevolveOp,
+    Selector,
+    ShellOp,
+    SketchOp,
+    SweepOp,
+    ThreadOp,
+    WorkPlaneOp,
+)
+from .session import DocumentContext, Session
+from .units import Quantity
+
+
+def _driven(resolved: Resolved | None) -> Driven | None:
+    return None if resolved is None else Driven(resolved.expression, resolved.value)
+
+
+# ---------------------------------------------------------------------------
+# Selectors and axes
+# ---------------------------------------------------------------------------
+
+
+def resolve_selector(selector: Selector, resolver: Resolver, *, kind: str | None = None) -> ResolvedSelector:
+    """Convert a recipe selector into backend units (cm)."""
+    return ResolvedSelector(
+        kind=kind or selector.kind,  # type: ignore[arg-type]
+        feature=selector.feature,
+        filter=selector.filter,
+        near=resolver.point3d(selector.near) if selector.near else None,
+        within=resolver.scalar_length(selector.within) if selector.within is not None else None,
+        min_length=resolver.scalar_length(selector.min_length) if selector.min_length is not None else None,
+        max_length=resolver.scalar_length(selector.max_length) if selector.max_length is not None else None,
+        ids=list(selector.ids) if selector.ids else None,
+        limit=selector.limit,
+    )
+
+
+def resolve_axis(context: DocumentContext, reference: str, sketch_hint: str | None = None) -> AxisSpec:
+    """Work out whether an axis reference means an origin axis, a sketch line or an edge."""
+    token = reference.strip()
+    if token.lower() in ("x", "y", "z"):
+        return AxisSpec(kind="work_axis", value=token.lower())
+    if token.startswith("edge:"):
+        return AxisSpec(kind="edge", value=token.split(":", 1)[1])
+
+    candidates = [sketch_hint] if sketch_hint else []
+    candidates += [name for name in reversed(list(context.plans)) if name != sketch_hint]
+    for sketch_name in candidates:
+        if sketch_name is None:
+            continue
+        plan = context.plans.get(sketch_name)
+        if plan is None:
+            continue
+        for primitive in plan.resolve_label(token):
+            if isinstance(primitive, PLine):
+                return AxisSpec(kind="sketch_line", value=token, sketch=sketch_name)
+
+    named = sorted({label for plan in context.plans.values() for label in plan.labels})
+    raise FeatureError(
+        f"Cannot resolve {reference!r} as an axis.",
+        hint="Use 'x', 'y', 'z', the name of a sketch line, or 'edge:<handle>'. "
+        f"Named sketch entities available: {', '.join(named) or '(none)'}.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Parameters
+# ---------------------------------------------------------------------------
+
+
+def resolve_parameter(resolver: Resolver, spec: ParameterSpec, unit: str) -> Resolved:
+    """Evaluate a parameter's value in the unit the caller asked for."""
+    if spec.unit is None and isinstance(spec.value, str):
+        # No unit given: let the expression's own units decide (an angle stays an angle).
+        return resolver.auto(spec.value, spec.name)
+    return resolver.in_unit(spec.value, unit, spec.name)
+
+
+def apply_parameter(session: Session, context: DocumentContext, spec: ParameterSpec) -> dict[str, Any]:
+    if spec.name in RESERVED_NAMES:
+        raise ParameterError(
+            f"{spec.name!r} is reserved (it is a function or constant in expressions).",
+            hint="Pick another name, e.g. by adding a prefix.",
+        )
+    unit = spec.unit or context.units
+    resolved = resolve_parameter(context.resolver, spec, unit)
+    info = session.backend.set_parameter(
+        context.doc_id,
+        spec.name,
+        resolved.expression,
+        units=unit,
+        comment=spec.comment,
+        key=spec.key,
+    )
+    context.resolver.declare(spec.name, Quantity(resolved.value, resolved.dim))
+    return info.as_dict()
+
+
+# ---------------------------------------------------------------------------
+# Operations
+# ---------------------------------------------------------------------------
+
+
+def apply_operation(session: Session, context: DocumentContext, op: Operation) -> dict[str, Any]:
+    """Execute one recipe operation and update the session's memory of the part."""
+    backend: Backend = session.backend
+    resolver = context.resolver
+
+    if isinstance(op, SketchOp):
+        plan = plan_sketch(op, resolver)
+        info = backend.build_sketch(context.doc_id, plan)
+        context.remember_sketch(info.name, plan)
+        return {"op": "sketch", **info.as_dict()}
+
+    if isinstance(op, ExtrudeOp):
+        sketch_name, _ = context.sketch_plan(op.sketch)
+        request = ExtrudeRequest(
+            sketch=sketch_name,
+            distance=_driven(resolver.length(op.distance, "extrude distance", positive=True))
+            if op.distance is not None
+            else None,
+            profiles=op.profiles,
+            extent="through_all" if op.extent in ("through_all", "all") else op.extent,
+            direction=op.direction,
+            operation=op.operation,
+            taper=_driven(resolver.angle(op.taper, "extrude taper")) if op.taper else None,
+            name=op.name,
+        )
+        return _record(context, backend.extrude(context.doc_id, request), "extrude")
+
+    if isinstance(op, RevolveOp):
+        sketch_name, _ = context.sketch_plan(op.sketch)
+        request = RevolveRequest(
+            sketch=sketch_name,
+            axis=resolve_axis(context, op.axis, sketch_name),
+            angle=_driven(resolver.angle(op.angle, "revolve angle")) if op.angle is not None else None,
+            profiles=op.profiles,
+            direction=op.direction,
+            operation=op.operation,
+            name=op.name,
+        )
+        return _record(context, backend.revolve(context.doc_id, request), "revolve")
+
+    if isinstance(op, SweepOp):
+        profile_name, _ = context.sketch_plan(op.profile_sketch)
+        path_name, _ = context.sketch_plan(op.path_sketch)
+        request = SweepRequest(profile_name, path_name, op.operation, op.name)
+        return _record(context, backend.sweep(context.doc_id, request), "sweep")
+
+    if isinstance(op, LoftOp):
+        names = [context.sketch_plan(name)[0] for name in op.sketches]
+        request = LoftRequest(names, [context.sketch_plan(r)[0] for r in op.rails], op.operation, op.name)
+        return _record(context, backend.loft(context.doc_id, request), "loft")
+
+    if isinstance(op, HoleOp):
+        sketch_name, plan = context.sketch_plan(op.sketch)
+        request = HoleRequest(
+            sketch=sketch_name,
+            diameter=_driven(resolver.length(op.diameter, "hole diameter", positive=True)),  # type: ignore[arg-type]
+            point_indices=_hole_indices(plan, op.points, sketch_name),
+            depth=_driven(resolver.length(op.depth, "hole depth", positive=True)) if op.depth else None,
+            through_all=op.through_all and op.depth is None,
+            direction=op.direction,
+            style=op.style,
+            cbore_diameter=_driven(resolver.length(op.cbore_diameter, "counterbore diameter"))
+            if op.cbore_diameter is not None
+            else None,
+            cbore_depth=_driven(resolver.length(op.cbore_depth, "counterbore depth"))
+            if op.cbore_depth is not None
+            else None,
+            csink_diameter=_driven(resolver.length(op.csink_diameter, "countersink diameter"))
+            if op.csink_diameter is not None
+            else None,
+            csink_angle=_driven(resolver.angle(op.csink_angle, "countersink angle")),
+            bottom_angle=_driven(resolver.angle(op.bottom_angle, "drill point angle")),
+            tap=op.tap,
+            name=op.name,
+        )
+        return _record(context, backend.hole(context.doc_id, request), "hole")
+
+    if isinstance(op, FilletOp):
+        request = FilletRequest(
+            edges=resolve_selector(op.edges, resolver, kind="edge"),
+            radius=_driven(resolver.length(op.radius, "fillet radius", positive=True)),  # type: ignore[arg-type]
+            name=op.name,
+        )
+        return _record(context, backend.fillet(context.doc_id, request), "fillet")
+
+    if isinstance(op, ChamferOp):
+        request = ChamferRequest(
+            edges=resolve_selector(op.edges, resolver, kind="edge"),
+            distance=_driven(resolver.length(op.distance, "chamfer distance", positive=True)),  # type: ignore[arg-type]
+            distance2=_driven(resolver.length(op.distance2, "chamfer second distance"))
+            if op.distance2 is not None
+            else None,
+            angle=_driven(resolver.angle(op.angle, "chamfer angle")) if op.angle is not None else None,
+            name=op.name,
+        )
+        return _record(context, backend.chamfer(context.doc_id, request), "chamfer")
+
+    if isinstance(op, ShellOp):
+        request = ShellRequest(
+            faces=resolve_selector(op.faces, resolver, kind="face"),
+            thickness=_driven(resolver.length(op.thickness, "shell thickness", positive=True)),  # type: ignore[arg-type]
+            direction=op.direction,
+            name=op.name,
+        )
+        return _record(context, backend.shell(context.doc_id, request), "shell")
+
+    if isinstance(op, RectangularPatternOp):
+        request = RectangularPatternRequest(
+            features=_pattern_features(context, op.features),
+            axis1=resolve_axis(context, op.axis1),
+            count1=op.count1,
+            spacing1=_driven(resolver.length(op.spacing1, "pattern spacing", positive=True)),  # type: ignore[arg-type]
+            axis2=resolve_axis(context, op.axis2) if op.axis2 else None,
+            count2=op.count2,
+            spacing2=_driven(resolver.length(op.spacing2, "pattern spacing"))
+            if op.spacing2 is not None
+            else None,
+            flip1=op.flip1,
+            flip2=op.flip2,
+            name=op.name,
+        )
+        return _record(context, backend.rectangular_pattern(context.doc_id, request), "rectangular_pattern")
+
+    if isinstance(op, CircularPatternOp):
+        request = CircularPatternRequest(
+            features=_pattern_features(context, op.features),
+            axis=resolve_axis(context, op.axis),
+            count=op.count,
+            angle=_driven(resolver.angle(op.angle, "pattern angle")),  # type: ignore[arg-type]
+            fitted=op.fitted,
+            name=op.name,
+        )
+        return _record(context, backend.circular_pattern(context.doc_id, request), "circular_pattern")
+
+    if isinstance(op, MirrorOp):
+        request = MirrorRequest(
+            features=_pattern_features(context, op.features), plane=op.plane, name=op.name
+        )
+        return _record(context, backend.mirror(context.doc_id, request), "mirror")
+
+    if isinstance(op, WorkPlaneOp):
+        request = WorkPlaneRequest(
+            kind=op.kind,
+            base=op.base,
+            second=op.second,
+            offset=_driven(resolver.length(op.offset, "work plane offset")),
+            angle=_driven(resolver.angle(op.angle, "work plane angle")),
+            name=op.name,
+        )
+        return _record(context, backend.work_plane(context.doc_id, request), "work_plane")
+
+    if isinstance(op, ThreadOp):
+        request = ThreadRequest(
+            faces=resolve_selector(op.faces, resolver, kind="face"),
+            designation=op.designation,
+            internal=op.internal,
+            depth=_driven(resolver.length(op.depth, "thread depth")) if op.depth else None,
+            name=op.name,
+        )
+        return _record(context, backend.thread(context.doc_id, request), "thread")
+
+    if isinstance(op, MaterialOp):
+        info = backend.set_material(context.doc_id, op.material, op.appearance)
+        return {"op": "material", "material": op.material, **info.as_dict()}
+
+    raise RecipeError(f"Unsupported operation {type(op).__name__}.")  # pragma: no cover
+
+
+def _record(context: DocumentContext, info: FeatureInfo, op_name: str) -> dict[str, Any]:
+    context.remember_feature(info.name)
+    return {"op": op_name, **info.as_dict()}
+
+
+def _pattern_features(context: DocumentContext, names: Sequence[str]) -> list[str]:
+    if names:
+        return list(names)
+    if context.last_feature is None:
+        raise FeatureError(
+            "There is no feature to pattern yet.",
+            hint="Create the feature first, or name it explicitly in `features`.",
+        )
+    return [context.last_feature]
+
+
+def _hole_indices(plan: Any, names: Sequence[str], sketch_name: str) -> list[int]:
+    if not names:
+        return []
+    order = {primitive_id: index for index, primitive_id in enumerate(plan.hole_centers)}
+    indices: list[int] = []
+    for name in names:
+        ids = plan.labels.get(name)
+        if not ids:
+            known = ", ".join(sorted(plan.labels)) or "(none)"
+            raise FeatureError(
+                f"Sketch {sketch_name!r} has no entity named {name!r}.",
+                hint=f"Named entities in that sketch: {known}.",
+            )
+        matched = [order[pid] for pid in ids if pid in order]
+        if not matched:
+            raise FeatureError(
+                f"{name!r} in sketch {sketch_name!r} is not a hole-centre point.",
+                hint="Use a `point`, `point_grid` or `bolt_circle` entity for hole centres.",
+            )
+        indices.extend(matched)
+    return sorted(set(indices))
+
+
+# ---------------------------------------------------------------------------
+# Whole-recipe execution
+# ---------------------------------------------------------------------------
+
+
+def build_part(
+    session: Session,
+    recipe: PartRecipe,
+    *,
+    document: str | None = None,
+    stop_on_error: bool = True,
+) -> dict[str, Any]:
+    """Create (or extend) a part from a complete recipe."""
+    backend = session.backend
+
+    if document is None:
+        info = backend.new_part(recipe.name, units=recipe.units, angle_units=recipe.angle_units)
+        context = session.register(info, recipe.units, recipe.angle_units)
+    else:
+        context = session.context(document)
+        context.units = recipe.units
+        context.angle_units = recipe.angle_units
+        context.resolver.length_unit = recipe.units
+        context.resolver.angle_unit = recipe.angle_units
+
+    context.recipe = recipe.model_dump(mode="json", exclude_defaults=True)
+
+    results: dict[str, Any] = {
+        "document": context.doc_id,
+        "name": recipe.name,
+        "units": recipe.units,
+        "parameters": [],
+        "operations": [],
+        "errors": [],
+    }
+
+    for spec in recipe.parameters:
+        try:
+            results["parameters"].append(apply_parameter(session, context, spec))
+        except Exception as exc:
+            entry = {"parameter": spec.name, "error": str(exc)}
+            results["errors"].append(entry)
+            if stop_on_error:
+                results["stopped_at"] = f"parameter {spec.name}"
+                results["ok"] = False
+                return results
+
+    if recipe.material:
+        try:
+            backend.set_material(context.doc_id, recipe.material)
+        except Exception as exc:
+            results["errors"].append({"material": recipe.material, "error": str(exc)})
+
+    for index, op in enumerate(recipe.operations):
+        try:
+            results["operations"].append({"index": index, **apply_operation(session, context, op)})
+        except Exception as exc:
+            results["errors"].append(
+                {"index": index, "op": getattr(op, "op", "?"), "error": str(exc),
+                 "details": getattr(exc, "hint", None)}
+            )
+            if stop_on_error:
+                results["stopped_at"] = f"operation {index} ({getattr(op, 'op', '?')})"
+                results["ok"] = False
+                return results
+
+    try:
+        properties = backend.mass_properties(context.doc_id)
+        results["mass_properties"] = properties.as_dict()
+    except Exception:  # pragma: no cover - a part with no solid yet
+        pass
+    results["ok"] = not results["errors"]
+    return results
+
+
+def check_recipe(recipe: PartRecipe) -> dict[str, Any]:
+    """Static checks that need no backend: expressions, references, closure."""
+    resolver = Resolver(recipe.units, recipe.angle_units)
+    findings: list[dict[str, Any]] = []
+    plans: dict[str, Any] = {}
+    features: list[str] = []
+    last_sketch: str | None = None
+
+    for spec in recipe.parameters:
+        try:
+            if spec.name in RESERVED_NAMES:
+                raise ParameterError(f"{spec.name!r} is a reserved name.")
+            resolved = resolve_parameter(resolver, spec, spec.unit or recipe.units)
+            resolver.declare(spec.name, Quantity(resolved.value, resolved.dim))
+        except Exception as exc:
+            findings.append({"where": f"parameter {spec.name}", "error": str(exc)})
+
+    for index, op in enumerate(recipe.operations):
+        where = f"operation {index} ({op.op})"
+        try:
+            if isinstance(op, SketchOp):
+                plan = plan_sketch(op, resolver)
+                name = op.name or f"Sketch{len(plans) + 1}"
+                plans[name] = plan
+                last_sketch = name
+            elif isinstance(op, (ExtrudeOp, RevolveOp, HoleOp)):
+                target = op.sketch or last_sketch
+                if target is None or target not in plans:
+                    raise RecipeError(
+                        f"{op.op} refers to sketch {target!r}, which no earlier operation creates."
+                    )
+                if isinstance(op, ExtrudeOp) and op.distance is not None:
+                    resolver.length(op.distance, "extrude distance", positive=True)
+                if isinstance(op, HoleOp):
+                    resolver.length(op.diameter, "hole diameter", positive=True)
+                    if not plans[target].hole_centers:
+                        raise RecipeError(f"Sketch {target!r} has no hole-centre points.")
+            elif isinstance(op, FilletOp):
+                resolver.length(op.radius, "fillet radius", positive=True)
+            elif isinstance(op, ChamferOp):
+                resolver.length(op.distance, "chamfer distance", positive=True)
+            elif isinstance(op, ShellOp):
+                resolver.length(op.thickness, "shell thickness", positive=True)
+            if op.name:
+                if op.name in features:
+                    raise RecipeError(f"Two operations are both named {op.name!r}.")
+                features.append(op.name)
+        except Exception as exc:
+            findings.append({"where": where, "error": str(exc), "hint": getattr(exc, "hint", None)})
+
+    profiles = {
+        name: len([loop for loop in _loops(plan)]) for name, plan in plans.items()
+    }
+    for name, plan_count in profiles.items():
+        if plan_count == 0 and any(
+            isinstance(op, (ExtrudeOp, RevolveOp)) and (op.sketch or "") == name
+            for op in recipe.operations
+        ):
+            findings.append({
+                "where": f"sketch {name}",
+                "error": "No closed profile: an extrude or revolve of this sketch will fail.",
+                "hint": "Check that the geometry forms a closed loop and is not construction only.",
+            })
+
+    return {
+        "ok": not findings,
+        "findings": findings,
+        "sketches": {name: plan.summary() | {"profiles": profiles[name]} for name, plan in plans.items()},
+        "parameters": {name: q.value for name, q in resolver.known().items()},
+    }
+
+
+def _loops(plan: Any) -> list[list[str]]:
+    from .geometry import profile_loops
+
+    return profile_loops(plan)

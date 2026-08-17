@@ -1,0 +1,49 @@
+{
+  "name": "HexStandoff",
+  "description": "Hexagonal standoff with a tapped through hole, sized across the flats",
+  "units": "mm",
+  "material": "Brass",
+  "parameters": [
+    {"name": "across_flats", "value": 8, "comment": "spanner size"},
+    {"name": "length", "value": 25},
+    {"name": "thread_d", "value": 4.2, "comment": "M5 tapping drill"},
+    {"name": "chamfer", "value": 0.5}
+  ],
+  "operations": [
+    {
+      "op": "sketch",
+      "name": "Hex",
+      "plane": "xy",
+      "entities": [
+        {
+          "type": "polygon",
+          "center": [0, 0],
+          "sides": 6,
+          "size": "across_flats",
+          "fit": "circumscribed"
+        }
+      ]
+    },
+    {"op": "extrude", "name": "Body", "sketch": "Hex", "distance": "length"},
+    {
+      "op": "sketch",
+      "name": "Axis",
+      "plane": "xy",
+      "entities": [{"type": "point", "position": [0, 0]}]
+    },
+    {
+      "op": "hole",
+      "name": "TappedHole",
+      "sketch": "Axis",
+      "diameter": "thread_d",
+      "through_all": true,
+      "tap": "M5x0.8"
+    },
+    {
+      "op": "chamfer",
+      "name": "EndChamfers",
+      "edges": {"filter": "circular"},
+      "distance": "chamfer"
+    }
+  ]
+}

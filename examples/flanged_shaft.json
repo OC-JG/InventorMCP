@@ -1,0 +1,148 @@
+{
+  "name": "FlangedShaft",
+  "description": "Turned shaft with an integral flange and a six-hole bolt circle",
+  "units": "mm",
+  "material": "Steel",
+  "parameters": [
+    {
+      "name": "shaft_d",
+      "value": 25,
+      "comment": "shaft outside diameter"
+    },
+    {
+      "name": "shaft_len",
+      "value": 90,
+      "comment": "shaft length beyond the flange"
+    },
+    {
+      "name": "flange_d",
+      "value": 80,
+      "comment": "flange outside diameter"
+    },
+    {
+      "name": "flange_t",
+      "value": 12,
+      "comment": "flange thickness"
+    },
+    {
+      "name": "bore_d",
+      "value": 10,
+      "comment": "through bore"
+    },
+    {
+      "name": "bolt_d",
+      "value": 7,
+      "comment": "M6 clearance"
+    },
+    {
+      "name": "pcd",
+      "value": "flange_d - 16",
+      "comment": "bolt pitch circle diameter"
+    }
+  ],
+  "operations": [
+    {
+      "op": "sketch",
+      "name": "Flange",
+      "plane": "xy",
+      "entities": [
+        {
+          "type": "circle",
+          "center": [
+            0,
+            0
+          ],
+          "diameter": "flange_d"
+        }
+      ]
+    },
+    {
+      "op": "extrude",
+      "name": "FlangeDisc",
+      "sketch": "Flange",
+      "distance": "flange_t"
+    },
+    {
+      "op": "work_plane",
+      "name": "FlangeTop",
+      "kind": "offset",
+      "base": "xy",
+      "offset": "flange_t"
+    },
+    {
+      "op": "sketch",
+      "name": "Shaft",
+      "plane": "FlangeTop",
+      "entities": [
+        {
+          "type": "circle",
+          "center": [
+            0,
+            0
+          ],
+          "diameter": "shaft_d"
+        }
+      ]
+    },
+    {
+      "op": "extrude",
+      "name": "ShaftBody",
+      "sketch": "Shaft",
+      "distance": "shaft_len"
+    },
+    {
+      "op": "sketch",
+      "name": "BoreCentre",
+      "plane": "xy",
+      "entities": [
+        {
+          "type": "point",
+          "position": [
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "op": "hole",
+      "name": "Bore",
+      "sketch": "BoreCentre",
+      "diameter": "bore_d",
+      "through_all": true
+    },
+    {
+      "op": "sketch",
+      "name": "BoltCircle",
+      "plane": "xy",
+      "entities": [
+        {
+          "type": "bolt_circle",
+          "center": [
+            0,
+            0
+          ],
+          "diameter": "pcd",
+          "count": 6
+        }
+      ]
+    },
+    {
+      "op": "hole",
+      "name": "BoltHoles",
+      "sketch": "BoltCircle",
+      "diameter": "bolt_d",
+      "depth": "flange_t"
+    },
+    {
+      "op": "chamfer",
+      "name": "ShaftEnd",
+      "edges": {
+        "filter": "circular",
+        "feature": "ShaftBody",
+        "limit": 2
+      },
+      "distance": 1.5
+    }
+  ]
+}

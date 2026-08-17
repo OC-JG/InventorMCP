@@ -1,0 +1,213 @@
+"""Selectors, edge/face treatments and the incremental editing path."""
+
+from __future__ import annotations
+
+import math
+
+import pytest
+
+from inventor_mcp.backend.base import ResolvedSelector
+from inventor_mcp.builder import apply_operation, build_part, resolve_selector
+from inventor_mcp.errors import SelectionError
+from inventor_mcp.schema import PartRecipe, Selector
+from pydantic import TypeAdapter
+
+from inventor_mcp.schema import Operation
+
+_OPS = TypeAdapter(list[Operation])
+
+BLOCK = {
+    "name": "Block",
+    "units": "mm",
+    "parameters": [{"name": "size", "value": 40}, {"name": "height", "value": 20}],
+    "operations": [
+        {"op": "sketch", "name": "Base", "plane": "xy", "entities": [
+            {"type": "rectangle", "center": [0, 0], "width": "size", "height": "size"}]},
+        {"op": "extrude", "name": "Body", "sketch": "Base", "distance": "height"},
+    ],
+}
+
+
+@pytest.fixture
+def block(session):
+    build_part(session, PartRecipe.model_validate(BLOCK))
+    return session.context()
+
+
+def apply(session, context, operations):
+    return [apply_operation(session, context, op) for op in _OPS.validate_python(operations)]
+
+
+def select(session, context, **selector):
+    resolved = resolve_selector(Selector.model_validate(selector), context.resolver)
+    return session.backend.select(context.doc_id, resolved)
+
+
+class TestSelectors:
+    def test_a_box_has_four_vertical_edges(self, session, block):
+        assert len(select(session, block, kind="edge", filter="vertical")) == 4
+
+    def test_and_eight_horizontal_ones(self, session, block):
+        assert len(select(session, block, kind="edge", filter="horizontal")) == 8
+
+    def test_top_and_bottom_faces(self, session, block):
+        assert len(select(session, block, kind="face", filter="top")) == 1
+        assert len(select(session, block, kind="face", filter="bottom")) == 1
+
+    def test_the_top_face_is_where_it_should_be(self, session, block):
+        top = select(session, block, kind="face", filter="top")[0]
+        assert top.midpoint[2] == pytest.approx(2.0)  # 20 mm in cm
+
+    def test_limit_trims_the_result(self, session, block):
+        assert len(select(session, block, kind="edge", filter="vertical", limit=2)) == 2
+
+    def test_near_sorts_by_distance(self, session, block):
+        matches = select(session, block, kind="edge", filter="vertical", near=[20, 20, 10])
+        assert matches[0].midpoint[0] == pytest.approx(2.0)
+        assert matches[0].midpoint[1] == pytest.approx(2.0)
+
+    def test_within_filters_out_the_far_ones(self, session, block):
+        matches = select(session, block, kind="edge", filter="vertical",
+                         near=[20, 20, 10], within=5)
+        assert len(matches) == 1
+
+    def test_feature_scoping(self, session, block):
+        assert select(session, block, kind="face", feature="Body")
+        assert select(session, block, kind="face", feature="Nothing") == []
+
+    def test_explicit_ids_round_trip(self, session, block):
+        first = select(session, block, kind="edge", filter="vertical")[0]
+        again = select(session, block, kind="edge", ids=[first.id])
+        assert [m.id for m in again] == [first.id]
+
+    def test_a_stale_handle_is_reported_clearly(self, session, block):
+        with pytest.raises(SelectionError, match="already-consumed"):
+            select(session, block, kind="edge", ids=["edge999"])
+
+    def test_length_filters(self, session, block):
+        long_edges = select(session, block, kind="edge", min_length=30)
+        assert all(edge.length >= 3.0 for edge in long_edges)
+
+    def test_selector_units_are_converted(self, session, block):
+        resolved = resolve_selector(
+            Selector.model_validate({"near": [10, 0, 0], "within": 5}), block.resolver
+        )
+        assert resolved.near == pytest.approx((1.0, 0.0, 0.0))
+        assert resolved.within == pytest.approx(0.5)
+
+
+class TestEdgeTreatments:
+    def test_filleting_the_vertical_edges(self, session, block):
+        [result] = apply(session, block, [
+            {"op": "fillet", "edges": {"filter": "vertical"}, "radius": 5}])
+        assert result["detail"]["edges"] == 4
+
+    def test_filleted_edges_cannot_be_filleted_again(self, session, block):
+        apply(session, block, [{"op": "fillet", "edges": {"filter": "vertical"}, "radius": 5}])
+        assert select(session, block, kind="edge", filter="vertical") == []
+
+    def test_a_selector_that_matches_nothing_explains_itself(self, session, block):
+        with pytest.raises(SelectionError, match="matched no edges"):
+            apply(session, block, [
+                {"op": "fillet", "edges": {"feature": "Ghost"}, "radius": 5}])
+
+    def test_chamfer_on_the_top_edges(self, session, block):
+        [result] = apply(session, block, [
+            {"op": "chamfer", "edges": {"filter": "horizontal", "near": [0, 0, 20], "within": 30},
+             "distance": 1}])
+        assert result["detail"]["edges"] >= 4
+
+    def test_shell_removes_a_face(self, session, block):
+        [result] = apply(session, block, [
+            {"op": "shell", "faces": {"kind": "face", "filter": "top"}, "thickness": 2}])
+        assert result["detail"]["removed_faces"] == 1
+
+
+class TestPatternsAndFeatureEditing:
+    def test_a_pattern_defaults_to_the_previous_feature(self, session, block):
+        [result] = apply(session, block, [
+            {"op": "rectangular_pattern", "axis1": "x", "count1": 3, "spacing1": 50}])
+        assert result["detail"]["features"] == ["Body"]
+        assert result["detail"]["occurrences"] == 3
+
+    def test_a_circular_pattern_records_its_angle(self, session, block):
+        [result] = apply(session, block, [
+            {"op": "circular_pattern", "features": ["Body"], "axis": "z", "count": 6}])
+        assert result["detail"]["angle_deg"] == pytest.approx(360.0)
+
+    def test_patterning_a_feature_that_does_not_exist(self, session, block):
+        with pytest.raises(Exception, match="No feature named"):
+            apply(session, block, [{"op": "mirror", "features": ["Rib"], "plane": "yz"}])
+
+    def test_rename_then_reference(self, session, block):
+        session.backend.rename_feature(block.doc_id, "Body", "MainBody")
+        assert select(session, block, kind="face", feature="MainBody")
+
+    def test_suppress_and_delete(self, session, block):
+        assert session.backend.suppress_feature(block.doc_id, "Body", True).suppressed
+        session.backend.delete_feature(block.doc_id, "Body")
+        assert [f.name for f in session.backend.list_features(block.doc_id)] == []
+
+
+class TestHoles:
+    def test_a_bolt_circle_drills_every_point(self, session, block):
+        results = apply(session, block, [
+            {"op": "sketch", "name": "Bolts", "plane": "xy", "entities": [
+                {"type": "bolt_circle", "diameter": 30, "count": 6}]},
+            {"op": "hole", "sketch": "Bolts", "diameter": 5, "through_all": True},
+        ])
+        assert results[1]["detail"]["count"] == 6
+
+    def test_named_points_select_a_subset(self, session, block):
+        results = apply(session, block, [
+            {"op": "sketch", "name": "Pts", "plane": "xy", "entities": [
+                {"type": "point", "position": [10, 10], "name": "a"},
+                {"type": "point", "position": [-10, -10], "name": "b"},
+            ]},
+            {"op": "hole", "sketch": "Pts", "points": ["a"], "diameter": 5},
+        ])
+        assert results[1]["detail"]["count"] == 1
+
+    def test_a_point_name_that_is_not_a_hole_centre(self, session, block):
+        with pytest.raises(Exception, match="not a hole-centre point"):
+            apply(session, block, [
+                {"op": "sketch", "name": "Mixed", "plane": "xy", "entities": [
+                    {"type": "circle", "diameter": 10, "name": "bore"}]},
+                {"op": "hole", "sketch": "Mixed", "points": ["bore"], "diameter": 5},
+            ])
+
+    def test_a_blind_hole_is_not_through_all(self, session, block):
+        results = apply(session, block, [
+            {"op": "sketch", "name": "Blind", "plane": "xy", "entities": [
+                {"type": "point", "position": [0, 0]}]},
+            {"op": "hole", "sketch": "Blind", "diameter": 6, "depth": 10},
+        ])
+        assert results[1]["detail"]["through_all"] is False
+
+
+class TestCutsAndPlanes:
+    def test_a_cut_removes_material(self, session, block):
+        before = session.backend.mass_properties(block.doc_id).volume
+        apply(session, block, [
+            {"op": "sketch", "name": "Pocket", "plane": "xy", "entities": [
+                {"type": "circle", "center": [0, 0], "diameter": 20}]},
+            {"op": "extrude", "sketch": "Pocket", "distance": 5, "operation": "cut"},
+        ])
+        after = session.backend.mass_properties(block.doc_id).volume
+        assert after == pytest.approx(before - math.pi * 1.0**2 * 0.5)
+
+    def test_a_sketch_on_an_offset_work_plane(self, session, block):
+        results = apply(session, block, [
+            {"op": "work_plane", "name": "Upper", "kind": "offset", "base": "xy",
+             "offset": "height"},
+            {"op": "sketch", "name": "OnTop", "plane": "Upper", "entities": [
+                {"type": "circle", "diameter": 10}]},
+            {"op": "extrude", "sketch": "OnTop", "distance": 5},
+        ])
+        assert results[-1]["kind"] == "extrude"
+
+    def test_sketching_on_an_unknown_plane_is_reported(self, session, block):
+        with pytest.raises(Exception, match="Unknown sketch plane"):
+            apply(session, block, [
+                {"op": "sketch", "name": "Nowhere", "plane": "abc", "entities": [
+                    {"type": "circle", "diameter": 5}]}])

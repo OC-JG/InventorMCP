@@ -1,0 +1,42 @@
+{
+  "name": "MountingPlate",
+  "description": "Rectangular plate with rounded corners and four clearance holes",
+  "units": "mm",
+  "material": "Aluminum",
+  "parameters": [
+    {"name": "plate_w", "value": 120, "comment": "overall width"},
+    {"name": "plate_d", "value": 80, "comment": "overall depth"},
+    {"name": "thk", "value": 8, "comment": "plate thickness"},
+    {"name": "hole_d", "value": 6.6, "comment": "M6 clearance"},
+    {"name": "edge_margin", "value": 12, "comment": "hole centre to edge"},
+    {"name": "corner_r", "value": 10, "comment": "corner radius"}
+  ],
+  "operations": [
+    {
+      "op": "sketch",
+      "name": "Body",
+      "plane": "xy",
+      "entities": [
+        {"type": "rectangle", "center": [0, 0], "width": "plate_w", "height": "plate_d"}
+      ]
+    },
+    {"op": "extrude", "name": "Plate", "sketch": "Body", "distance": "thk"},
+    {"op": "fillet", "name": "Corners", "edges": {"filter": "vertical"}, "radius": "corner_r"},
+    {
+      "op": "sketch",
+      "name": "HoleCentres",
+      "plane": "xy",
+      "entities": [
+        {
+          "type": "point_grid",
+          "center": [0, 0],
+          "columns": 2,
+          "rows": 2,
+          "x_spacing": "plate_w - 2 * edge_margin",
+          "y_spacing": "plate_d - 2 * edge_margin"
+        }
+      ]
+    },
+    {"op": "hole", "name": "FixingHoles", "sketch": "HoleCentres", "diameter": "hole_d", "through_all": true}
+  ]
+}

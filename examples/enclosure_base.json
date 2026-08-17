@@ -1,0 +1,80 @@
+{
+  "name": "EnclosureBase",
+  "description": "Shelled enclosure base with a slotted cable entry and four lid bosses",
+  "units": "mm",
+  "material": "ABS Plastic",
+  "parameters": [
+    {"name": "box_w", "value": 100},
+    {"name": "box_d", "value": 70},
+    {"name": "box_h", "value": 35},
+    {"name": "wall", "value": 2.5, "comment": "wall thickness"},
+    {"name": "corner_r", "value": 6},
+    {"name": "boss_d", "value": 7},
+    {"name": "boss_hole_d", "value": 2.5, "comment": "M3 self-tapping pilot"},
+    {"name": "boss_inset", "value": "corner_r + boss_d / 2"},
+    {"name": "cable_w", "value": 12},
+    {"name": "cable_h", "value": 6}
+  ],
+  "operations": [
+    {
+      "op": "sketch",
+      "name": "Outline",
+      "plane": "xy",
+      "entities": [
+        {"type": "rectangle", "center": [0, 0], "width": "box_w", "height": "box_d"}
+      ]
+    },
+    {"op": "extrude", "name": "Block", "sketch": "Outline", "distance": "box_h"},
+    {"op": "fillet", "name": "Corners", "edges": {"filter": "vertical"}, "radius": "corner_r"},
+    {
+      "op": "shell",
+      "name": "Cavity",
+      "faces": {"kind": "face", "filter": "top"},
+      "thickness": "wall",
+      "direction": "inside"
+    },
+    {
+      "op": "sketch",
+      "name": "Bosses",
+      "plane": "xy",
+      "entities": [
+        {
+          "type": "point_grid",
+          "center": [0, 0],
+          "columns": 2,
+          "rows": 2,
+          "x_spacing": "box_w - 2 * boss_inset",
+          "y_spacing": "box_d - 2 * boss_inset"
+        }
+      ]
+    },
+    {
+      "op": "hole",
+      "name": "BossHoles",
+      "sketch": "Bosses",
+      "diameter": "boss_hole_d",
+      "depth": "box_h - wall - 2"
+    },
+    {
+      "op": "sketch",
+      "name": "CableEntry",
+      "plane": "xz",
+      "entities": [
+        {
+          "type": "rectangle",
+          "center": [0, "box_h - cable_h / 2 - wall"],
+          "width": "cable_w",
+          "height": "cable_h"
+        }
+      ]
+    },
+    {
+      "op": "extrude",
+      "name": "CableCut",
+      "sketch": "CableEntry",
+      "distance": "box_d",
+      "direction": "symmetric",
+      "operation": "cut"
+    }
+  ]
+}
