@@ -6,7 +6,6 @@ import math
 
 import pytest
 
-from inventor_mcp.backend.base import ResolvedSelector
 from inventor_mcp.builder import apply_operation, build_part, resolve_selector
 from inventor_mcp.errors import SelectionError
 from inventor_mcp.schema import PartRecipe, Selector

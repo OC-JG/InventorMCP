@@ -8,7 +8,6 @@ import pytest
 from pydantic import ValidationError
 
 from inventor_mcp.builder import build_part, check_recipe, resolve_axis
-from inventor_mcp.errors import FeatureError, ParameterError
 from inventor_mcp.schema import PartRecipe
 
 

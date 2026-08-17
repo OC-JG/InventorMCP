@@ -97,6 +97,12 @@ EXPORT_EXTENSIONS = {
 }
 
 
+#: ``HealthStatusEnum`` values meaning "up to date, nothing to report".  Any other
+#: value is surfaced verbatim rather than translated, because the numbering is
+#: version-specific and a wrong gloss is worse than none.
+_HEALTHY_STATUSES = {0, 15873}
+
+
 def _com_message(exc: Exception) -> str:
     """Pull the readable part out of a ``pythoncom.com_error``."""
     info = getattr(exc, "excepinfo", None)
@@ -350,20 +356,21 @@ class ComBackend(Backend):
                      appearance: str | None = None) -> DocInfo:  # pragma: no cover
         document = self._doc(doc_id)
         with self._translate_errors(f"Applying material {material!r}", DocumentError):
-            assets = document.ComponentDefinition.Document.AppearanceAssets
-            library_material = _find_material(self._require_app(), document, material)
-            if library_material is None:
+            asset = _find_asset(self._require_app(), document, material, "material")
+            if asset is None:
                 raise DocumentError(
-                    f"No material named {material!r} in the active material libraries.",
-                    hint="Use the exact name shown in Inventor's material browser.",
+                    f"No material named {material!r} in this document or the active libraries.",
+                    hint="Use the exact name shown in Inventor's material browser, "
+                    "e.g. 'Aluminum 6061' rather than 'aluminium'.",
                 )
-            document.ActiveMaterial = library_material
+            document.ActiveMaterial = asset
             if appearance:
-                for index in range(1, int(assets.Count) + 1):
-                    if str(assets.Item(index).DisplayName).lower() == appearance.lower():
-                        document.ActiveAppearance = assets.Item(index)
-                        break
-        return DocInfo(id=doc_id, name=str(document.DisplayName))
+                appearance_asset = _find_asset(
+                    self._require_app(), document, appearance, "appearance"
+                )
+                if appearance_asset is not None:
+                    document.ActiveAppearance = appearance_asset
+        return DocInfo(id=doc_id, name=str(document.DisplayName), kind="part")
 
     # -- parameters --------------------------------------------------------
     def set_parameter(self, doc_id: str, name: str, expression: str, *, units: str = "mm",
@@ -406,13 +413,11 @@ class ComBackend(Backend):
 
     def delete_parameter(self, doc_id: str, name: str) -> None:  # pragma: no cover
         document = self._doc(doc_id)
-        parameters = document.ComponentDefinition.Parameters.UserParameters
         parameter = _find_parameter(document.ComponentDefinition.Parameters, name)
         if parameter is None:
             raise ParameterError(f"No parameter named {name!r}.")
         with self._translate_errors(f"Deleting parameter {name!r}", ParameterError):
             parameter.Delete()
-        del parameters
 
     # -- sketches ----------------------------------------------------------
     def build_sketch(self, doc_id: str, plan: SketchPlan) -> SketchInfo:  # pragma: no cover
@@ -554,7 +559,7 @@ class ComBackend(Backend):
                        dimension: Any) -> None:  # pragma: no cover
         dimensions = sketch.DimensionConstraints
         targets = [self._entity(sketch, objects, ref) for ref in dimension.refs]
-        text = transient.CreatePoint2d(*_text_point(dimension, objects))
+        text = transient.CreatePoint2d(*_text_point(dimension))
 
         if dimension.kind in ("distance", "horizontal", "vertical"):
             orientation = {
@@ -1139,13 +1144,17 @@ class ComBackend(Backend):
             document.Rebuild()
         errors = []
         try:
-            manager = document.ComponentDefinition.Document.DocumentEvents  # noqa: F841
-            health = document.ComponentDefinition.Features
-            for index in range(1, int(health.Count) + 1):
-                feature = health.Item(index)
-                if int(getattr(feature, "HealthStatus", 0)) not in (0, 15873):
-                    errors.append({"feature": str(feature.Name),
-                                   "status": int(feature.HealthStatus)})
+            features = document.ComponentDefinition.Features
+            for index in range(1, int(features.Count) + 1):
+                feature = features.Item(index)
+                status = getattr(feature, "HealthStatus", None)
+                if status is None or int(status) in _HEALTHY_STATUSES:
+                    continue
+                errors.append({
+                    "feature": str(feature.Name),
+                    "health_status": int(status),
+                    "suppressed": bool(getattr(feature, "Suppressed", False)),
+                })
         except Exception:
             pass
         return {"rebuilt": True, "errors": errors}
@@ -1213,7 +1222,7 @@ def _polar(center: tuple[float, float], radius: float, angle: float) -> tuple[fl
     return (center[0] + radius * math.cos(angle), center[1] + radius * math.sin(angle))
 
 
-def _text_point(dimension: Any, objects: dict[str, Any]) -> tuple[float, float]:
+def _text_point(dimension: Any) -> tuple[float, float]:
     """Somewhere near the geometry, so dimension text does not stack on the origin."""
     return (dimension.text_offset[0], dimension.text_offset[1])
 
@@ -1240,6 +1249,37 @@ def _named_work_axis(component: Any, name: str) -> Any:  # pragma: no cover - Wi
         if str(axes.Item(index).Name) == name:
             return axes.Item(index)
     raise FeatureError(f"No work axis named {name!r}.")
+
+
+def _find_asset(app: Any, document: Any, name: str, kind: str) -> Any | None:  # pragma: no cover
+    """Find a material or appearance asset by display name.
+
+    Assets already present in the document are preferred; otherwise the active
+    asset libraries are searched and the match is copied into the document,
+    which is what Inventor requires before it can be made active.
+    """
+    wanted = name.strip().lower()
+    local = document.MaterialAssets if kind == "material" else document.AppearanceAssets
+    for index in range(1, int(local.Count) + 1):
+        asset = local.Item(index)
+        if str(asset.DisplayName).strip().lower() == wanted:
+            return asset
+
+    try:
+        libraries = app.AssetLibraries
+    except Exception:
+        return None
+    for index in range(1, int(libraries.Count) + 1):
+        library = libraries.Item(index)
+        try:
+            assets = library.MaterialAssets if kind == "material" else library.AppearanceAssets
+        except Exception:
+            continue
+        for asset_index in range(1, int(assets.Count) + 1):
+            asset = assets.Item(asset_index)
+            if str(asset.DisplayName).strip().lower() == wanted:
+                return asset.CopyTo(document)
+    return None
 
 
 def _find_parameter(parameters: Any, name: str) -> Any | None:  # pragma: no cover - Windows only

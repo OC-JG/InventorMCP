@@ -47,7 +47,7 @@ class DocumentContext:
         if key is None:
             raise DocumentError(
                 "No sketch has been created yet.",
-                hint="Create one with `create_sketch` or a recipe `sketch` operation.",
+                hint="Add a `sketch` operation, via `apply_operations` or a recipe.",
             )
         plan = self.plans.get(key)
         if plan is None:
@@ -114,7 +114,7 @@ class Session:
         if key is None:
             raise DocumentError(
                 "No part is open in this session.",
-                hint="Call `new_part` (or `build_part` with a recipe) first.",
+                hint="Call `new_part` (or `build_part_from_recipe`) first.",
             )
         context = self.contexts.get(key)
         if context is None:

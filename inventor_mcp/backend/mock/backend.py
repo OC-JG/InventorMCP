@@ -805,7 +805,6 @@ class MockBackend(Backend):
         targets = _pattern_targets(document, request.features)
         occurrences = request.count1 * request.count2
         name = self._feature_name(document, request.name, "pattern")
-        _scale_pattern_volume(document, targets, occurrences)
         feature = _Feature(
             id=self._next("feat"),
             name=name,
@@ -815,6 +814,7 @@ class MockBackend(Backend):
                 "count1": request.count1,
                 "count2": request.count2,
                 "occurrences": occurrences,
+                "note": _VOLUME_NOT_MODELLED,
             },
         )
         document.features.append(feature)
@@ -825,7 +825,6 @@ class MockBackend(Backend):
         document = self._doc(doc_id)
         targets = _pattern_targets(document, request.features)
         name = self._feature_name(document, request.name, "pattern")
-        _scale_pattern_volume(document, targets, request.count)
         feature = _Feature(
             id=self._next("feat"),
             name=name,
@@ -834,6 +833,7 @@ class MockBackend(Backend):
                 "features": [t.name for t in targets],
                 "count": request.count,
                 "angle_deg": round(math.degrees(request.angle.value), 4),
+                "note": _VOLUME_NOT_MODELLED,
             },
         )
         document.features.append(feature)
@@ -844,12 +844,12 @@ class MockBackend(Backend):
         document = self._doc(doc_id)
         targets = _pattern_targets(document, request.features)
         name = self._feature_name(document, request.name, "mirror")
-        _scale_pattern_volume(document, targets, 2)
         feature = _Feature(
             id=self._next("feat"),
             name=name,
             kind="mirror",
-            detail={"features": [t.name for t in targets], "plane": request.plane},
+            detail={"features": [t.name for t in targets], "plane": request.plane,
+                    "note": _VOLUME_NOT_MODELLED},
         )
         document.features.append(feature)
         self._record("mirror", name=name)
@@ -1137,14 +1137,10 @@ def _pattern_targets(document: _Document, names: Sequence[str]) -> list[_Feature
     return [document.features[-1]]
 
 
-def _scale_pattern_volume(document: _Document, targets: Sequence[_Feature], occurrences: int) -> None:
-    """Very rough: repeat each target's own contribution ``occurrences`` times."""
-    for target in targets:
-        if target.kind == "hole":
-            per_occurrence = document.volume * 0.0
-        else:
-            per_occurrence = 0.0
-        document.volume += per_occurrence * (occurrences - 1)
+#: Patterns and mirrors copy geometry the simulator does not track well enough to
+#: re-integrate, so their volume contribution is reported as unmodelled rather
+#: than guessed at.
+_VOLUME_NOT_MODELLED = "occurrence volume is not estimated by the simulator"
 
 
 def _bounds_center(bounds: list[float] | None) -> tuple[float, float, float] | None:

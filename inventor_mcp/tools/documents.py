@@ -7,7 +7,6 @@ from typing import Annotated, Any, Literal
 from pydantic import Field
 
 from ..backend import create_backend
-from ..errors import DocumentError
 from ..session import Session
 from ..units import ANGLE_UNIT_NAMES, LENGTH_UNIT_NAMES
 from ._common import guard

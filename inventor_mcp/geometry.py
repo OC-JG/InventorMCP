@@ -19,6 +19,7 @@ from .errors import SketchError
 from .plan import (
     ORIGIN,
     Constraint,
+    Primitive,
     PArc,
     PCircle,
     PEllipse,

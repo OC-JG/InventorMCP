@@ -36,7 +36,7 @@ def register(server: Any, session: Session) -> None:
         description="Statically check a part recipe without touching Inventor: expressions, "
         "units, sketch closure, references between operations, hole centres. "
         "Returns per-sketch geometry counts and every problem found. "
-        "Cheap -- run it before `build_part`.\n\n" + RECIPE_CHEATSHEET,
+        "Cheap -- run it before `build_part_from_recipe`.\n\n" + RECIPE_CHEATSHEET,
     )
     @guard
     def validate_recipe(

@@ -30,7 +30,7 @@ from .backend.base import (
     ThreadRequest,
     WorkPlaneRequest,
 )
-from .errors import FeatureError, ParameterError, RecipeError, SelectionError
+from .errors import FeatureError, ParameterError, RecipeError
 from .expressions import RESERVED_NAMES
 from .geometry import plan_sketch
 from .plan import PLine

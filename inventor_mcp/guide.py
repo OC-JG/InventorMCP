@@ -14,7 +14,7 @@ Workflow:
 1. `connect` -- picks a live Inventor session, or a simulator if Inventor is absent.
 2. `validate_recipe` -- static check of a recipe. Free, needs no Inventor, catches
    unit mistakes, unclosed profiles and missing references. Use it before building.
-3. `build_part` -- creates the part: parameters first, then sketches and features.
+3. `build_part_from_recipe` -- creates the part: parameters first, then sketches and features.
 4. `inspect_part` / `select_topology` / `measure_part` -- see what actually exists.
 5. `set_parameters` -- change a driving dimension and the model updates. This is the
    point of the whole thing: iterate on parameters, not on geometry.

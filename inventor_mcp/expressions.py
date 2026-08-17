@@ -252,7 +252,7 @@ class _Evaluator(ast.NodeVisitor):
         known = ", ".join(sorted(self.parameters)) or "(none defined)"
         raise ExpressionError(
             f"Unknown parameter {name!r}.",
-            hint=f"Declare it with `set_parameter` first. Known parameters: {known}.",
+            hint=f"Declare it with `set_parameters` first. Known parameters: {known}.",
             unknown_parameter=name,
         )
 
