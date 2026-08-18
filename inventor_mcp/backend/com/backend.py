@@ -1108,12 +1108,50 @@ class ComBackend(Backend):
             collection.Add(self._topology[match.id]["object"])
         return collection
 
+    #: AddSimple's trailing options, in declaration order. They are
+    #: optional-with-a-default, and leaving them out makes pywin32 send a
+    #: missing-variant that Inventor rejects as a type mismatch -- the same
+    #: thing that broke AddForSolid. These are Inventor's own UI defaults.
+    _FILLET_OPTIONS = (
+        False,  # AllFillets
+        False,  # AllRounds
+        True,   # AutomaticEdgeChain
+        True,   # RollAlongSharpEdges
+        True,   # RollingBallWherePossible
+        False,  # PreserveAllFeatures
+    )
+
     def fillet(self, doc_id: str, request: FilletRequest) -> FeatureInfo:  # pragma: no cover
         document = self._doc(doc_id)
         edges = self._edge_collection(doc_id, request.edges)
         features = document.ComponentDefinition.Features.FilletFeatures
+
+        failures: list[str] = []
         with self._batch(document), self._translate_errors("Fillet"):
-            feature = features.AddSimple(edges, request.radius.expression)
+            feature = None
+            # An expression keeps the fillet parameter-driven; a plain number is
+            # the fallback if this version will not take one there.
+            for radius, described in ((request.radius.expression, "expression"),
+                                      (request.radius.value, "value")):
+                try:
+                    feature = features.AddSimple(edges, radius, *self._FILLET_OPTIONS)
+                except Exception as exc:
+                    failures.append(f"radius as {described}: {_com_message(exc)}")
+                    continue
+                if described == "value" and not _set_radius_expression(
+                    feature, request.radius.expression
+                ):
+                    logger.warning(
+                        "Fillet radius is a fixed %s rather than the expression %r: "
+                        "this feature will not follow the parameter.",
+                        request.radius.value, request.radius.expression,
+                    )
+                break
+            if feature is None:
+                raise FeatureError(
+                    f"Could not create the fillet: {self._explain_text(failures[0])}",
+                    hint="; ".join(failures),
+                )
             if request.name:
                 feature.Name = request.name
         return _feature_info(feature, "fillet", {
@@ -1693,6 +1731,20 @@ def _is_structural(constraint: Any, groups: dict[tuple[str, str], Any]) -> bool:
     first, second = constraint.refs
     keys = [(ref.entity, ref.point.value) for ref in (first, second)]
     return all(key in groups for key in keys) and groups[keys[0]] == groups[keys[1]]
+
+
+def _set_radius_expression(feature: Any, expression: str) -> bool:  # pragma: no cover
+    """Put the driving expression back on a fillet created from a number."""
+    for getter in (
+        lambda: feature.FilletEdgeSets.Item(1).Radius,
+        lambda: feature.Radius,
+    ):
+        try:
+            getter().Expression = expression
+            return True
+        except Exception:
+            continue
+    return False
 
 
 def _distinct(*objects: Any) -> list[Any]:

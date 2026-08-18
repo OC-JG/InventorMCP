@@ -419,3 +419,45 @@ class TestDistinct:
     def test_equal_but_separate_objects_are_both_kept(self):
         # COM wrappers compare equal surprisingly often; identity is what matters.
         assert len(com._distinct([1], [1])) == 2
+
+
+class TestFilletOptions:
+    """Optional-with-default COM arguments must be passed explicitly.
+
+    Leaving them out makes pywin32 send a missing-variant that Inventor
+    rejects. AddForSolid failed the same way and started working the moment
+    its Combine flag was passed.
+    """
+
+    def test_all_six_trailing_options_are_supplied(self):
+        assert len(com.ComBackend._FILLET_OPTIONS) == 6
+        assert all(isinstance(option, bool) for option in com.ComBackend._FILLET_OPTIONS)
+
+    def test_it_does_not_fillet_every_edge_in_the_part(self):
+        all_fillets, all_rounds = com.ComBackend._FILLET_OPTIONS[:2]
+        assert all_fillets is False and all_rounds is False
+
+    def test_the_expression_can_be_restored_onto_an_edge_set(self):
+        applied: dict[str, str] = {}
+
+        class Radius:
+            def __setattr__(self, name, value):
+                applied[name] = value
+
+        class Feature:
+            FilletEdgeSets = type("Sets", (), {"Item": staticmethod(lambda i: Radius())})()
+
+        assert com._set_radius_expression(Feature(), "corner_r") is True
+        assert applied == {"Expression": "corner_r"}
+
+    def test_it_reports_failure_rather_than_pretending(self):
+        class Feature:
+            @property
+            def FilletEdgeSets(self):
+                raise RuntimeError("not on this version")
+
+            @property
+            def Radius(self):
+                raise RuntimeError("nor this")
+
+        assert com._set_radius_expression(Feature(), "corner_r") is False
