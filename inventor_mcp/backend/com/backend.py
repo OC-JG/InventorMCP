@@ -812,11 +812,20 @@ class ComBackend(Backend):
         if _already_constrained(sketch, kind, targets):
             return f"{where}: Inventor had already applied it"
 
-        raise SketchError(
-            f"Could not apply {where}: {self._explain(first_error)}",
-            hint="Without it the sketch geometry is not joined, so no profile can be "
-            "built from it.",
-        )
+        if kind in _STRUCTURAL_KINDS:
+            raise SketchError(
+                f"Could not apply {where}: {self._explain(first_error)}",
+                hint="Without it the sketch geometry is not joined, so no profile can "
+                "be built from it.",
+            )
+
+        # Everything else refines a sketch that is already closed. Inventor
+        # sometimes rejects one as dependent on the constraints around it; that
+        # leaves the sketch usable but with a degree of freedom still in it, so
+        # it is reported rather than treated as fatal.
+        logger.warning("Sketch %s: %s was refused (%s); the sketch may be "
+                       "under-constrained.", sketch.Name, where, self._explain(first_error))
+        return f"{where}: refused by Inventor, sketch may be under-constrained"
 
     def _add_dimension(self, sketch: Any, transient: Any, objects: dict[str, Any],
                        dimension: Any) -> None:  # pragma: no cover
@@ -1740,6 +1749,11 @@ def _feature_kind(feature: Any) -> str:  # pragma: no cover - Windows only
 
 #: Constraint kinds Inventor infers on its own while geometry is created.
 _INFERRED_KINDS = {"coincident", "horizontal", "vertical", "tangent"}
+
+#: Kinds that join geometry into a closed loop.  Without one of these there is
+#: no profile and the sketch is useless, so a failure is fatal.  Every other
+#: kind refines a sketch that already closes.
+_STRUCTURAL_KINDS = {"coincident"}
 
 
 def _already_constrained(sketch: Any, kind: str, targets: list[Any]) -> bool:  # pragma: no cover

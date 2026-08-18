@@ -165,6 +165,18 @@ class TestPolygon:
         equal = [c for c in plan.constraints if c.kind == "equal_length"]
         assert len(equal) == 5  # sides - 1
 
+    def test_edges_are_measured_against_the_first_not_chained(self):
+        """Chaining round the loop puts a constraint on the closing pair.
+
+        Inventor's redundancy detection objects to that one; measuring every
+        edge against the first is the same count and avoids it.
+        """
+        plan = build([{"type": "polygon", "sides": 6, "size": 20}])
+        equal = [c for c in plan.constraints if c.kind == "equal_length"]
+        assert len(equal) == 5
+        assert {c.refs[0].entity for c in equal} == {"line1"}
+        assert {c.refs[1].entity for c in equal} == {"line2", "line3", "line4", "line5", "line6"}
+
     def test_edges_are_equal_by_length_not_radius(self):
         """Inventor has no single 'equal': lines match on length, curves on radius."""
         plan = build([{"type": "polygon", "sides": 5, "size": 20}])

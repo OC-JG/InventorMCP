@@ -587,3 +587,29 @@ class TestExtentDirections:
         from inventor_mcp.backend.com.constants import EXTENT_DIRECTIONS
 
         assert set(EXTENT_DIRECTIONS) == {"positive", "negative", "symmetric"}
+
+
+class TestStructuralConstraints:
+    """Only coincidence closes a loop; everything else refines it.
+
+    A refused coincident leaves a sketch with no profile, which is fatal. A
+    refused equal-length leaves a usable sketch with a degree of freedom in it,
+    which is worth reporting but not worth failing the whole part over.
+    """
+
+    def test_only_coincidence_is_structural(self):
+        assert com._STRUCTURAL_KINDS == {"coincident"}
+
+    def test_every_structural_kind_is_a_real_constraint_kind(self):
+        import typing
+
+        from inventor_mcp.plan import ConstraintKind
+
+        assert com._STRUCTURAL_KINDS <= set(typing.get_args(ConstraintKind))
+
+    def test_inferred_kinds_are_all_real_too(self):
+        import typing
+
+        from inventor_mcp.plan import ConstraintKind
+
+        assert com._INFERRED_KINDS <= set(typing.get_args(ConstraintKind))

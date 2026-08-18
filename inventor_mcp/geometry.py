@@ -472,8 +472,11 @@ def _plan_polygon(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: Polygon
         for line in lines:
             plan.constrain("tangent", Ref(line.id), Ref(guide.id))
     # Equal edges leave exactly one degree of freedom: the polygon's rotation.
-    for previous, current in zip(lines, lines[1:]):
-        plan.constrain("equal_length", Ref(previous.id), Ref(current.id))
+    # Measured against the first edge rather than chained around the loop --
+    # the same count, but the closing pair is never constrained to each other,
+    # which Inventor's redundancy detection objects to.
+    for other in lines[1:]:
+        plan.constrain("equal_length", Ref(lines[0].id), Ref(other.id))
 
     if spec.dimension:
         plan.dimension("diameter", (Ref(guide.id),), size.expression, size.value,
