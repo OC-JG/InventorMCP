@@ -141,9 +141,13 @@ def main(argv: list[str] | None = None) -> int:
                     extra = "  along  " + ",".join(f"{c:5.2f}" for c in match.direction)
                 if match.convexity:
                     extra += f"  {match.convexity}"
-                size = match.area if kind == "face" else match.length
-                print(f"    {match.id:>8}  {match.geometry:<12} ({where})"
-                      f"  size {size or 0:8.3f}{extra}")
+                # Positions are printed in mm, so sizes are too: mm for an
+                # edge's length, mm^2 for a face's area.
+                if kind == "face":
+                    size = f"{(match.area or 0) * 100:10.1f} mm2"
+                else:
+                    size = f"{(match.length or 0) * 10:10.2f} mm "
+                print(f"    {match.id:>8}  {match.geometry:<12} ({where}) {size}{extra}")
 
     if args.export:
         out = Path(args.export).resolve()

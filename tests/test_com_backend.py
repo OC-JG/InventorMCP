@@ -646,3 +646,58 @@ class TestFilterFallthrough:
         top = TopoInfo(id="f", kind="face", description="", normal=(0, 0, 1))
         assert com._com_passes_filter(top, "top") is True
         assert com._com_passes_filter(top, "bottom") is False
+
+
+class TestEdgeConvexity:
+    """Convexity is decided locally, at the edge.
+
+    An earlier version compared the edge against the body's bounding-box
+    centre, which put an L-section's outside corner in the concave set: the
+    centre of a re-entrant part's bounding box is not inside the material.
+    """
+
+    def edge(self, midpoint, faces):
+        box = type("Box", (), {
+            "MinPoint": type("P", (), dict(zip("XYZ", midpoint)))(),
+            "MaxPoint": type("P", (), dict(zip("XYZ", midpoint)))(),
+        })()
+        collection = type("Faces", (), {
+            "Count": len(faces),
+            "Item": staticmethod(lambda index: faces[index - 1]),
+        })()
+        return type("Edge", (), {
+            "Faces": collection,
+            "Evaluator": type("Ev", (), {"RangeBox": box})(),
+        })()
+
+    def face(self, normal, point):
+        return type("Face", (), {
+            "Geometry": type("G", (), {"Normal": type("N", (), dict(zip("XYZ", normal)))()})(),
+            "IsParamReversed": False,
+            "PointOnFace": type("P", (), dict(zip("XYZ", point)))(),
+        })()
+
+    def test_a_box_corner_is_convex(self):
+        # Top face and a side face of a block; both point away from the material.
+        top = self.face((0, 0, 1), (-45, 0, 6))
+        side = self.face((0, -1, 0), (-45, -25, 3))
+        assert com._edge_convexity(self.edge((-45, -25, 6), [top, side])) == "convex"
+
+    def test_an_l_section_inside_corner_is_concave(self):
+        # The exact case the body-centre heuristic got wrong: the base's top
+        # face meeting the upright's inner face.
+        base_top = self.face((0, 0, 1), (-45, 0, 6))
+        upright = self.face((-1, 0, 0), (-6, 0, 38))
+        assert com._edge_convexity(self.edge((-6, 0, 6), [base_top, upright])) == "concave"
+
+    def test_an_edge_with_one_face_is_unknown(self):
+        top = self.face((0, 0, 1), (0, 0, 6))
+        assert com._edge_convexity(self.edge((0, 0, 6), [top])) is None
+
+    def test_a_curved_face_leaves_it_unknown(self):
+        class Curved:
+            Geometry = type("G", (), {})()  # a cylinder has no single Normal
+            PointOnFace = type("P", (), {"X": 0, "Y": 0, "Z": 0})()
+
+        top = self.face((0, 0, 1), (0, 0, 6))
+        assert com._edge_convexity(self.edge((0, 0, 6), [top, Curved()])) is None

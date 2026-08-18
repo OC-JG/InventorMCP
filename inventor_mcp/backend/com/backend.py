@@ -233,7 +233,6 @@ class ComBackend(Backend):
         self._documents: dict[str, Any] = {}
         self._sketches: dict[str, dict[str, Any]] = {}
         self._topology: dict[str, dict[str, Any]] = {}
-        self._centre_cache: tuple[float, float, float] | None = None
         self._ids = count(1)
 
     # -- plumbing ----------------------------------------------------------
@@ -1476,7 +1475,6 @@ class ComBackend(Backend):
         return FeatureInfo(id=f"feat:{new_name}", name=new_name, kind=_feature_kind(feature))
 
     def select(self, doc_id: str, selector: ResolvedSelector) -> list[TopoInfo]:  # pragma: no cover
-        self._centre_cache = None
         document = self._doc(doc_id)
         component = document.ComponentDefinition
         if int(component.SurfaceBodies.Count) == 0:
@@ -1530,24 +1528,14 @@ class ComBackend(Backend):
             results.sort(key=lambda i: -(i.area or i.length or 0.0))
         elif selector.filter == "smallest":
             results.sort(key=lambda i: (i.area or i.length or 0.0))
+        elif selector.limit is not None:
+            # Without an ordering, `limit` would keep whatever Inventor happened
+            # to return first. Largest first is both reproducible and usually
+            # what "the one big edge" means.
+            results.sort(key=lambda i: (-(i.area or i.length or 0.0), i.midpoint or (0, 0, 0)))
         if selector.limit is not None:
             results = results[: selector.limit]
         return results
-
-    def _body_centre(self, entity: Any) -> tuple[float, float, float] | None:  # pragma: no cover
-        """Centre of the body this entity belongs to, cached per selection pass."""
-        if self._centre_cache is not None:
-            return self._centre_cache
-        try:
-            box = entity.Parent.RangeBox
-            self._centre_cache = (
-                (float(box.MinPoint.X) + float(box.MaxPoint.X)) / 2,
-                (float(box.MinPoint.Y) + float(box.MaxPoint.Y)) / 2,
-                (float(box.MinPoint.Z) + float(box.MaxPoint.Z)) / 2,
-            )
-        except Exception:
-            self._centre_cache = None
-        return self._centre_cache
 
     def _describe(self, entity: Any, kind: str) -> TopoInfo | None:  # pragma: no cover
         handle = self._next("edge" if kind == "edge" else "face")
@@ -1567,7 +1555,7 @@ class ComBackend(Backend):
             length = _edge_length(entity)
             geometry = _curve_type(entity)
             direction = _edge_direction(entity)
-            convexity = _edge_convexity(entity, self._body_centre(entity))
+            convexity = _edge_convexity(entity)
             info = TopoInfo(
                 id=handle,
                 kind="edge",
@@ -2082,42 +2070,55 @@ def _edge_length(edge: Any) -> float | None:  # pragma: no cover - Windows only
         return None
 
 
-def _edge_convexity(edge: Any, centre: tuple[float, float, float] | None) -> str | None:
-    """Whether an edge is an outside corner or an inside one.  # pragma: no cover
-
-    Compares the sum of the two adjacent faces' outward normals against the
-    direction from the body's centre to the edge: an outside corner faces away
-    from the body, an inside one faces back towards it.
-
-    This is a heuristic, not a topological test. It is reliable on the
-    prismatic parts this server builds and can misjudge a strongly re-entrant
-    shape, so it returns ``None`` rather than guessing when anything is
-    missing, and an unknown edge matches neither filter.
-    """
-    if centre is None:
+def _face_point(face: Any) -> tuple[float, float, float] | None:  # pragma: no cover
+    """A point Inventor guarantees lies on the face, not merely near it."""
+    try:
+        point = face.PointOnFace
+        return (float(point.X), float(point.Y), float(point.Z))
+    except Exception:
         return None
+
+
+def _edge_convexity(edge: Any, _unused: Any = None) -> str | None:  # pragma: no cover
+    """Whether an edge is an outside corner or an inside one.
+
+    For each of the two adjacent faces, take the direction from the edge
+    towards a point on that face and test it against the *other* face's
+    outward normal.  At an outside corner each face lies behind its
+    neighbour's normal; at an inside corner it lies in front of it.
+
+    This is local to the edge, which matters: an earlier version compared
+    against the body's centre and got an L-section wrong, because the centre
+    of a re-entrant part's bounding box is not inside the material.
+    """
     try:
         faces = edge.Faces
         if int(faces.Count) != 2:
             return None
-        normals = [_face_normal(faces.Item(index)) for index in (1, 2)]
+        first, second = faces.Item(1), faces.Item(2)
         box = edge.Evaluator.RangeBox
-        midpoint = (
+        on_edge = (
             (float(box.MinPoint.X) + float(box.MaxPoint.X)) / 2,
             (float(box.MinPoint.Y) + float(box.MaxPoint.Y)) / 2,
             (float(box.MinPoint.Z) + float(box.MaxPoint.Z)) / 2,
         )
     except Exception:
         return None
-    if any(normal is None for normal in normals):
+
+    normals = (_face_normal(first), _face_normal(second))
+    points = (_face_point(first), _face_point(second))
+    if any(item is None for item in normals + points):
         return None
 
-    outward = [a + b for a, b in zip(*normals)]  # type: ignore[arg-type]
-    away = [point - middle for point, middle in zip(midpoint, centre)]
-    alignment = sum(a * b for a, b in zip(outward, away))
-    if abs(alignment) < 1e-9:
+    alignment = 0.0
+    for point, other_normal in ((points[0], normals[1]), (points[1], normals[0])):
+        towards = [a - b for a, b in zip(point, on_edge)]  # type: ignore[arg-type]
+        length = math.sqrt(sum(c * c for c in towards)) or 1.0
+        alignment += sum(a * b for a, b in zip(towards, other_normal)) / length  # type: ignore[arg-type]
+
+    if abs(alignment) < 1e-6:
         return None
-    return "convex" if alignment > 0 else "concave"
+    return "concave" if alignment > 0 else "convex"
 
 
 def _edge_direction(edge: Any) -> tuple[float, float, float] | None:  # pragma: no cover
