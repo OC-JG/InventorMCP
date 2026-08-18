@@ -41,6 +41,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="Keep going after a failure. Off by default, because a failed "
                              "parameter makes every later step fail for the same reason.")
     parser.add_argument("--verbose", action="store_true", help="Traceback for every failure.")
+    parser.add_argument("--topology", action="store_true",
+                        help="List the finished part's edges and faces with their positions. "
+                             "Use it to check what a selector would actually match.")
     args = parser.parse_args(argv)
 
     recipe = PartRecipe.model_validate(json.loads(Path(args.recipe).read_text()))
@@ -118,6 +121,27 @@ def main(argv: list[str] | None = None) -> int:
             size = [round((box[i + 3] - box[i]) * 10, 3) for i in range(3)]
             print(f"         bounding box (mm): {size}")
         print(f"         volume: {properties.volume:.4f} cm^3   mass: {properties.mass}")
+
+    if args.topology and not failures:
+        from inventor_mcp.backend.base import ResolvedSelector
+
+        for kind in ("face", "edge"):
+            try:
+                matches = backend.select(context.doc_id, ResolvedSelector(kind=kind))
+            except Exception as exc:
+                print(f"[{FAIL}] listing {kind}s: {exc}")
+                continue
+            print(f"\n{len(matches)} {kind}(s), positions in mm:")
+            for match in sorted(matches, key=lambda m: m.midpoint or (0, 0, 0)):
+                where = ", ".join(f"{c * 10:8.2f}" for c in (match.midpoint or (0, 0, 0)))
+                extra = ""
+                if match.normal:
+                    extra = "  normal " + ",".join(f"{c:5.2f}" for c in match.normal)
+                elif match.direction:
+                    extra = "  along  " + ",".join(f"{c:5.2f}" for c in match.direction)
+                size = match.area if kind == "face" else match.length
+                print(f"    {match.id:>8}  {match.geometry:<12} ({where})"
+                      f"  size {size or 0:8.3f}{extra}")
 
     if args.export:
         out = Path(args.export).resolve()

@@ -59,27 +59,50 @@ def generated_root() -> Path:
     return max(candidates, key=lambda d: d.stat().st_mtime)
 
 
-_INVOKE = re.compile(r"InvokeTypes\([^,]+,[^,]+,[^,]+,\s*\([^)]*\),\s*\((?P<types>.*?)\),(?P<args>.*)",
-                     re.DOTALL)
+#: The tuple of (vartype, flags) pairs InvokeTypes passes for the arguments.
+#: The return spec just before it is a single pair, so a run of two or more
+#: never matches it by accident.
+_ARG_TYPES = re.compile(r"\(\s*((?:\(\d+,\s*\d+\)\s*,?\s*){2,})\)")
+_ONE_TYPE = re.compile(r"\((\d+),\s*(\d+)\)")
+
+#: PARAMFLAG bits worth reporting.
+_OPTIONAL = 0x10
 
 
 def describe(path: Path, method: str | None) -> None:
     source = path.read_text(errors="replace")
-    name_pattern = method or "\\w+"
+    name_pattern = method or r"\w+"
+    # Parameter lists wrap across lines once a method takes more than a few,
+    # so the parameter group has to span newlines.
     pattern = re.compile(
-        "\tdef (?P<name>" + name_pattern + ")\((?P<params>.*?)\):\n(?P<body>(?:\t\t.*\n)+)"
+        r"\n\tdef (?P<name>" + name_pattern + r")\((?P<params>.*?)\):\n"
+        r"(?P<body>(?:\t\t.*\n)+)",
+        re.DOTALL,
     )
     found = False
     for match in pattern.finditer(source):
-        invoke = _INVOKE.search(match.group("body"))
-        if not invoke:
+        body = match.group("body")
+        types_match = _ARG_TYPES.search(body)
+        params = [
+            part.split("=")[0].strip()
+            for part in match.group("params").replace("\n", " ").split(",")[1:]
+            if part.strip()
+        ]
+        if not params and not types_match:
             continue
         found = True
-        params = [p.split("=")[0].strip() for p in match.group("params").split(",")[1:]]
-        types = [int(t) for t in re.findall(r"\((\d+),\s*\d+\)", invoke.group("types"))]
+        types = _ONE_TYPE.findall(types_match.group(1)) if types_match else []
         print(f"\n{path.stem}.{match.group('name')}")
+        if not params:
+            print("    (no arguments)")
         for index, name in enumerate(params):
-            kind = VARTYPE.get(types[index], f"type {types[index]}") if index < len(types) else "?"
+            if index < len(types):
+                vartype, flags = int(types[index][0]), int(types[index][1])
+                kind = VARTYPE.get(vartype, f"vartype {vartype}")
+                if flags & _OPTIONAL:
+                    kind += ", optional"
+            else:
+                kind = "?"
             print(f"    {index}. {name:28} {kind}")
     if method and not found:
         print(f"\n{path.stem}.{method}: not found")
@@ -93,8 +116,12 @@ def main(argv: list[str]) -> int:
         class_name, _, method = target.partition(".")
         path = root / f"{class_name}.py"
         if not path.exists():
-            print(f"\n{class_name}: no generated module")
-            continue
+            matches = sorted(root.glob(f"{class_name}*.py"))
+            if not matches:
+                print(f"\n{class_name}: no generated module in this type library")
+                continue
+            path = matches[0]
+            print(f"\n({class_name} found as {path.stem})")
         describe(path, method or None)
     return 0
 

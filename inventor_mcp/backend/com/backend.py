@@ -535,8 +535,7 @@ class ComBackend(Backend):
             raise ParameterError(
                 f"Inventor refused the parameter {name!r} = {expression!r} "
                 f"(units {symbol!r}): {first}",
-                hint="Check the name is not reserved and that the expression's units "
-                "are consistent.",
+                hint=self._diagnose_parameter(parameters, name, symbol),
             ) from exc
         try:
             parameter.Expression = expression
@@ -553,6 +552,27 @@ class ComBackend(Backend):
         logger.info("Parameter %s was created by value because AddByExpression "
                     "refused it (%s).", name, first)
         return parameter
+
+    def _diagnose_parameter(self, parameters: Any, name: str,
+                            symbol: str) -> str:  # pragma: no cover - Windows only
+        """Say whether it is the name Inventor objects to, or something else.
+
+        Creating a throwaway parameter with a name Inventor cannot object to
+        separates "this identifier is unacceptable" from "the document will not
+        take parameters at all", which otherwise look identical.
+        """
+        probe = "inventor_mcp_probe"
+        try:
+            created = parameters.UserParameters.AddByValue(probe, 0.0, symbol)
+        except Exception as exc:
+            return (f"A throwaway parameter failed too ({_com_message(exc)}), so the "
+                    "document is rejecting parameters rather than this name.")
+        try:
+            created.Delete()
+        except Exception:
+            pass
+        return (f"A throwaway parameter with the same units succeeded, so Inventor is "
+                f"objecting to the name {name!r} itself. Try renaming it.")
 
     def list_parameters(self, doc_id: str, *,
                         include_model: bool = False) -> list[ParamInfo]:  # pragma: no cover
@@ -1286,12 +1306,21 @@ class ComBackend(Backend):
             if request.faces.ids or request.faces.filter != "all"
             else self._new_collection("face")
         )
-        with self._batch(document), self._translate_errors("Shell"):
-            definition = features.CreateShellDefinition(
-                faces, request.thickness.expression,
-                self._k(SHELL_DIRECTIONS[request.direction]),
-            )
-            feature = features.Add(definition)
+        with self._batch(document):
+            try:
+                definition = features.CreateShellDefinition(
+                    faces, request.thickness.expression,
+                    self._k(SHELL_DIRECTIONS[request.direction]),
+                )
+                feature = features.Add(definition)
+            except Exception as exc:
+                raise FeatureError(
+                    f"Shell failed: {self._explain(exc)}",
+                    hint=f"{int(faces.Count)} face(s) were selected to open, thickness "
+                    f"{request.thickness.expression!r}, direction {request.direction!r}. "
+                    "A thickness larger than the smallest local wall, or a face set that "
+                    "does not bound the body, will both refuse.",
+                ) from exc
             if request.name:
                 feature.Name = request.name
         return _feature_info(feature, "shell", {
