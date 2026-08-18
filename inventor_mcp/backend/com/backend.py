@@ -558,13 +558,22 @@ class ComBackend(Backend):
                     sketch.Name = plan.name
 
             objects: dict[str, Any] = {}
+            # Endpoints that coincidence joins are built as one shared point
+            # rather than two points plus a constraint: Inventor infers the
+            # coincidence from the coordinates anyway and then refuses ours.
+            groups = plan.shared_point_groups()
+            shared: dict[tuple[str, str], Any] = {}
             with self._translate_errors("Adding sketch geometry", SketchError):
                 for primitive in plan.primitives:
-                    objects[primitive.id] = self._add_primitive(sketch, transient, primitive)
+                    objects[primitive.id] = self._add_primitive(
+                        sketch, transient, primitive, groups, shared
+                    )
 
             skipped: list[str] = []
             with self._translate_errors("Applying sketch constraints", SketchError):
                 for constraint in plan.constraints:
+                    if _is_structural(constraint, groups):
+                        continue
                     note = self._add_constraint(sketch, objects, constraint)
                     if note:
                         skipped.append(note)
@@ -591,12 +600,33 @@ class ComBackend(Backend):
             skipped_constraints=len(skipped),
         )
 
-    def _add_primitive(self, sketch: Any, transient: Any, primitive: Any) -> Any:  # pragma: no cover
+    def _add_primitive(self, sketch: Any, transient: Any, primitive: Any,
+                       groups: dict[tuple[str, str], Any] | None = None,
+                       shared: dict[tuple[str, str], Any] | None = None) -> Any:  # pragma: no cover
+        groups = groups or {}
+        shared = shared if shared is not None else {}
+
+        def anchor(which: str, position: tuple[float, float]) -> Any:
+            """An existing shared point if one has been made, else a location."""
+            group = groups.get((primitive.id, which))
+            if group is not None and group in shared:
+                return shared[group]
+            return transient.CreatePoint2d(*position)
+
+        def remember(entity: Any, which: str, attribute: str) -> None:
+            group = groups.get((primitive.id, which))
+            if group is not None and group not in shared:
+                try:
+                    shared[group] = getattr(entity, attribute)
+                except Exception:  # pragma: no cover - version-specific
+                    pass
+
         if isinstance(primitive, PLine):
             entity = sketch.SketchLines.AddByTwoPoints(
-                transient.CreatePoint2d(*primitive.start),
-                transient.CreatePoint2d(*primitive.end),
+                anchor("start", primitive.start), anchor("end", primitive.end)
             )
+            remember(entity, "start", "StartSketchPoint")
+            remember(entity, "end", "EndSketchPoint")
         elif isinstance(primitive, PCircle):
             entity = sketch.SketchCircles.AddByCenterRadius(
                 transient.CreatePoint2d(*primitive.center), primitive.radius
@@ -606,9 +636,11 @@ class ComBackend(Backend):
             end = _polar(primitive.center, primitive.radius, primitive.end_angle)
             entity = sketch.SketchArcs.AddByCenterStartEndPoint(
                 transient.CreatePoint2d(*primitive.center),
-                transient.CreatePoint2d(*start),
-                transient.CreatePoint2d(*end),
+                anchor("start", start),
+                anchor("end", end),
             )
+            remember(entity, "start", "StartSketchPoint")
+            remember(entity, "end", "EndSketchPoint")
         elif isinstance(primitive, PEllipse):
             major_axis = transient.CreateUnitVector2d(
                 math.cos(primitive.rotation), math.sin(primitive.rotation)
@@ -771,6 +803,12 @@ class ComBackend(Backend):
                 raise
             except Exception as exc:
                 first_error = first_error or exc
+
+        # Inventor infers some constraints from the coordinates as geometry is
+        # created, and then rejects an explicit duplicate. That is only benign
+        # if the constraint really is there, so check rather than assume.
+        if _already_constrained(sketch, kind, targets):
+            return f"{where}: Inventor had already applied it"
 
         raise SketchError(
             f"Could not apply {where}: {self._explain(first_error)}",
@@ -1610,6 +1648,51 @@ def _document_kind(document: Any) -> str:  # pragma: no cover - Windows only
 
 def _feature_kind(feature: Any) -> str:  # pragma: no cover - Windows only
     return str(type(feature).__name__).replace("Feature", "").lower() or "feature"
+
+
+#: Constraint kinds Inventor infers on its own while geometry is created.
+_INFERRED_KINDS = {"coincident", "horizontal", "vertical", "tangent"}
+
+
+def _already_constrained(sketch: Any, kind: str, targets: list[Any]) -> bool:  # pragma: no cover
+    """True when the sketch already carries this exact constraint.
+
+    Used only after a failed call, to tell "Inventor beat us to it" apart from
+    "this constraint could not be applied" -- which look identical from the
+    return code but mean opposite things for the resulting sketch.
+    """
+    if kind not in _INFERRED_KINDS:
+        return False
+    try:
+        constraints = sketch.GeometricConstraints
+        total = int(constraints.Count)
+    except Exception:
+        return False
+
+    wanted = [target for target in targets if target is not None]
+    for index in range(1, total + 1):
+        try:
+            existing = constraints.Item(index)
+        except Exception:
+            continue
+        entities = [
+            getattr(existing, name, None) for name in ("EntityOne", "EntityTwo", "Entity", "Line")
+        ]
+        entities = [entity for entity in entities if entity is not None]
+        if len(entities) < len(wanted):
+            continue
+        if all(any(_same_com_object(entity, target) for entity in entities) for target in wanted):
+            return True
+    return False
+
+
+def _is_structural(constraint: Any, groups: dict[tuple[str, str], Any]) -> bool:
+    """True when the geometry was built to satisfy this constraint already."""
+    if constraint.kind != "coincident" or len(constraint.refs) != 2:
+        return False
+    first, second = constraint.refs
+    keys = [(ref.entity, ref.point.value) for ref in (first, second)]
+    return all(key in groups for key in keys) and groups[keys[0]] == groups[keys[1]]
 
 
 def _distinct(*objects: Any) -> list[Any]:

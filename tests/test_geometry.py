@@ -236,3 +236,52 @@ class TestNamingAndProfiles:
     def test_polyline_rejects_zero_length_segments(self):
         with pytest.raises(SketchError, match="zero-length"):
             build([{"type": "polyline", "points": [[0, 0], [0, 0], [10, 10]], "closed": False}])
+
+
+class TestSharedPoints:
+    """Coincident endpoints are built as one point, not two plus a constraint.
+
+    Inventor infers coincidence from the coordinates as geometry is created and
+    then rejects an explicit duplicate, so the backend needs to know which
+    endpoints are meant to be the same point before it creates them.
+    """
+
+    def test_a_rectangle_has_four_corner_groups(self):
+        plan = build([{"type": "rectangle", "center": [0, 0], "width": 40, "height": 20}])
+        groups = plan.shared_point_groups()
+        # Eight line endpoints plus the diagonal's two, collapsing to four corners.
+        assert len(set(groups.values())) == 4
+        assert len(groups) == 10
+
+    def test_each_corner_joins_the_lines_that_meet_there(self):
+        plan = build([{"type": "rectangle", "center": [0, 0], "width": 40, "height": 20}])
+        groups = plan.shared_point_groups()
+        assert groups[("line1", "end")] == groups[("line2", "start")]
+        assert groups[("line4", "end")] == groups[("line1", "start")]
+
+    def test_the_construction_diagonal_reuses_two_of_them(self):
+        plan = build([{"type": "rectangle", "center": [0, 0], "width": 40, "height": 20}])
+        groups = plan.shared_point_groups()
+        assert groups[("cline1", "start")] == groups[("line1", "start")]
+        assert groups[("cline1", "end")] == groups[("line3", "start")]
+
+    def test_the_origin_is_never_grouped(self):
+        """The origin is a projected point; it cannot be shared as an endpoint."""
+        plan = build([{"type": "rectangle", "center": [0, 0], "width": 40, "height": 20}])
+        groups = plan.shared_point_groups()
+        assert not any(entity == "__origin__" for entity, _ in groups)
+
+    def test_a_slot_joins_its_lines_to_its_arcs(self):
+        plan = build([{"type": "slot", "center": [0, 0], "length": 30, "width": 8}])
+        groups = plan.shared_point_groups()
+        assert len(set(groups.values())) == 4  # two per end arc
+
+    def test_a_lone_circle_needs_no_groups(self):
+        plan = build([{"type": "circle", "diameter": 20}])
+        assert plan.shared_point_groups() == {}
+
+    def test_a_polyline_chains_through_every_vertex(self):
+        plan = build([{"type": "polyline", "closed": True,
+                       "points": [[0, 0], [40, 0], [40, 20], [0, 20]]}])
+        groups = plan.shared_point_groups()
+        assert len(set(groups.values())) == 4

@@ -190,6 +190,39 @@ class SketchPlan:
     def resolve_label(self, label: str) -> list[Primitive]:
         return [self.by_id(pid) for pid in self.labels.get(label, [])]
 
+    def shared_point_groups(self) -> dict[tuple[str, str], tuple[str, str]]:
+        """Endpoints that coincidence makes into one point, keyed to a group.
+
+        A backend can honour these structurally -- by building the next curve
+        from the previous curve's endpoint -- instead of creating two points
+        and constraining them together.  That produces a cleaner sketch, and
+        avoids asking Inventor for a constraint it has already inferred from
+        the coordinates, which it rejects as invalid rather than ignoring.
+        """
+        parent: dict[tuple[str, str], tuple[str, str]] = {}
+
+        def find(key: tuple[str, str]) -> tuple[str, str]:
+            parent.setdefault(key, key)
+            while parent[key] != key:
+                parent[key] = parent[parent[key]]
+                key = parent[key]
+            return key
+
+        shareable = (PointRef.START, PointRef.END)
+        for constraint in self.constraints:
+            if constraint.kind != "coincident" or len(constraint.refs) != 2:
+                continue
+            first, second = constraint.refs
+            if first.entity == ORIGIN.entity or second.entity == ORIGIN.entity:
+                continue
+            if first.point not in shareable or second.point not in shareable:
+                continue
+            a, b = (first.entity, first.point.value), (second.entity, second.point.value)
+            root_a, root_b = find(a), find(b)
+            if root_a != root_b:
+                parent[root_a] = root_b
+        return {key: find(key) for key in parent}
+
     def summary(self) -> dict:
         counts: dict[str, int] = {}
         for primitive in self.primitives:
