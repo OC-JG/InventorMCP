@@ -19,6 +19,57 @@ from inventor_mcp.backend.com.constants import BOOLEAN_OPERATIONS, FALLBACK, Con
 from inventor_mcp.errors import BackendUnavailableError
 
 
+class _RecordingRadius:
+    """A stand-in for a Parameter: remembers the expression assigned to it."""
+
+    def __init__(self, feature):
+        object.__setattr__(self, "_feature", feature)
+
+    def __setattr__(self, name, value):
+        if name == "Expression":
+            self._feature.applied = value
+        else:
+            object.__setattr__(self, name, value)
+
+
+class _EdgeSet:
+    """One fillet edge set, whose Radius is a Parameter."""
+
+    def __init__(self, feature):
+        self.Radius = _RecordingRadius(feature)
+
+
+class _EdgeSets:
+    def __init__(self, feature):
+        self._feature = feature
+
+    def Item(self, index):
+        return _EdgeSet(self._feature)
+
+
+class FakeFilletFeature:
+    """A fillet whose radius parameter hangs off FilletEdgeSets."""
+
+    def __init__(self):
+        self.applied = None
+
+    @property
+    def FilletEdgeSets(self):
+        return _EdgeSets(self)
+
+
+class UnhelpfulFeature:
+    """A fillet exposing neither route to its radius parameter."""
+
+    @property
+    def FilletEdgeSets(self):
+        raise RuntimeError("not on this version")
+
+    @property
+    def Radius(self):
+        raise RuntimeError("nor this")
+
+
 def fake_point(x: float, y: float):
     """A stand-in for a SketchPoint: just something with .Geometry.X/.Y."""
     geometry = type("Geometry", (), {"X": x, "Y": y})()
@@ -438,26 +489,9 @@ class TestFilletOptions:
         assert all_fillets is False and all_rounds is False
 
     def test_the_expression_can_be_restored_onto_an_edge_set(self):
-        applied: dict[str, str] = {}
-
-        class Radius:
-            def __setattr__(self, name, value):
-                applied[name] = value
-
-        class Feature:
-            FilletEdgeSets = type("Sets", (), {"Item": staticmethod(lambda i: Radius())})()
-
-        assert com._set_radius_expression(Feature(), "corner_r") is True
-        assert applied == {"Expression": "corner_r"}
+        feature = FakeFilletFeature()
+        assert com._set_radius_expression(feature, "corner_r") is True
+        assert feature.applied == "corner_r"
 
     def test_it_reports_failure_rather_than_pretending(self):
-        class Feature:
-            @property
-            def FilletEdgeSets(self):
-                raise RuntimeError("not on this version")
-
-            @property
-            def Radius(self):
-                raise RuntimeError("nor this")
-
-        assert com._set_radius_expression(Feature(), "corner_r") is False
+        assert com._set_radius_expression(UnhelpfulFeature(), "corner_r") is False
