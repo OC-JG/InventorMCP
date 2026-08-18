@@ -613,3 +613,36 @@ class TestStructuralConstraints:
         from inventor_mcp.plan import ConstraintKind
 
         assert com._INFERRED_KINDS <= set(typing.get_args(ConstraintKind))
+
+
+class TestFilterFallthrough:
+    """A filter that cannot be evaluated must not match everything.
+
+    Falling through to True turns "the top face" into "every face", which is
+    how a shell came to be handed all ten faces of a box to open.
+    """
+
+    def unknown(self, kind="face"):
+        from inventor_mcp.backend.base import TopoInfo
+
+        return TopoInfo(id="x", kind=kind, description="")
+
+    def test_an_axis_filter_needs_a_normal(self):
+        for name in ("top", "bottom", "left", "right", "front", "back"):
+            assert com._com_passes_filter(self.unknown(), name) is False
+
+    def test_a_convexity_filter_needs_a_convexity(self):
+        assert com._com_passes_filter(self.unknown("edge"), "concave") is False
+
+    def test_a_geometry_filter_needs_a_geometry(self):
+        assert com._com_passes_filter(self.unknown(), "planar") is False
+
+    def test_all_still_matches_anything(self):
+        assert com._com_passes_filter(self.unknown(), "all") is True
+
+    def test_a_known_normal_is_honoured(self):
+        from inventor_mcp.backend.base import TopoInfo
+
+        top = TopoInfo(id="f", kind="face", description="", normal=(0, 0, 1))
+        assert com._com_passes_filter(top, "top") is True
+        assert com._com_passes_filter(top, "bottom") is False

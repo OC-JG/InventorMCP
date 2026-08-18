@@ -42,11 +42,29 @@ class TestPlaneMapping:
                     assert offset_point[axis] == pytest.approx(0.0)
 
     def test_sketch_axes_are_distinct_from_the_normal(self):
+        def axis_of(point):
+            return next(i for i, value in enumerate(point) if value)
+
         for plane in ("xy", "xz", "yz"):
             u = map3d(plane, 1.0, 0.0, 0.0)
             v = map3d(plane, 0.0, 1.0, 0.0)
             w = map3d(plane, 0.0, 0.0, 1.0)
-            assert sorted([u.index(1.0), v.index(1.0), w.index(1.0)]) == [0, 1, 2]
+            assert sorted([axis_of(u), axis_of(v), axis_of(w)]) == [0, 1, 2]
+
+    def test_the_xz_plane_runs_its_horizontal_axis_along_minus_x(self):
+        """Measured against Inventor 2027.1, not assumed.
+
+        An L-profile drawn from 0 to 90 in sketch X comes out spanning -90 to 0
+        in model X, which is why a `near` point picked on the +X side of an XZ
+        sketch selects the wrong edge.
+        """
+        assert map3d("xz", 1.0, 0.0, 0.0) == (-1.0, 0.0, 0.0)
+        assert map3d("xz", 0.0, 1.0, 0.0) == (0.0, 0.0, 1.0)
+
+    def test_the_other_planes_keep_their_sign(self):
+        assert map3d("xy", 1.0, 0.0, 0.0) == (1.0, 0.0, 0.0)
+        assert map3d("yz", 1.0, 0.0, 0.0) == (0.0, 1.0, 0.0)
+        assert map3d("yz", 0.0, 1.0, 0.0) == (0.0, 0.0, 1.0)
 
 
 class TestExtrusionDirection:

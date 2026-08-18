@@ -53,12 +53,17 @@ from ..base import (
     WorkPlaneRequest,
 )
 
-#: Plane name -> (axis indices for sketch u, sketch v, plane normal; normal vector).
-#: ``map3d`` uses it to turn a sketch coordinate plus a plane offset into model space.
-_PLANES: dict[str, tuple[tuple[int, int, int], tuple[float, float, float]]] = {
-    "xy": ((0, 1, 2), (0.0, 0.0, 1.0)),
-    "xz": ((0, 2, 1), (0.0, 1.0, 0.0)),
-    "yz": ((1, 2, 0), (1.0, 0.0, 0.0)),
+#: Plane name -> (axis index and sign for sketch u, sketch v and the plane
+#: normal; normal vector).  Measured against Inventor 2027.1 rather than
+#: assumed: the XZ plane runs its horizontal axis along -X, which is why a
+#: point picked on the +X side of an XZ sketch finds the wrong edge.
+_PLANES: dict[
+    str, tuple[tuple[tuple[int, float], tuple[int, float], tuple[int, float]],
+               tuple[float, float, float]]
+] = {
+    "xy": (((0, 1.0), (1, 1.0), (2, 1.0)), (0.0, 0.0, 1.0)),
+    "xz": (((0, -1.0), (2, 1.0), (1, 1.0)), (0.0, 1.0, 0.0)),
+    "yz": (((1, 1.0), (2, 1.0), (0, 1.0)), (1.0, 0.0, 0.0)),
 }
 
 #: Rough densities in kg/cm^3 for the handful of materials worth guessing at.
@@ -80,9 +85,8 @@ def map3d(plane: str, u: float, v: float, w: float) -> tuple[float, float, float
     """Map a sketch coordinate onto model space for *plane*."""
     axes, _ = _PLANES[plane]
     coords = [0.0, 0.0, 0.0]
-    coords[axes[0]] = u
-    coords[axes[1]] = v
-    coords[axes[2]] = w
+    for value, (axis, sign) in zip((u, v, w), axes):
+        coords[axis] = value * sign
     return (coords[0], coords[1], coords[2])
 
 

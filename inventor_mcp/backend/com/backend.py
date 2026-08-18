@@ -1564,10 +1564,7 @@ class ComBackend(Backend):
 
         info: TopoInfo
         if kind == "edge":
-            try:
-                length = float(evaluator.GetLengthAtParam(evaluator.Domain[0], evaluator.Domain[1]))
-            except Exception:
-                length = None  # type: ignore[assignment]
+            length = _edge_length(entity)
             geometry = _curve_type(entity)
             direction = _edge_direction(entity)
             convexity = _edge_convexity(entity, self._body_centre(entity))
@@ -2030,17 +2027,59 @@ def _surface_type(face: Any) -> str:  # pragma: no cover - Windows only
     return "spline"
 
 
-def _face_normal(face: Any) -> tuple[float, float, float] | None:  # pragma: no cover - Windows only
+def _face_normal(face: Any) -> tuple[float, float, float] | None:  # pragma: no cover
+    """The outward normal of a planar face.
+
+    Read from the surface geometry, which is a plain property, rather than
+    through the evaluator's parameter round-trip -- that returned nothing
+    usable and took the top/bottom face filters down with it.  Curved faces
+    have no single normal, so they get ``None``.
+    """
     try:
-        evaluator = face.Evaluator
-        _, params = evaluator.GetParamAtPoint(face.PointOnFace)
-        _, normals = evaluator.GetNormalAtParam(params)
-        normal = (float(normals[0]), float(normals[1]), float(normals[2]))
+        normal = face.Geometry.Normal
+        vector = (float(normal.X), float(normal.Y), float(normal.Z))
     except Exception:
         return None
-    if bool(getattr(face, "IsParamReversed", False)):
-        normal = (-normal[0], -normal[1], -normal[2])
-    return normal
+    try:
+        if bool(face.IsParamReversed):
+            vector = (-vector[0], -vector[1], -vector[2])
+    except Exception:
+        pass
+    return vector
+
+
+def _edge_length(edge: Any) -> float | None:  # pragma: no cover - Windows only
+    """Length of an edge, in centimetres.
+
+    The curve evaluator's parameter extents were returning nothing usable, so
+    the geometry is measured directly: vertex to vertex for a line, and the
+    circumference for a full circle.
+    """
+    try:
+        evaluator = edge.Evaluator
+        extents = evaluator.GetParamExtents()
+        if isinstance(extents, (tuple, list)) and len(extents) >= 2:
+            length = evaluator.GetLengthAtParam(float(extents[0]), float(extents[1]))
+            if isinstance(length, (tuple, list)):
+                length = length[-1]
+            if length:
+                return float(length)
+    except Exception:
+        pass
+
+    try:
+        start, stop = edge.StartVertex.Point, edge.StopVertex.Point
+        return math.dist(
+            (float(start.X), float(start.Y), float(start.Z)),
+            (float(stop.X), float(stop.Y), float(stop.Z)),
+        ) or None
+    except Exception:
+        pass
+
+    try:  # a closed circle has no distinct vertices
+        return 2 * math.pi * float(edge.Geometry.Radius)
+    except Exception:
+        return None
 
 
 def _edge_convexity(edge: Any, centre: tuple[float, float, float] | None) -> str | None:
@@ -2090,18 +2129,28 @@ def _edge_direction(edge: Any) -> tuple[float, float, float] | None:  # pragma: 
         return None
 
 
-def _com_passes_filter(info: TopoInfo, filter_name: str) -> bool:  # pragma: no cover - Windows only
+def _com_passes_filter(info: TopoInfo, filter_name: str) -> bool:  # pragma: no cover
+    """Whether a matched entity satisfies *filter_name*.
+
+    A filter that cannot be evaluated returns False rather than True. Falling
+    through to "yes" turns "the top face" into "every face", which is how a
+    shell came to be handed all ten faces of a box to open.
+    """
     if filter_name in ("convex", "concave"):
         return info.convexity == filter_name
     if filter_name in ("all", "largest", "smallest", "outer"):
         return True
     if filter_name in ("circular", "linear", "planar", "cylindrical", "elliptical"):
         return info.geometry == filter_name
+
     axis_map = {"top": (2, 1), "bottom": (2, -1), "front": (1, -1),
                 "back": (1, 1), "right": (0, 1), "left": (0, -1)}
-    if filter_name in axis_map and info.normal is not None:
+    if filter_name in axis_map:
+        if info.normal is None:
+            return False
         axis, sign = axis_map[filter_name]
         return info.normal[axis] * sign > 0.9
+
     if filter_name == "vertical":
         if info.kind == "face":
             return info.normal is not None and abs(info.normal[2]) < 0.1
