@@ -208,8 +208,11 @@ class UnitContext:
     length: str | None = None
     angle: str | None = None
 
+    def symbol_for(self, dim: Dim) -> str | None:
+        return {Dim.LENGTH: self.length, Dim.ANGLE: self.angle}.get(dim)
+
     def factor_for(self, dim: Dim) -> float | None:
-        symbol = {Dim.LENGTH: self.length, Dim.ANGLE: self.angle}.get(dim)
+        symbol = self.symbol_for(dim)
         return None if symbol is None else lookup_unit(symbol).factor
 
 
@@ -218,19 +221,29 @@ class _Evaluator(ast.NodeVisitor):
         self.parameters = parameters
         self.units = units or UnitContext()
         self.referenced: set[str] = set()
+        #: AST nodes whose bare number took the document's units, and which unit.
+        #: Inventor's own parser is unit-strict, so the expression it is given
+        #: has to say so explicitly.
+        self.promoted: dict[int, str] = {}
 
-    def _promote(self, left: _Value, right: _Value) -> tuple[_Value, _Value]:
+    def _promote(self, left_node: ast.AST, left: _Value,
+                 right_node: ast.AST, right: _Value) -> tuple[_Value, _Value]:
         """Give a bare number the units of the value it is being added to."""
         if left.exponents == right.exponents:
             return left, right
-        for plain, dimensioned, swap in ((left, right, False), (right, left, True)):
-            if plain.exponents != _DIMENSIONLESS or dimensioned.exponents == _DIMENSIONLESS:
+        for plain_node, plain, other, swap in (
+            (left_node, left, right, False),
+            (right_node, right, left, True),
+        ):
+            if plain.exponents != _DIMENSIONLESS or other.exponents == _DIMENSIONLESS:
                 continue
-            factor = self.units.factor_for(dimensioned.dim)
-            if factor is None:
+            symbol = self.units.symbol_for(other.dim)
+            if symbol is None:
                 continue
-            promoted = _Value(plain.number * factor, dimensioned.exponents)
-            return (dimensioned, promoted) if swap else (promoted, dimensioned)
+            factor = lookup_unit(symbol).factor
+            self.promoted[id(plain_node)] = symbol
+            promoted = _Value(plain.number * factor, other.exponents)
+            return (other, promoted) if swap else (promoted, other)
         return left, right
 
     # -- leaves ------------------------------------------------------------
@@ -263,7 +276,7 @@ class _Evaluator(ast.NodeVisitor):
         op = node.op
 
         if isinstance(op, (ast.Add, ast.Sub)):
-            left, right = self._promote(left, right)
+            left, right = self._promote(node.left, left, node.right, right)
             if left.exponents != right.exponents:
                 raise ExpressionError(
                     f"Cannot add or subtract a {left.dim.value} and a {right.dim.value} value.",
@@ -360,6 +373,60 @@ class _Evaluator(ast.NodeVisitor):
         )
 
 
+#: Binary operators, rendered back in Inventor's syntax (which uses ^ for power).
+_OPERATORS = {
+    ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.Div: "/",
+    ast.Mod: "%", ast.Pow: "^",
+}
+
+
+def _render(node: ast.AST, promoted: Mapping[int, str]) -> str:
+    """Write an expression back out, with promoted literals carrying their unit.
+
+    Inventor's expression parser is unit-strict: it will not add a length
+    parameter to a bare number.  We accept ``flange_d - 16`` because engineers
+    write it that way, so what Inventor is handed has to say ``16 mm``.
+    """
+    unit = promoted.get(id(node))
+
+    if isinstance(node, ast.Expression):
+        return _render(node.body, promoted)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        if node.func.id == _QUANTITY_FUNC:
+            number, symbol = node.args[0], node.args[1]
+            assert isinstance(number, ast.Constant) and isinstance(symbol, ast.Constant)
+            text = f"{number.value:g}"
+            suffix = unit or str(symbol.value)
+            return f"{text} {suffix}" if suffix else text
+        rendered = f"{node.func.id}({', '.join(_render(a, promoted) for a in node.args)})"
+        return f"({rendered}) * 1 {unit}" if unit else rendered
+    if isinstance(node, ast.Name):
+        return f"({node.id}) * 1 {unit}" if unit else node.id
+    if isinstance(node, ast.Constant):
+        text = f"{node.value:g}"
+        return f"{text} {unit}" if unit else text
+    if isinstance(node, ast.UnaryOp):
+        sign = "-" if isinstance(node.op, ast.USub) else "+"
+        rendered = f"{sign}{_render(node.operand, promoted)}"
+        return f"({rendered}) * 1 {unit}" if unit else rendered
+    if isinstance(node, ast.BinOp):
+        operator = _OPERATORS.get(type(node.op))
+        if operator is None:  # pragma: no cover - guarded during evaluation
+            raise ExpressionError(f"Cannot render operator {type(node.op).__name__}.")
+        left, right = _render(node.left, promoted), _render(node.right, promoted)
+        # Brackets round any nested operation: verbose, but never wrong, and
+        # Inventor does not care.
+        if isinstance(node.left, ast.BinOp):
+            left = f"({left})"
+        if isinstance(node.right, ast.BinOp):
+            right = f"({right})"
+        rendered = f"{left} {operator} {right}"
+        return f"({rendered}) * 1 {unit}" if unit else rendered
+    raise ExpressionError(  # pragma: no cover - the evaluator rejects these first
+        f"Cannot render {type(node).__name__} back to an expression."
+    )
+
+
 @dataclass(frozen=True)
 class Expr:
     """The result of evaluating an expression."""
@@ -367,6 +434,9 @@ class Expr:
     source: str
     quantity: Quantity
     referenced: frozenset[str]
+    #: ``source`` with any bare number that took the document's units written
+    #: out explicitly, so Inventor's unit-strict parser accepts it.
+    normalised: str = ""
 
     @property
     def dim(self) -> Dim:
@@ -409,7 +479,12 @@ def evaluate(
     tree = _parse(source)
     evaluator = _Evaluator(parameters or {}, units)
     value = evaluator.visit(tree)
-    return Expr(source.strip(), _as_quantity(value), frozenset(evaluator.referenced))
+    normalised = (
+        _render(tree, evaluator.promoted) if evaluator.promoted else source.strip()
+    )
+    return Expr(
+        source.strip(), _as_quantity(value), frozenset(evaluator.referenced), normalised
+    )
 
 
 def referenced_parameters(source: str) -> set[str]:

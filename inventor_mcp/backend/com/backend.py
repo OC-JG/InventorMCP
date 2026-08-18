@@ -279,7 +279,7 @@ class ComBackend(Backend):
         except InventorMCPError:
             raise
         except Exception as exc:  # pragma: no cover - depends on live Inventor
-            raise error_type(f"{what} failed: {_com_message(exc)}") from exc
+            raise error_type(f"{what} failed: {self._explain(exc)}") from exc
 
     # -- session -----------------------------------------------------------
     def connect(self, *, visible: bool = True, create: bool = True) -> AppInfo:  # pragma: no cover

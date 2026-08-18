@@ -159,3 +159,63 @@ class TestBareNumbersInMixedArithmetic:
 
         with pytest.raises(ExpressionError, match="add or subtract"):
             evaluate("10 mm * 10 mm - 5", {}, UnitContext(length="mm"))
+
+
+class TestNormalisedForInventor:
+    """Inventor's expression parser is unit-strict; ours is forgiving.
+
+    We accept `flange_d - 16` because engineers write it that way, so the
+    expression handed to Inventor has to spell the unit out or it is refused.
+    """
+
+    def context(self):
+        from inventor_mcp.expressions import UnitContext
+
+        return UnitContext(length="mm", angle="deg")
+
+    def test_a_promoted_literal_gains_its_unit(self):
+        params = {"flange_d": to_internal(80, "mm")}
+        result = evaluate("flange_d - 16", params, self.context())
+        assert result.normalised == "flange_d - 16 mm"
+        assert result.value == pytest.approx(6.4)
+
+    def test_an_untouched_expression_is_passed_through_verbatim(self):
+        params = {"w": to_internal(100, "mm"), "t": to_internal(4, "mm")}
+        result = evaluate("w - 2 * t", params, self.context())
+        assert result.normalised == "w - 2 * t"
+
+    def test_a_scaling_factor_is_not_given_units(self):
+        """`w / 2` divides by a count; only +/- operands get promoted."""
+        params = {"w": to_internal(100, "mm")}
+        result = evaluate("w / 2 - 5", params, self.context()).normalised
+        assert "2 mm" not in result
+        assert "5 mm" in result
+
+    def test_it_survives_a_round_trip(self):
+        params = {"flange_d": to_internal(80, "mm")}
+        once = evaluate("flange_d - 16", params, self.context())
+        twice = evaluate(once.normalised, params, self.context())
+        assert twice.value == pytest.approx(once.value)
+        assert twice.normalised == once.normalised
+
+    def test_nested_arithmetic_keeps_its_meaning(self):
+        params = {"a": to_internal(50, "mm"), "b": to_internal(10, "mm")}
+        expression = evaluate("(a - 5) * 2 - b", params, self.context())
+        assert expression.value == pytest.approx(evaluate(
+            "(a - 5 mm) * 2 - b", params, self.context()).value)
+        assert evaluate(expression.normalised, params, self.context()).value == pytest.approx(
+            expression.value)
+
+    def test_angles_are_normalised_too(self):
+        params = {"draft": to_internal(30, "deg")}
+        result = evaluate("draft + 15", params, self.context())
+        assert result.normalised == "draft + 15 deg"
+        assert result.value == pytest.approx(math.radians(45))
+
+    def test_a_promoted_name_is_scaled_rather_than_suffixed(self):
+        """A unitless *parameter* cannot take a suffix, so it is multiplied."""
+        params = {"w": to_internal(100, "mm"), "count": to_internal(3, "ul")}
+        result = evaluate("w - count", params, self.context())
+        assert result.normalised == "w - (count) * 1 mm"
+        assert evaluate(result.normalised, params, self.context()).value == pytest.approx(
+            result.value)

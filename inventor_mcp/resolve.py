@@ -63,7 +63,7 @@ class Resolver:
 
         expr = evaluate(spec, self.parameters, self._units())
         if expr.dim is expected:
-            return Resolved(expr.source, expr.value, expected)
+            return Resolved(expr.normalised, expr.value, expected)
 
         if expr.dim is Dim.UNITLESS:
             # Bare numbers take the context unit, matching Inventor's own behaviour.
@@ -100,7 +100,7 @@ class Resolver:
             quantity = to_internal(float(spec), self.length_unit)
             return Resolved(format_quantity(quantity, self.length_unit), quantity.value, Dim.LENGTH)
         expr = evaluate(str(spec), self.parameters, self._units())
-        return Resolved(expr.source, expr.value, expr.dim)
+        return Resolved(expr.normalised, expr.value, expr.dim)
 
     # -- coordinates -------------------------------------------------------
     def coordinates(self, point: Sequence[float | int | str], what: str = "position") -> tuple[Resolved, ...]:
