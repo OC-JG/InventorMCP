@@ -227,12 +227,12 @@ class TestAssetLookup:
         assert tried == ["document assets", "asset libraries"]
 
 
-class TestConstraintIdempotence:
-    """Inventor merges sketch points created at identical coordinates.
+class TestConstraintApplication:
+    """A constraint that cannot be applied is an error, not a warning.
 
-    A chain of lines drawn corner to corner can therefore arrive at the
-    constraint stage already joined, and asking it to constrain a point to
-    itself is an invalid argument rather than a no-op.
+    Geometry that merely sits at the right coordinates is not joined, and
+    Inventor will refuse to build a profile from it -- so the only case worth
+    skipping is a constraint between an entity and itself.
     """
 
     def test_identical_wrappers_are_recognised(self):
@@ -242,29 +242,34 @@ class TestConstraintIdempotence:
     def test_distinct_objects_without_com_are_not_the_same(self):
         assert com._same_com_object(object(), object()) is False
 
-    def test_points_at_the_same_place_agree(self):
-        assert com._points_agree(fake_point(1.5, -2.0), fake_point(1.5, -2.0)) is True
+    def test_every_constraint_kind_is_dispatched(self):
+        calls: list[str] = []
 
-    def test_points_apart_do_not_agree(self):
-        assert com._points_agree(fake_point(0, 0), fake_point(0, 1)) is False
+        class Collection:
+            def __getattr__(self, name):
+                def record(*args):
+                    calls.append(name)
+                return record
 
-    def test_the_tolerance_is_tight(self):
-        assert com._points_agree(fake_point(0, 0), fake_point(0, 1e-9)) is True
-        assert com._points_agree(fake_point(0, 0), fake_point(0, 1e-3)) is False
+        backend = object.__new__(com.ComBackend)
+        targets = [object(), object(), object()]
+        for kind in ("horizontal", "vertical", "horizontal_align", "vertical_align",
+                     "coincident", "collinear", "parallel", "perpendicular", "tangent",
+                     "concentric", "equal", "symmetric", "midpoint", "ground"):
+            backend._apply_constraint(Collection(), kind, targets)
+        assert calls == [
+            "AddHorizontal", "AddVertical", "AddHorizontalAlign", "AddVerticalAlign",
+            "AddCoincident", "AddCollinear", "AddParallel", "AddPerpendicular",
+            "AddTangent", "AddConcentric", "AddEqual", "AddSymmetry", "AddMidpoint",
+            "AddGround",
+        ]
 
-    def test_something_that_is_not_a_point_never_agrees(self):
-        class NotAPoint:
-            pass
+    def test_an_unknown_kind_is_refused(self):
+        from inventor_mcp.errors import SketchError
 
-        assert com._points_agree(NotAPoint(), NotAPoint()) is False
-
-    def test_a_position_read_that_raises_is_treated_as_unknown(self):
-        class Hostile:
-            @property
-            def Geometry(self):
-                raise RuntimeError("COM says no")
-
-        assert com._sketch_point_position(Hostile()) is None
+        backend = object.__new__(com.ComBackend)
+        with pytest.raises(SketchError, match="Unsupported constraint"):
+            backend._apply_constraint(object(), "welded", [object()])
 
 
 class TestConstructionGeometry:

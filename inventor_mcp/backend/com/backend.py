@@ -169,21 +169,6 @@ def _same_com_object(first: Any, second: Any) -> bool:  # pragma: no cover - Win
         return False
 
 
-def _sketch_point_position(entity: Any) -> tuple[float, float] | None:  # pragma: no cover
-    try:
-        geometry = entity.Geometry
-        return (float(geometry.X), float(geometry.Y))
-    except Exception:
-        return None
-
-
-def _points_agree(first: Any, second: Any, tolerance: float = 1.0e-6) -> bool:  # pragma: no cover
-    """True when both entities are points already at the same place."""
-    a = _sketch_point_position(first)
-    b = _sketch_point_position(second)
-    return a is not None and b is not None and math.dist(a, b) <= tolerance
-
-
 def _com_message(exc: Exception) -> str:
     """Pull the readable part out of a ``pythoncom.com_error``."""
     info = getattr(exc, "excepinfo", None)
@@ -613,6 +598,32 @@ class ComBackend(Backend):
                 pass
         return entity
 
+    def _constraint_collections(self, sketch: Any) -> list[Any]:  # pragma: no cover
+        """The constraints collection, early-bound first then late-bound.
+
+        The generated early-bound wrapper marshals some of these calls in a way
+        Inventor rejects; resolving the method by name at call time avoids it.
+        """
+        collection = sketch.GeometricConstraints
+        collections = [collection]
+        if win32com is not None:
+            try:
+                collections.append(win32com.client.dynamic.Dispatch(collection._oleobj_))
+            except Exception:
+                pass
+        return collections
+
+    def _explain(self, exc: Exception | None) -> str:  # pragma: no cover - Windows only
+        """Inventor's own account of the failure, when it has one."""
+        message = _com_message(exc) if exc is not None else "no error reported"
+        detail = None
+        try:
+            manager = self._app.ErrorManager
+            detail = str(manager.LastErrorMessage or "").strip() or None
+        except Exception:
+            detail = None
+        return f"{message} ({detail})" if detail and detail not in message else message
+
     def _origin_point(self, sketch: Any) -> Any:  # pragma: no cover - Windows only
         """A sketch point at the origin that constraints can actually target.
 
@@ -660,17 +671,48 @@ class ComBackend(Backend):
             return target.CenterSketchPoint
         raise SketchError(f"Unsupported point reference {ref.point.value!r}.")
 
+    def _apply_constraint(self, constraints: Any, kind: str, targets: list[Any]) -> None:
+        """Dispatch one constraint onto a ``GeometricConstraints`` collection."""
+        if kind == "horizontal":
+            constraints.AddHorizontal(targets[0])
+        elif kind == "vertical":
+            constraints.AddVertical(targets[0])
+        elif kind == "horizontal_align":
+            constraints.AddHorizontalAlign(targets[0], targets[1])
+        elif kind == "vertical_align":
+            constraints.AddVerticalAlign(targets[0], targets[1])
+        elif kind == "coincident":
+            constraints.AddCoincident(targets[0], targets[1])
+        elif kind == "collinear":
+            constraints.AddCollinear(targets[0], targets[1])
+        elif kind == "parallel":
+            constraints.AddParallel(targets[0], targets[1])
+        elif kind == "perpendicular":
+            constraints.AddPerpendicular(targets[0], targets[1])
+        elif kind == "tangent":
+            constraints.AddTangent(targets[0], targets[1])
+        elif kind == "concentric":
+            constraints.AddConcentric(targets[0], targets[1])
+        elif kind == "equal":
+            constraints.AddEqual(targets[0], targets[1])
+        elif kind == "symmetric":
+            constraints.AddSymmetry(targets[0], targets[1], targets[2])
+        elif kind == "midpoint":
+            constraints.AddMidpoint(targets[0], targets[1])
+        elif kind == "ground":
+            constraints.AddGround(targets[0])
+        else:
+            raise SketchError(f"Unsupported constraint {kind!r}.")
+
     def _add_constraint(self, sketch: Any, objects: dict[str, Any],
                         constraint: Any) -> str | None:  # pragma: no cover
         """Apply one geometric constraint.
 
-        Returns a note when the constraint was already satisfied and therefore
-        skipped, or ``None`` when it was applied.  Inventor merges sketch points
-        created at identical coordinates, so a chain of lines drawn corner to
-        corner can arrive here already joined -- and constraining a point to
-        itself is an invalid argument, not a no-op.
+        Returns a note when the constraint was genuinely unnecessary, or
+        ``None`` when it was applied.  A constraint that cannot be applied is
+        an error: geometry that merely *sits* at the right coordinates is not
+        joined, and Inventor will refuse to build a profile from it.
         """
-        constraints = sketch.GeometricConstraints
         targets = [self._entity(sketch, objects, ref) for ref in constraint.refs]
         kind = constraint.kind
         where = f"{kind}({', '.join(str(ref) for ref in constraint.refs)})"
@@ -678,50 +720,21 @@ class ComBackend(Backend):
         if kind == "coincident" and _same_com_object(targets[0], targets[1]):
             return f"{where}: already the same point"
 
-        try:
-            if kind == "horizontal":
-                constraints.AddHorizontal(targets[0])
-            elif kind == "vertical":
-                constraints.AddVertical(targets[0])
-            elif kind == "horizontal_align":
-                constraints.AddHorizontalAlign(targets[0], targets[1])
-            elif kind == "vertical_align":
-                constraints.AddVerticalAlign(targets[0], targets[1])
-            elif kind == "coincident":
-                constraints.AddCoincident(targets[0], targets[1])
-            elif kind == "collinear":
-                constraints.AddCollinear(targets[0], targets[1])
-            elif kind == "parallel":
-                constraints.AddParallel(targets[0], targets[1])
-            elif kind == "perpendicular":
-                constraints.AddPerpendicular(targets[0], targets[1])
-            elif kind == "tangent":
-                constraints.AddTangent(targets[0], targets[1])
-            elif kind == "concentric":
-                constraints.AddConcentric(targets[0], targets[1])
-            elif kind == "equal":
-                constraints.AddEqual(targets[0], targets[1])
-            elif kind == "symmetric":
-                constraints.AddSymmetry(targets[0], targets[1], targets[2])
-            elif kind == "midpoint":
-                constraints.AddMidpoint(targets[0], targets[1])
-            elif kind == "ground":
-                constraints.AddGround(targets[0])
-            else:
-                raise SketchError(f"Unsupported constraint {kind!r}.")
-        except SketchError:
-            raise
-        except Exception as exc:
-            # A coincidence Inventor has already made for us is satisfied, not
-            # broken -- but only accept that when the geometry actually agrees.
-            if kind == "coincident" and _points_agree(targets[0], targets[1]):
-                return f"{where}: already coincident"
-            raise SketchError(
-                f"Could not apply {where}: {_com_message(exc)}",
-                hint="This usually means the constraint is redundant with one Inventor "
-                "added itself, or that the two entities cannot take it.",
-            ) from exc
-        return None
+        first_error: Exception | None = None
+        for collection in self._constraint_collections(sketch):
+            try:
+                self._apply_constraint(collection, kind, targets)
+                return None
+            except SketchError:
+                raise
+            except Exception as exc:
+                first_error = first_error or exc
+
+        raise SketchError(
+            f"Could not apply {where}: {self._explain(first_error)}",
+            hint="Without it the sketch geometry is not joined, so no profile can be "
+            "built from it.",
+        )
 
     def _add_dimension(self, sketch: Any, transient: Any, objects: dict[str, Any],
                        dimension: Any) -> None:  # pragma: no cover

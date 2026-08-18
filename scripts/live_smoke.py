@@ -103,6 +103,9 @@ def main(argv: list[str] | None = None) -> int:
                   f"dimensions={result.get('dimensions')} "
                   f"profiles={result.get('profiles')} "
                   f"fully_constrained={result.get('fully_constrained')}")
+            skipped = result.get("skipped_constraints") or 0
+            if skipped:
+                print(f"         WARNING: {skipped} constraint(s) were not applied")
 
     properties = step("mass_properties", lambda: backend.mass_properties(context.doc_id))
     if properties:
