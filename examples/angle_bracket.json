@@ -1,0 +1,174 @@
+{
+  "name": "AngleBracket",
+  "description": "L-section bracket with adjustment slots in the base and a gusseted upright",
+  "units": "mm",
+  "material": "Steel",
+  "parameters": [
+    {
+      "name": "base_len",
+      "value": 90
+    },
+    {
+      "name": "upright_h",
+      "value": 70
+    },
+    {
+      "name": "width",
+      "value": 50
+    },
+    {
+      "name": "thk",
+      "value": 6
+    },
+    {
+      "name": "slot_len",
+      "value": 20
+    },
+    {
+      "name": "slot_w",
+      "value": 9,
+      "comment": "M8 clearance"
+    },
+    {
+      "name": "slot_pitch",
+      "value": 30
+    },
+    {
+      "name": "hole_d",
+      "value": 9,
+      "comment": "M8 clearance in the upright"
+    },
+    {
+      "name": "fillet_r",
+      "value": 8
+    },
+    {
+      "name": "hole_z",
+      "value": "upright_h - 15",
+      "comment": "hole height above the base"
+    }
+  ],
+  "operations": [
+    {
+      "op": "sketch",
+      "name": "Section",
+      "plane": "xz",
+      "entities": [
+        {
+          "type": "polyline",
+          "closed": true,
+          "points": [
+            [
+              0,
+              0
+            ],
+            [
+              "base_len",
+              0
+            ],
+            [
+              "base_len",
+              "thk"
+            ],
+            [
+              "thk",
+              "thk"
+            ],
+            [
+              "thk",
+              "upright_h"
+            ],
+            [
+              0,
+              "upright_h"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "op": "extrude",
+      "name": "Body",
+      "sketch": "Section",
+      "distance": "width",
+      "direction": "symmetric"
+    },
+    {
+      "op": "sketch",
+      "name": "Slots",
+      "plane": "xy",
+      "entities": [
+        {
+          "type": "slot",
+          "center": [
+            "base_len - 25",
+            "slot_pitch / 2"
+          ],
+          "length": "slot_len",
+          "width": "slot_w",
+          "angle": 0
+        }
+      ]
+    },
+    {
+      "op": "extrude",
+      "name": "SlotCut",
+      "sketch": "Slots",
+      "extent": "through_all",
+      "operation": "cut",
+      "direction": "positive"
+    },
+    {
+      "op": "mirror",
+      "name": "SlotPair",
+      "features": [
+        "SlotCut"
+      ],
+      "plane": "xz"
+    },
+    {
+      "op": "sketch",
+      "name": "UprightHoles",
+      "plane": "yz",
+      "entities": [
+        {
+          "type": "point",
+          "position": [
+            -15,
+            "hole_z"
+          ]
+        },
+        {
+          "type": "point",
+          "position": [
+            15,
+            "hole_z"
+          ]
+        }
+      ]
+    },
+    {
+      "op": "hole",
+      "name": "UprightFixings",
+      "sketch": "UprightHoles",
+      "diameter": "hole_d",
+      "depth": "thk",
+      "direction": "positive"
+    },
+    {
+      "op": "fillet",
+      "name": "InsideCorner",
+      "edges": {
+        "filter": "horizontal",
+        "near": [
+          6,
+          0,
+          6
+        ],
+        "within": 12,
+        "limit": 1
+      },
+      "radius": "fillet_r"
+    }
+  ]
+}
