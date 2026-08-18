@@ -300,3 +300,79 @@ class TestConstructionGeometry:
         points = [p for p in plan.primitives if isinstance(p, PPoint)]
         assert len(points) == 1
         assert points[0].construction is True
+
+
+class TestOriginPoint:
+    """The sketch origin has to be projected in before it can be constrained.
+
+    ``PlanarSketch.OriginPoint`` marks where the sketch sits; Inventor refuses
+    to constrain against it. These cover the projection and the grounded-point
+    fallback without needing Inventor.
+    """
+
+    def backend(self):
+        # __init__ refuses to run without pywin32, which is the point of it;
+        # bypass it to exercise the pure logic underneath.
+        instance = object.__new__(com.ComBackend)
+        instance._app = None
+        return instance
+
+    def test_it_projects_the_origin_work_point(self):
+        projected = object()
+        work_point = object()
+
+        class Sketch:
+            Name = "Sketch1"
+            Parent = type("Def", (), {"WorkPoints": type("WP", (), {
+                "Item": staticmethod(lambda index: work_point)})()})()
+
+            def AddByProjectingEntity(self, entity):
+                assert entity is work_point
+                return projected
+
+        assert self.backend()._origin_point(Sketch()) is projected
+
+    def test_it_falls_back_to_a_grounded_point(self):
+        created = object()
+        grounded: list[object] = []
+
+        class Sketch:
+            Name = "Sketch1"
+
+            @property
+            def Parent(self):
+                raise RuntimeError("no parent here")
+
+            SketchPoints = type("SP", (), {
+                "Add": staticmethod(lambda point, hole_center: created)})()
+            GeometricConstraints = type("GC", (), {
+                "AddGround": staticmethod(lambda entity: grounded.append(entity))})()
+
+        instance = self.backend()
+        instance._app = type("App", (), {"TransientGeometry": type("TG", (), {
+            "CreatePoint2d": staticmethod(lambda x, y: (x, y))})()})()
+
+        assert instance._origin_point(Sketch()) is created
+        assert grounded == [created]
+
+    def test_the_origin_is_resolved_once_and_reused(self):
+        calls: list[int] = []
+
+        class Sketch:
+            Name = "Sketch1"
+            Parent = type("Def", (), {"WorkPoints": type("WP", (), {
+                "Item": staticmethod(lambda index: object())})()})()
+
+            def AddByProjectingEntity(self, entity):
+                calls.append(1)
+                return "origin"
+
+        from inventor_mcp.plan import ORIGIN
+
+        instance = self.backend()
+        sketch = Sketch()
+        objects: dict = {}
+        first = instance._entity(sketch, objects, ORIGIN)
+        second = instance._entity(sketch, objects, ORIGIN)
+        assert first == second == "origin"
+        assert len(calls) == 1, "the origin should be projected once per sketch"

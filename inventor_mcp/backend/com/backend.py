@@ -613,9 +613,40 @@ class ComBackend(Backend):
                 pass
         return entity
 
+    def _origin_point(self, sketch: Any) -> Any:  # pragma: no cover - Windows only
+        """A sketch point at the origin that constraints can actually target.
+
+        ``PlanarSketch.OriginPoint`` looks like the obvious choice, but Inventor
+        refuses to constrain against it -- it is a marker for where the sketch
+        sits, not a point participating in the sketch.  Projecting the part's
+        origin work point produces a real, associative SketchPoint that behaves
+        like any other.
+        """
+        try:
+            component = sketch.Parent
+            return sketch.AddByProjectingEntity(component.WorkPoints.Item(1))
+        except Exception as exc:
+            logger.info("Could not project the origin into %s (%s); "
+                        "falling back to a grounded point.", sketch.Name, _com_message(exc))
+
+        # Not associative, but it pins geometry to the origin just as well.
+        app = self._require_app()
+        point = sketch.SketchPoints.Add(app.TransientGeometry.CreatePoint2d(0.0, 0.0), False)
+        try:
+            sketch.GeometricConstraints.AddGround(point)
+        except Exception:  # pragma: no cover - version-specific
+            pass
+        return point
+
     def _entity(self, sketch: Any, objects: dict[str, Any], ref: Ref) -> Any:  # pragma: no cover
         if ref.entity == "__origin__":
-            return sketch.OriginPoint
+            # Resolved once per sketch, on first use, and cached alongside the
+            # sketch's other entities so it lives exactly as long as they do.
+            origin = objects.get("__origin__")
+            if origin is None:
+                origin = self._origin_point(sketch)
+                objects["__origin__"] = origin
+            return origin
         target = objects.get(ref.entity)
         if target is None:
             raise SketchError(f"Internal error: sketch entity {ref.entity!r} was not created.")
