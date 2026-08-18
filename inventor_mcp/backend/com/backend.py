@@ -103,6 +103,43 @@ EXPORT_EXTENSIONS = {
 _HEALTHY_STATUSES = {0, 15873}
 
 
+#: DocumentTypeEnum -> the specific COM interface that carries its members.
+_DOCUMENT_INTERFACES = {
+    12290: "PartDocument",
+    12291: "AssemblyDocument",
+    12292: "DrawingDocument",
+    12293: "PresentationDocument",
+}
+
+
+def _specialise(document: Any) -> Any:  # pragma: no cover - Windows only
+    """Return *document* as its specific interface rather than plain ``Document``.
+
+    ``Documents.Add`` and ``Documents.Item`` are declared as returning the
+    generic ``Document``.  Late binding papers over that, but the early-bound
+    wrapper pywin32 generates takes the declaration literally -- so
+    ``ComponentDefinition``, which lives on ``PartDocument``, raises
+    AttributeError and every subsequent call fails.  Cast once, here, and the
+    rest of the backend can assume the real interface.
+    """
+    if win32com is None:
+        return document
+    try:
+        target = _DOCUMENT_INTERFACES.get(int(document.DocumentType))
+    except Exception:
+        target = None
+    if target:
+        try:
+            return win32com.client.CastTo(document, target)
+        except Exception:
+            pass
+    # Last resort: dynamic dispatch resolves members by name at call time.
+    try:
+        return win32com.client.dynamic.Dispatch(document._oleobj_)
+    except Exception:
+        return document
+
+
 def _com_message(exc: Exception) -> str:
     """Pull the readable part out of a ``pythoncom.com_error``."""
     info = getattr(exc, "excepinfo", None)
@@ -248,7 +285,7 @@ class ComBackend(Backend):
             document = app.ActiveDocument
             if document is None:
                 raise DocumentError("No document is open in Inventor.")
-            return document
+            return _specialise(document)
         document = self._documents.get(doc_id)
         if document is None:
             raise DocumentError(
@@ -276,7 +313,7 @@ class ComBackend(Backend):
         with self._translate_errors("Creating the part document", DocumentError):
             part_type = self._k("kPartDocumentObject")
             path = template or app.FileManager.GetTemplateFile(part_type)
-            document = app.Documents.Add(part_type, path, True)
+            document = _specialise(app.Documents.Add(part_type, path, True))
             try:
                 document.DisplayName = name
             except Exception:
@@ -298,7 +335,7 @@ class ComBackend(Backend):
         if not os.path.exists(path):
             raise DocumentError(f"No such file: {path}")
         with self._translate_errors("Opening the document", DocumentError):
-            document = app.Documents.Open(path, True)
+            document = _specialise(app.Documents.Open(path, True))
         return self._register(document, "mm", "deg")
 
     def list_documents(self) -> list[DocInfo]:  # pragma: no cover - Windows only
@@ -306,7 +343,7 @@ class ComBackend(Backend):
         known = {id(document): doc_id for doc_id, document in self._documents.items()}
         results: list[DocInfo] = []
         for index in range(1, int(app.Documents.Count) + 1):
-            document = app.Documents.Item(index)
+            document = _specialise(app.Documents.Item(index))
             doc_id = known.get(id(document))
             if doc_id is None:
                 doc_id = self._next("doc")
@@ -355,21 +392,38 @@ class ComBackend(Backend):
     def set_material(self, doc_id: str, material: str,
                      appearance: str | None = None) -> DocInfo:  # pragma: no cover
         document = self._doc(doc_id)
-        with self._translate_errors(f"Applying material {material!r}", DocumentError):
-            asset = _find_asset(self._require_app(), document, material, "material")
-            if asset is None:
+        tried: list[str] = []
+        asset = _find_asset(self._require_app(), document, material, "material", tried)
+        if asset is not None:
+            try:
+                document.ActiveMaterial = asset
+            except Exception as exc:
                 raise DocumentError(
-                    f"No material named {material!r} in this document or the active libraries.",
-                    hint="Use the exact name shown in Inventor's material browser, "
-                    "e.g. 'Aluminum 6061' rather than 'aluminium'.",
-                )
-            document.ActiveMaterial = asset
-            if appearance:
-                appearance_asset = _find_asset(
-                    self._require_app(), document, appearance, "appearance"
-                )
-                if appearance_asset is not None:
+                    f"Found material {material!r} but could not apply it: {_com_message(exc)}"
+                ) from exc
+        else:
+            # Older documents expose the material by name on the component
+            # definition rather than as an asset.
+            try:
+                document.ComponentDefinition.Material = material
+                tried.append("ComponentDefinition.Material")
+            except Exception as exc:
+                raise DocumentError(
+                    f"No material named {material!r} is available to this document.",
+                    hint="Use the exact name from Inventor's material browser, e.g. "
+                    "'Aluminum 6061' rather than 'aluminium'. Looked in: "
+                    f"{', '.join(tried) or 'no asset collection was reachable'}.",
+                ) from exc
+
+        if appearance:
+            appearance_asset = _find_asset(
+                self._require_app(), document, appearance, "appearance", []
+            )
+            if appearance_asset is not None:
+                try:
                     document.ActiveAppearance = appearance_asset
+                except Exception:
+                    pass
         return DocInfo(id=doc_id, name=str(document.DisplayName), kind="part")
 
     # -- parameters --------------------------------------------------------
@@ -1251,34 +1305,61 @@ def _named_work_axis(component: Any, name: str) -> Any:  # pragma: no cover - Wi
     raise FeatureError(f"No work axis named {name!r}.")
 
 
-def _find_asset(app: Any, document: Any, name: str, kind: str) -> Any | None:  # pragma: no cover
+def _asset_collection(container: Any, kind: str) -> Any | None:  # pragma: no cover
+    """The asset collection on a document or library, whatever it is called here.
+
+    Which collections a ``Document`` exposes varies between Inventor releases,
+    so probe rather than assume; a missing collection is a normal outcome, not
+    an error.
+    """
+    names = ("MaterialAssets", "Assets") if kind == "material" else ("AppearanceAssets", "Assets")
+    for name in names:
+        collection = getattr(container, name, None)
+        if collection is None:
+            continue
+        try:
+            int(collection.Count)
+        except Exception:
+            continue
+        return collection
+    return None
+
+
+def _find_asset(app: Any, document: Any, name: str, kind: str,
+                tried: list[str]) -> Any | None:  # pragma: no cover
     """Find a material or appearance asset by display name.
 
-    Assets already present in the document are preferred; otherwise the active
-    asset libraries are searched and the match is copied into the document,
-    which is what Inventor requires before it can be made active.
+    Assets already in the document win; otherwise the active libraries are
+    searched and the match copied in, which Inventor requires before it can be
+    made active.  ``tried`` collects what was actually searched so a failure
+    can say where it looked.
     """
     wanted = name.strip().lower()
-    local = document.MaterialAssets if kind == "material" else document.AppearanceAssets
-    for index in range(1, int(local.Count) + 1):
-        asset = local.Item(index)
-        if str(asset.DisplayName).strip().lower() == wanted:
-            return asset
 
-    try:
-        libraries = app.AssetLibraries
-    except Exception:
+    local = _asset_collection(document, kind)
+    if local is not None:
+        tried.append("document assets")
+        for index in range(1, int(local.Count) + 1):
+            asset = local.Item(index)
+            if str(asset.DisplayName).strip().lower() == wanted:
+                return asset
+
+    libraries = getattr(app, "AssetLibraries", None)
+    if libraries is None:
         return None
+    tried.append("asset libraries")
     for index in range(1, int(libraries.Count) + 1):
         library = libraries.Item(index)
-        try:
-            assets = library.MaterialAssets if kind == "material" else library.AppearanceAssets
-        except Exception:
+        assets = _asset_collection(library, kind)
+        if assets is None:
             continue
         for asset_index in range(1, int(assets.Count) + 1):
             asset = assets.Item(asset_index)
             if str(asset.DisplayName).strip().lower() == wanted:
-                return asset.CopyTo(document)
+                try:
+                    return asset.CopyTo(document)
+                except Exception:
+                    return asset
     return None
 
 

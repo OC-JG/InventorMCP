@@ -133,3 +133,89 @@ class TestContract:
                 if getattr(getattr(implementation, name, None), "__isabstractmethod__", False)
             }
             assert not missing, f"{implementation.__name__} leaves {missing} abstract"
+
+
+class TestDocumentSpecialisation:
+    """``Documents.Add`` returns the generic ``Document`` interface.
+
+    Under early binding that interface really is generic: ``ComponentDefinition``
+    lives on ``PartDocument``, so without a cast every call after `new_part`
+    fails with AttributeError. These guard the mapping and the fallbacks.
+    """
+
+    def test_every_document_type_maps_to_an_interface(self):
+        assert com._DOCUMENT_INTERFACES[12290] == "PartDocument"
+        assert com._DOCUMENT_INTERFACES[12291] == "AssemblyDocument"
+        assert set(com._DOCUMENT_INTERFACES) == {12290, 12291, 12292, 12293}
+
+    def test_it_is_a_no_op_without_pywin32(self):
+        sentinel = object()
+        assert com._specialise(sentinel) is sentinel
+
+    def test_an_object_with_no_document_type_is_returned_unchanged(self, monkeypatch):
+        class Fake:
+            pass
+
+        monkeypatch.setattr(com, "win32com", None)
+        fake = Fake()
+        assert com._specialise(fake) is fake
+
+
+class TestAssetLookup:
+    def test_a_missing_collection_is_not_an_error(self):
+        class Bare:
+            pass
+
+        assert com._asset_collection(Bare(), "material") is None
+
+    def test_it_falls_back_to_the_generic_assets_collection(self):
+        class Collection:
+            Count = 0
+
+        class Doc:
+            Assets = Collection()
+
+        assert com._asset_collection(Doc(), "material") is not None
+
+    def test_a_collection_that_cannot_be_counted_is_skipped(self):
+        class Broken:
+            @property
+            def Count(self):
+                raise RuntimeError("COM says no")
+
+        class Doc:
+            MaterialAssets = Broken()
+
+        assert com._asset_collection(Doc(), "material") is None
+
+    def test_finding_an_asset_records_where_it_looked(self):
+        class Asset:
+            DisplayName = "Aluminum 6061"
+
+        class Collection:
+            Count = 1
+
+            def Item(self, index):
+                return Asset()
+
+        class Doc:
+            MaterialAssets = Collection()
+
+        tried: list[str] = []
+        found = com._find_asset(object(), Doc(), "aluminum 6061", "material", tried)
+        assert found is not None
+        assert tried == ["document assets"]
+
+    def test_a_miss_reports_everywhere_it_searched(self):
+        class Empty:
+            Count = 0
+
+        class Doc:
+            MaterialAssets = Empty()
+
+        class App:
+            AssetLibraries = Empty()
+
+        tried: list[str] = []
+        assert com._find_asset(App(), Doc(), "unobtainium", "material", tried) is None
+        assert tried == ["document assets", "asset libraries"]

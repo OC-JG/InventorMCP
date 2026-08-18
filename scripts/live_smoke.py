@@ -37,6 +37,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--backend", default="inventor", choices=["inventor", "mock"])
     parser.add_argument("--export", metavar="DIR", help="Write STEP, STL and a PNG here.")
     parser.add_argument("--keep-open", action="store_true", help="Leave the part open in Inventor.")
+    parser.add_argument("--continue-on-error", action="store_true",
+                        help="Keep going after a failure. Off by default, because a failed "
+                             "parameter makes every later step fail for the same reason.")
+    parser.add_argument("--verbose", action="store_true", help="Traceback for every failure.")
     args = parser.parse_args(argv)
 
     recipe = PartRecipe.model_validate(json.loads(Path(args.recipe).read_text()))
@@ -47,6 +51,9 @@ def main(argv: list[str] | None = None) -> int:
     failures: list[str] = []
 
     def step(label: str, fn):
+        if failures and not args.continue_on_error:
+            print(f"[ skip ] {label}")
+            return None
         try:
             result = fn()
         except Exception as exc:
@@ -54,7 +61,10 @@ def main(argv: list[str] | None = None) -> int:
             hint = getattr(exc, "hint", None)
             if hint:
                 print(f"         hint: {hint}")
-            traceback.print_exc(limit=6)
+            # Only the first failure gets a traceback; the rest are usually
+            # consequences of it and the noise buries the real cause.
+            if args.verbose or not failures:
+                traceback.print_exc(limit=6)
             failures.append(label)
             return None
         print(f"[{OK}] {label}")
@@ -122,6 +132,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{len(failures)} step(s) failed:")
         for label in failures:
             print(f"  - {label}")
+        if not args.continue_on_error:
+            print("\nStopped at the first failure. Re-run with --continue-on-error "
+                  "to see how far it gets, or --verbose for full tracebacks.")
         return 1
     print("All steps passed.")
     return 0
