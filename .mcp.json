@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "inventor": {
+      "command": "python",
+      "args": ["-m", "inventor_mcp", "--backend", "auto"],
+      "env": {}
+    }
+  }
+}

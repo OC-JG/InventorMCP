@@ -29,38 +29,73 @@ the holes with it.
 
 ## Install
 
-```bash
+The server runs on your own machine, next to Inventor. Inventor's automation API is
+Windows-only, so **for real geometry this must be a Windows machine with Inventor
+installed**; everything else (writing recipes, validating them, the test suite) runs
+anywhere.
+
+```powershell
 git clone https://github.com/OC-JG/InventorMCP
 cd InventorMCP
-pip install -e .            # server only, works everywhere
-pip install -e ".[inventor]" # adds pywin32, on Windows with Inventor installed
+py -m venv .venv
+.venv\Scripts\activate
+pip install -e ".[inventor]"     # on macOS/Linux: pip install -e .
 ```
 
-Python 3.10+. Autodesk Inventor is needed only to produce real geometry — see
-[Working without Inventor](#working-without-inventor).
+Check it starts before wiring it into anything:
 
-## Connect it to a client
+```powershell
+python -m inventor_mcp --backend mock --help
+pytest                            # 213 tests, no Inventor needed
+```
 
-<details open>
-<summary><b>Claude Desktop / Claude Code</b></summary>
+Python 3.10+.
+
+## Add it to Claude
+
+### Claude Code
+
+From inside the cloned repo, with the virtualenv active:
+
+```bash
+claude mcp add inventor -- python -m inventor_mcp --backend auto
+```
+
+The repo also ships a project-scoped [`.mcp.json`](.mcp.json), so if you open this
+directory with Claude Code it will offer to enable the server for you. Check it with:
+
+```bash
+claude mcp list
+```
+
+### Claude Desktop
+
+Edit the config file — create it if it does not exist:
+
+| OS | Path |
+|---|---|
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
 
 ```json
 {
   "mcpServers": {
     "inventor": {
-      "command": "python",
+      "command": "C:\\path\\to\\InventorMCP\\.venv\\Scripts\\python.exe",
       "args": ["-m", "inventor_mcp", "--backend", "auto"]
     }
   }
 }
 ```
 
-On Windows the path is usually `"command": "py"` or the full path to `python.exe`
-inside the environment you installed into.
-</details>
+Restart Claude Desktop, then look for the tools icon in the message box.
 
-<details>
-<summary><b>Any other MCP client</b></summary>
+> **Use the absolute path to the `python.exe` inside your virtualenv.** Claude
+> Desktop launches the server without your shell's `PATH`, so a bare `"python"` is
+> the single most common reason a server shows as failed. On Windows, note the
+> doubled backslashes — JSON requires them.
+
+### Any other MCP client
 
 The server speaks stdio by default:
 
@@ -70,10 +105,24 @@ inventor-mcp --transport streamable-http
 ```
 
 `--backend` takes `auto` (Inventor when available, otherwise the simulator),
-`inventor` (fail if Inventor is unreachable) or `mock` (always simulate).
-Every flag also has an environment variable: `INVENTOR_MCP_BACKEND`,
+`inventor` (fail loudly if Inventor is unreachable) or `mock` (always simulate).
+Every flag has an environment variable too: `INVENTOR_MCP_BACKEND`,
 `INVENTOR_MCP_TRANSPORT`, `INVENTOR_MCP_LOG_LEVEL`.
-</details>
+
+### Check it worked
+
+Ask Claude to call `connect`. A healthy live connection replies:
+
+```json
+{"backend": "inventor", "simulated": false, "connected": true, "version": "2025"}
+```
+
+If it says `"backend": "mock"`, Inventor was not reachable and you are talking to the
+simulator — useful, but it will not produce a real part. Run with
+`--backend inventor` to see why it failed rather than falling back silently.
+
+Then try: *"Model a 120 x 80 x 8 mm aluminium mounting plate with 10 mm corner radii
+and four M6 clearance holes 12 mm in from each edge."*
 
 ---
 
