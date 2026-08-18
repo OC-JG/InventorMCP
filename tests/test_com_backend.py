@@ -219,3 +219,49 @@ class TestAssetLookup:
         tried: list[str] = []
         assert com._find_asset(App(), Doc(), "unobtainium", "material", tried) is None
         assert tried == ["document assets", "asset libraries"]
+
+
+class TestConstraintIdempotence:
+    """Inventor merges sketch points created at identical coordinates.
+
+    A chain of lines drawn corner to corner can therefore arrive at the
+    constraint stage already joined, and asking it to constrain a point to
+    itself is an invalid argument rather than a no-op.
+    """
+
+    def test_identical_wrappers_are_recognised(self):
+        thing = object()
+        assert com._same_com_object(thing, thing) is True
+
+    def test_distinct_objects_without_com_are_not_the_same(self):
+        assert com._same_com_object(object(), object()) is False
+
+    def test_points_at_the_same_place_agree(self):
+        class Geometry:
+            X, Y = 1.5, -2.0
+
+        class Point:
+            Geometry = Geometry()
+
+        assert com._points_agree(Point(), Point()) is True
+
+    def test_points_apart_do_not_agree(self):
+        def point(x, y):
+            geometry = type("G", (), {"X": x, "Y": y})()
+            return type("P", (), {"Geometry": geometry})()
+
+        assert com._points_agree(point(0, 0), point(0, 1)) is False
+
+    def test_something_that_is_not_a_point_never_agrees(self):
+        class NotAPoint:
+            pass
+
+        assert com._points_agree(NotAPoint(), NotAPoint()) is False
+
+    def test_a_position_read_that_raises_is_treated_as_unknown(self):
+        class Hostile:
+            @property
+            def Geometry(self):
+                raise RuntimeError("COM says no")
+
+        assert com._sketch_point_position(Hostile()) is None

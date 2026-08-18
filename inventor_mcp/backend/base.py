@@ -90,6 +90,8 @@ class SketchInfo(Info):
     hole_centers: int = 0
     fully_constrained: bool | None = None
     degrees_of_freedom: int | None = None
+    #: Constraints Inventor had already satisfied, so we did not re-apply them.
+    skipped_constraints: int = 0
 
 
 @dataclass
