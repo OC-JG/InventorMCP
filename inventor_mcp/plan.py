@@ -103,7 +103,8 @@ ConstraintKind = Literal[
     "perpendicular",
     "tangent",
     "concentric",
-    "equal",
+    "equal_length",  # two lines are the same length
+    "equal_radius",  # two arcs or circles share a radius
     "symmetric",
     "midpoint",
     "ground",

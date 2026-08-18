@@ -404,7 +404,7 @@ def _plan_slot(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: SlotEntity
     plan.constrain("tangent", Ref(upper.id), Ref(arc2.id))
     plan.constrain("tangent", Ref(lower.id), Ref(arc1.id))
     plan.constrain("tangent", Ref(lower.id), Ref(arc2.id))
-    plan.constrain("equal", Ref(arc1.id), Ref(arc2.id))
+    plan.constrain("equal_radius", Ref(arc1.id), Ref(arc2.id))
 
     if _at_origin(math.sin(angle)):
         plan.constrain("horizontal", Ref(centerline.id))
@@ -473,7 +473,7 @@ def _plan_polygon(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: Polygon
             plan.constrain("tangent", Ref(line.id), Ref(guide.id))
     # Equal edges leave exactly one degree of freedom: the polygon's rotation.
     for previous, current in zip(lines, lines[1:]):
-        plan.constrain("equal", Ref(previous.id), Ref(current.id))
+        plan.constrain("equal_length", Ref(previous.id), Ref(current.id))
 
     if spec.dimension:
         plan.dimension("diameter", (Ref(guide.id),), size.expression, size.value,
@@ -688,11 +688,16 @@ def _resolve_ref(plan: SketchPlan, token: str) -> Ref:
 def _apply_constraints(plan: SketchPlan, specs: Iterable[ConstraintSpec]) -> None:
     for spec in specs:
         refs = tuple(_resolve_ref(plan, token) for token in spec.entities)
-        kind = spec.type
+        kind: str = spec.type
         if kind == "fix":
             for ref in refs:
                 plan.constrain("ground", ref)
             continue
+        if kind == "equal":
+            # Inventor has no single "equal": lines match on length, curves on
+            # radius. The plan knows which is meant, so it records which.
+            primitive = plan.by_id(refs[0].entity)
+            kind = "equal_radius" if isinstance(primitive, (PCircle, PArc)) else "equal_length"
         plan.constraints.append(Constraint(kind, refs))  # type: ignore[arg-type]
 
 

@@ -306,14 +306,34 @@ class TestConstraintApplication:
         targets = [object(), object(), object()]
         for kind in ("horizontal", "vertical", "horizontal_align", "vertical_align",
                      "coincident", "collinear", "parallel", "perpendicular", "tangent",
-                     "concentric", "equal", "symmetric", "midpoint", "ground"):
+                     "concentric", "equal_length", "equal_radius", "symmetric",
+                     "midpoint", "ground"):
             backend._apply_constraint(Collection(), kind, targets)
         assert calls == [
             "AddHorizontal", "AddVertical", "AddHorizontalAlign", "AddVerticalAlign",
             "AddCoincident", "AddCollinear", "AddParallel", "AddPerpendicular",
-            "AddTangent", "AddConcentric", "AddEqual", "AddSymmetry", "AddMidpoint",
-            "AddGround",
+            "AddTangent", "AddConcentric", "AddEqualLength", "AddEqualRadius",
+            "AddSymmetry", "AddMidpoint", "AddGround",
         ]
+
+    def test_every_plan_constraint_kind_is_handled(self):
+        """The IR and the backend must not drift apart."""
+        import typing
+
+        from inventor_mcp.plan import ConstraintKind
+
+        calls: list[str] = []
+
+        class Collection:
+            def __getattr__(self, name):
+                def record(*args):
+                    calls.append(name)
+                return record
+
+        backend = object.__new__(com.ComBackend)
+        for kind in typing.get_args(ConstraintKind):
+            backend._apply_constraint(Collection(), kind, [object(), object(), object()])
+        assert len(calls) == len(typing.get_args(ConstraintKind))
 
     def test_an_unknown_kind_is_refused(self):
         from inventor_mcp.errors import SketchError

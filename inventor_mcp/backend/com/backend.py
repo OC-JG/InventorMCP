@@ -767,8 +767,10 @@ class ComBackend(Backend):
             constraints.AddTangent(targets[0], targets[1])
         elif kind == "concentric":
             constraints.AddConcentric(targets[0], targets[1])
-        elif kind == "equal":
-            constraints.AddEqual(targets[0], targets[1])
+        elif kind == "equal_length":
+            constraints.AddEqualLength(targets[0], targets[1])
+        elif kind == "equal_radius":
+            constraints.AddEqualRadius(targets[0], targets[1])
         elif kind == "symmetric":
             constraints.AddSymmetry(targets[0], targets[1], targets[2])
         elif kind == "midpoint":

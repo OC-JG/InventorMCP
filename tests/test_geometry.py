@@ -129,7 +129,9 @@ class TestSlot:
         lines = [p for p in plan.primitives if isinstance(p, PLine) and not p.construction]
         assert len(arcs) == 2 and len(lines) == 2
         assert sum(1 for c in plan.constraints if c.kind == "tangent") == 4
-        assert any(c.kind == "equal" for c in plan.constraints)
+        # The end arcs match on radius, which is a different constraint to length.
+        assert any(c.kind == "equal_radius" for c in plan.constraints)
+        assert not any(c.kind == "equal_length" for c in plan.constraints)
 
     def test_the_origin_is_never_the_moved_point(self):
         plan = build([{"type": "slot", "center": [0, 0], "length": 30, "width": 8}])
@@ -160,8 +162,16 @@ class TestPolygon:
 
     def test_equal_constraints_leave_only_rotation_free(self):
         plan = build([{"type": "polygon", "sides": 6, "size": 20}])
-        equal = [c for c in plan.constraints if c.kind == "equal"]
+        equal = [c for c in plan.constraints if c.kind == "equal_length"]
         assert len(equal) == 5  # sides - 1
+
+    def test_edges_are_equal_by_length_not_radius(self):
+        """Inventor has no single 'equal': lines match on length, curves on radius."""
+        plan = build([{"type": "polygon", "sides": 5, "size": 20}])
+        kinds = {c.kind for c in plan.constraints}
+        assert "equal_length" in kinds
+        assert "equal_radius" not in kinds
+        assert "equal" not in kinds
 
     def test_polygon_closes(self):
         plan = build([{"type": "polygon", "sides": 5, "size": 20}])
@@ -215,6 +225,25 @@ class TestNamingAndProfiles:
             {"type": "circle", "center": [0, 0], "diameter": 10},
         ])
         assert len(profile_loops(plan)) == 2
+
+    def test_a_recipe_equal_resolves_by_entity_type(self):
+        lines = build(
+            [
+                {"type": "line", "start": [0, 0], "end": [40, 0], "name": "a", "locate": "none"},
+                {"type": "line", "start": [0, 10], "end": [40, 10], "name": "b", "locate": "none"},
+            ],
+            constraints=[{"type": "equal", "entities": ["a", "b"]}],
+        )
+        assert any(c.kind == "equal_length" for c in lines.constraints)
+
+        circles = build(
+            [
+                {"type": "circle", "center": [0, 0], "diameter": 10, "name": "a", "locate": "none"},
+                {"type": "circle", "center": [30, 0], "diameter": 10, "name": "b", "locate": "none"},
+            ],
+            constraints=[{"type": "equal", "entities": ["a", "b"]}],
+        )
+        assert any(c.kind == "equal_radius" for c in circles.constraints)
 
     def test_explicit_constraints_reference_names(self):
         plan = build(
