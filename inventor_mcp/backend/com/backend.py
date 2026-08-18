@@ -1094,16 +1094,35 @@ class ComBackend(Backend):
             "style": request.style,
         })
 
-    def _edge_collection(self, doc_id: str, selector: ResolvedSelector) -> Any:  # pragma: no cover
-        app = self._require_app()
+    def _new_collection(self, kind: str) -> Any:  # pragma: no cover - Windows only
+        """A collection of the type Inventor expects for *kind*.
+
+        Feature methods are typed: fillets and chamfers take an
+        ``EdgeCollection``, shells and threads a ``FaceCollection``.  A generic
+        ``ObjectCollection`` holds the same objects but is refused as a type
+        mismatch, which is what it looks like when a fillet will not build.
+        """
+        transient = self._require_app().TransientObjects
+        factory = {"edge": "CreateEdgeCollection", "face": "CreateFaceCollection"}.get(kind)
+        if factory:
+            creator = getattr(transient, factory, None)
+            if creator is not None:
+                try:
+                    return creator()
+                except Exception:  # pragma: no cover - version-specific
+                    pass
+        return transient.CreateObjectCollection()
+
+    def _topology_collection(self, doc_id: str, selector: ResolvedSelector, *,
+                             required: bool = True) -> Any:  # pragma: no cover
         matches = self.select(doc_id, selector)
-        if not matches:
+        if not matches and required:
             raise SelectionError(
-                "The selector matched no topology.",
+                f"The selector matched no {selector.kind}s.",
                 hint="Call `select_topology` with the same selector to see the alternatives.",
                 selector=selector.__dict__,
             )
-        collection = app.TransientObjects.CreateObjectCollection()
+        collection = self._new_collection(selector.kind)
         for match in matches:
             collection.Add(self._topology[match.id]["object"])
         return collection
@@ -1123,7 +1142,7 @@ class ComBackend(Backend):
 
     def fillet(self, doc_id: str, request: FilletRequest) -> FeatureInfo:  # pragma: no cover
         document = self._doc(doc_id)
-        edges = self._edge_collection(doc_id, request.edges)
+        edges = self._topology_collection(doc_id, request.edges)
         features = document.ComponentDefinition.Features.FilletFeatures
 
         failures: list[str] = []
@@ -1160,7 +1179,7 @@ class ComBackend(Backend):
 
     def chamfer(self, doc_id: str, request: ChamferRequest) -> FeatureInfo:  # pragma: no cover
         document = self._doc(doc_id)
-        edges = self._edge_collection(doc_id, request.edges)
+        edges = self._topology_collection(doc_id, request.edges)
         features = document.ComponentDefinition.Features.ChamferFeatures
         with self._batch(document), self._translate_errors("Chamfer"):
             if request.distance2 is not None:
@@ -1181,12 +1200,14 @@ class ComBackend(Backend):
 
     def shell(self, doc_id: str, request: ShellRequest) -> FeatureInfo:  # pragma: no cover
         document = self._doc(doc_id)
-        app = self._require_app()
         features = document.ComponentDefinition.Features.ShellFeatures
-        faces = app.TransientObjects.CreateObjectCollection()
-        if request.faces.ids or request.faces.filter != "all":
-            for match in self.select(doc_id, request.faces):
-                faces.Add(self._topology[match.id]["object"])
+        # An empty face collection is meaningful here: it hollows the body out
+        # without opening it.
+        faces = (
+            self._topology_collection(doc_id, request.faces, required=False)
+            if request.faces.ids or request.faces.filter != "all"
+            else self._new_collection("face")
+        )
         with self._batch(document), self._translate_errors("Shell"):
             definition = features.CreateShellDefinition(
                 faces, self._k(SHELL_DIRECTIONS[request.direction]), request.thickness.expression
@@ -1282,7 +1303,7 @@ class ComBackend(Backend):
 
     def thread(self, doc_id: str, request: ThreadRequest) -> FeatureInfo:  # pragma: no cover
         document = self._doc(doc_id)
-        faces = self._edge_collection(doc_id, request.faces)
+        faces = self._topology_collection(doc_id, request.faces)
         features = document.ComponentDefinition.Features.ThreadFeatures
         with self._batch(document), self._translate_errors("Thread"):
             definition = features.CreateThreadDefinition(

@@ -495,3 +495,48 @@ class TestFilletOptions:
 
     def test_it_reports_failure_rather_than_pretending(self):
         assert com._set_radius_expression(UnhelpfulFeature(), "corner_r") is False
+
+
+class TestTypedCollections:
+    """Inventor's feature methods take typed collections, not ObjectCollection.
+
+    A generic ObjectCollection holds the same objects but is refused as a type
+    mismatch, which is indistinguishable from a bad radius until you look at
+    which argument the error names.
+    """
+
+    class Transient:
+        def __init__(self, available=("CreateEdgeCollection", "CreateFaceCollection")):
+            self.available = available
+            self.made: list[str] = []
+
+        def __getattr__(self, name):
+            if name not in self.available and name != "CreateObjectCollection":
+                raise AttributeError(name)
+
+            def make():
+                self.made.append(name)
+                return f"<{name}>"
+
+            return make
+
+    def backend(self, transient):
+        instance = object.__new__(com.ComBackend)
+        instance._app = type("App", (), {"TransientObjects": transient})()
+        return instance
+
+    def test_edges_get_an_edge_collection(self):
+        transient = self.Transient()
+        assert self.backend(transient)._new_collection("edge") == "<CreateEdgeCollection>"
+
+    def test_faces_get_a_face_collection(self):
+        transient = self.Transient()
+        assert self.backend(transient)._new_collection("face") == "<CreateFaceCollection>"
+
+    def test_anything_else_gets_an_object_collection(self):
+        transient = self.Transient()
+        assert self.backend(transient)._new_collection("feature") == "<CreateObjectCollection>"
+
+    def test_it_falls_back_when_the_typed_factory_is_missing(self):
+        transient = self.Transient(available=())
+        assert self.backend(transient)._new_collection("edge") == "<CreateObjectCollection>"
