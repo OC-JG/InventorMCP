@@ -842,9 +842,32 @@ class ComBackend(Backend):
 
     # -- features ----------------------------------------------------------
     def _profiles(self, sketch: Any, selection: Sequence[int] | str) -> Any:  # pragma: no cover
-        if selection == "outer":
-            return sketch.Profiles.AddForSolid(True)
-        return sketch.Profiles.AddForSolid()
+        """Build a profile from the sketch's closed loops.
+
+        ``AddForSolid`` takes an optional ``Combine`` flag whose default
+        pywin32 does not always marshal cleanly, so it is passed explicitly
+        first and only then left to the default.
+        """
+        failures: list[str] = []
+        for arguments in ((True,), ()):
+            try:
+                profile = sketch.Profiles.AddForSolid(*arguments)
+            except Exception as exc:
+                failures.append(_com_message(exc))
+                continue
+            if int(profile.Count) > 0:
+                return profile
+            failures.append("Inventor returned a profile containing no closed loop.")
+            try:
+                profile.Delete()
+            except Exception:
+                pass
+
+        raise FeatureError(
+            f"No usable profile in sketch {sketch.Name!r}: {failures[0]}",
+            hint="A solid feature needs a closed loop of non-construction geometry. "
+            f"This sketch contains {_describe_sketch(sketch)}.",
+        )
 
     def extrude(self, doc_id: str, request: ExtrudeRequest) -> FeatureInfo:  # pragma: no cover
         document = self._doc(doc_id)
@@ -1529,21 +1552,59 @@ def _feature_kind(feature: Any) -> str:  # pragma: no cover - Windows only
     return str(type(feature).__name__).replace("Feature", "").lower() or "feature"
 
 
+def _describe_sketch(sketch: Any) -> str:  # pragma: no cover - Windows only
+    """A census of what Inventor thinks is in the sketch.
+
+    Reported when a profile cannot be built, because "no closed loop" and
+    "everything got marked as construction" look identical from the outside.
+    """
+    parts: list[str] = []
+    for name in ("SketchLines", "SketchArcs", "SketchCircles", "SketchEllipses", "SketchPoints"):
+        collection = getattr(sketch, name, None)
+        if collection is None:
+            continue
+        try:
+            total = int(collection.Count)
+        except Exception:
+            continue
+        if not total:
+            continue
+        construction = 0
+        for index in range(1, total + 1):
+            try:
+                if bool(collection.Item(index).Construction):
+                    construction += 1
+            except Exception:
+                pass
+        label = name.replace("Sketch", "").lower()
+        parts.append(f"{total} {label}" + (f" ({construction} construction)" if construction else ""))
+    return ", ".join(parts) or "no geometry at all"
+
+
 def _count_profiles(sketch: Any) -> int:  # pragma: no cover - Windows only
     try:
-        profile = sketch.Profiles.AddForSolid()
-        count_ = int(profile.Count)
-        profile.Delete()
-        return count_
-    except Exception:
+        profile = sketch.Profiles.AddForSolid(True)
+    except Exception as exc:
+        # Not fatal here -- a sketch of hole centres has no profile by design --
+        # but worth saying out loud, since a silent zero looks like the same thing.
+        logger.info("Sketch %s: no profile available (%s); contains %s",
+                    getattr(sketch, "Name", "?"), _com_message(exc), _describe_sketch(sketch))
         return 0
+    count_ = int(profile.Count)
+    try:
+        profile.Delete()
+    except Exception:
+        pass
+    return count_
 
 
 def _fully_constrained(sketch: Any) -> bool | None:  # pragma: no cover - Windows only
-    try:
-        return bool(sketch.FullyConstrained)
-    except Exception:
-        return None
+    """``None`` when this Inventor version does not expose the flag."""
+    for name in ("FullyConstrained", "IsFullyConstrained"):
+        value = getattr(sketch, name, None)
+        if isinstance(value, bool):
+            return value
+    return None
 
 
 def _sketch_plane_name(sketch: Any) -> str:  # pragma: no cover - Windows only
