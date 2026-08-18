@@ -1154,7 +1154,12 @@ def _bounds_center(bounds: list[float] | None) -> tuple[float, float, float] | N
 
 
 def _passes_filter(topo: _Topo, filter_name: str, document: _Document) -> bool:
-    if filter_name in ("all", "convex", "concave", "outer"):
+    if filter_name in ("convex", "concave"):
+        # The simulator synthesises topology from sketch loops and has no notion
+        # of which side the material is on, so it accepts either rather than
+        # claiming an answer. Inventor decides for real.
+        return True
+    if filter_name in ("all", "outer"):
         return True
     if filter_name in ("circular", "linear", "planar", "cylindrical"):
         return topo.geometry == filter_name

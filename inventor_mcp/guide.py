@@ -84,7 +84,10 @@ SELECTORS pick edges and faces without magic indices:
   {"kind":"edge|face", "feature":"Extrusion1", "filter":"...", "near":[x,y,z],
    "within":5, "min_length":10, "limit":4, "ids":["edge12"]}
   filters: all, top, bottom, front, back, left, right, vertical, horizontal,
-           circular, linear, planar, cylindrical, largest, smallest
+           circular, linear, planar, cylindrical, largest, smallest,
+           concave (an inside corner), convex (an outside one)
+  Prefer `concave` over guessing a `near` point for "round the inside corner":
+  it does not depend on which way a sketch plane happens to face.
   Run `select_topology` with a selector first to see exactly what it matches.
 
 WORKED EXAMPLE -- a bolted mounting plate:

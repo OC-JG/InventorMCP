@@ -122,7 +122,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"         bounding box (mm): {size}")
         print(f"         volume: {properties.volume:.4f} cm^3   mass: {properties.mass}")
 
-    if args.topology and not failures:
+    if args.topology:
         from inventor_mcp.backend.base import ResolvedSelector
 
         for kind in ("face", "edge"):
@@ -139,6 +139,8 @@ def main(argv: list[str] | None = None) -> int:
                     extra = "  normal " + ",".join(f"{c:5.2f}" for c in match.normal)
                 elif match.direction:
                     extra = "  along  " + ",".join(f"{c:5.2f}" for c in match.direction)
+                if match.convexity:
+                    extra += f"  {match.convexity}"
                 size = match.area if kind == "face" else match.length
                 print(f"    {match.id:>8}  {match.geometry:<12} ({where})"
                       f"  size {size or 0:8.3f}{extra}")

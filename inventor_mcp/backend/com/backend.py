@@ -233,6 +233,7 @@ class ComBackend(Backend):
         self._documents: dict[str, Any] = {}
         self._sketches: dict[str, dict[str, Any]] = {}
         self._topology: dict[str, dict[str, Any]] = {}
+        self._centre_cache: tuple[float, float, float] | None = None
         self._ids = count(1)
 
     # -- plumbing ----------------------------------------------------------
@@ -1166,10 +1167,24 @@ class ComBackend(Backend):
                         )
                     else:
                         assert request.depth is not None
-                        bottom = request.bottom_angle.expression if request.bottom_angle else "118 deg"
-                        feature = features.AddDrilledByDistanceExtent(
-                            placement, request.diameter.expression, request.depth.expression,
-                            direction, bottom,
+                        feature = _call_by_keyword(
+                            features.AddDrilledByDistanceExtent,
+                            [
+                                # Named, because the trailing arguments of this
+                                # family are not in the order they read: the
+                                # counterbore variant puts ExtentDirection at
+                                # index 3 and the bottom-tip arguments after it.
+                                {
+                                    "PlacementDefinition": placement,
+                                    "DiameterOrTapInfo": request.diameter.expression,
+                                    "Depth": request.depth.expression,
+                                    "ExtentDirection": direction,
+                                },
+                            ],
+                            positional=(
+                                placement, request.diameter.expression,
+                                request.depth.expression, direction,
+                            ),
                         )
                 except Exception as exc:
                     failures.append(_com_message(exc))
@@ -1461,6 +1476,7 @@ class ComBackend(Backend):
         return FeatureInfo(id=f"feat:{new_name}", name=new_name, kind=_feature_kind(feature))
 
     def select(self, doc_id: str, selector: ResolvedSelector) -> list[TopoInfo]:  # pragma: no cover
+        self._centre_cache = None
         document = self._doc(doc_id)
         component = document.ComponentDefinition
         if int(component.SurfaceBodies.Count) == 0:
@@ -1518,6 +1534,21 @@ class ComBackend(Backend):
             results = results[: selector.limit]
         return results
 
+    def _body_centre(self, entity: Any) -> tuple[float, float, float] | None:  # pragma: no cover
+        """Centre of the body this entity belongs to, cached per selection pass."""
+        if self._centre_cache is not None:
+            return self._centre_cache
+        try:
+            box = entity.Parent.RangeBox
+            self._centre_cache = (
+                (float(box.MinPoint.X) + float(box.MaxPoint.X)) / 2,
+                (float(box.MinPoint.Y) + float(box.MaxPoint.Y)) / 2,
+                (float(box.MinPoint.Z) + float(box.MaxPoint.Z)) / 2,
+            )
+        except Exception:
+            self._centre_cache = None
+        return self._centre_cache
+
     def _describe(self, entity: Any, kind: str) -> TopoInfo | None:  # pragma: no cover
         handle = self._next("edge" if kind == "edge" else "face")
         try:
@@ -1539,6 +1570,7 @@ class ComBackend(Backend):
                 length = None  # type: ignore[assignment]
             geometry = _curve_type(entity)
             direction = _edge_direction(entity)
+            convexity = _edge_convexity(entity, self._body_centre(entity))
             info = TopoInfo(
                 id=handle,
                 kind="edge",
@@ -1547,6 +1579,7 @@ class ComBackend(Backend):
                 direction=direction,
                 length=length,
                 geometry=geometry,
+                convexity=convexity,
             )
         else:
             try:
@@ -1883,6 +1916,24 @@ def _set_radius_expression(feature: Any, expression: str) -> bool:  # pragma: no
     return False
 
 
+def _call_by_keyword(method: Any, keyword_sets: list[dict[str, Any]],
+                     positional: tuple[Any, ...]) -> Any:  # pragma: no cover - Windows only
+    """Call *method* by name where possible, falling back to positional.
+
+    Argument order in Inventor's hole methods is not what it reads like, and
+    getting it wrong puts a string where an enum belongs. Naming the arguments
+    removes the guesswork; late-bound dispatch does not accept keywords, so a
+    positional call stands behind it.
+    """
+    errors: list[str] = []
+    for keywords in keyword_sets:
+        try:
+            return method(**keywords)
+        except TypeError as exc:  # unknown or missing parameter name
+            errors.append(str(exc))
+    return method(*positional)
+
+
 def _distinct(*objects: Any) -> list[Any]:
     """The given objects with duplicates dropped, preserving order."""
     unique: list[Any] = []
@@ -1992,6 +2043,44 @@ def _face_normal(face: Any) -> tuple[float, float, float] | None:  # pragma: no 
     return normal
 
 
+def _edge_convexity(edge: Any, centre: tuple[float, float, float] | None) -> str | None:
+    """Whether an edge is an outside corner or an inside one.  # pragma: no cover
+
+    Compares the sum of the two adjacent faces' outward normals against the
+    direction from the body's centre to the edge: an outside corner faces away
+    from the body, an inside one faces back towards it.
+
+    This is a heuristic, not a topological test. It is reliable on the
+    prismatic parts this server builds and can misjudge a strongly re-entrant
+    shape, so it returns ``None`` rather than guessing when anything is
+    missing, and an unknown edge matches neither filter.
+    """
+    if centre is None:
+        return None
+    try:
+        faces = edge.Faces
+        if int(faces.Count) != 2:
+            return None
+        normals = [_face_normal(faces.Item(index)) for index in (1, 2)]
+        box = edge.Evaluator.RangeBox
+        midpoint = (
+            (float(box.MinPoint.X) + float(box.MaxPoint.X)) / 2,
+            (float(box.MinPoint.Y) + float(box.MaxPoint.Y)) / 2,
+            (float(box.MinPoint.Z) + float(box.MaxPoint.Z)) / 2,
+        )
+    except Exception:
+        return None
+    if any(normal is None for normal in normals):
+        return None
+
+    outward = [a + b for a, b in zip(*normals)]  # type: ignore[arg-type]
+    away = [point - middle for point, middle in zip(midpoint, centre)]
+    alignment = sum(a * b for a, b in zip(outward, away))
+    if abs(alignment) < 1e-9:
+        return None
+    return "convex" if alignment > 0 else "concave"
+
+
 def _edge_direction(edge: Any) -> tuple[float, float, float] | None:  # pragma: no cover
     try:
         geometry = edge.Geometry
@@ -2002,7 +2091,9 @@ def _edge_direction(edge: Any) -> tuple[float, float, float] | None:  # pragma: 
 
 
 def _com_passes_filter(info: TopoInfo, filter_name: str) -> bool:  # pragma: no cover - Windows only
-    if filter_name in ("all", "largest", "smallest", "outer", "convex", "concave"):
+    if filter_name in ("convex", "concave"):
+        return info.convexity == filter_name
+    if filter_name in ("all", "largest", "smallest", "outer"):
         return True
     if filter_name in ("circular", "linear", "planar", "cylindrical", "elliptical"):
         return info.geometry == filter_name

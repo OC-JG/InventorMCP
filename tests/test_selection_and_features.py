@@ -210,3 +210,40 @@ class TestCutsAndPlanes:
             apply(session, block, [
                 {"op": "sketch", "name": "Nowhere", "plane": "abc", "entities": [
                     {"type": "circle", "diameter": 5}]}])
+
+
+class TestConvexity:
+    """"Round the inside corner" should be sayable without guessing a point.
+
+    A `near` point depends on which way the sketch plane faces, which is not
+    something a recipe author should have to know; `concave` does not.
+    """
+
+    def test_the_selector_accepts_it(self):
+        assert Selector.model_validate({"filter": "concave"}).filter == "concave"
+        assert Selector.model_validate({"filter": "convex"}).filter == "convex"
+
+    def test_it_survives_resolution(self, session, block):
+        resolved = resolve_selector(
+            Selector.model_validate({"kind": "edge", "filter": "concave"}), block.resolver
+        )
+        assert resolved.filter == "concave"
+
+    def test_the_simulator_does_not_pretend_to_know(self, session, block):
+        """It synthesises topology from sketch loops and has no material side."""
+        every = select(session, block, kind="edge", filter="all")
+        concave = select(session, block, kind="edge", filter="concave")
+        assert len(concave) == len(every)
+        assert all(match.convexity is None for match in concave)
+
+    def test_the_com_filter_requires_a_known_convexity(self):
+        from inventor_mcp.backend.base import TopoInfo
+        from inventor_mcp.backend.com import backend as com
+
+        inside = TopoInfo(id="e1", kind="edge", description="", convexity="concave")
+        outside = TopoInfo(id="e2", kind="edge", description="", convexity="convex")
+        unknown = TopoInfo(id="e3", kind="edge", description="")
+        assert com._com_passes_filter(inside, "concave") is True
+        assert com._com_passes_filter(outside, "concave") is False
+        assert com._com_passes_filter(unknown, "concave") is False
+        assert com._com_passes_filter(unknown, "convex") is False

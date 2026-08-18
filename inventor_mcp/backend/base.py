@@ -120,6 +120,9 @@ class TopoInfo(Info):
     length: float | None = None
     area: float | None = None
     geometry: str | None = None
+    #: "convex" (an outside corner) or "concave" (an inside one), when it can
+    #: be determined. ``None`` means unknown, which never matches either filter.
+    convexity: str | None = None
 
 
 @dataclass

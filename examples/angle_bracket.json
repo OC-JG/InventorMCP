@@ -159,13 +159,9 @@
       "op": "fillet",
       "name": "InsideCorner",
       "edges": {
-        "filter": "horizontal",
-        "near": [
-          6,
-          0,
-          6
-        ],
-        "within": 12,
+        "kind": "edge",
+        "filter": "concave",
+        "min_length": 40,
         "limit": 1
       },
       "radius": "fillet_r"
