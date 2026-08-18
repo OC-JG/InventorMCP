@@ -115,6 +115,40 @@ _DOCUMENT_INTERFACES = {
 }
 
 
+#: How COM members are resolved.  "late" looks them up by name at call time;
+#: "early" uses the wrapper pywin32 generates from the type library.
+BINDING_MODES = ("late", "early")
+
+
+def resolve_binding(binding: str | None = None) -> str:
+    """Pick a binding mode from the argument, the environment, or the default.
+
+    Late binding is the default: the generated early-bound wrapper mis-marshals
+    several Inventor calls, and the cost of late binding is one name lookup per
+    call.  ``INVENTOR_MCP_BINDING=early`` restores the old behaviour.
+    """
+    chosen = (binding or os.environ.get("INVENTOR_MCP_BINDING") or "late").strip().lower()
+    return chosen if chosen in BINDING_MODES else "late"
+
+
+def _as_late_bound(obj: Any) -> Any:  # pragma: no cover - Windows only
+    """Re-wrap a COM object so members resolve by name at call time.
+
+    pywin32 can generate an early-bound wrapper from Inventor's type library,
+    and that wrapper marshals several calls in a way Inventor rejects outright
+    -- ``Documents.Add`` handing back the generic ``Document`` interface,
+    ``AddCoincident`` and ``AddForSolid`` failing with E_INVALIDARG on
+    arguments that are demonstrably valid.  Late binding sidesteps the whole
+    class of problem at the cost of a name lookup per call.
+    """
+    if win32com is None:
+        return obj
+    try:
+        return win32com.client.dynamic.Dispatch(obj._oleobj_)
+    except Exception:
+        return obj
+
+
 def _specialise(document: Any) -> Any:  # pragma: no cover - Windows only
     """Return *document* as its specific interface rather than plain ``Document``.
 
@@ -185,7 +219,8 @@ class ComBackend(Backend):
 
     name = "inventor"
 
-    def __init__(self) -> None:
+    def __init__(self, binding: str | None = None) -> None:
+        self.binding = resolve_binding(binding)
         if win32com is None:
             raise BackendUnavailableError(
                 "The Inventor backend needs Windows and pywin32.",
@@ -271,11 +306,17 @@ class ComBackend(Backend):
             app.Visible = bool(visible)
         except Exception:
             pass
-        # Early binding gives us the enum values; late binding still works without it.
+
+        # Generating the type-library cache is what gives us exact enum values.
+        # It is independent of how we then talk to Inventor, and Inventor is a
+        # single-instance server, so this attaches to the session already open.
         try:
             win32com.client.gencache.EnsureDispatch("Inventor.Application")
         except Exception:
             pass
+
+        if self.binding == "late":
+            app = _as_late_bound(app)
 
         self._app = app
         self._constants = load(app)
@@ -615,11 +656,12 @@ class ComBackend(Backend):
 
     def _explain(self, exc: Exception | None) -> str:  # pragma: no cover - Windows only
         """Inventor's own account of the failure, when it has one."""
-        message = _com_message(exc) if exc is not None else "no error reported"
-        detail = None
+        return self._explain_text(_com_message(exc) if exc is not None else "no error reported")
+
+    def _explain_text(self, message: str) -> str:  # pragma: no cover - Windows only
+        """Append Inventor's last error message, which its excepinfo omits."""
         try:
-            manager = self._app.ErrorManager
-            detail = str(manager.LastErrorMessage or "").strip() or None
+            detail = str(self._app.ErrorManager.LastErrorMessage or "").strip() or None
         except Exception:
             detail = None
         return f"{message} ({detail})" if detail and detail not in message else message
@@ -857,27 +899,32 @@ class ComBackend(Backend):
     def _profiles(self, sketch: Any, selection: Sequence[int] | str) -> Any:  # pragma: no cover
         """Build a profile from the sketch's closed loops.
 
-        ``AddForSolid`` takes an optional ``Combine`` flag whose default
-        pywin32 does not always marshal cleanly, so it is passed explicitly
-        first and only then left to the default.
+        ``AddForSolid``'s ``Combine`` flag is optional-with-a-default, which is
+        not always marshalled cleanly, so it is passed explicitly before being
+        left to the default -- and the collection is tried late-bound too.
         """
         failures: list[str] = []
-        for arguments in ((True,), ()):
+        attempts = [
+            (collection, arguments)
+            for collection in _distinct(sketch.Profiles, _as_late_bound(sketch.Profiles))
+            for arguments in ((True,), ())
+        ]
+        for profiles, arguments in attempts:
             try:
-                profile = sketch.Profiles.AddForSolid(*arguments)
+                profile = profiles.AddForSolid(*arguments)
             except Exception as exc:
                 failures.append(_com_message(exc))
                 continue
             if int(profile.Count) > 0:
                 return profile
-            failures.append("Inventor returned a profile containing no closed loop.")
+            failures.append("Inventor returned a profile with no closed loop in it.")
             try:
                 profile.Delete()
             except Exception:
                 pass
 
         raise FeatureError(
-            f"No usable profile in sketch {sketch.Name!r}: {failures[0]}",
+            f"No usable profile in sketch {sketch.Name!r}: {self._explain_text(failures[0])}",
             hint="A solid feature needs a closed loop of non-construction geometry. "
             f"This sketch contains {_describe_sketch(sketch)}.",
         )
@@ -1563,6 +1610,15 @@ def _document_kind(document: Any) -> str:  # pragma: no cover - Windows only
 
 def _feature_kind(feature: Any) -> str:  # pragma: no cover - Windows only
     return str(type(feature).__name__).replace("Feature", "").lower() or "feature"
+
+
+def _distinct(*objects: Any) -> list[Any]:
+    """The given objects with duplicates dropped, preserving order."""
+    unique: list[Any] = []
+    for obj in objects:
+        if obj is not None and not any(obj is seen for seen in unique):
+            unique.append(obj)
+    return unique
 
 
 def _describe_sketch(sketch: Any) -> str:  # pragma: no cover - Windows only

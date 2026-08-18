@@ -381,3 +381,41 @@ class TestOriginPoint:
         second = instance._entity(sketch, objects, ORIGIN)
         assert first == second == "origin"
         assert len(calls) == 1, "the origin should be projected once per sketch"
+
+
+class TestBindingMode:
+    """Late binding is the default because the generated wrapper misbehaves."""
+
+    def test_late_is_the_default(self, monkeypatch):
+        monkeypatch.delenv("INVENTOR_MCP_BINDING", raising=False)
+        assert com.resolve_binding() == "late"
+
+    def test_an_explicit_argument_wins(self, monkeypatch):
+        monkeypatch.setenv("INVENTOR_MCP_BINDING", "late")
+        assert com.resolve_binding("early") == "early"
+
+    def test_the_environment_is_honoured(self, monkeypatch):
+        monkeypatch.setenv("INVENTOR_MCP_BINDING", "  EARLY  ")
+        assert com.resolve_binding() == "early"
+
+    def test_nonsense_falls_back_to_late(self, monkeypatch):
+        monkeypatch.setenv("INVENTOR_MCP_BINDING", "telepathy")
+        assert com.resolve_binding() == "late"
+
+    def test_late_binding_is_a_no_op_without_pywin32(self):
+        sentinel = object()
+        assert com._as_late_bound(sentinel) is sentinel
+
+
+class TestDistinct:
+    def test_duplicates_are_dropped_by_identity(self):
+        first, second = object(), object()
+        assert com._distinct(first, second, first) == [first, second]
+
+    def test_none_is_ignored(self):
+        thing = object()
+        assert com._distinct(thing, None) == [thing]
+
+    def test_equal_but_separate_objects_are_both_kept(self):
+        # COM wrappers compare equal surprisingly often; identity is what matters.
+        assert len(com._distinct([1], [1])) == 2

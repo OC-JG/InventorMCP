@@ -27,6 +27,32 @@ The backend then calls `gencache.EnsureDispatch` to generate the early-bound typ
 library wrapper. That is what makes enum values exact for your installed version.
 It is best-effort — see below if it fails.
 
+## Early vs late binding
+
+pywin32 can generate an early-bound wrapper from Inventor's type library. This
+server generates it -- that is where exact enum values come from -- but then
+talks to Inventor **late-bound**, resolving members by name at call time.
+
+That is not a stylistic preference. On Inventor 2027.1 with Python 3.14 the
+generated wrapper produced a string of failures on calls that were
+demonstrably valid:
+
+* `Documents.Add` handed back the generic `Document` interface, so
+  `ComponentDefinition` raised `AttributeError`
+* `GeometricConstraints.AddCoincident` and `AddMidpoint` returned `E_INVALIDARG`
+  on ordinary sketch points
+* `Profiles.AddForSolid` returned `E_INVALIDARG` on a sketch that extruded
+  perfectly well by hand
+
+Late binding costs one name lookup per call and avoids all of it. To go back:
+
+```powershell
+set INVENTOR_MCP_BINDING=early
+```
+
+If you hit a call that behaves differently between the two, that is worth an
+issue -- include the Inventor version and the failing operation.
+
 ## Enum constants
 
 Inventor's API takes enum values (`kJoinOperation`, `kVerticalDim`, …) whose numbers
