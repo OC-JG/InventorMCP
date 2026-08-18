@@ -143,6 +143,17 @@ def _specialise(document: Any) -> Any:  # pragma: no cover - Windows only
         return document
 
 
+def _supports_construction(primitive: Any) -> bool:
+    """Whether Inventor lets this entity be marked as construction geometry.
+
+    Construction is a property of curves -- it says "this shape is here to
+    drive constraints, not to form a profile".  A sketch point forms no
+    profile in the first place, so the flag is meaningless on one and setting
+    it is rejected outright.
+    """
+    return not isinstance(primitive, PPoint)
+
+
 def _same_com_object(first: Any, second: Any) -> bool:  # pragma: no cover - Windows only
     """True when two wrappers point at the same underlying COM object."""
     if first is second:
@@ -589,8 +600,12 @@ class ComBackend(Backend):
         else:
             raise SketchError(f"Cannot create {type(primitive).__name__} in Inventor.")
 
-        if getattr(primitive, "construction", False):
-            entity.Construction = True
+        if getattr(primitive, "construction", False) and _supports_construction(primitive):
+            try:
+                entity.Construction = True
+            except Exception as exc:  # pragma: no cover - version-specific
+                logger.info("Could not mark %s as construction geometry: %s",
+                            primitive.id, _com_message(exc))
         if getattr(primitive, "centerline", False):
             try:
                 entity.Centerline = True

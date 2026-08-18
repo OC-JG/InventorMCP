@@ -265,3 +265,38 @@ class TestConstraintIdempotence:
                 raise RuntimeError("COM says no")
 
         assert com._sketch_point_position(Hostile()) is None
+
+
+class TestConstructionGeometry:
+    """Construction is a property of curves, not of points.
+
+    A sketch point forms no profile, so the flag is meaningless on one and
+    Inventor rejects the assignment rather than ignoring it.
+    """
+
+    def test_curves_take_the_flag(self):
+        from inventor_mcp.plan import PArc, PCircle, PEllipse, PLine
+
+        for primitive in (PLine("l1"), PCircle("c1"), PArc("a1"), PEllipse("e1")):
+            assert com._supports_construction(primitive) is True
+
+    def test_points_do_not(self):
+        from inventor_mcp.plan import PPoint
+
+        assert com._supports_construction(PPoint("p1")) is False
+
+    def test_the_shapes_that_build_construction_points_still_mark_them(self):
+        """The plan should still say 'construction'; only the COM call is skipped."""
+        from inventor_mcp.geometry import plan_sketch
+        from inventor_mcp.plan import PPoint
+        from inventor_mcp.resolve import Resolver
+        from inventor_mcp.schema import SketchOp
+
+        spec = SketchOp.model_validate({
+            "op": "sketch", "plane": "xy",
+            "entities": [{"type": "rectangle", "center": [0, 0], "width": 40, "height": 20}],
+        })
+        plan = plan_sketch(spec, Resolver("mm", "deg"))
+        points = [p for p in plan.primitives if isinstance(p, PPoint)]
+        assert len(points) == 1
+        assert points[0].construction is True
