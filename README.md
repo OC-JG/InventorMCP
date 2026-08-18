@@ -325,11 +325,16 @@ pytest                      # 213 tests, no Inventor required
 The recipe layer, expression evaluator, geometry expansion, selectors, tool surface
 and simulator are covered by the test suite and run on any platform.
 
-The COM backend's calls into Inventor cannot be exercised on a Linux CI machine.
-Its structure, error translation, enum resolution and selector filtering are tested;
-the API calls themselves need a pass on a Windows machine with Inventor installed
-before they should be trusted in anger. `docs/INVENTOR_SETUP.md` lists what to check
-first and how to diagnose an enum mismatch if one shows up.
+The COM backend has been driven against **Inventor 2027.1**: `mounting_plate.json`
+builds end to end — parameters, constrained sketch, extrude, fillet by selector,
+holes from a point grid — and exports to STEP, STL and PNG. Inventor's volume for
+that part agreed with the simulator's estimate to six significant figures.
+
+Not yet exercised live: revolve, sweep, loft, shell, chamfer, patterns, mirror,
+work planes and threads. Those paths are written but unproven, and the other four
+examples are the way to find out. See
+[docs/INVENTOR_SETUP.md](docs/INVENTOR_SETUP.md) for what is confirmed, what is
+not, and the Inventor API quirks that cost the most time getting there.
 
 ## Licence
 

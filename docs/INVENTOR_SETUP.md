@@ -100,6 +100,40 @@ Build each one, then in Inventor:
 3. Change a parameter and rebuild. The part should move coherently. Geometry that
    jumps or flips indicates a missing locating constraint.
 
+## What has been verified
+
+`mounting_plate.json` builds end to end on **Inventor 2027.1** (Windows, Python
+3.14, pywin32), including export and capture. That covers:
+
+connect · new part · material · user parameters with expressions · sketch
+geometry, constraints and driving dimensions · profile · extrude · fillet by
+selector · hole from a point grid · mass properties · STEP · STL · PNG · save
+
+Inventor reported 75.0185 cm³ against the simulator's 75.018498 cm³, with an
+identical bounding box.
+
+Not yet exercised against Inventor: revolve, sweep, loft, shell, chamfer,
+patterns, mirror, work planes, threads, and the polygon/slot/polyline entities.
+Those live in the other four examples — run them and report what breaks.
+
+Some notes from getting there, which are the sort of thing that costs an
+afternoon:
+
+* Feature methods take **typed collections**. `EdgeCollection` for fillets and
+  chamfers, `FaceCollection` for shells and threads. A generic
+  `ObjectCollection` holds the same objects and is refused as a type mismatch.
+* Arguments typed `VT_I4` are **enums, not flags**. `ExtentDirection` takes
+  `kPositiveExtentDirection`, not `True`.
+* Optional-with-default arguments are safer passed explicitly;
+  `Profiles.AddForSolid()` failed until `Combine` was supplied.
+* Inventor **infers coincident constraints** from coordinates as geometry is
+  created, then rejects an explicit duplicate as invalid. Build chained curves
+  from the previous curve's `SketchPoint` instead.
+* `PlanarSketch.OriginPoint` cannot be constrained against. Project the origin
+  work point into the sketch first.
+* A midpoint constraint moves the *point* onto the line, so the grounded sketch
+  origin can never be that point.
+
 ## Known-shaky areas
 
 These are the parts of the COM backend most likely to need adjustment, and why:
@@ -115,6 +149,8 @@ These are the parts of the COM backend most likely to need adjustment, and why:
   any recipe.
 - **Face normals** are read via `GetNormalAtParam` with `IsParamReversed` applied.
   If `top`/`bottom` selectors pick the wrong faces, that is where to look.
+- **`FullyConstrained`** is not exposed under that name on 2027.1, so sketches
+  report `null` for it rather than true or false.
 
 None of these affect the mock backend or the recipe format.
 
