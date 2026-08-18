@@ -90,8 +90,11 @@ class SketchInfo(Info):
     hole_centers: int = 0
     fully_constrained: bool | None = None
     degrees_of_freedom: int | None = None
-    #: Constraints Inventor had already satisfied, so we did not re-apply them.
-    skipped_constraints: int = 0
+    #: Constraints Inventor inferred for itself, so ours were not needed. Benign.
+    inferred_constraints: int = 0
+    #: Constraints Inventor refused as dependent on the others. The sketch still
+    #: closes, but a degree of freedom is left in it.
+    refused_constraints: int = 0
 
 
 @dataclass

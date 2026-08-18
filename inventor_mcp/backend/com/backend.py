@@ -569,17 +569,20 @@ class ComBackend(Backend):
                         sketch, transient, primitive, groups, shared
                     )
 
-            skipped: list[str] = []
+            inferred: list[str] = []
+            refused: list[str] = []
             with self._translate_errors("Applying sketch constraints", SketchError):
                 for constraint in plan.constraints:
                     if _is_structural(constraint, groups):
                         continue
-                    note = self._add_constraint(sketch, objects, constraint)
-                    if note:
-                        skipped.append(note)
-            if skipped:
-                logger.info("Sketch %s: %d constraint(s) already satisfied: %s",
-                            sketch.Name, len(skipped), "; ".join(skipped[:5]))
+                    outcome, note = self._add_constraint(sketch, objects, constraint)
+                    if outcome == "inferred":
+                        inferred.append(note)
+                    elif outcome == "refused":
+                        refused.append(note)
+            if inferred:
+                logger.info("Sketch %s: Inventor had already applied %d constraint(s): %s",
+                            sketch.Name, len(inferred), "; ".join(inferred[:5]))
 
             with self._translate_errors("Applying sketch dimensions", SketchError):
                 for dimension in plan.dimensions:
@@ -597,7 +600,8 @@ class ComBackend(Backend):
             profiles=profiles,
             hole_centers=len(plan.hole_centers),
             fully_constrained=_fully_constrained(sketch),
-            skipped_constraints=len(skipped),
+            inferred_constraints=len(inferred),
+            refused_constraints=len(refused),
         )
 
     def _add_primitive(self, sketch: Any, transient: Any, primitive: Any,
@@ -781,26 +785,27 @@ class ComBackend(Backend):
             raise SketchError(f"Unsupported constraint {kind!r}.")
 
     def _add_constraint(self, sketch: Any, objects: dict[str, Any],
-                        constraint: Any) -> str | None:  # pragma: no cover
-        """Apply one geometric constraint.
+                        constraint: Any) -> tuple[str, str]:  # pragma: no cover
+        """Apply one geometric constraint, reporting what became of it.
 
-        Returns a note when the constraint was genuinely unnecessary, or
-        ``None`` when it was applied.  A constraint that cannot be applied is
-        an error: geometry that merely *sits* at the right coordinates is not
-        joined, and Inventor will refuse to build a profile from it.
+        Returns ``("applied", ...)``, ``("inferred", ...)`` when Inventor had
+        already made the same constraint itself, or ``("refused", ...)`` when it
+        rejected one as dependent on the others.  Those three are genuinely
+        different: only the last leaves a degree of freedom behind, and only a
+        failed *structural* constraint is fatal.
         """
         targets = [self._entity(sketch, objects, ref) for ref in constraint.refs]
         kind = constraint.kind
         where = f"{kind}({', '.join(str(ref) for ref in constraint.refs)})"
 
         if kind == "coincident" and _same_com_object(targets[0], targets[1]):
-            return f"{where}: already the same point"
+            return ("inferred", f"{where}: already the same point")
 
         first_error: Exception | None = None
         for collection in self._constraint_collections(sketch):
             try:
                 self._apply_constraint(collection, kind, targets)
-                return None
+                return ("applied", where)
             except SketchError:
                 raise
             except Exception as exc:
@@ -810,7 +815,7 @@ class ComBackend(Backend):
         # created, and then rejects an explicit duplicate. That is only benign
         # if the constraint really is there, so check rather than assume.
         if _already_constrained(sketch, kind, targets):
-            return f"{where}: Inventor had already applied it"
+            return ("inferred", f"{where}: Inventor had already applied it")
 
         if kind in _STRUCTURAL_KINDS:
             raise SketchError(
@@ -823,9 +828,9 @@ class ComBackend(Backend):
         # sometimes rejects one as dependent on the constraints around it; that
         # leaves the sketch usable but with a degree of freedom still in it, so
         # it is reported rather than treated as fatal.
-        logger.warning("Sketch %s: %s was refused (%s); the sketch may be "
-                       "under-constrained.", sketch.Name, where, self._explain(first_error))
-        return f"{where}: refused by Inventor, sketch may be under-constrained"
+        logger.warning("Sketch %s: %s was refused (%s); the sketch keeps a degree of "
+                       "freedom.", sketch.Name, where, self._explain(first_error))
+        return ("refused", where)
 
     def _add_dimension(self, sketch: Any, transient: Any, objects: dict[str, Any],
                        dimension: Any) -> None:  # pragma: no cover

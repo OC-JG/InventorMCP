@@ -112,9 +112,13 @@ selector · hole from a point grid · mass properties · STEP · STL · PNG · s
 Inventor reported 75.0185 cm³ against the simulator's 75.018498 cm³, with an
 identical bounding box.
 
-Not yet exercised against Inventor: revolve, sweep, loft, shell, chamfer,
-patterns, mirror, work planes, threads, and the polygon/slot/polyline entities.
-Those live in the other four examples — run them and report what breaks.
+`hex_standoff.json` builds too, adding the polygon entity, a tapped hole and a
+chamfer on circular edges. Its hexagon keeps one degree of freedom — see
+"Known-shaky areas" below.
+
+Not yet exercised against Inventor: revolve, sweep, loft, shell, patterns,
+mirror, work planes, threads, and the slot/polyline entities. Those live in the
+other three examples — run them and report what breaks.
 
 Some notes from getting there, which are the sort of thing that costs an
 afternoon:
@@ -151,6 +155,14 @@ These are the parts of the COM backend most likely to need adjustment, and why:
   If `top`/`bottom` selectors pick the wrong faces, that is where to look.
 - **`FullyConstrained`** is not exposed under that name on 2027.1, so sketches
   report `null` for it rather than true or false.
+- **Polygons keep one degree of freedom.** A regular polygon is built as a
+  construction circle, vertices coincident with it, and `n - 1` equal-length
+  edges. Inventor refuses the last of those equalities — whether they are
+  chained around the loop or all measured against the first edge, it is always
+  the constraint involving the *closing* edge that is rejected, so it considers
+  that edge's length already determined. The geometry is created regular and
+  the circle is dimensioned, so the part is correct; the sketch is simply not
+  fully constrained. `refused_constraints` on the sketch result reports it.
 
 None of these affect the mock backend or the recipe format.
 

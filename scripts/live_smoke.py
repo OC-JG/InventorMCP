@@ -103,9 +103,13 @@ def main(argv: list[str] | None = None) -> int:
                   f"dimensions={result.get('dimensions')} "
                   f"profiles={result.get('profiles')} "
                   f"fully_constrained={result.get('fully_constrained')}")
-            skipped = result.get("skipped_constraints") or 0
-            if skipped:
-                print(f"         WARNING: {skipped} constraint(s) were not applied")
+            inferred = result.get("inferred_constraints") or 0
+            refused = result.get("refused_constraints") or 0
+            if inferred:
+                print(f"         {inferred} constraint(s) Inventor had already made")
+            if refused:
+                print(f"         WARNING: {refused} constraint(s) refused - this sketch "
+                      "keeps a degree of freedom")
 
     properties = step("mass_properties", lambda: backend.mass_properties(context.doc_id))
     if properties:
