@@ -503,13 +503,11 @@ class ComBackend(Backend):
         parameters = document.ComponentDefinition.Parameters
         with self._translate_errors(f"Setting parameter {name!r}", ParameterError):
             existing = _find_parameter(parameters, name)
-            if existing is None:
-                parameter = parameters.UserParameters.AddByExpression(
-                    name, expression, inventor_symbol(units)
-                )
-            else:
+            if existing is not None:
                 parameter = existing
                 parameter.Expression = expression
+            else:
+                parameter = self._add_parameter(parameters, name, expression, units)
             if comment:
                 parameter.Comment = comment
             try:
@@ -518,6 +516,43 @@ class ComBackend(Backend):
             except Exception:
                 pass
         return _parameter_info(parameter)
+
+    def _add_parameter(self, parameters: Any, name: str, expression: str,
+                       units: str) -> Any:  # pragma: no cover - Windows only
+        """Create a user parameter, reporting exactly what Inventor refused."""
+        symbol = inventor_symbol(units)
+        try:
+            return parameters.UserParameters.AddByExpression(name, expression, symbol)
+        except Exception as exc:
+            first = self._explain(exc)
+
+        # Inventor's expression parser is stricter than ours in ways that are
+        # not always obvious; creating the parameter by value and then assigning
+        # the expression gets a second, clearer error out of it if it is genuine.
+        try:
+            parameter = parameters.UserParameters.AddByValue(name, 0.0, symbol)
+        except Exception as exc:
+            raise ParameterError(
+                f"Inventor refused the parameter {name!r} = {expression!r} "
+                f"(units {symbol!r}): {first}",
+                hint="Check the name is not reserved and that the expression's units "
+                "are consistent.",
+            ) from exc
+        try:
+            parameter.Expression = expression
+        except Exception as exc:
+            try:
+                parameter.Delete()
+            except Exception:
+                pass
+            raise ParameterError(
+                f"Inventor refused the expression {expression!r} for {name!r} "
+                f"(units {symbol!r}): {self._explain(exc)}",
+                hint=f"AddByExpression also refused it: {first}",
+            ) from exc
+        logger.info("Parameter %s was created by value because AddByExpression "
+                    "refused it (%s).", name, first)
+        return parameter
 
     def list_parameters(self, doc_id: str, *,
                         include_model: bool = False) -> list[ParamInfo]:  # pragma: no cover
@@ -1253,7 +1288,8 @@ class ComBackend(Backend):
         )
         with self._batch(document), self._translate_errors("Shell"):
             definition = features.CreateShellDefinition(
-                faces, self._k(SHELL_DIRECTIONS[request.direction]), request.thickness.expression
+                faces, request.thickness.expression,
+                self._k(SHELL_DIRECTIONS[request.direction]),
             )
             feature = features.Add(definition)
             if request.name:
@@ -1320,7 +1356,9 @@ class ComBackend(Backend):
         plane = self._resolve_plane(document, request.plane, None)
         features = document.ComponentDefinition.Features.MirrorFeatures
         with self._batch(document), self._translate_errors("Mirror"):
-            feature = features.Add(parents, plane, True)
+            feature = features.Add(
+                parents, plane, False, self._k("kAdjustToModelCompute")
+            )
             if request.name:
                 feature.Name = request.name
         return _feature_info(feature, "mirror", {"plane": request.plane})
