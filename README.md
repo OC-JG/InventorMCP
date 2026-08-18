@@ -317,7 +317,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for why it is split that way, a
 
 ```bash
 pip install -e ".[dev]"
-pytest                      # 213 tests, no Inventor required
+pytest                      # 298 tests, no Inventor required
 ```
 
 ### Status
@@ -329,11 +329,11 @@ The COM backend has been driven against **Inventor 2027.1**. `mounting_plate.jso
 builds end to end — parameters, constrained sketch, extrude, fillet by selector,
 holes from a point grid — and exports to STEP, STL and PNG; Inventor's volume for
 that part agreed with the simulator's estimate to six significant figures.
-`hex_standoff.json` adds the polygon entity, a tapped hole and a chamfer.
+`hex_standoff.json` adds the polygon entity, a tapped hole and a chamfer, and
+`enclosure_base.json` adds a shell and a work plane.
 
-Not yet exercised live: revolve, sweep, loft, shell, patterns, mirror, work planes
-and threads. Those paths are written but unproven, and the remaining examples are
-the way to find out. See
+Not yet exercised live: revolve, sweep, loft, patterns and threads. Those paths
+are written but unproven, and the remaining examples are the way to find out. See
 [docs/INVENTOR_SETUP.md](docs/INVENTOR_SETUP.md) for what is confirmed, what is
 not, and the Inventor API quirks that cost the most time getting there.
 

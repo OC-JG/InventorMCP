@@ -54,15 +54,16 @@ from ..base import (
 )
 
 #: Plane name -> (axis index and sign for sketch u, sketch v and the plane
-#: normal; normal vector).  Measured against Inventor 2027.1 rather than
-#: assumed: the XZ plane runs its horizontal axis along -X, which is why a
-#: point picked on the +X side of an XZ sketch finds the wrong edge.
+#: normal; normal vector).  These are the axes a *recipe* means.  Inventor's
+#: own XZ plane runs its first axis along -X; the COM backend mirrors the
+#: geometry on the way in so that both backends put a recipe's coordinates in
+#: the same place.
 _PLANES: dict[
     str, tuple[tuple[tuple[int, float], tuple[int, float], tuple[int, float]],
                tuple[float, float, float]]
 ] = {
     "xy": (((0, 1.0), (1, 1.0), (2, 1.0)), (0.0, 0.0, 1.0)),
-    "xz": (((0, -1.0), (2, 1.0), (1, 1.0)), (0.0, 1.0, 0.0)),
+    "xz": (((0, 1.0), (2, 1.0), (1, 1.0)), (0.0, 1.0, 0.0)),
     "yz": (((1, 1.0), (2, 1.0), (0, 1.0)), (1.0, 0.0, 0.0)),
 }
 

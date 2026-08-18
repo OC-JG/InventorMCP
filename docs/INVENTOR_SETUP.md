@@ -88,7 +88,7 @@ of the API surface:
 | `hex_standoff.json` | Polygon construction-circle constraints, tapped hole, chamfer on circular edges |
 | `flanged_shaft.json` | Offset work plane, stacked extrusions, bolt circle, blind holes |
 | `enclosure_base.json` | Shell with a removed face, cut extrude on a second plane |
-| `angle_bracket.json` | Polyline profile, symmetric extrude, slot, mirror, sketch on YZ |
+| `angle_bracket.json` | Polyline profile, symmetric extrude, slot, mirror, sketch on XZ |
 
 Build each one, then in Inventor:
 
@@ -116,9 +116,12 @@ identical bounding box.
 chamfer on circular edges. Its hexagon keeps one degree of freedom — see
 "Known-shaky areas" below.
 
-Not yet exercised against Inventor: revolve, sweep, loft, shell, patterns,
-mirror, work planes, threads, and the slot/polyline entities. Those live in the
-other three examples — run them and report what breaks.
+`enclosure_base.json` builds, adding a shell, an offset work plane and a sketch
+on it. `angle_bracket.json` builds, adding the polyline profile, a symmetric
+extrude, a slot, a mirror and a sketch on XZ.
+
+Not yet exercised against Inventor: revolve, sweep, loft, patterns and threads.
+Those live in the remaining example — run it and report what breaks.
 
 Some notes from getting there, which are the sort of thing that costs an
 afternoon:
@@ -137,6 +140,13 @@ afternoon:
   work point into the sketch first.
 * A midpoint constraint moves the *point* onto the line, so the grounded sketch
   origin can never be that point.
+* **The XZ plane's first axis runs along model -X.** A profile drawn from 0 to 90
+  in sketch X came out spanning -90 to 0, which silently put a second sketch's
+  features on the wrong side of the part. A recipe's coordinates mean the axes
+  the plane is named after, on every plane alike, so the COM backend reflects
+  the plan's first axis on the way in (`SketchPlan.mirrored_u`) and the geometry
+  lands where it was asked for. `_MIRRORED_PLANES` in the COM backend is the
+  list; add to it if another release orients a plane differently.
 
 ## Known-shaky areas
 

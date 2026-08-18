@@ -106,6 +106,11 @@ EXPORT_EXTENSIONS = {
 _HEALTHY_STATUSES = {0, 15873}
 
 
+#: Sketch planes whose first axis runs opposite to the model axis they are
+#: named after.  Measured on Inventor 2027.1: a profile drawn from 0 to 90 in
+#: sketch X on the XZ plane comes out spanning -90 to 0 in model X.
+_MIRRORED_PLANES = {"xz"}
+
 #: DocumentTypeEnum -> the specific COM interface that carries its members.
 _DOCUMENT_INTERFACES = {
     12290: "PartDocument",
@@ -605,6 +610,8 @@ class ComBackend(Backend):
         app = self._require_app()
         transient = app.TransientGeometry
 
+        if plan.plane.lower() in _MIRRORED_PLANES:
+            plan = plan.mirrored_u()
         plane = self._resolve_plane(document, plan.plane, plan.offset_expression)
         with self._batch(document):
             with self._translate_errors("Creating the sketch", SketchError):

@@ -224,6 +224,49 @@ class SketchPlan:
                 parent[root_a] = root_b
         return {key: find(key) for key in parent}
 
+    def mirrored_u(self) -> "SketchPlan":
+        """A copy with the sketch's first axis reversed.
+
+        Inventor's XZ plane runs its horizontal axis along -X, so a profile
+        drawn from 0 to 90 comes out spanning -90 to 0.  A recipe that says
+        "x from 0 to 90" means model +X, and a sketch plane's internal
+        orientation is not something the author should have to know -- so the
+        geometry is mirrored on the way in and lands where it was asked for.
+
+        Constraints and dimensions are unaffected: they refer to entities, and
+        mirroring preserves lengths, angles between lines, and horizontality.
+        """
+        import copy
+        import math as _math
+
+        mirrored = copy.deepcopy(self)
+        for primitive in mirrored.primitives:
+            if isinstance(primitive, PLine):
+                primitive.start = (-primitive.start[0], primitive.start[1])
+                primitive.end = (-primitive.end[0], primitive.end[1])
+            elif isinstance(primitive, PArc):
+                primitive.center = (-primitive.center[0], primitive.center[1])
+                # Reflecting the axis turns an angle t into pi - t, and reverses
+                # the sweep, so the endpoints swap to keep the arc going the
+                # same way round its centre.
+                start, end = primitive.start_angle, primitive.end_angle
+                primitive.start_angle = _math.pi - end
+                primitive.end_angle = _math.pi - start
+            elif isinstance(primitive, PEllipse):
+                primitive.center = (-primitive.center[0], primitive.center[1])
+                primitive.rotation = _math.pi - primitive.rotation
+            elif isinstance(primitive, PCircle):
+                primitive.center = (-primitive.center[0], primitive.center[1])
+            elif isinstance(primitive, PPoint):
+                primitive.position = (-primitive.position[0], primitive.position[1])
+
+        mirrored.dimensions = [
+            Dimension(d.kind, d.refs, d.expression, d.value, d.name,
+                      (-d.text_offset[0], d.text_offset[1]))
+            for d in mirrored.dimensions
+        ]
+        return mirrored
+
     def summary(self) -> dict:
         counts: dict[str, int] = {}
         for primitive in self.primitives:
