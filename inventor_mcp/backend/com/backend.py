@@ -1070,21 +1070,48 @@ class ComBackend(Backend):
                 hint="Add `point`, `point_grid` or `bolt_circle` entities to the sketch.",
             )
 
+        # ExtentDirection is an enum, not a boolean: passing True/False sends 1
+        # or 0, which are not values of PartFeatureExtentDirectionEnum.
+        requested = self._k(EXTENT_DIRECTIONS.get(request.direction, "kNegativeExtentDirection"))
+        opposite = self._k(
+            "kPositiveExtentDirection"
+            if request.direction == "negative"
+            else "kNegativeExtentDirection"
+        )
+        # Which way a sketch plane faces is not something the caller should have
+        # to reason about, so a through hole that finds no material is retried
+        # the other way. A blind hole is not flipped: its depth is meant.
+        directions = [requested, opposite] if request.through_all else [requested]
+
+        feature = None
+        failures: list[str] = []
         with self._batch(document), self._translate_errors("Hole"):
             placement = features.CreateSketchPlacementDefinition(centers)
-            if request.through_all:
-                feature = features.AddDrilledByThroughAllExtent(
-                    placement, request.diameter.expression, request.direction != "negative"
-                )
-            else:
-                assert request.depth is not None
-                bottom = request.bottom_angle.expression if request.bottom_angle else "118 deg"
-                feature = features.AddDrilledByDistanceExtent(
-                    placement,
-                    request.diameter.expression,
-                    request.depth.expression,
-                    request.direction != "negative",
-                    bottom,
+            for index, direction in enumerate(directions):
+                try:
+                    if request.through_all:
+                        feature = features.AddDrilledByThroughAllExtent(
+                            placement, request.diameter.expression, direction
+                        )
+                    else:
+                        assert request.depth is not None
+                        bottom = request.bottom_angle.expression if request.bottom_angle else "118 deg"
+                        feature = features.AddDrilledByDistanceExtent(
+                            placement, request.diameter.expression, request.depth.expression,
+                            direction, bottom,
+                        )
+                except Exception as exc:
+                    failures.append(_com_message(exc))
+                    continue
+                if index:
+                    logger.info("Hole in %s drilled the opposite way: the sketch plane "
+                                "faces away from the material.", request.sketch)
+                break
+            if feature is None:
+                raise FeatureError(
+                    f"Could not drill the hole: {self._explain_text(failures[0])}",
+                    hint="Check that the hole centres sit over material and that the "
+                    "diameter is smaller than the surrounding geometry.",
                 )
             if request.name:
                 feature.Name = request.name

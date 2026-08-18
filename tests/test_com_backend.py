@@ -540,3 +540,30 @@ class TestTypedCollections:
     def test_it_falls_back_when_the_typed_factory_is_missing(self):
         transient = self.Transient(available=())
         assert self.backend(transient)._new_collection("edge") == "<CreateObjectCollection>"
+
+
+class TestExtentDirections:
+    """Extent direction is an enum, not a flag.
+
+    The COM signature types it as VT_I4, so a Python bool arrives as 1 or 0 --
+    neither of which is a value of PartFeatureExtentDirectionEnum.
+    """
+
+    def test_both_directions_resolve_to_enum_values(self):
+        constants = Constants(None)
+        positive = constants.resolve("kPositiveExtentDirection")
+        negative = constants.resolve("kNegativeExtentDirection")
+        assert positive != negative
+        assert {positive, negative}.isdisjoint({0, 1}), "must not collide with bool coercion"
+
+    def test_the_recipe_directions_all_map(self):
+        from inventor_mcp.backend.com.constants import EXTENT_DIRECTIONS
+
+        constants = Constants(None)
+        for name in EXTENT_DIRECTIONS.values():
+            assert isinstance(constants.resolve(name), int)
+
+    def test_symmetric_is_available_for_extrudes(self):
+        from inventor_mcp.backend.com.constants import EXTENT_DIRECTIONS
+
+        assert set(EXTENT_DIRECTIONS) == {"positive", "negative", "symmetric"}

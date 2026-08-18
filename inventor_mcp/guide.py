@@ -69,6 +69,8 @@ sweep       {"op":"sweep","profile_sketch":"P","path_sketch":"Path"}
 loft        {"op":"loft","sketches":["S1","S2"]}
 hole        {"op":"hole","sketch":"Holes","diameter":"hole_d","through_all":true,
              "style":"drilled|counterbore|countersink","tap":"M6x1"}
+             A through hole drills whichever way finds material, so `direction`
+             only matters for a blind hole (one with a `depth`).
 fillet      {"op":"fillet","edges":{"filter":"vertical"},"radius":"corner_r"}
 chamfer     {"op":"chamfer","edges":{"filter":"top"},"distance":1}
 shell       {"op":"shell","faces":{"kind":"face","filter":"top"},"thickness":"wall"}
