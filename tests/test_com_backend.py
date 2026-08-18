@@ -19,6 +19,12 @@ from inventor_mcp.backend.com.constants import BOOLEAN_OPERATIONS, FALLBACK, Con
 from inventor_mcp.errors import BackendUnavailableError
 
 
+def fake_point(x: float, y: float):
+    """A stand-in for a SketchPoint: just something with .Geometry.X/.Y."""
+    geometry = type("Geometry", (), {"X": x, "Y": y})()
+    return type("SketchPoint", (), {"Geometry": geometry})()
+
+
 class TestAvailability:
     @pytest.mark.skipif(sys.platform == "win32", reason="pywin32 is importable on Windows")
     def test_it_refuses_to_start_off_windows_with_an_actionable_message(self):
@@ -237,20 +243,14 @@ class TestConstraintIdempotence:
         assert com._same_com_object(object(), object()) is False
 
     def test_points_at_the_same_place_agree(self):
-        class Geometry:
-            X, Y = 1.5, -2.0
-
-        class Point:
-            Geometry = Geometry()
-
-        assert com._points_agree(Point(), Point()) is True
+        assert com._points_agree(fake_point(1.5, -2.0), fake_point(1.5, -2.0)) is True
 
     def test_points_apart_do_not_agree(self):
-        def point(x, y):
-            geometry = type("G", (), {"X": x, "Y": y})()
-            return type("P", (), {"Geometry": geometry})()
+        assert com._points_agree(fake_point(0, 0), fake_point(0, 1)) is False
 
-        assert com._points_agree(point(0, 0), point(0, 1)) is False
+    def test_the_tolerance_is_tight(self):
+        assert com._points_agree(fake_point(0, 0), fake_point(0, 1e-9)) is True
+        assert com._points_agree(fake_point(0, 0), fake_point(0, 1e-3)) is False
 
     def test_something_that_is_not_a_point_never_agrees(self):
         class NotAPoint:
