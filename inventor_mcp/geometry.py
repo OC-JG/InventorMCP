@@ -278,9 +278,9 @@ def _plan_rectangle(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: Recta
         )
         plan.constrain("coincident", Ref(diagonal.id, PointRef.START), Ref(lines[0].id, PointRef.START))
         plan.constrain("coincident", Ref(diagonal.id, PointRef.END), Ref(lines[2].id, PointRef.START))
-        if _at_origin(cx) and _at_origin(cy):
-            plan.constrain("midpoint", ORIGIN, Ref(diagonal.id))
-            return
+        # The centre gets its own point even when it sits on the origin: a
+        # midpoint constraint moves the *point* onto the line, and the sketch
+        # origin is grounded, so it cannot be the one that moves.
         center_point = plan.add(PPoint(ids.next("cpoint"), construction=True, position=(cx, cy)))
         plan.constrain("midpoint", Ref(center_point.id), Ref(diagonal.id))
         _locate(plan, resolver, Ref(center_point.id), (cx, cy), "origin",
@@ -422,11 +422,15 @@ def _plan_slot(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: SlotEntity
         plan.dimension("diameter", (Ref(arc1.id),), width.expression, width.value,
                        text_offset=(-radius, radius))
 
-    if spec.locate == "origin" and _at_origin(center[0]) and _at_origin(center[1]):
-        plan.constrain("midpoint", ORIGIN, Ref(centerline.id))
-    else:
-        _locate(plan, resolver, Ref(arc1.id, PointRef.CENTER), c1, spec.locate,
-                entity=Ref(centerline.id))
+    if spec.locate == "none":
+        return
+    if spec.locate == "fix":
+        plan.constrain("ground", Ref(centerline.id))
+        return
+    center_point = plan.add(PPoint(ids.next("cpoint"), construction=True, position=center))
+    plan.constrain("midpoint", Ref(center_point.id), Ref(centerline.id))
+    _locate(plan, resolver, Ref(center_point.id), center, "origin",
+            x_expression=anchor_x, y_expression=anchor_y)
 
 
 def _plan_polygon(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: PolygonEntity) -> None:

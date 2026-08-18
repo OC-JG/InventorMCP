@@ -6,7 +6,7 @@ import pytest
 
 from inventor_mcp.errors import SketchError
 from inventor_mcp.geometry import loop_area, plan_bounds, plan_sketch, profile_loops
-from inventor_mcp.plan import PArc, PCircle, PLine, PPoint
+from inventor_mcp.plan import ORIGIN, PArc, PCircle, PLine, PPoint
 from inventor_mcp.schema import SketchOp
 
 
@@ -35,10 +35,10 @@ class TestRectangle:
         counts = {}
         for constraint in plan.constraints:
             counts[constraint.kind] = counts.get(constraint.kind, 0) + 1
-        assert counts["coincident"] == 6  # four corners plus the construction diagonal
+        assert counts["coincident"] == 7  # four corners, the diagonal's ends, the centre
         assert counts["horizontal"] == 2
         assert counts["vertical"] == 2
-        assert counts["midpoint"] == 1  # the diagonal's midpoint pins the centre
+        assert counts["midpoint"] == 1  # the diagonal's midpoint pins the centre point
 
     def test_dimensions_carry_the_expression_not_the_number(self):
         from inventor_mcp.resolve import Resolver
@@ -61,6 +61,20 @@ class TestRectangle:
     def test_corner_anchor_positions_the_geometry(self):
         plan = build([{"type": "rectangle", "corner": [0, 0], "width": 40, "height": 20}])
         assert plan_bounds(plan) == pytest.approx((0.0, 0.0, 4.0, 2.0))
+
+    def test_the_centre_point_is_the_thing_constrained_not_the_origin(self):
+        """A midpoint constraint moves the point onto the line.
+
+        The sketch origin is grounded and cannot move, so it must never be the
+        point in a midpoint constraint -- Inventor rejects that outright.
+        """
+        plan = build([{"type": "rectangle", "center": [0, 0], "width": 40, "height": 20}])
+        midpoints = [c for c in plan.constraints if c.kind == "midpoint"]
+        assert len(midpoints) == 1
+        assert midpoints[0].refs[0] != ORIGIN
+        assert any(
+            c.kind == "coincident" and ORIGIN in c.refs for c in plan.constraints
+        )
 
     def test_centre_away_from_the_origin_is_dimensioned(self):
         plan = build([{"type": "rectangle", "center": [30, 0], "width": 40, "height": 20}])
@@ -116,6 +130,12 @@ class TestSlot:
         assert len(arcs) == 2 and len(lines) == 2
         assert sum(1 for c in plan.constraints if c.kind == "tangent") == 4
         assert any(c.kind == "equal" for c in plan.constraints)
+
+    def test_the_origin_is_never_the_moved_point(self):
+        plan = build([{"type": "slot", "center": [0, 0], "length": 30, "width": 8}])
+        for constraint in plan.constraints:
+            if constraint.kind == "midpoint":
+                assert constraint.refs[0] != ORIGIN
 
     def test_it_closes_into_one_profile(self):
         plan = build([{"type": "slot", "center": [0, 0], "length": 30, "width": 8}])
