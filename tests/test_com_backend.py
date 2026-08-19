@@ -701,3 +701,92 @@ class TestEdgeConvexity:
 
         top = self.face((0, 0, 1), (0, 0, 6))
         assert com._edge_convexity(self.edge((0, 0, 6), [top, Curved()])) is None
+
+
+class TestNoOpFeatures:
+    """Inventor reports success for a cut that meets no material.
+
+    The angle bracket spent two runs like that: its slots cut empty air and
+    its upright holes drilled past the part, and every step still printed
+    `ok`. The volume was the only witness -- 43.96331886 cm^3, exactly the
+    body less its slots plus its fillet, with the holes contributing nothing.
+    So a feature that removes material now has to prove it.
+    """
+
+    class Document:
+        """A part whose volume is whatever the test says it is."""
+
+        def __init__(self, volume):
+            self._volume = volume
+            outer = self
+
+            class MassProperties:
+                @property
+                def Volume(self):
+                    if outer._volume is None:
+                        raise RuntimeError("no solid body")
+                    return outer._volume
+
+            self.ComponentDefinition = type(
+                "CD", (), {"MassProperties": MassProperties()}
+            )()
+
+    def test_a_smaller_part_counts_as_removed(self):
+        assert com._removed_material(self.Document(43.2), 46.2) is True
+
+    def test_an_unchanged_part_does_not(self):
+        assert com._removed_material(self.Document(46.2), 46.2) is False
+
+    def test_nor_does_a_part_that_grew(self):
+        """A join reported as a cut, or a fillet that filled a corner."""
+        assert com._removed_material(self.Document(46.9), 46.2) is False
+
+    def test_rounding_noise_is_not_a_cut(self):
+        assert com._removed_material(self.Document(46.2 - 1e-12), 46.2) is False
+
+    def test_a_real_cut_survives_the_tolerance(self):
+        """The smallest cut worth making is still millions of times the floor."""
+        assert com._removed_material(self.Document(46.2 - 1e-4), 46.2) is True
+
+    def test_an_unmeasurable_part_is_given_the_benefit_of_the_doubt(self):
+        """Better a missed no-op than a working feature reported as failed."""
+        assert com._removed_material(self.Document(None), 46.2) is True
+        assert com._removed_material(self.Document(43.2), None) is True
+
+    def test_the_volume_reader_reports_no_solid_as_unknown(self):
+        assert com._solid_volume(self.Document(None)) is None
+        assert com._solid_volume(self.Document(46.2)) == 46.2
+
+
+class TestHoleDirectionIsNotTheCallersProblem:
+    """A blind hole is flipped too, because flipping preserves its depth.
+
+    Only through-all holes used to be retried, on the reasoning that a blind
+    hole's depth is meant. The depth is -- but the side of the sketch plane it
+    is measured from is not, and the bracket's upright holes were drilled off
+    the back of the part at full depth, removing nothing.
+    """
+
+    def test_a_no_op_feature_is_taken_back_out_of_the_tree(self):
+        class Feature:
+            deleted = False
+
+            def Delete(self):
+                type(self).deleted = True
+
+        com._delete_quietly(Feature())
+        assert Feature.deleted is True
+
+    def test_a_feature_that_will_not_delete_does_not_raise(self):
+        class Stubborn:
+            def Delete(self):
+                raise RuntimeError("cannot delete")
+
+        com._delete_quietly(Stubborn())  # the retry matters more than the tidying
+
+    def test_both_directions_are_tried_whatever_the_extent(self):
+        import inspect
+
+        source = inspect.getsource(com.ComBackend.hole)
+        assert "directions = [requested, opposite]" in source
+        assert "if request.through_all else" not in source

@@ -140,6 +140,11 @@ afternoon:
   work point into the sketch first.
 * A midpoint constraint moves the *point* onto the line, so the grounded sketch
   origin can never be that point.
+* **A cut that meets no material still reports success.** Inventor builds the
+  feature, changes nothing, and returns it. Two of the angle bracket's three
+  geometry bugs hid behind an `ok` line that way. Cut extrudes and holes now
+  compare the volume before and after and refuse to pass off a no-op as a
+  feature; a hole that finds nothing is retried the other way first.
 * **The XZ plane's first axis runs along model -X.** A profile drawn from 0 to 90
   in sketch X came out spanning -90 to 0, which silently put a second sketch's
   features on the wrong side of the part. A recipe's coordinates mean the axes
@@ -161,6 +166,14 @@ These are the parts of the COM backend most likely to need adjustment, and why:
   carried through the recipe and reported, but the COM path currently creates a
   drilled hole. The recipe records the intent, so upgrading this does not change
   any recipe.
+- **Edge convexity is decided from a sampled point on each adjacent face**
+  (`Face.PointOnFace`), and that point is arbitrary. On a face with an inner
+  loop — the top of a plate with a slot through it — the sample can land on the
+  far side of the edge and flip the answer: on the bracket, six of the eight
+  slot-opening edges came back `convex` and two came back `concave`, for
+  geometry that is identical by symmetry. Anything selected purely by
+  `concave`/`convex` should be narrowed with `min_length` or `near` until this
+  is decided from the edge's loop orientation instead.
 - **Face normals** are read via `GetNormalAtParam` with `IsParamReversed` applied.
   If `top`/`bottom` selectors pick the wrong faces, that is where to look.
 - **`FullyConstrained`** is not exposed under that name on 2027.1, so sketches

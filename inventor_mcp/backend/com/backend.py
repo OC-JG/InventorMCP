@@ -1049,6 +1049,7 @@ class ComBackend(Backend):
         document = self._doc(doc_id)
         sketch = self._sketch(doc_id, request.sketch)
         features = document.ComponentDefinition.Features.ExtrudeFeatures
+        before = _solid_volume(document) if request.operation == "cut" else None
         with self._batch(document), self._translate_errors("Extrude"):
             profile = self._profiles(sketch, request.profiles)
             definition = features.CreateExtrudeDefinition(
@@ -1065,6 +1066,18 @@ class ComBackend(Backend):
             if request.taper is not None:
                 definition.TaperAngle = request.taper.expression
             feature = features.Add(definition)
+            # A cut that meets no material builds without complaint and leaves
+            # the part exactly as it was.  Saying so is the whole point: an
+            # `ok` on a cut that did nothing is worse than a failure, because
+            # it sends you looking at the wrong operation.
+            if request.operation == "cut" and not _removed_material(document, before):
+                _delete_quietly(feature)
+                raise FeatureError(
+                    f"The cut from sketch {request.sketch!r} removed no material.",
+                    hint="Its profile does not overlap the part. Check the sketch "
+                    "plane and the coordinates against the part's bounding box, "
+                    "and check `direction` -- a cut runs one way from its plane.",
+                )
             if request.name:
                 feature.Name = request.name
         return _feature_info(feature, "extrude", {
@@ -1157,12 +1170,15 @@ class ComBackend(Backend):
             else "kNegativeExtentDirection"
         )
         # Which way a sketch plane faces is not something the caller should have
-        # to reason about, so a through hole that finds no material is retried
-        # the other way. A blind hole is not flipped: its depth is meant.
-        directions = [requested, opposite] if request.through_all else [requested]
+        # to reason about, so a hole that finds no material is retried the other
+        # way.  Flipping a blind hole preserves its depth -- the depth is what
+        # the recipe meant, the side of the plane is not.
+        directions = [requested, opposite]
 
         feature = None
         failures: list[str] = []
+        flipped = False
+        before = _solid_volume(document)
         with self._batch(document), self._translate_errors("Hole"):
             placement = features.CreateSketchPlacementDefinition(centers)
             for index, direction in enumerate(directions):
@@ -1195,10 +1211,17 @@ class ComBackend(Backend):
                 except Exception as exc:
                     failures.append(_com_message(exc))
                     continue
-                if index:
-                    logger.info("Hole in %s drilled the opposite way: the sketch plane "
-                                "faces away from the material.", request.sketch)
-                break
+                # Inventor is happy to drill into thin air and call it a
+                # success, so the feature only counts if the part got smaller.
+                if _removed_material(document, before):
+                    if index:
+                        flipped = True
+                        logger.info("Hole in %s drilled the opposite way: the sketch "
+                                    "plane faces away from the material.", request.sketch)
+                    break
+                failures.append("the hole removed no material")
+                _delete_quietly(feature)
+                feature = None
             if feature is None:
                 raise FeatureError(
                     f"Could not drill the hole: {self._explain_text(failures[0])}",
@@ -1211,6 +1234,7 @@ class ComBackend(Backend):
             "count": int(centers.Count),
             "diameter": request.diameter.as_dict(),
             "style": request.style,
+            "flipped": flipped,
         })
 
     def _new_collection(self, kind: str) -> Any:  # pragma: no cover - Windows only
@@ -2126,6 +2150,43 @@ def _edge_convexity(edge: Any, _unused: Any = None) -> str | None:  # pragma: no
     if abs(alignment) < 1e-6:
         return None
     return "concave" if alignment > 0 else "convex"
+
+
+def _solid_volume(document: Any) -> float | None:
+    """The current volume, or None if it cannot be measured.
+
+    Used to tell "the feature built" from "the feature did something".
+    Inventor reports success for a cut that meets no material, so success is
+    not on its own evidence that anything happened.
+    """
+    try:
+        return float(document.ComponentDefinition.MassProperties.Volume)
+    except Exception:
+        return None
+
+
+def _removed_material(document: Any, before: float | None) -> bool:
+    """Whether the part has got smaller since *before*.
+
+    When the volume cannot be read the answer is True: an unmeasurable part
+    must not make a feature that really worked look like a failure. The
+    tolerance is a millionth of a cubic centimetre, well under any real cut
+    and well over Inventor's own rounding.
+    """
+    if before is None:
+        return True
+    after = _solid_volume(document)
+    if after is None:
+        return True
+    return before - after > 1e-6
+
+
+def _delete_quietly(feature: Any) -> None:  # pragma: no cover
+    """Undo a feature that built but did nothing, before trying another way."""
+    try:
+        feature.Delete()
+    except Exception:
+        logger.debug("Could not delete the no-op feature; it stays in the tree.")
 
 
 def _edge_direction(edge: Any) -> tuple[float, float, float] | None:  # pragma: no cover
