@@ -97,9 +97,26 @@ def main(argv: list[str] | None = None) -> int:
         step(f"parameter {spec.name} = {spec.value!r}",
              lambda spec=spec: apply_parameter(session, context, spec))
 
+    def volume_now():
+        """Quietly, so a failure here never masquerades as a failed operation."""
+        try:
+            return backend.mass_properties(context.doc_id).volume
+        except Exception:
+            return None
+
+    previous_volume = None
     for index, op in enumerate(recipe.operations):
         label = f"op {index}: {op.op}" + (f" ({op.name})" if op.name else "")
         result = step(label, lambda op=op: apply_operation(session, context, op))
+        if result and op.op != "sketch":
+            # A cut that removes nothing looks exactly like a cut that worked,
+            # unless you watch the volume.  That is how the angle bracket
+            # spent a while cutting slots through empty air.
+            volume = volume_now()
+            if volume is not None:
+                change = "" if previous_volume is None else f"  ({volume - previous_volume:+.4f})"
+                print(f"         volume: {volume:.4f} cm^3{change}")
+                previous_volume = volume
         if result and op.op == "sketch":
             print(f"         entities={result.get('entities')} "
                   f"constraints={result.get('constraints')} "
@@ -119,7 +136,11 @@ def main(argv: list[str] | None = None) -> int:
         box = properties.bounding_box
         if box:
             size = [round((box[i + 3] - box[i]) * 10, 3) for i in range(3)]
-            print(f"         bounding box (mm): {size}")
+            # Where the part sits, not just how big it is: a mirrored sketch
+            # plane moves a part without changing any of its spans.
+            extents = " x ".join(
+                f"{box[i] * 10:.1f}..{box[i + 3] * 10:.1f}" for i in range(3))
+            print(f"         bounding box (mm): {size}   at {extents}")
         print(f"         volume: {properties.volume:.4f} cm^3   mass: {properties.mass}")
 
     if args.topology:
