@@ -166,14 +166,19 @@ These are the parts of the COM backend most likely to need adjustment, and why:
   carried through the recipe and reported, but the COM path currently creates a
   drilled hole. The recipe records the intent, so upgrading this does not change
   any recipe.
-- **Edge convexity is decided from a sampled point on each adjacent face**
-  (`Face.PointOnFace`), and that point is arbitrary. On a face with an inner
-  loop — the top of a plate with a slot through it — the sample can land on the
-  far side of the edge and flip the answer: on the bracket, six of the eight
-  slot-opening edges came back `convex` and two came back `concave`, for
-  geometry that is identical by symmetry. Anything selected purely by
-  `concave`/`convex` should be narrowed with `min_length` or `near` until this
-  is decided from the edge's loop orientation instead.
+- **Edge convexity** is decided from the boundary loops: a face's boundary runs
+  anticlockwise about its outward normal, so the material lies to the left of
+  the loop, and whether that direction faces into the neighbouring face's normal
+  is the answer. That needs `Edge.EdgeUses` and `EdgeUse.IsParamReversed`, for
+  which makepy generates no module on 2027.1 — late binding asks the object
+  rather than the wrapper, so it may work anyway. Where it does not, the answer
+  falls back to sampling a point on each face (`Face.PointOnFace`), and that
+  point is arbitrary: on a face with an inner loop — the top of a plate with a
+  slot through it — it can land on the far side of the edge and flip the answer.
+  Six of the bracket's eight slot-opening edges came back `convex` and two
+  `concave`, for geometry identical by symmetry. Run
+  `scripts/probe_convexity.py` to see which path this machine takes; while it is
+  the fallback, narrow a `concave`/`convex` selector with `min_length` or `near`.
 - **Face normals** are read via `GetNormalAtParam` with `IsParamReversed` applied.
   If `top`/`bottom` selectors pick the wrong faces, that is where to look.
 - **`FullyConstrained`** is not exposed under that name on 2027.1, so sketches

@@ -69,6 +69,21 @@ _ONE_TYPE = re.compile(r"\((\d+),\s*(\d+)\)")
 _OPTIONAL = 0x10
 
 
+#: Generated modules list every readable property in a _prop_map_get_ dict.
+_PROP_MAP = re.compile(r"_prop_map_get_ = \{(?P<body>.*?)\n\t\}", re.DOTALL)
+_PROP_NAME = re.compile(r'"(\w+)"\s*:')
+
+
+def properties(path: Path) -> list[str]:
+    """The class's readable properties, which have no signature to print.
+
+    Worth listing separately: a method that is missing may just be a property,
+    and looking only at methods once made `EdgeUse` look absent entirely.
+    """
+    match = _PROP_MAP.search(path.read_text(errors="replace"))
+    return sorted(set(_PROP_NAME.findall(match.group("body")))) if match else []
+
+
 def describe(path: Path, method: str | None) -> None:
     source = path.read_text(errors="replace")
     name_pattern = method or r"\w+"
@@ -105,7 +120,17 @@ def describe(path: Path, method: str | None) -> None:
                 kind = "?"
             print(f"    {index}. {name:28} {kind}")
     if method and not found:
-        print(f"\n{path.stem}.{method}: not found")
+        print(f"\n{path.stem}.{method}: not a method")
+        if method in properties(path):
+            print("    it is a property -- read it, do not call it")
+    if not method:
+        readable = properties(path)
+        if readable:
+            print(f"\n{path.stem} properties:")
+            for index in range(0, len(readable), 4):
+                print("    " + "  ".join(f"{name:26}" for name in readable[index:index + 4]))
+        elif not found:
+            print(f"\n{path.stem}: no methods and no properties in the wrapper")
 
 
 def main(argv: list[str]) -> int:
@@ -118,7 +143,11 @@ def main(argv: list[str]) -> int:
         if not path.exists():
             matches = sorted(root.glob(f"{class_name}*.py"))
             if not matches:
-                print(f"\n{class_name}: no generated module in this type library")
+                print(f"\n{class_name}: no generated module in this type library.")
+                print("    makepy writes a module per interface it generates, and skips "
+                      "some.\n    That is not proof the interface is missing: late binding "
+                      "asks the\n    object, not the wrapper. Probe a live one -- see "
+                      "scripts/probe_convexity.py.")
                 continue
             path = matches[0]
             print(f"\n({class_name} found as {path.stem})")

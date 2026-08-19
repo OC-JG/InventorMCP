@@ -790,3 +790,147 @@ class TestHoleDirectionIsNotTheCallersProblem:
         source = inspect.getsource(com.ComBackend.hole)
         assert "directions = [requested, opposite]" in source
         assert "if request.through_all else" not in source
+
+
+class TestConvexityFromLoops:
+    """Convexity decided from the boundary loops, which is exact.
+
+    A face's boundary runs anticlockwise about its outward normal, so the
+    material lies to the left of the loop -- `normal x tangent`. Whether that
+    direction points into the neighbouring face's normal is the whole answer.
+
+    Every case here is a real edge off a 60x40x10 plate with a 20x10x4 pocket
+    in its underside, worked out from the loop orderings that give each face
+    its outward normal. The pocket is what matters: its opening ring makes the
+    underside a face with an inner loop, which is where sampling a point on the
+    face stops being trustworthy.
+    """
+
+    def face(self, normal, point=(0.0, 0.0, 0.0)):
+        return type("Face", (), {
+            "Geometry": type("G", (), {"Normal": type("N", (), dict(zip("XYZ", normal)))()})(),
+            "IsParamReversed": False,
+            "PointOnFace": type("P", (), dict(zip("XYZ", point)))(),
+        })()
+
+    def edge(self, tangent, uses, midpoint=(0.0, 0.0, 0.0)):
+        """An edge with a parametric direction and one use per adjacent face.
+
+        `uses` is (face, runs_against_the_parametric_direction) per face.
+        """
+        objects = [
+            type("EdgeUse", (), {"Face": face, "IsParamReversed": reversed_})()
+            for face, reversed_ in uses
+        ]
+        collection = type("EdgeUses", (), {
+            "Count": len(objects),
+            "Item": staticmethod(lambda index: objects[index - 1]),
+        })()
+        box = type("Box", (), {
+            "MinPoint": type("P", (), dict(zip("XYZ", midpoint)))(),
+            "MaxPoint": type("P", (), dict(zip("XYZ", midpoint)))(),
+        })()
+        return type("Edge", (), {
+            "EdgeUses": collection,
+            "Geometry": type("G", (), {
+                "Direction": type("D", (), dict(zip("XYZ", tangent)))()})(),
+            "Evaluator": type("Ev", (), {"RangeBox": box})(),
+            "Faces": type("Faces", (), {
+                "Count": len(uses),
+                "Item": staticmethod(lambda index: uses[index - 1][0]),
+            })(),
+        })()
+
+    def test_the_plates_top_front_edge_is_convex(self):
+        top, front = self.face((0, 0, 1)), self.face((0, -1, 0))
+        edge = self.edge((1, 0, 0), [(top, False), (front, True)])
+        assert com._convexity_from_loops(edge) == "convex"
+
+    def test_where_the_pocket_opens_onto_the_underside_is_convex(self):
+        """A hole's opening is a 90-degree wedge of material like any corner."""
+        underside, wall = self.face((0, 0, -1)), self.face((0, 1, 0))
+        edge = self.edge((1, 0, 0), [(underside, False), (wall, True)])
+        assert com._convexity_from_loops(edge) == "convex"
+
+    def test_the_pockets_ceiling_meeting_a_wall_is_concave(self):
+        ceiling, wall = self.face((0, 0, -1)), self.face((0, 1, 0))
+        edge = self.edge((1, 0, 0), [(ceiling, True), (wall, False)])
+        assert com._convexity_from_loops(edge) == "concave"
+
+    def test_the_pockets_own_corners_are_concave(self):
+        end, side = self.face((1, 0, 0)), self.face((0, 1, 0))
+        edge = self.edge((0, 0, 1), [(end, True), (side, False)])
+        assert com._convexity_from_loops(edge) == "concave"
+
+    def test_an_l_sections_inside_corner_is_concave(self):
+        """The bracket: the base's top face meeting the upright's inner face."""
+        base_top, upright = self.face((0, 0, 1)), self.face((1, 0, 0))
+        edge = self.edge((0, 1, 0), [(base_top, True), (upright, False)])
+        assert com._convexity_from_loops(edge) == "concave"
+
+    def test_both_faces_have_to_agree(self):
+        """Either use answers on its own, so a disagreement means don't know."""
+        top, front = self.face((0, 0, 1)), self.face((0, -1, 0))
+        wrong = self.edge((1, 0, 0), [(top, False), (front, False)])
+        assert com._convexity_from_loops(wrong) is None
+
+    def test_faces_that_meet_smoothly_are_neither(self):
+        """A filleted corner's tangent edges: no corner left to round."""
+        flat, tangent = self.face((0, 0, 1)), self.face((0, 0, 1))
+        edge = self.edge((1, 0, 0), [(flat, False), (tangent, True)])
+        assert com._convexity_from_loops(edge) is None
+
+
+class TestConvexityFallsBackToSampling:
+    """Loop orientation is preferred; sampling still answers when it cannot.
+
+    `EdgeUse` has no generated module on 2027.1, so this path may or may not be
+    reachable at run time. Late binding asks the object rather than the
+    wrapper, so it is worth trying -- but not worth losing the old answer over.
+    """
+
+    def sampled_only_edge(self, midpoint, faces):
+        """No EdgeUses at all, as an older release or a surface body might be."""
+        box = type("Box", (), {
+            "MinPoint": type("P", (), dict(zip("XYZ", midpoint)))(),
+            "MaxPoint": type("P", (), dict(zip("XYZ", midpoint)))(),
+        })()
+        return type("Edge", (), {
+            "Faces": type("Faces", (), {
+                "Count": len(faces),
+                "Item": staticmethod(lambda index: faces[index - 1]),
+            })(),
+            "Evaluator": type("Ev", (), {"RangeBox": box})(),
+        })()
+
+    def face(self, normal, point):
+        return type("Face", (), {
+            "Geometry": type("G", (), {"Normal": type("N", (), dict(zip("XYZ", normal)))()})(),
+            "IsParamReversed": False,
+            "PointOnFace": type("P", (), dict(zip("XYZ", point)))(),
+        })()
+
+    def test_an_edge_with_no_uses_is_still_answered(self):
+        top = self.face((0, 0, 1), (-45, 0, 6))
+        side = self.face((0, -1, 0), (-45, -25, 3))
+        edge = self.sampled_only_edge((-45, -25, 6), [top, side])
+        assert com._convexity_from_loops(edge) is None
+        assert com._edge_convexity(edge) == "convex"
+
+    def test_the_loop_answer_wins_where_sampling_gets_it_wrong(self):
+        """The bracket's own edge87, in centimetres, with the samples that beat it.
+
+        The slot's outer wall meeting the top of the base at (65, 19.5, 6) mm.
+        It is convex -- the material there is the quarter wedge y > 19.5, z < 6,
+        the same as at any of the seven edges symmetric to it. The sampler said
+        concave, because the top face is 84 mm long with two slots through it
+        and its interior point landed across the part, while the wall's own
+        point sat off to one end rather than square under the edge.
+        """
+        probe = TestConvexityFromLoops()
+        base_top = probe.face((0, 0, 1), point=(2.0, -2.0, 0.6))
+        slot_wall = probe.face((0, -1, 0), point=(7.4, 1.95, 0.25))
+        edge = probe.edge((1, 0, 0), [(base_top, False), (slot_wall, True)],
+                          midpoint=(6.5, 1.95, 0.6))
+        assert com._convexity_from_samples(edge) == "concave", "the sampler is fooled"
+        assert com._edge_convexity(edge) == "convex", "the loops are not"

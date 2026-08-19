@@ -2110,17 +2110,111 @@ def _face_point(face: Any) -> tuple[float, float, float] | None:  # pragma: no c
         return None
 
 
+def _cross(a: Sequence[float], b: Sequence[float]) -> tuple[float, float, float]:
+    return (a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0])
+
+
+def _edge_uses(edge: Any) -> list[Any] | None:  # pragma: no cover - Windows only
+    """The edge's two uses, one per adjacent face, or None if unavailable.
+
+    makepy generates no module for ``EdgeUse``, but late binding asks the
+    object rather than the wrapper, so this can still work where the generated
+    signature suggests it cannot.
+    """
+    try:
+        uses = edge.EdgeUses
+        return [uses.Item(index) for index in range(1, int(uses.Count) + 1)]
+    except Exception:
+        return None
+
+
+def _use_face(use: Any) -> Any | None:  # pragma: no cover - Windows only
+    """The face an edge use belongs to, whichever way round this release says it."""
+    for path in ("Face", "EdgeUseLoop.Face", "Parent.Face"):
+        target = use
+        try:
+            for step in path.split("."):
+                target = getattr(target, step)
+        except Exception:
+            continue
+        if target is not None:
+            return target
+    return None
+
+
+def _convexity_from_loops(edge: Any) -> str | None:  # pragma: no cover - Windows only
+    """Convexity from the orientation of the faces' boundary loops.
+
+    A face's boundary runs anticlockwise about its outward normal, so the
+    face's material lies to the left of the loop direction -- which is
+    ``normal x tangent``.  If that direction points *into* the neighbouring
+    face's outward normal the two faces close over the material and the edge
+    is an inside corner; if it points away, an outside one.
+
+    This is exact rather than sampled, and it is asked of both faces so that a
+    disagreement is reported as "don't know" instead of a coin toss.
+    """
+    uses = _edge_uses(edge)
+    if uses is None or len(uses) != 2:
+        return None
+    tangent = _edge_direction(edge)
+    if tangent is None:  # a circle has no single direction
+        return None
+
+    verdicts = set()
+    for index, use in enumerate(uses):
+        face, other = _use_face(use), _use_face(uses[1 - index])
+        if face is None or other is None:
+            return None
+        normal, other_normal = _face_normal(face), _face_normal(other)
+        if normal is None or other_normal is None:
+            return None
+        try:
+            reversed_ = bool(use.IsParamReversed)
+        except Exception:
+            return None
+        forward = tuple(-c for c in tangent) if reversed_ else tangent
+        alignment = sum(a * b for a, b in zip(_cross(normal, forward), other_normal))
+        if abs(alignment) < 1e-9:  # tangent faces meet smoothly
+            return None
+        verdicts.add("concave" if alignment > 0 else "convex")
+
+    if len(verdicts) != 1:
+        logger.debug("The two edge uses disagree about convexity; leaving it unknown.")
+        return None
+    return verdicts.pop()
+
+
 def _edge_convexity(edge: Any, _unused: Any = None) -> str | None:  # pragma: no cover
     """Whether an edge is an outside corner or an inside one.
 
-    For each of the two adjacent faces, take the direction from the edge
-    towards a point on that face and test it against the *other* face's
-    outward normal.  At an outside corner each face lies behind its
-    neighbour's normal; at an inside corner it lies in front of it.
+    Decided from the boundary loops where the release exposes them, because
+    that is exact.  Otherwise fall back to sampling: for each of the two
+    adjacent faces, take the direction from the edge towards a point on that
+    face and test it against the *other* face's outward normal.
 
-    This is local to the edge, which matters: an earlier version compared
-    against the body's centre and got an L-section wrong, because the centre
-    of a re-entrant part's bounding box is not inside the material.
+    Sampling is only as good as the sample.  ``Face.PointOnFace`` returns an
+    arbitrary interior point, and on a face with an inner loop -- the underside
+    of a plate with a pocket in it -- that point can lie on the far side of the
+    edge and invert the answer.  On the angle bracket it put two of the eight
+    slot-opening edges in the concave set and the other six in the convex one,
+    for geometry that is identical by symmetry.
+    """
+    decided = _convexity_from_loops(edge)
+    if decided is not None:
+        return decided
+    return _convexity_from_samples(edge)
+
+
+def _convexity_from_samples(edge: Any) -> str | None:  # pragma: no cover
+    """The fallback: which side of the edge a sampled point on each face is on.
+
+    Local to the edge, which matters -- an earlier version compared against the
+    body's centre and got an L-section wrong, because the centre of a
+    re-entrant part's bounding box is not inside the material -- but only as
+    reliable as ``Face.PointOnFace``.  See ``_edge_convexity``.
     """
     try:
         faces = edge.Faces
