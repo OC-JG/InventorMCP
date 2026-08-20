@@ -10,6 +10,14 @@ calculation before being written down:
 |---|---|---|
 | `mounting_plate` | 75.0185 cm³ | the simulator's 75.018498, six significant figures |
 | `angle_bracket` | 43.1999 cm³ | 46.2 body − 2×1.4617 slots − 2×0.3817 holes + 0.6867 fillet |
+
+The bracket is worth a note: the simulator used to report 27.15 cm³ for it, and
+now reports 43.2012 — within 0.003% of Inventor. It got there by fixing three
+things it had been getting wrong rather than approximating: a mirrored cut
+removed nothing, a through-cut was charged the bounding box rather than the
+6 mm base it passes through, and a fillet on an inside corner was subtracted
+instead of added. Each of those was a wrong answer wearing the clothes of an
+estimate.
 | `flanged_shaft` | 93.6305 cm³ | π·40²·12 flange + π·12.5²·90 shaft − π·5²·102 bore − 6 bolt holes − chamfer by Pappus |
 
 `cover_plate` is the other way round: its volume was **derived by hand first**

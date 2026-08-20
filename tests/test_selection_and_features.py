@@ -229,12 +229,43 @@ class TestConvexity:
         )
         assert resolved.filter == "concave"
 
-    def test_the_simulator_does_not_pretend_to_know(self, session, block):
-        """It synthesises topology from sketch loops and has no material side."""
+    def test_the_simulator_knows_a_profile_corner(self, session, block):
+        """The one case it can answer: an edge along an extrusion at a corner.
+
+        It used to decline for every edge and match all of them, which is worse
+        than declining -- a recipe asking for the single concave edge on an
+        angle bracket got whichever edge came first.
+        """
         every = select(session, block, kind="edge", filter="all")
-        concave = select(session, block, kind="edge", filter="concave")
-        assert len(concave) == len(every)
-        assert all(match.convexity is None for match in concave)
+        convex = select(session, block, kind="edge", filter="convex")
+        assert 0 < len(convex) < len(every)
+        assert all(match.convexity == "convex" for match in convex)
+        assert all(match.convexity_from == "profile corner" for match in convex)
+
+    def test_a_box_has_no_concave_edge(self, session, block):
+        assert select(session, block, kind="edge", filter="concave") == []
+
+    def test_it_still_declines_for_the_edges_it_cannot_see(self, session, block):
+        """A cap edge's convexity depends on what the boss sits on."""
+        every = select(session, block, kind="edge", filter="all")
+        assert any(match.convexity is None for match in every)
+
+    def test_an_l_section_has_exactly_one_concave_edge(self, session):
+        """The inside corner, which is what a bracket's fillet is for."""
+        from inventor_mcp.builder import build_part
+        from inventor_mcp.schema import PartRecipe
+
+        build_part(session, PartRecipe.model_validate({
+            "name": "L", "units": "mm", "operations": [
+                {"op": "sketch", "name": "S", "plane": "xz", "entities": [
+                    {"type": "polyline", "closed": True, "points": [
+                        [0, 0], [60, 0], [60, 6], [6, 6], [6, 40], [0, 40]]}]},
+                {"op": "extrude", "sketch": "S", "distance": 30},
+            ]}))
+        context = session.context(session.active)
+        [inside] = select(session, context, kind="edge", filter="concave")
+        assert inside.length == pytest.approx(3.0), "it runs the length of the extrusion"
+        assert len(select(session, context, kind="edge", filter="convex")) == 5
 
     def test_the_com_filter_requires_a_known_convexity(self):
         from inventor_mcp.backend.base import TopoInfo

@@ -237,6 +237,11 @@ mean:
   loops, and **unknown** where it does not — and unknown matches nothing, so a
   selector that returns "matched no edges" is telling you it could not decide,
   not that the edge is absent. Narrow with `min_length` or `near`.
+- `validate_recipe` can check these offline now, for the edges that run along an
+  extrusion: the profile's corner decides whether that edge is an inside or an
+  outside one, and the simulator works it out the same way. Edges it cannot
+  place stay unknown there too, so a rehearsal that says "matched no edges" is
+  worth reading rather than dismissing as a limit of the simulator.
 - Convexity is never known for a **circular** edge. Use `near` to pick between a
   shaft's free end and its shoulder — they are both circular and only one is the
   one you mean.

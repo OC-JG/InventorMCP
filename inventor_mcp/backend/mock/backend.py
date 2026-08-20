@@ -115,6 +115,11 @@ class _Topo:
     length: float | None = None
     area: float | None = None
     consumed: bool = False
+    #: "convex" | "concave" | None. Set where the simulator can actually tell:
+    #: an edge running along an extrusion at a corner of its profile is convex
+    #: or concave exactly as that corner turns. Everything else stays None and
+    #: matches neither filter, as on the live backend.
+    convexity: str | None = None
 
     def to_info(self) -> TopoInfo:
         return TopoInfo(
@@ -128,6 +133,8 @@ class _Topo:
             length=self.length,
             area=self.area,
             geometry=self.geometry,
+            convexity=self.convexity,
+            convexity_from="profile corner" if self.convexity else None,
         )
 
 
@@ -507,7 +514,9 @@ class MockBackend(Backend):
             document.volume += signed
         moved = document.volume - was
 
-        self._synthesise_extrude_topology(document, sketch, loops, plane, distance, request.direction, name)
+        self._synthesise_extrude_topology(document, sketch, loops, plane, distance,
+                                          request.direction, name,
+                                          cut=request.operation == "cut")
         if request.operation != "cut":
             self._record_slabs(document, sketch, loops, plane, distance, request.direction)
 
@@ -558,6 +567,7 @@ class MockBackend(Backend):
         distance: float,
         direction: str,
         feature_name: str,
+        cut: bool = False,
     ) -> None:
         normal = plane_normal(plane)
         offset = sketch.offset
@@ -591,9 +601,11 @@ class MockBackend(Backend):
                         area=area,
                     )
                 )
+            corners = _corner_convexity(loop_points(sketch.plan, loop), inverted=cut)
             for primitive_id in loop:
                 primitive = sketch.plan.by_id(primitive_id)
-                self._synthesise_side(document, plane, primitive, near, far, feature_name)
+                self._synthesise_side(document, plane, primitive, near, far,
+                                      feature_name, corners)
 
     def _synthesise_side(
         self,
@@ -603,6 +615,7 @@ class MockBackend(Backend):
         near: float,
         far: float,
         feature_name: str,
+        corners: dict[tuple[float, float], str] | None = None,
     ) -> None:
         height = abs(far - near)
         if isinstance(primitive, PCircle):
@@ -660,7 +673,9 @@ class MockBackend(Backend):
                         length=primitive.length,
                     )
                 )
-            # The edge running along the extrusion direction at the segment start.
+            # The edge running along the extrusion direction at the segment
+            # start. This is the one edge the simulator can classify: it sits at
+            # a corner of the profile, and the corner's turn decides it.
             document.topology.append(
                 _Topo(
                     id=self._next("edge"),
@@ -671,6 +686,7 @@ class MockBackend(Backend):
                     midpoint=map3d(plane, primitive.start[0], primitive.start[1], (near + far) / 2),
                     direction=plane_normal(plane),
                     length=height,
+                    convexity=(corners or {}).get(_corner_key(primitive.start)),
                 )
             )
             return
@@ -889,9 +905,21 @@ class MockBackend(Backend):
             )
         name = self._feature_name(document, requested_name, kind)
         total_length = sum(match.length or 0.0 for match in matches)
-        # Removing (fillet) or adding (chamfer) a prism of roughly this size.
+        # r^2 (1 - pi/4) per unit length: the corner left outside a quarter
+        # circle inscribed in a square. On an outside corner that material goes
+        # away; on an inside corner the same amount is added, and the simulator
+        # subtracted either way -- which is why the angle bracket read 1.4 cm^3
+        # light with a correct fillet in it.
+        #
+        # The sign comes from the selector rather than from the shape: the
+        # simulator synthesises topology from sketch loops and genuinely cannot
+        # see which side the material is on, so it takes the recipe's word. A
+        # recipe that asks for "concave" and gets a convex edge is a mistake only
+        # Inventor can catch.
+        adds = selector.filter == "concave"
+        corner = total_length * size * size * 0.2146
         was = document.volume
-        document.volume = max(document.volume - total_length * size * size * 0.2146, 0.0)
+        document.volume = max(document.volume + (corner if adds else -corner), 0.0)
         for match in matches:
             match.consumed = True
         feature = _Feature(
@@ -899,7 +927,9 @@ class MockBackend(Backend):
             name=name,
             kind=kind,
             volume_delta=document.volume - was,
-            detail={**detail, "edges": len(matches), "edge_ids": [m.id for m in matches]},
+            detail={**detail, "edges": len(matches), "edge_ids": [m.id for m in matches],
+                    "volume_note": ("added, since the selector asks for a concave edge"
+                                    if adds else "removed, as on an outside corner")},
         )
         document.features.append(feature)
         document.modified = True
@@ -1366,6 +1396,64 @@ def _loop_center(plan: SketchPlan, loop: Sequence[str]) -> tuple[float, float]:
     return (sum(xs) / len(xs), sum(ys) / len(ys))
 
 
+#: How far a corner has to turn before it counts as one, in radians. Below this
+#: the polygon is following a curve or crossing a tangent junction, where there
+#: is no edge to classify -- a slot's straight-to-arc join is smooth.
+_CORNER = math.radians(1.0)
+
+
+def _corner_key(point: Sequence[float]) -> tuple[float, float]:
+    """A position rounded enough to match the same vertex twice."""
+    return (round(point[0], 7), round(point[1], 7))
+
+
+def _corner_convexity(outline: Sequence[tuple[float, float]],
+                      *, inverted: bool = False) -> dict[tuple[float, float], str]:
+    """Which corners of a profile turn out and which turn in.
+
+    An extruded profile's corner becomes an edge running along the extrusion,
+    and that edge is convex or concave exactly as the corner turns: in a
+    counter-clockwise loop a left turn is an outside corner and a reflex vertex
+    is an inside one. This is the one convexity question the simulator can
+    answer from what it has, rather than declining as it does for everything
+    else -- and it is the question that put a fillet on the wrong edge twice.
+
+    *inverted* for a cut: a pocket's corners are the opposite way round from a
+    boss's, since the material is outside the profile rather than inside.
+    """
+    count = len(outline)
+    if count < 3:
+        return {}
+    signed = 0.0
+    for current, following in zip(outline, list(outline[1:]) + [outline[0]]):
+        signed += current[0] * following[1] - following[0] * current[1]
+    if signed == 0:  # pragma: no cover - a degenerate loop has no corners
+        return {}
+    anticlockwise = signed > 0
+
+    corners: dict[tuple[float, float], str] = {}
+    for index in range(count):
+        previous = outline[index - 1]
+        here = outline[index]
+        following = outline[(index + 1) % count]
+        incoming = (here[0] - previous[0], here[1] - previous[1])
+        outgoing = (following[0] - here[0], following[1] - here[1])
+        first = math.hypot(*incoming)
+        second = math.hypot(*outgoing)
+        if first == 0 or second == 0:
+            continue
+        cross = incoming[0] * outgoing[1] - incoming[1] * outgoing[0]
+        dot = incoming[0] * outgoing[0] + incoming[1] * outgoing[1]
+        if abs(math.atan2(cross, dot)) < _CORNER:
+            continue  # a tangent join or a sampled curve: no edge here
+        turns_left = cross > 0
+        convex = turns_left == anticlockwise
+        if inverted:
+            convex = not convex
+        corners[_corner_key(here)] = "convex" if convex else "concave"
+    return corners
+
+
 def _side_normal(plane: str, line: PLine) -> tuple[float, float, float]:
     dx = line.end[0] - line.start[0]
     dy = line.end[1] - line.start[1]
@@ -1637,10 +1725,13 @@ def _sketch_info(sketch: Any) -> SketchInfo:
 
 def _passes_filter(topo: _Topo, filter_name: str, document: _Document) -> bool:
     if filter_name in ("convex", "concave"):
-        # The simulator synthesises topology from sketch loops and has no notion
-        # of which side the material is on, so it accepts either rather than
-        # claiming an answer. Inventor decides for real.
-        return True
+        # Known only where a profile corner decides it -- an edge running along
+        # an extrusion. Everything else is None and matches neither, which is
+        # what the live backend does too: "matched no edges" can mean "could not
+        # tell", and that is worth saying rather than quietly matching all of
+        # them. It used to accept either, so a recipe asking for the one concave
+        # edge on an angle bracket got whichever edge happened to be first.
+        return topo.convexity == filter_name
     if filter_name in ("all", "outer"):
         return True
     if filter_name in ("circular", "linear", "planar", "cylindrical"):

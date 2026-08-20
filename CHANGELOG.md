@@ -111,9 +111,22 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   distance is now measured over the profile from the prisms that built the part,
   which is exact for an extruded body and falls back to the span for a revolve,
   sweep or loft rather than guessing. Between this and the mirror fix the
-  bracket went from 27.15 cm^3 to 41.28 against Inventor's 43.20; the rest is
-  the fillet estimate, which is still a subtraction whichever way the edge
-  turns.
+  bracket went from 27.15 cm^3 to 41.28 against Inventor's 43.20.
+- **A fillet was subtracted whichever way the edge turned.** On an inside corner
+  a fillet *adds* the same material an outside corner loses, so the bracket's
+  correct fillet made it 1.4 cm^3 light. The sign now comes from the selector,
+  since the simulator cannot see which side the material is on and the recipe
+  has said which it means.
+- **`concave` and `convex` matched every edge in the simulator**, which is worse
+  than matching none: a recipe asking for the one inside corner on a bracket got
+  whichever edge happened to be created first. An edge running along an
+  extrusion sits at a corner of its profile, and the corner's turn decides it
+  exactly -- so those are classified, and everything else stays unknown and
+  matches neither, as on the live backend. Tangent joins are not corners, so a
+  slot's straight-to-arc junction is correctly no edge at all.
+
+  Together these put the angle bracket at 43.2012 cm^3 against Inventor's
+  43.1999 -- from 27.15 at the start. What is left is the slot arcs' sampling.
 - Four simulator answers that were wrong rather than approximate: a sketch on a
   named work plane ignored the plane's offset (the flanged shaft was built 12 mm
   low), a sweep summed only straight path segments so an arc path had no length,
