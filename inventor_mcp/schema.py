@@ -396,7 +396,11 @@ class HoleOp(OpBase):
         default_factory=list,
         description="Named point entities to use. Empty means every hole-centre point in the sketch.",
     )
-    diameter: ValueSpec = Field(description="Nominal (drill) diameter.")
+    diameter: ValueSpec = Field(
+        description="Nominal (drill) diameter. For a tapped hole give the tap-drill "
+        "diameter: Inventor takes the real one from its thread table, and the "
+        "server reports it back so the two can be compared."
+    )
     depth: ValueSpec | None = Field(None, description="Blind depth. Omit for a through hole.")
     through_all: bool = True
     direction: HoleDirection = Field(
@@ -410,8 +414,30 @@ class HoleOp(OpBase):
     cbore_depth: ValueSpec | None = None
     csink_diameter: ValueSpec | None = None
     csink_angle: ValueSpec = "90 deg"
-    tap: str | None = Field(None, description="Thread designation to tap, e.g. 'M6x1'.")
-    bottom_angle: ValueSpec = Field("118 deg", description="Drill point angle for blind holes.")
+    tap: str | None = Field(
+        None,
+        description="Thread designation to tap, e.g. 'M6x1' or '1/4-20'. Inventor "
+        "takes the drill size from its own thread table, so `diameter` stops "
+        "governing the bore when this is given.",
+    )
+    tap_type: str | None = Field(
+        None,
+        description="Which thread table, as Inventor names it: 'ANSI Metric M "
+        "Profile', 'ANSI Unified Screw Threads', 'NPT', 'BSP'. Derived from the "
+        "designation when omitted.",
+    )
+    tap_class: str | None = Field(
+        None, description="Thread class, e.g. '6H' or '2B'. Defaults by thread type."
+    )
+    tap_right_handed: bool = True
+    tap_full_depth: bool = Field(
+        True, description="Thread the whole depth of the hole rather than part of it."
+    )
+    bottom_angle: ValueSpec | None = Field(
+        None,
+        description="Drill point angle for a blind hole, e.g. '118 deg'. Omit for "
+        "a flat bottom, which is what Inventor's own hole dialog gives.",
+    )
 
     @model_validator(mode="after")
     def _depth_consistency(self) -> "HoleOp":

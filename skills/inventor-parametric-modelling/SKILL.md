@@ -315,8 +315,17 @@ fastener rather than deriving one.
 - Regular polygons keep one degree of freedom: Inventor refuses the closing
   equal-length constraint. The geometry is right and dimensioned; the sketch is
   just not fully constrained.
-- Counterbore, countersink and tapped hole styles are accepted and recorded but
-  the current COM path drills a plain hole. Do not promise a user a tapped hole.
+- **Hole styles are built, and checked.** `counterbore`, `spotface`,
+  `countersink` and `tap` reach Inventor's own hole feature. Because a wrong
+  argument order can still build — producing a plain hole that would be reported
+  as a counterbore — the server reads the style back off the finished feature and
+  fails rather than reporting a counterbore it cannot see. A tapped hole takes
+  its drill size from Inventor's thread table, so give `diameter` as the
+  *tapping drill* (nominal less the pitch for coarse metric); the server reports
+  the size Inventor actually used and says so when the two disagree. None of the
+  styles has yet been built against a live Inventor — the read-back is what makes
+  that survivable rather than silent, so treat a first success with the same
+  suspicion as the operations below.
 - Revolve, sweep, loft, patterns and threads are written but have never been run
   against a live Inventor. Treat a success there with suspicion and check the
   `measured` block hard. `examples/belt_pulley.json`, `pipe_bend.json`,

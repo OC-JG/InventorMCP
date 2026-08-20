@@ -700,14 +700,7 @@ class MockBackend(Backend):
         plane = sketch.base_plane
         radius = request.diameter.value / 2
         depth = request.depth.value if request.depth else _through_all_distance(document, plane)
-        removed = math.pi * radius**2 * depth * len(centers)
-        if request.style in ("counterbore", "spotface") and request.cbore_diameter and request.cbore_depth:
-            removed += (
-                math.pi
-                * (request.cbore_diameter.value / 2) ** 2
-                * request.cbore_depth.value
-                * len(centers)
-            )
+        removed = (math.pi * radius**2 * depth + _style_volume(request, radius)) * len(centers)
         document.volume = max(document.volume - removed, 0.0)
 
         name = self._feature_name(document, request.name, "hole")
@@ -745,6 +738,10 @@ class MockBackend(Backend):
                 "style": request.style,
                 "through_all": request.through_all,
                 "tap": request.tap,
+                # The simulator has no thread table, so a tapped hole is sized
+                # by the recipe's diameter. Inventor sizes it from the table,
+                # which is why the recipe should give the tap-drill diameter.
+                "tap_sized_by": "the recipe's diameter" if request.tap else None,
             },
         )
         document.features.append(feature)
@@ -1170,6 +1167,37 @@ def _edge_direction(plane: str, line: PLine) -> tuple[float, float, float]:
     dy = line.end[1] - line.start[1]
     length = math.hypot(dx, dy) or 1.0
     return map3d(plane, dx / length, dy / length, 0.0)
+
+
+def _style_volume(request: HoleRequest, radius: float) -> float:
+    """What one hole's *style* removes on top of the plain bore, in cm^3.
+
+    The bore is counted over the full depth elsewhere, so only the material
+    outside it counts here -- a counterbore of 10 mm over a 5.5 mm hole takes
+    away an annulus, not a whole cylinder. Counting the whole cylinder is what
+    this used to do, and it made every counterbored plate lighter than it is.
+    """
+    if request.style in ("counterbore", "spotface"):
+        if not (request.cbore_diameter and request.cbore_depth):
+            return 0.0
+        outer = request.cbore_diameter.value / 2
+        return math.pi * max(outer**2 - radius**2, 0.0) * request.cbore_depth.value
+    if request.style == "countersink":
+        if not request.csink_diameter:
+            return 0.0
+        outer = request.csink_diameter.value / 2
+        if outer <= radius:
+            return 0.0
+        # The angle Inventor takes is the full included angle, so the cone's
+        # half-angle is what relates the radii to the depth.
+        half = (request.csink_angle.value if request.csink_angle else math.pi / 2) / 2
+        slope = math.tan(half)
+        if slope <= 0:
+            return 0.0
+        height = (outer - radius) / slope
+        frustum = math.pi * height / 3 * (outer**2 + outer * radius + radius**2)
+        return max(frustum - math.pi * radius**2 * height, 0.0)
+    return 0.0
 
 
 def _through_all_distance(document: _Document, plane: str = "xy") -> float:

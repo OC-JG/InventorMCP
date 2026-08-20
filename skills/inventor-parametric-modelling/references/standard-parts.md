@@ -50,7 +50,8 @@ flats come out on the **Y** axis and the corners on X.
   "parameters": [
     {"name": "across_flats", "value": 24, "comment": "DIN 934 s for M16"},
     {"name": "height", "value": 14.8, "comment": "DIN 934 m"},
-    {"name": "thread_d", "value": 16}
+    {"name": "thread_d", "value": 16},
+    {"name": "tap_drill", "value": "thread_d - 2", "comment": "M16x2: nominal less the pitch"}
   ],
   "operations": [
     {"op": "sketch", "name": "Hex", "plane": "xy", "entities": [
@@ -59,13 +60,13 @@ flats come out on the **Y** axis and the corners on X.
     {"op": "extrude", "name": "Body", "sketch": "Hex", "distance": "height"},
     {"op": "sketch", "name": "Bore", "plane": "xy", "entities": [
       {"type": "point", "position": [0, 0]}]},
-    {"op": "hole", "name": "Thread", "sketch": "Bore", "diameter": "thread_d",
+    {"op": "hole", "name": "Thread", "sketch": "Bore", "diameter": "tap_drill",
      "through_all": true, "tap": "M16x2"}
   ]
 }
 ```
 
-Two things this recipe does not do, and you should say so rather than implying
+One thing this recipe does not do, and you should say so rather than implying
 otherwise:
 
 - **The chamfer is missing.** A real DIN 934 nut has a *conical* chamfer on both
@@ -74,9 +75,12 @@ otherwise:
   right way is a `revolve` with `operation: "cut"` and a triangular profile —
   but `revolve` has never been run against a live Inventor here, so it is not in
   the template yet.
-- **The tap is recorded, not cut.** The recipe carries `"tap": "M16x2"` and the
-  COM backend currently drills a plain hole. The thread is in the model's intent
-  and not in its geometry.
+
+The tap *is* cut: `"tap": "M16x2"` makes a real tapped hole, and Inventor takes
+the drill size from its own thread table. `diameter` is then only the recipe's
+claim about that size, which the server reports back so the two can be compared
+— so give the tapping drill (nominal less the pitch, 14 mm here) rather than the
+nominal 16, or the report will tell you they disagree.
 
 ## Plain washer, DIN 125 A
 

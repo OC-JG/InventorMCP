@@ -75,9 +75,14 @@ revolve     {"op":"revolve","sketch":"Profile","axis":"axis","angle":"180 deg"}
 sweep       {"op":"sweep","profile_sketch":"P","path_sketch":"Path"}
 loft        {"op":"loft","sketches":["S1","S2"]}
 hole        {"op":"hole","sketch":"Holes","diameter":"hole_d","through_all":true,
-             "style":"drilled|counterbore|countersink","tap":"M6x1"}
+             "style":"drilled|counterbore|spotface|countersink","tap":"M6x1"}
+             counterbore/spotface need cbore_diameter and cbore_depth;
+             countersink needs csink_diameter (csink_angle is the included angle).
              A through hole drills whichever way finds material, so `direction`
-             only matters for a blind hole (one with a `depth`).
+             only matters for a blind hole (one with a `depth`). A blind hole
+             gets a flat bottom unless you give `bottom_angle`.
+             With `tap`, Inventor takes the drill size from its own thread
+             table, so give `diameter` as the tapping drill.
 fillet      {"op":"fillet","edges":{"filter":"vertical"},"radius":"corner_r"}
 chamfer     {"op":"chamfer","edges":{"filter":"top"},"distance":1}
 shell       {"op":"shell","faces":{"kind":"face","filter":"top"},"thickness":"wall"}

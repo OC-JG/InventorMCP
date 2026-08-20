@@ -63,6 +63,7 @@ from ..base import (
     TopoInfo,
     WorkPlaneRequest,
 )
+from . import holes
 from .constants import (
     BOOLEAN_OPERATIONS,
     DISPLAY_MODES,
@@ -1309,40 +1310,58 @@ class ComBackend(Backend):
         extent = self._k(_HOLE_ALONG_NORMAL if along_normal else _HOLE_AGAINST_NORMAL)
 
         before = _solid_volume(document)
+        notes: list[str] = []
         with self._batch(document), self._translate_errors("Hole"):
             placement = features.CreateSketchPlacementDefinition(centers)
+
+            # A tap goes in where the diameter would: Inventor takes the drill
+            # size from its own thread table, so the recipe's diameter stops
+            # governing the bore and becomes a claim to check afterwards.
+            size: Any = request.diameter.expression
+            if request.tap:
+                try:
+                    size = holes.tap_info(features, request)
+                except Exception as exc:
+                    raise FeatureError(
+                        f"Could not set up the {request.tap!r} thread: "
+                        f"{self._explain_text(_com_message(exc))}",
+                        hint="Inventor looks the designation up in its own thread "
+                        "table, so it has to match one there exactly -- 'M6x1', not "
+                        "'M6'. Give `tap_type` and `tap_class` if the defaults are "
+                        "wrong for this table, or drop `tap` and add a `thread` "
+                        "operation on the bore instead.",
+                    ) from exc
+
+            call = holes.plan_call(
+                request, placement, extent, size,
+                request.bottom_angle.expression if request.bottom_angle else None,
+            )
             try:
-                if request.through_all:
-                    feature = features.AddDrilledByThroughAllExtent(
-                        placement, request.diameter.expression, extent
-                    )
-                else:
-                    assert request.depth is not None
-                    feature = _call_by_keyword(
-                        features.AddDrilledByDistanceExtent,
-                        [
-                            # Named, because the trailing arguments of this
-                            # family are not in the order they read: the
-                            # counterbore variant puts ExtentDirection at
-                            # index 3 and the bottom-tip arguments after it.
-                            {
-                                "PlacementDefinition": placement,
-                                "DiameterOrTapInfo": request.diameter.expression,
-                                "Depth": request.depth.expression,
-                                "ExtentDirection": extent,
-                            },
-                        ],
-                        positional=(
-                            placement, request.diameter.expression,
-                            request.depth.expression, extent,
-                        ),
-                    )
+                feature = holes.invoke(features, call)
             except Exception as exc:
                 raise FeatureError(
-                    f"Could not drill the hole: {self._explain_text(_com_message(exc))}",
-                    hint="Check that the hole centres sit over material and that "
-                    "the diameter is smaller than the surrounding geometry.",
+                    f"Could not make the {request.style} hole: "
+                    f"{self._explain_text(_com_message(exc))}",
+                    hint=f"Called {call.describe()}. Check that the hole centres "
+                    "sit over material, that the diameter is smaller than the "
+                    "surrounding geometry, and that a counterbore or countersink "
+                    "is wider than the bore it sits over.",
                 ) from exc
+
+            # Inventor coerces what it can, so a wrong argument order can build
+            # a plain hole and report success.  Reading the type back off the
+            # feature is the only thing that distinguishes "made a counterbore"
+            # from "made something".
+            agreed, verdict = holes.verify(feature, request, self._k)
+            if agreed is False:
+                raise FeatureError(
+                    f"The hole built but is not what was asked for: {verdict}.",
+                    hint=f"Called {call.describe()}. The argument order for this "
+                    "family is probably wrong on this release -- run "
+                    "`python scripts/probe_hole_styles.py` and paste its output.",
+                )
+            if agreed is None:
+                notes.append(f"style not verified: {verdict}")
 
             # Inventor is happy to drill into thin air and call it a success, so
             # the feature only counts if the part got smaller.  There is no
@@ -1363,13 +1382,31 @@ class ComBackend(Backend):
 
             if request.name:
                 feature.Name = request.name
-        return _feature_info(feature, "hole", {
+        detail: dict[str, Any] = {
             "count": int(centers.Count),
             "diameter": request.diameter.as_dict(),
             "style": request.style,
+            "method": call.method,
             "drilled": ("along" if along_normal else "against") + " the sketch normal",
             "chose_by": why,
-        })
+        }
+        if request.tap:
+            detail["tap"] = request.tap
+            detail["tap_type"] = request.tap_type or holes.thread_type_for(request.tap)
+            actual = _hole_diameter(feature)
+            if actual is not None:
+                detail["drilled_diameter_mm"] = round(actual * 10, 4)
+                # The recipe's diameter did not reach the model, so a wrong one
+                # would otherwise sit in the recipe looking authoritative.
+                if abs(actual - request.diameter.value) > 5.0e-3:
+                    notes.append(
+                        f"the tap drill is {actual * 10:.2f} mm from Inventor's "
+                        f"thread table, not the {request.diameter.value * 10:.2f} mm "
+                        "the recipe gives; the recipe's diameter did not reach the model"
+                    )
+        if notes:
+            detail["notes"] = notes
+        return _feature_info(feature, "hole", detail)
 
     def _explain_dry_hole(self, document: Any, sketch: Any, centers: Any,
                           before: float | None, measured: list[float | None],
@@ -2124,22 +2161,24 @@ def _set_radius_expression(feature: Any, expression: str) -> bool:  # pragma: no
     return False
 
 
-def _call_by_keyword(method: Any, keyword_sets: list[dict[str, Any]],
-                     positional: tuple[Any, ...]) -> Any:  # pragma: no cover - Windows only
-    """Call *method* by name where possible, falling back to positional.
+def _hole_diameter(feature: Any) -> float | None:  # pragma: no cover - Windows only
+    """The bore Inventor actually drilled, in cm, or None if it will not say.
 
-    Argument order in Inventor's hole methods is not what it reads like, and
-    getting it wrong puts a string where an enum belongs. Naming the arguments
-    removes the guesswork; late-bound dispatch does not accept keywords, so a
-    positional call stands behind it.
+    Worth asking for a tapped hole: the drill size comes from Inventor's thread
+    table rather than from the recipe, so the recipe's own diameter is a claim
+    nothing has checked.
     """
-    errors: list[str] = []
-    for keywords in keyword_sets:
+    for name in ("HoleDiameter", "Diameter"):
         try:
-            return method(**keywords)
-        except TypeError as exc:  # unknown or missing parameter name
-            errors.append(str(exc))
-    return method(*positional)
+            value = getattr(feature, name)
+        except Exception:
+            continue
+        for read in (lambda: float(value.Value), lambda: float(value)):
+            try:
+                return read()
+            except Exception:
+                continue
+    return None
 
 
 def _distinct(*objects: Any) -> list[Any]:

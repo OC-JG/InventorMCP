@@ -62,6 +62,36 @@ def test_the_mounting_plate_has_the_advertised_size(session):
     assert (box[3] - box[0], box[4] - box[1], box[5] - box[2]) == pytest.approx((12.0, 8.0, 0.8))
 
 
+def test_the_cover_plates_hole_styles_remove_what_the_geometry_says(session):
+    """The one expectation derived by hand *before* any live run.
+
+    A counterbore removes an annulus over the bore that is already counted, and
+    a countersink removes a cone -- the simulator got both wrong until these
+    numbers were worked out. Pinning it here keeps the expectation file and the
+    derivation in step, so a live disagreement means Inventor, not arithmetic.
+    """
+    import math
+
+    root = Path(__file__).parent.parent
+    build_part(session, load(root / "examples" / "cover_plate.json"))
+    measured = session.backend.mass_properties(session.active).volume
+
+    plate = 10.0 * 6.0 * 1.0
+    bore = math.pi * 0.33**2 * 1.0
+    counterbore = math.pi * (0.55**2 - 0.33**2) * 0.66
+    spigot = math.pi * 0.4**2 * 1.0
+    # 90 degrees included, so the cone is (R - r) = 0.4 cm deep.
+    cone = (math.pi * 0.4 / 3 * (0.8**2 + 0.8 * 0.4 + 0.4**2)
+            - math.pi * 0.4**2 * 0.4)
+    by_hand = plate - 4 * (bore + counterbore) - (spigot + cone)
+    assert measured == pytest.approx(by_hand, rel=1e-9)
+
+    recorded = json.loads(
+        (root / "examples" / "expected" / "cover_plate.json").read_text())
+    assert recorded["volume_cm3"] == pytest.approx(by_hand, abs=5e-7), (
+        "the recorded expectation no longer matches the derivation it came from")
+
+
 class TestEveryParameterActuallyDrivesSomething:
     """The test that would have caught the polyline gap.
 

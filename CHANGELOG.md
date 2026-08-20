@@ -44,6 +44,22 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   `threaded_boss` (thread, rectangular pattern).
 - `skills/.../references/standard-parts.md` — hex nut, washer and standoff
   templates, with the across-flats trap and the DIN/ISO disagreement recorded.
+- Hole styles are built rather than recorded. `counterbore`, `spotface`,
+  `countersink` and `tap` reach Inventor's own hole methods — eight of them, one
+  per style and extent — through a dispatch that can be tested offline against a
+  recorder instead of discovered on a live machine. The finished feature's
+  `HoleType` is read back, and a style Inventor does not confirm is refused
+  rather than reported, because a wrong argument order can still build and would
+  otherwise pass as a counterbore.
+- `bottom_angle` now reaches the model, and defaults to nothing: a blind hole
+  gets Inventor's own flat bottom unless a drill point is asked for. It used to
+  default to 118° and be dropped, which is the worst of both.
+- `examples/cover_plate.json` — counterbored and countersunk holes, with its
+  volume derived by hand and written to `examples/expected/` *before* any live
+  run, so the first run checks the geometry rather than recording it.
+- `scripts/probe_hole_styles.py` — one hole of every style through one block, with the
+  method called, the enum read back, the volume removed against what the
+  geometry says, and which thread tables `CreateTapInfo` will accept.
 
 ### Fixed
 - Holes drilled the wrong way and removed nothing. Inventor's extent enum runs
@@ -64,6 +80,9 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 - Errors are sanitised on the way out, so a COM failure no longer ships an
   absolute path — a user name, a project directory, a network share.
 - Disputed enum fallback values refuse rather than guess.
+- The simulator counted a counterbore as a whole cylinder rather than an
+  annulus over the bore it already counted, and ignored a countersink entirely.
+  Every counterbored plate came out lighter than it is.
 - Four simulator answers that were wrong rather than approximate: a sketch on a
   named work plane ignored the plane's offset (the flanged shaft was built 12 mm
   low), a sweep summed only straight path segments so an arc path had no length,
@@ -75,8 +94,10 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 ### Known limits
 - Revolve, sweep, loft, patterns and threads are written but unproven: no
   shipped recipe reaches them.
-- Counterbore, countersink and tapped hole styles are recorded and reported but
-  the COM path drills a plain hole.
+- The hole methods' argument order came from another project's field notes, not
+  from measurement here. It is verified at run time against the feature Inventor
+  builds, so a wrong order fails rather than lying; `scripts/probe_hole_styles.py`
+  settles it.
 - Assemblies, drawings and sheet metal are not supported.
 - Regular polygons keep one degree of freedom; Inventor refuses the closing
   equal-length constraint.

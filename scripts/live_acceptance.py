@@ -26,9 +26,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "scripts"))
 
 from inventor_mcp.builder import apply_operation, apply_parameter, measure  # noqa: E402
-from inventor_mcp.schema import PartRecipe  # noqa: E402
+from inventor_mcp.schema import PartRecipe, SketchOp  # noqa: E402
 from inventor_mcp.session import Session  # noqa: E402
 
 EXPECTED = ROOT / "examples" / "expected"
@@ -187,6 +188,68 @@ def check_parameter_edit(session: Session, report: Report) -> None:
     report.note(f"volume {before['volume_cm3']:.4f} -> {after['volume_cm3']:.4f} cm^3")
 
 
+def check_hole_styles(session: Session, report: Report) -> None:
+    """That a counterbore is a counterbore, which nothing has ever confirmed.
+
+    The hole-method argument order came from another project's field notes, and
+    a wrong order can still build: Inventor coerces what it can, so a plain hole
+    reported as a counterbore is the failure mode. The backend reads the style
+    back and refuses, so a pass here means Inventor agreed -- and the volume
+    check means it agreed about the shape, not just the label.
+    """
+    print("\n--- every hole style builds as the style asked for")
+    import probe_hole_styles
+
+    # The loop runs against the simulator too, so a typo in it is found here
+    # rather than on a live machine -- but the simulator calls none of Inventor's
+    # hole methods, so its verdicts are recorded as skips rather than passes.
+    live = session.backend.name != "mock"
+
+    backend = session.ensure_backend()
+    context = probe_hole_styles.block(session, backend)
+    for index, case in enumerate(probe_hole_styles.CASES):
+        if case.get("bottom_angle") and not live:
+            report.skip(f"{case['name']}", "the simulator does not model a drill point")
+            continue
+        before = probe_hole_styles.volume(session, context)
+        try:
+            apply_operation(session, context, SketchOp(
+                name=f"Centre{index}", plane="xy",
+                entities=[{"type": "point", "hole_center": True,
+                           "position": [(index - len(probe_hole_styles.CASES) / 2 + 0.5)
+                                        * probe_hole_styles.BLOCK
+                                        / (len(probe_hole_styles.CASES) + 1), 0]}],
+            ))
+            info = backend.hole(context.doc_id, probe_hole_styles.request_for(case, index))
+        except Exception as exc:
+            report.check(False, f"{case['name']}: {type(exc).__name__}", str(exc)[:200])
+            continue
+        after = probe_hole_styles.volume(session, context)
+        removed = None if before is None or after is None else before - after
+        if removed is None:
+            report.check(False, f"{case['name']}: could not be measured")
+            continue
+        wanted = case["removes"]
+        agreed = abs(removed - wanted) <= probe_hole_styles.TOLERANCE
+        what = (f"{case['name']}: removed {removed:.4f} cm^3 via "
+                f"{(info.detail or {}).get('method')}")
+        if not live:
+            report.skip(what, f"the simulator's own arithmetic, expected {wanted:.4f}"
+                              + ("" if agreed else " -- and it disagrees"))
+            continue
+        report.check(
+            agreed, what,
+            f"expected {wanted:.4f}, out by {removed - wanted:+.4f} -- the style "
+            "read back correctly but the shape is wrong" if not agreed else "",
+        )
+        for note in (info.detail or {}).get("notes") or []:
+            report.note(note)
+    try:
+        backend.close_document(context.doc_id, save=False)
+    except Exception:
+        pass
+
+
 def check_threading(session: Session, report: Report) -> None:
     """Inventor from several threads at once, which no run has ever done.
 
@@ -255,6 +318,7 @@ def check_constants(session: Session, report: Report) -> None:
 CHECKS = {
     "examples": None,  # handled specially: one per recipe
     "parameter-edit": check_parameter_edit,
+    "hole-styles": check_hole_styles,
     "threading": check_threading,
     "constants": check_constants,
 }

@@ -120,16 +120,19 @@ class TestTheClaimsAboutBehaviourHold:
         assert map3d("yz", 1.0, 0.0, 0.0) == (0.0, 1.0, 0.0)
         assert "model X on every plane" in skill
 
-    def test_the_hole_styles_it_warns_about_really_are_dropped(self, skill):
-        """If this is ever implemented, the skill must stop saying otherwise."""
-        import inspect
+    def test_the_hole_styles_it_offers_really_are_built(self, skill):
+        """The Skill used to warn these were dropped; it must not any more."""
+        from inventor_mcp.backend.com import holes
+        from inventor_mcp.schema import HoleOp
 
-        from inventor_mcp.backend.com import backend as com
-
-        source = inspect.getsource(com.ComBackend.hole)
-        assert "AddCBore" not in source, (
-            "counterbore is implemented now -- update the Skill")
-        assert "plain hole" in skill
+        for style in HoleOp.model_fields["style"].annotation.__args__:
+            assert (style, True) in holes.METHOD and (style, False) in holes.METHOD
+        assert "AddCBore" in holes.METHOD[("counterbore", True)]
+        assert "drills a plain hole" not in skill, (
+            "counterbore, countersink and tapped holes are built now")
+        # And the Skill has to say what it does check, since a hole that builds
+        # as the wrong style is the failure the verification exists for.
+        assert "reads the style back" in skill
 
     def test_the_unproven_operations_it_lists_match_the_documentation(self, skill):
         setup = (SKILL.parent.parent.parent / "docs" / "INVENTOR_SETUP.md").read_text()
@@ -254,10 +257,11 @@ class TestTheStandardParts:
         assert across_corners == pytest.approx(24.0 / math.cos(math.pi / 6), abs=1e-3)
 
     def test_the_hex_nut_has_the_volume_the_standard_implies(self, reference):
+        """The bore is the tapping drill, 14 mm for M16x2, not the nominal 16."""
         import math
 
         nut = self.recipes(reference)["HexNut_M16"]
-        wanted = ((3 ** 0.5 / 2) * 24 ** 2 * 14.8 - math.pi * 8 ** 2 * 14.8) / 1000
+        wanted = ((3 ** 0.5 / 2) * 24 ** 2 * 14.8 - math.pi * 7 ** 2 * 14.8) / 1000
         assert self.build(nut).volume == pytest.approx(wanted, rel=1e-6)
 
     def test_the_washer_does_too(self, reference):
@@ -282,6 +286,16 @@ class TestTheStandardParts:
         assert "17" in reference and "16" in reference
 
     def test_it_says_what_the_templates_do_not_do(self, reference):
-        """A tapped hole that drills plain, and a missing conical chamfer."""
-        assert "recorded, not cut" in reference.lower() or "not in its geometry" in reference
+        """The missing conical chamfer, and where a tapped hole's size comes from."""
         assert "conical" in reference
+        assert "thread table" in reference, (
+            "a tapped hole is drilled from Inventor's table, so the template has "
+            "to say the recipe's diameter is only a claim about it")
+
+    def test_the_tapped_template_gives_the_tapping_drill(self, reference):
+        """Nominal 16 with an M16x2 tap would disagree with Inventor by 2 mm."""
+        nut = self.recipes(reference)["HexNut_M16"]
+        hole = [op for op in nut["operations"] if op["op"] == "hole"][0]
+        assert hole["tap"] == "M16x2"
+        assert hole["diameter"] != "thread_d", (
+            "that is the nominal diameter, not the hole you drill to tap it")

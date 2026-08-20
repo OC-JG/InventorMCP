@@ -177,8 +177,8 @@ That indirection is what buys the useful properties:
 ```
 
 More in [`examples/`](examples/): a flanged shaft, a hex standoff, a shelled
-enclosure and an angle bracket. Each one is exercised by the test suite, so they
-cannot drift out of date.
+enclosure, an angle bracket and a counterbored cover plate. Each one is
+exercised by the test suite, so they cannot drift out of date.
 
 ### Sketches come out constrained
 
@@ -333,8 +333,10 @@ from polylines and slots and bolt circles, blind and through holes, fillets and
 chamfers chosen by selector, mirroring, shells, mass properties, and export to
 STEP, STL and PNG.
 
-Not yet exercised live: revolve, sweep, loft, patterns and threads. No shipped
-recipe reaches them, so a sixth example is what would prove them. See
+Not yet exercised live: revolve, sweep, loft, patterns, threads and the
+counterbore, countersink and tapped hole styles. Recipes now reach all of them —
+`belt_pulley`, `pipe_bend`, `duct_transition`, `threaded_boss` and
+`cover_plate` — so what is missing is a run, not a recipe. See
 [docs/INVENTOR_SETUP.md](docs/INVENTOR_SETUP.md) for what is confirmed, what is
 not, and the Inventor API quirks that cost the most time getting there.
 

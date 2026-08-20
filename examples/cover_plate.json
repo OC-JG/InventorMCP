@@ -1,0 +1,72 @@
+{
+  "name": "CoverPlate",
+  "description": "Flat cover with counterbored bolt holes and a countersunk centre hole, to exercise the hole styles",
+  "units": "mm",
+  "material": "Aluminum",
+  "parameters": [
+    {"name": "plate_l", "value": 100, "comment": "overall length"},
+    {"name": "plate_w", "value": 60, "comment": "overall width"},
+    {"name": "plate_t", "value": 10, "comment": "plate thickness"},
+    {"name": "edge_margin", "value": 12, "comment": "bolt centre to edge"},
+    {"name": "bolt_d", "value": 6.6, "comment": "M6 clearance"},
+    {"name": "cbore_d", "value": 11, "comment": "clears an M6 socket-head cap screw"},
+    {"name": "cbore_deep", "value": 6.6, "comment": "head sits below the face"},
+    {"name": "spigot_d", "value": 8, "comment": "centre hole"},
+    {"name": "csink_d", "value": 16, "comment": "countersink at the face"},
+    {"name": "csink_inc", "value": 90, "unit": "deg", "comment": "included angle"}
+  ],
+  "operations": [
+    {
+      "op": "sketch",
+      "name": "Body",
+      "plane": "xy",
+      "entities": [
+        {"type": "rectangle", "center": [0, 0], "width": "plate_l", "height": "plate_w"}
+      ]
+    },
+    {"op": "extrude", "name": "Plate", "sketch": "Body", "distance": "plate_t"},
+    {
+      "op": "sketch",
+      "name": "BoltCentres",
+      "plane": "xy",
+      "entities": [
+        {
+          "type": "point_grid",
+          "center": [0, 0],
+          "columns": 2,
+          "rows": 2,
+          "x_spacing": "plate_l - 2 * edge_margin",
+          "y_spacing": "plate_w - 2 * edge_margin"
+        }
+      ]
+    },
+    {
+      "op": "hole",
+      "name": "BoltHoles",
+      "sketch": "BoltCentres",
+      "diameter": "bolt_d",
+      "through_all": true,
+      "style": "counterbore",
+      "cbore_diameter": "cbore_d",
+      "cbore_depth": "cbore_deep"
+    },
+    {
+      "op": "sketch",
+      "name": "CentreHole",
+      "plane": "xy",
+      "entities": [
+        {"type": "point", "position": [0, 0]}
+      ]
+    },
+    {
+      "op": "hole",
+      "name": "SpigotHole",
+      "sketch": "CentreHole",
+      "diameter": "spigot_d",
+      "through_all": true,
+      "style": "countersink",
+      "csink_diameter": "csink_d",
+      "csink_angle": "csink_inc"
+    }
+  ]
+}

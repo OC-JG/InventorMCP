@@ -254,7 +254,15 @@ class HoleRequest:
     csink_diameter: Driven | None = None
     csink_angle: Driven | None = None
     bottom_angle: Driven | None = None
+    #: Thread designation to tap, e.g. "M6x1". When given, Inventor takes the
+    #: drill size from its own thread table and `diameter` no longer governs it.
     tap: str | None = None
+    #: Which thread table, e.g. "ANSI Metric M Profile". Derived from the
+    #: designation when omitted.
+    tap_type: str | None = None
+    tap_class: str | None = None
+    tap_right_handed: bool = True
+    tap_full_depth: bool = True
     name: str | None = None
 
 

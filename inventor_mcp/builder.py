@@ -283,8 +283,14 @@ def _apply_one(session: Session, context: DocumentContext, op: Operation) -> dic
             if op.csink_diameter is not None
             else None,
             csink_angle=_driven(resolver.angle(op.csink_angle, "countersink angle")),
-            bottom_angle=_driven(resolver.angle(op.bottom_angle, "drill point angle")),
+            bottom_angle=_driven(resolver.angle(op.bottom_angle, "drill point angle"))
+            if op.bottom_angle is not None
+            else None,
             tap=op.tap,
+            tap_type=op.tap_type,
+            tap_class=op.tap_class,
+            tap_right_handed=op.tap_right_handed,
+            tap_full_depth=op.tap_full_depth,
             name=op.name,
         )
         return _record(context, backend.hole(context.doc_id, request), "hole")

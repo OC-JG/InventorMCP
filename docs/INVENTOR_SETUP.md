@@ -86,6 +86,7 @@ of the API surface:
 |---|---|
 | `mounting_plate.json` | Sketch geometry, constraints, dimensions, extrude, fillet by selector, hole from a point grid |
 | `hex_standoff.json` | Polygon construction-circle constraints, tapped hole, chamfer on circular edges |
+| `cover_plate.json` | Counterbored and countersunk holes, with a volume derived by hand first |
 | `flanged_shaft.json` | Offset work plane, stacked extrusions, bolt circle, through bore, chamfer |
 | `enclosure_base.json` | Shell with a removed face, cut extrude on a second plane |
 | `angle_bracket.json` | Polyline profile, symmetric extrude, slot, mirror, sketch on XZ |
@@ -124,7 +125,10 @@ identical bounding box.
 
 `hex_standoff.json` builds too, adding the polygon entity, a tapped hole and a
 chamfer on circular edges. Its hexagon keeps one degree of freedom — see
-"Known-shaky areas" below.
+"Known-shaky areas" below. Its tapped hole was a *plain* hole when that run was
+made — the tap was recorded and dropped — so the part it builds now is not the
+part that run produced. Nothing was recorded from it, so there is no stale
+number, but the volume will differ once the thread is really cut.
 
 `enclosure_base.json` builds, adding a shell with a removed face and a cut
 extrude on a second plane. It contains no work plane, despite an earlier version
@@ -227,10 +231,15 @@ These are the parts of the COM backend most likely to need adjustment, and why:
 - **`shell`** uses `CreateShellDefinition`. Older releases expose a direct
   `ShellFeatures.Add(faces, thickness, direction)` instead.
 - **`thread`** creates a definition from the first selected face only.
-- **Hole styles** other than plain drilled (counterbore, countersink, tapped) are
-  carried through the recipe and reported, but the COM path currently creates a
-  drilled hole. The recipe records the intent, so upgrading this does not change
-  any recipe.
+- **Hole styles** go through Inventor's own hole methods, one per combination of
+  style and extent (`AddCBoreByThroughAllExtent` and its seven siblings). Their
+  argument order was taken from another project's field notes rather than
+  measured here — the extent-direction enum comes *before* the counterbore's own
+  dimensions, which is not how it reads — so the backend reads `HoleType` back
+  off the finished feature and refuses rather than reporting a counterbore it
+  cannot see. `python scripts/probe_hole_styles.py` settles the order and the enum
+  values in one run, and `examples/cover_plate.json` has a hand-derived volume
+  that catches a hole built as the wrong shape.
 - **Edge convexity is decided from the boundary loops**, which is exact: a
   face's boundary runs anticlockwise about its outward normal, so the material
   lies to the left of the loop, and whether that direction faces into the
