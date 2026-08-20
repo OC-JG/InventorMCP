@@ -57,6 +57,15 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 - `examples/cover_plate.json` — counterbored and countersunk holes, with its
   volume derived by hand and written to `examples/expected/` *before* any live
   run, so the first run checks the geometry rather than recording it.
+- Opt-in rollback. `rollback_on_error` on `build_part_from_recipe` and
+  `apply_operations` wraps the work in one of Inventor's own transactions and
+  aborts it if anything fails. Off by default, because a half-built part is the
+  best evidence there is about what went wrong — three of the geometry bugs
+  fixed here were found by looking at one. What makes it worth having is the
+  failure that cannot be recovered otherwise: a hole consumes its sketch, so
+  without a transaction there is nothing left to retry with. The simulator
+  implements it exactly, by copying the document aside, so the path is tested
+  rather than assumed.
 - `scripts/probe_hole_styles.py` — one hole of every style through one block, with the
   method called, the enum read back, the volume removed against what the
   geometry says, and which thread tables `CreateTapInfo` will accept.

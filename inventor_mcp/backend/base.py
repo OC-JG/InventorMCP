@@ -490,6 +490,28 @@ class Backend(ABC):
     @abstractmethod
     def rebuild(self, doc_id: str) -> dict[str, Any]: ...
 
+    # -- undo --------------------------------------------------------------
+    # Not abstract: a backend that cannot undo says so by returning None, and
+    # the caller carries on without a net rather than refusing to build.
+    def begin_transaction(self, doc_id: str, name: str) -> str | None:
+        """Start a unit of work that can be abandoned whole, or None if it cannot.
+
+        Opt-in, because the default behaviour is deliberately the opposite:
+        a half-built part is evidence, and deleting the evidence to leave a
+        clean document has cost more debugging time than it has saved. What
+        makes it worth having at all is that some failures cannot be undone
+        any other way -- a hole consumes its sketch, so there is nothing left
+        to retry with unless the whole thing is rolled back.
+        """
+        return None
+
+    def commit_transaction(self, handle: str) -> None:
+        """Keep the work. Idempotent, and silent if the handle is unknown."""
+
+    def abort_transaction(self, handle: str) -> bool:
+        """Undo everything since :meth:`begin_transaction`. False if it could not."""
+        return False
+
     # -- output ------------------------------------------------------------
     @abstractmethod
     def export(self, doc_id: str, request: ExportRequest) -> dict[str, Any]: ...

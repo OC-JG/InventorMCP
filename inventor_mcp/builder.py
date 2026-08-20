@@ -436,19 +436,30 @@ def build_part(
     *,
     document: str | None = None,
     stop_on_error: bool = True,
+    rollback_on_error: bool = False,
 ) -> dict[str, Any]:
-    """Create (or extend) a part from a complete recipe."""
+    """Create (or extend) a part from a complete recipe.
+
+    ``rollback_on_error`` is off by default and deliberately so: a half-built
+    part is the best evidence there is about what went wrong, and throwing it
+    away to leave a tidy document has cost more debugging time here than it has
+    saved. Turn it on when the part matters more than the diagnosis -- appending
+    to something that already works, or retrying a hole, which consumes its
+    sketch and so cannot be retried any other way.
+    """
     backend = session.backend
 
     if document is None:
         info = backend.new_part(recipe.name, units=recipe.units, angle_units=recipe.angle_units)
         context = session.register(info, recipe.units, recipe.angle_units)
+        created = True
     else:
         context = session.context(document)
         context.units = recipe.units
         context.angle_units = recipe.angle_units
         context.resolver.length_unit = recipe.units
         context.resolver.angle_unit = recipe.angle_units
+        created = False
 
     context.recipe = recipe.model_dump(mode="json", exclude_defaults=True)
 
@@ -461,6 +472,41 @@ def build_part(
         "errors": [],
     }
 
+    handle = None
+    if rollback_on_error:
+        handle = backend.begin_transaction(context.doc_id, f"Build {recipe.name}")
+        if handle is None:
+            results["rollback"] = (
+                "not available from this backend, so the part is left as it is"
+            )
+
+    def finish() -> dict[str, Any]:
+        """Commit or roll back, and say which, before handing the result over."""
+        results["ok"] = not results["errors"]
+        if handle is None:
+            return results
+        if results["ok"]:
+            backend.commit_transaction(handle)
+            return results
+        results["rolled_back"] = backend.abort_transaction(handle)
+        if results["rolled_back"]:
+            # The parameter and operation entries are kept deliberately: they are
+            # the record of how far the build got, which is the only thing left
+            # to reason from once the geometry is gone.
+            results["applied_then_undone"] = True
+            results["rollback"] = (
+                "every feature and sketch from this call was undone, so nothing "
+                "under `operations` exists any more"
+                + (", and the part document is empty" if created
+                   else "; the part is as it was before the call")
+            )
+        else:
+            results["rollback"] = (
+                "the rollback itself failed, so the part is in whatever state "
+                "the last operation left it -- inspect it before building on it"
+            )
+        return results
+
     for spec in recipe.parameters:
         try:
             results["parameters"].append(apply_parameter(session, context, spec))
@@ -469,8 +515,7 @@ def build_part(
             results["errors"].append(entry)
             if stop_on_error:
                 results["stopped_at"] = f"parameter {spec.name}"
-                results["ok"] = False
-                return results
+                return finish()
 
     if recipe.material:
         try:
@@ -488,16 +533,14 @@ def build_part(
             )
             if stop_on_error:
                 results["stopped_at"] = f"operation {index} ({getattr(op, 'op', '?')})"
-                results["ok"] = False
-                return results
+                return finish()
 
     try:
         properties = backend.mass_properties(context.doc_id)
         results["mass_properties"] = properties.as_dict()
     except Exception:  # pragma: no cover - a part with no solid yet
         pass
-    results["ok"] = not results["errors"]
-    return results
+    return finish()
 
 
 def check_recipe(recipe: PartRecipe) -> dict[str, Any]:

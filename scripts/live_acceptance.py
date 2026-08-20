@@ -28,7 +28,12 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from inventor_mcp.builder import apply_operation, apply_parameter, measure  # noqa: E402
+from inventor_mcp.builder import (  # noqa: E402
+    apply_operation,
+    apply_parameter,
+    build_part,
+    measure,
+)
 from inventor_mcp.schema import PartRecipe, SketchOp  # noqa: E402
 from inventor_mcp.session import Session  # noqa: E402
 
@@ -250,6 +255,77 @@ def check_hole_styles(session: Session, report: Report) -> None:
         pass
 
 
+def check_rollback(session: Session, report: Report) -> None:
+    """That Inventor's TransactionManager really puts the part back.
+
+    Written against the simulator, which models a rollback by copying the
+    document aside. Inventor's own transactions are a different mechanism
+    entirely, and whether an abort restores a *consumed sketch* -- the one
+    failure rollback exists for -- has never been checked.
+    """
+    print("\n--- a failed build rolls back")
+    # The body runs against the simulator too, so a typo here is found offline;
+    # but the simulator copies the document aside, which proves nothing about
+    # Inventor's TransactionManager, so its verdicts are recorded as skips.
+    live = session.backend.name != "mock"
+
+    def verdict(ok: bool, what: str, detail: str = "") -> bool:
+        if live:
+            return report.check(ok, what, detail)
+        # The detail only reads correctly against a failure -- it explains one.
+        report.skip(what, "the simulator, not Inventor"
+                          + (f" -- and it says no: {detail}" if not ok and detail
+                             else " -- and it says no" if not ok else ""))
+        return ok
+
+    path = ROOT / "examples" / "mounting_plate.json"
+    recipe = PartRecipe.model_validate(json.loads(path.read_text()))
+    good = build_part(session, recipe)
+    if not good["ok"]:
+        verdict(False, "the plate did not build", json.dumps(good["errors"][:1]))
+        return
+    backend = session.backend
+    before = measure(session, session.context(good["document"]))
+
+    # The same recipe again, with its last operation pointed at a sketch that is
+    # not there: everything before it succeeds, so there is something to undo.
+    broken = json.loads(path.read_text())
+    broken["operations"] = [
+        {"op": "sketch", "name": "Pocket", "plane": "xy", "entities": [
+            {"type": "rectangle", "center": [0, 0], "width": 40, "height": 20}]},
+        {"op": "extrude", "name": "Pocket_Cut", "sketch": "Pocket",
+         "distance": 3, "operation": "cut"},
+        {"op": "hole", "sketch": "NoSuchSketch", "diameter": 5},
+    ]
+    broken["parameters"] = []
+    result = build_part(session, PartRecipe.model_validate(broken),
+                        document=good["document"], rollback_on_error=True)
+    verdict(result["ok"] is False, "the broken build failed, as intended",
+            "it succeeded, so this checks nothing")
+    if not verdict(bool(result.get("rolled_back")),
+                   f"{'Inventor' if live else 'the backend'} accepted the rollback",
+                   result.get("rollback", "no rollback was reported")):
+        return
+
+    after = measure(session, session.context(good["document"]))
+    if before is None or after is None:
+        verdict(False, "could not measure across the rollback")
+        return
+    verdict(abs(after["volume_cm3"] - before["volume_cm3"]) <= TOLERANCE,
+            f"the volume came back: {after['volume_cm3']:.4f} cm^3",
+            f"was {before['volume_cm3']:.4f} before the failed build -- the "
+            "pocket was cut and not restored")
+    for field in ("faces", "edges"):
+        if field in before and field in after:
+            verdict(before[field] == after[field],
+                    f"{field} came back to {after[field]}",
+                    f"was {before[field]}" if before[field] != after[field] else "")
+    try:
+        backend.close_document(good["document"], save=False)
+    except Exception:
+        pass
+
+
 def check_threading(session: Session, report: Report) -> None:
     """Inventor from several threads at once, which no run has ever done.
 
@@ -319,6 +395,7 @@ CHECKS = {
     "examples": None,  # handled specially: one per recipe
     "parameter-edit": check_parameter_edit,
     "hole-styles": check_hole_styles,
+    "rollback": check_rollback,
     "threading": check_threading,
     "constants": check_constants,
 }

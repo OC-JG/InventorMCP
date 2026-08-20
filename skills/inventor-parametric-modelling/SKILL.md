@@ -326,6 +326,14 @@ fastener rather than deriving one.
   styles has yet been built against a live Inventor — the read-back is what makes
   that survivable rather than silent, so treat a first success with the same
   suspicion as the operations below.
+- **A failed build leaves the part where it stopped**, on purpose: the
+  half-built part is usually what explains the failure. Pass
+  `rollback_on_error: true` to `build_part_from_recipe` or `apply_operations`
+  when the part matters more than the diagnosis — appending to something that
+  already works, or retrying a hole, which consumes its sketch and so cannot be
+  retried any other way. The report says whether the rollback happened; if it
+  says the rollback itself failed, stop and look at the part before building on
+  it.
 - Revolve, sweep, loft, patterns and threads are written but have never been run
   against a live Inventor. Treat a success there with suspicion and check the
   `measured` block hard. `examples/belt_pulley.json`, `pipe_bend.json`,

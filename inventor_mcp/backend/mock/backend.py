@@ -15,6 +15,7 @@ they surface.
 
 from __future__ import annotations
 
+import copy
 import math
 from dataclasses import dataclass, field
 from itertools import count
@@ -191,6 +192,7 @@ class MockBackend(Backend):
         self._documents: dict[str, _Document] = {}
         self._active: str | None = None
         self._ids = count(1)
+        self._transactions: dict[str, tuple[str, _Document]] = {}
         self.calls: list[tuple[str, dict[str, Any]]] = []
 
     # -- helpers -----------------------------------------------------------
@@ -1069,6 +1071,33 @@ class MockBackend(Backend):
                     "geometry, so sizes reported after a parameter change are stale. "
                     "Connect to Inventor for a real rebuild.",
         }
+
+    # -- undo --------------------------------------------------------------
+    def begin_transaction(self, doc_id: str, name: str) -> str | None:
+        """Copy the document aside, so an abort can put it back.
+
+        A real rollback rather than a stub: Inventor's transactions are one of
+        the few things the simulator can model exactly, which is what lets the
+        rollback path be tested at all.
+        """
+        document = self._doc(doc_id)
+        handle = self._next("txn")
+        self._transactions[handle] = (document.id, copy.deepcopy(document))
+        self._record("begin_transaction", handle=handle, name=name)
+        return handle
+
+    def commit_transaction(self, handle: str) -> None:
+        self._transactions.pop(handle, None)
+        self._record("commit_transaction", handle=handle)
+
+    def abort_transaction(self, handle: str) -> bool:
+        entry = self._transactions.pop(handle, None)
+        self._record("abort_transaction", handle=handle)
+        if entry is None:
+            return False
+        doc_id, snapshot = entry
+        self._documents[doc_id] = snapshot
+        return True
 
     # -- output ------------------------------------------------------------
     def export(self, doc_id: str, request: ExportRequest) -> dict[str, Any]:

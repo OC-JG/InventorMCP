@@ -134,6 +134,13 @@ def register(server: Any, session: Session) -> None:
         validate_first: Annotated[
             bool, Field(description="Run the static checks first and refuse to build if they fail.")
         ] = True,
+        rollback_on_error: Annotated[
+            bool,
+            Field(description="Undo the whole build if any step fails, using Inventor's own "
+                              "transactions. Off by default: a half-built part is usually the "
+                              "best evidence about what went wrong. Turn it on when the part "
+                              "matters more than the diagnosis."),
+        ] = False,
     ) -> dict[str, Any]:
         parsed = PartRecipe.model_validate(recipe)
         session.ensure_backend()
@@ -148,7 +155,8 @@ def register(server: Any, session: Session) -> None:
                     "hint": "Fix the findings, or call again with validate_first=false to "
                             "build anyway and see how far it gets.",
                 }
-        result = build_part(session, parsed, document=document, stop_on_error=stop_on_error)
+        result = build_part(session, parsed, document=document, stop_on_error=stop_on_error,
+                            rollback_on_error=rollback_on_error)
         context = session.context(result["document"])
         if "mass_properties" in result:
             result["bounding_box"] = display_box(
@@ -169,11 +177,22 @@ def register(server: Any, session: Session) -> None:
         ],
         document: Annotated[str | None, Field(description="Target part; defaults to the active one.")] = None,
         stop_on_error: Annotated[bool, Field(description="Stop at the first failure.")] = True,
+        rollback_on_error: Annotated[
+            bool,
+            Field(description="Undo these operations if any of them fails, using Inventor's "
+                              "own transactions, leaving the part as it was. Off by default, "
+                              "because the half-applied state is usually what explains the "
+                              "failure -- but this is the way to retry a hole, which consumes "
+                              "its sketch and so cannot be retried otherwise."),
+        ] = False,
     ) -> dict[str, Any]:
         parsed = _OPERATIONS.validate_python(operations)
         context = session.context(document)
         results: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
+        backend = session.backend
+        handle = backend.begin_transaction(context.doc_id, "Apply operations") \
+            if rollback_on_error else None
         for index, op in enumerate(parsed):
             try:
                 results.append({"index": index, **apply_operation(session, context, op)})
@@ -182,12 +201,28 @@ def register(server: Any, session: Session) -> None:
                                "hint": getattr(exc, "hint", None)})
                 if stop_on_error:
                     break
-        return {
+        report = {
             "ok": not errors,
             "document": context.doc_id,
             "applied": results,
             "errors": errors,
         }
+        if rollback_on_error and handle is None:
+            report["rollback"] = "not available from this backend, so nothing was undone"
+        elif handle is not None and errors:
+            report["rolled_back"] = backend.abort_transaction(handle)
+            if report["rolled_back"]:
+                # The entries stay: they say what was built and are the record of
+                # how far it got. They just no longer describe anything that is
+                # in the part, and that has to be said rather than inferred.
+                report["applied_then_undone"] = True
+            report["rollback"] = ("the part is as it was before the call, so nothing "
+                                  "under `applied` exists any more"
+                                  if report["rolled_back"] else
+                                  "the rollback itself failed -- inspect the part")
+        elif handle is not None:
+            backend.commit_transaction(handle)
+        return report
 
     @server.tool(
         description="Declare or change driving parameters, then rebuild. This is how you revise a "

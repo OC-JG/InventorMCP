@@ -255,6 +255,7 @@ class ComBackend(Backend):
         self._documents: dict[str, Any] = {}
         self._sketches: dict[str, dict[str, Any]] = {}
         self._topology: dict[str, dict[str, Any]] = {}
+        self._transactions: dict[str, Any] = {}
         self._ids = count(1)
 
     # -- plumbing ----------------------------------------------------------
@@ -1878,6 +1879,50 @@ class ComBackend(Backend):
                 float(box.MaxPoint.X), float(box.MaxPoint.Y), float(box.MaxPoint.Z),
             ),
         )
+
+    # -- undo --------------------------------------------------------------
+    def begin_transaction(self, doc_id: str, name: str) -> str | None:  # pragma: no cover
+        """Open one of Inventor's own transactions over this document.
+
+        Inventor's ``TransactionManager`` is what its own commands use, so an
+        abort undoes everything the way Ctrl+Z would -- including the sketch a
+        hole feature consumed, which nothing else can bring back.
+        """
+        document = self._doc(doc_id)
+        app = self._require_app()
+        try:
+            transaction = app.TransactionManager.StartTransaction(document, name)
+        except Exception as exc:
+            logger.debug("Inventor would not start a transaction: %s", _com_message(exc))
+            return None
+        handle = self._next("txn")
+        self._transactions[handle] = transaction
+        return handle
+
+    def commit_transaction(self, handle: str) -> None:  # pragma: no cover
+        transaction = self._transactions.pop(handle, None)
+        if transaction is None:
+            return
+        try:
+            transaction.End()
+        except Exception as exc:
+            # The work is already in the document; only the grouping is lost, so
+            # this is worth a log and not an error.
+            logger.debug("Could not close transaction %s: %s", handle, _com_message(exc))
+
+    def abort_transaction(self, handle: str) -> bool:  # pragma: no cover
+        transaction = self._transactions.pop(handle, None)
+        if transaction is None:
+            return False
+        try:
+            transaction.Abort()
+        except Exception as exc:
+            logger.debug("Could not abort transaction %s: %s", handle, _com_message(exc))
+            return False
+        # Every handle held against the old topology is now stale, and a stale
+        # handle that still resolves is worse than one that fails.
+        self._topology.clear()
+        return True
 
     def rebuild(self, doc_id: str) -> dict[str, Any]:  # pragma: no cover
         document = self._doc(doc_id)
