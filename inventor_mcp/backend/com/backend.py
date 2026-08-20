@@ -1211,24 +1211,22 @@ class ComBackend(Backend):
                 hint="Add `point`, `point_grid` or `bolt_circle` entities to the sketch.",
             )
 
-        # ExtentDirection is an enum, not a boolean: passing True/False sends 1
-        # or 0, which are not values of PartFeatureExtentDirectionEnum.
-        requested = self._k(EXTENT_DIRECTIONS.get(request.direction, "kNegativeExtentDirection"))
-        opposite = self._k(
-            "kPositiveExtentDirection"
-            if request.direction == "negative"
-            else "kNegativeExtentDirection"
-        )
+        # Which way to drill, in the recipe's terms: along the sketch plane's
+        # own normal, or against it.  "auto" is the usual case -- a hole placed
+        # on a face is drilled into the part -- and the backend can see which
+        # side that is, which the author should not have to work out.
+        axes = _sketch_axes(sketch, app.TransientGeometry)
+        normal = _cross(*axes) if axes else None
+        along_normal, why = _drilling_side(request.direction, document, sketch, normal)
+        extent = self._k(_HOLE_ALONG_NORMAL if along_normal else _HOLE_AGAINST_NORMAL)
 
-        flipped = False
         before = _solid_volume(document)
-        measured: list[float | None] = []
         with self._batch(document), self._translate_errors("Hole"):
             placement = features.CreateSketchPlacementDefinition(centers)
             try:
                 if request.through_all:
                     feature = features.AddDrilledByThroughAllExtent(
-                        placement, request.diameter.expression, requested
+                        placement, request.diameter.expression, extent
                     )
                 else:
                     assert request.depth is not None
@@ -1243,12 +1241,12 @@ class ComBackend(Backend):
                                 "PlacementDefinition": placement,
                                 "DiameterOrTapInfo": request.diameter.expression,
                                 "Depth": request.depth.expression,
-                                "ExtentDirection": requested,
+                                "ExtentDirection": extent,
                             },
                         ],
                         positional=(
                             placement, request.diameter.expression,
-                            request.depth.expression, requested,
+                            request.depth.expression, extent,
                         ),
                     )
             except Exception as exc:
@@ -1259,31 +1257,21 @@ class ComBackend(Backend):
                 ) from exc
 
             # Inventor is happy to drill into thin air and call it a success, so
-            # the feature only counts if the part got smaller. The update is
-            # deliberate: the volume has to be the one after this feature.
+            # the feature only counts if the part got smaller.  There is no
+            # second chance: a hole consumes its sketch, so the feature cannot
+            # be deleted and rebuilt, and neither HoleFeature.ExtentDirection
+            # nor its Definition is writable on 2027.1.  Hence choosing the
+            # side up front rather than trying one and correcting.
             _recompute(document)
-            measured.append(_solid_volume(document))
+            after = _solid_volume(document)
             if not _removed_material(document, before):
-                # Which way a sketch plane faces is not the caller's problem, so
-                # try the other way -- but *in place*. A hole consumes its
-                # sketch, so deleting the feature to build a second one leaves
-                # nothing to build it from: that is why the bracket's retry
-                # errored and why no sketch was left in the tree afterwards.
-                flipped = _flip_extent(feature, opposite)
-                if flipped:
-                    _recompute(document)
-                    measured.append(_solid_volume(document))
-                if not flipped or not _removed_material(document, before):
-                    raise FeatureError(
-                        "The hole built but removed no material, in either "
-                        "direction." if flipped else
-                        "The hole built but removed no material, and its "
-                        "direction could not be reversed to try the other way.",
-                        hint=self._explain_dry_hole(
-                            document, sketch, centers, before, measured, []),
-                    )
-                logger.info("Hole in %s drilled the opposite way: the sketch "
-                            "plane faces away from the material.", request.sketch)
+                raise FeatureError(
+                    "The hole built but removed no material.",
+                    hint=self._explain_dry_hole(
+                        document, sketch, centers, before, [after],
+                        [f"drilled {'along' if along_normal else 'against'} the "
+                         f"sketch normal, {why}"]),
+                )
 
             if request.name:
                 feature.Name = request.name
@@ -1291,7 +1279,8 @@ class ComBackend(Backend):
             "count": int(centers.Count),
             "diameter": request.diameter.as_dict(),
             "style": request.style,
-            "flipped": flipped,
+            "drilled": ("along" if along_normal else "against") + " the sketch normal",
+            "chose_by": why,
         })
 
     def _explain_dry_hole(self, document: Any, sketch: Any, centers: Any,
@@ -2484,22 +2473,48 @@ def _describe_orientation(
     return f"{seen}, {change}"
 
 
-def _flip_extent(feature: Any, direction: int) -> bool:  # pragma: no cover
-    """Reverse a feature's extent without rebuilding it, if that is possible.
+#: Which Inventor extent enum drills *along* a sketch plane's own normal.
+#: Measured with scripts/probe_hole.py on 2027.1: a point on the YZ origin
+#: plane, whose normal is +X, with material at x > 0. kNegativeExtentDirection
+#: removed 0.3817 cm^3 -- exactly a 9 mm hole 6 mm deep -- and
+#: kPositiveExtentDirection removed nothing. So a hole's enum runs opposite to
+#: an extrude's, where kPositiveExtentDirection builds along the normal. That
+#: is Inventor being sensible on its own terms -- a hole is drilled *into* the
+#: face you placed it on -- but it is the opposite of what `direction` means
+#: everywhere else in a recipe, so the backend absorbs it here.
+_HOLE_ALONG_NORMAL = "kNegativeExtentDirection"
+_HOLE_AGAINST_NORMAL = "kPositiveExtentDirection"
 
-    Deleting and recreating is not an option for a hole: it consumes its
-    sketch, so the second attempt has no centres to place itself on.
+
+def _drilling_side(requested: str, document: Any, sketch: Any,
+                   normal: tuple[float, ...] | None) -> tuple[bool, str]:
+    """Whether to drill along the sketch normal, and how that was decided.
+
+    An explicit `positive` or `negative` in the recipe is obeyed.  Otherwise
+    look for the material: a hole is drilled into the part, and which side the
+    part is on is a question about the model, not about the author's intent.
     """
-    for describe, target in (("the feature", lambda: feature),
-                             ("its definition", lambda: feature.Definition)):
-        try:
-            resolved = target()
-            resolved.ExtentDirection = direction
-        except Exception:
-            continue
-        logger.info("Reversed the hole's extent through %s.", describe)
-        return True
-    return False
+    if requested == "positive":
+        return True, "the recipe asked for it"
+    if requested == "negative":
+        return False, "the recipe asked for it"
+
+    if normal is None:
+        return True, "the sketch's normal could not be measured"
+    try:
+        centroid = document.ComponentDefinition.MassProperties.CenterOfMass
+        origin = sketch.SketchToModelSpace(
+            sketch.Application.TransientGeometry.CreatePoint2d(0.0, 0.0))
+        towards = sum(
+            (getattr(centroid, axis) - getattr(origin, axis)) * component
+            for axis, component in zip("XYZ", normal)
+        )
+    except Exception:
+        return True, "the material could not be located, so along the normal"
+    if abs(towards) < 1e-9:
+        return True, "the plane runs through the middle of the part"
+    return towards > 0, ("the part lies "
+                         f"{'along' if towards > 0 else 'against'} the normal")
 
 
 def _recompute(document: Any) -> None:  # pragma: no cover - Windows only

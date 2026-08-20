@@ -152,8 +152,7 @@
       "name": "UprightFixings",
       "sketch": "UprightHoles",
       "diameter": "hole_d",
-      "depth": "thk",
-      "direction": "positive"
+      "depth": "thk"
     },
     {
       "op": "fillet",

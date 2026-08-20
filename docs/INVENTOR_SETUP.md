@@ -149,11 +149,22 @@ afternoon:
   work point into the sketch first.
 * A midpoint constraint moves the *point* onto the line, so the grounded sketch
   origin can never be that point.
-* **A hole consumes its sketch**, so a hole that removes nothing cannot be
-  deleted and rebuilt the other way round — the second attempt has no centres
-  left to place itself on, which is why the bracket's retry errored on top of
-  its first failure and left no sketch in the tree. Reverse the extent on the
-  feature in place instead (`_flip_extent`).
+* **A hole's `ExtentDirection` runs opposite to an extrude's.** Measured with
+  `scripts/probe_hole.py`: on a plane whose normal is +X with material at x > 0,
+  `kNegativeExtentDirection` removed exactly a 9 mm × 6 mm hole and
+  `kPositiveExtentDirection` removed nothing. That is Inventor being sensible on
+  its own terms — a hole is drilled *into* the face you placed it on — but it is
+  the opposite of what `direction` means everywhere else in a recipe, so the
+  backend absorbs it (`_HOLE_ALONG_NORMAL`).
+* **There is no second chance at a hole's direction**, so it is chosen before
+  drilling rather than corrected afterwards. A hole consumes its sketch, so the
+  feature cannot be deleted and rebuilt — the retry has no centres left to place
+  itself on, which is why the bracket's second attempt errored on top of its
+  first and left no sketch in the tree. And neither `HoleFeature.ExtentDirection`
+  nor its `Definition` is writable, so it cannot be reversed in place either.
+  Both routes were measured; both are closed. `direction: "auto"` — the default —
+  compares the part's centre of mass against the sketch plane and drills towards
+  the material.
 * **A cut that meets no material still reports success.** Inventor builds the
   feature, changes nothing, and returns it. Two of the angle bracket's three
   geometry bugs hid behind an `ok` line that way. Cut extrudes and holes now

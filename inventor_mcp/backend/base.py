@@ -229,7 +229,8 @@ class HoleRequest:
     point_indices: Sequence[int] = ()
     depth: Driven | None = None
     through_all: bool = True
-    direction: str = "negative"
+    #: "auto" | "positive" | "negative", relative to the sketch plane's normal.
+    direction: str = "auto"
     style: str = "drilled"
     cbore_diameter: Driven | None = None
     cbore_depth: Driven | None = None

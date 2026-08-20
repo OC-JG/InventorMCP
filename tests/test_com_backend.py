@@ -760,80 +760,112 @@ class TestNoOpFeatures:
         assert com._solid_volume(self.Document(46.2)) == 46.2
 
 
-class TestHoleDirectionIsNotTheCallersProblem:
-    """A blind hole is flipped too, because flipping preserves its depth.
+class TestHoleDirection:
+    """A hole's direction is chosen before it is drilled, because there is no
+    second chance.
 
-    Only through-all holes used to be retried, on the reasoning that a blind
-    hole's depth is meant. The depth is -- but the side of the sketch plane it
-    is measured from is not, and the bracket's upright holes were drilled off
-    the back of the part at full depth, removing nothing.
+    A hole consumes its sketch, so the feature cannot be deleted and rebuilt --
+    the retry has no centres left to place itself on. Neither
+    HoleFeature.ExtentDirection nor its Definition is writable on 2027.1, so it
+    cannot be reversed in place either. Both routes were measured with
+    scripts/probe_hole.py; both are closed. So the side is decided up front.
     """
 
-    def test_a_no_op_feature_is_taken_back_out_of_the_tree(self):
-        class Feature:
-            deleted = False
+    def test_a_holes_enum_runs_opposite_to_an_extrudes(self):
+        """Measured, not assumed: see _HOLE_ALONG_NORMAL for the evidence.
 
-            def Delete(self):
-                type(self).deleted = True
-
-        com._delete_quietly(Feature())
-        assert Feature.deleted is True
-
-    def test_a_feature_that_will_not_delete_does_not_raise(self):
-        class Stubborn:
-            def Delete(self):
-                raise RuntimeError("cannot delete")
-
-        com._delete_quietly(Stubborn())  # the retry matters more than the tidying
-
-    def test_the_other_direction_is_reached_by_flipping_not_rebuilding(self):
-        """A hole consumes its sketch, so the second build has no centres.
-
-        That is what happened to the bracket: the first attempt removed
-        nothing, deleting it took the sketch with it, and the retry errored on
-        geometry that no longer existed -- leaving no sketch in the tree and a
-        confusing second error on top of the first.
+        On a plane whose normal is +X with material at x > 0,
+        kNegativeExtentDirection removed exactly a 9 mm x 6 mm hole and
+        kPositiveExtentDirection removed nothing.
         """
+        from inventor_mcp.backend.com.constants import EXTENT_DIRECTIONS
+
+        assert com._HOLE_ALONG_NORMAL == "kNegativeExtentDirection"
+        assert com._HOLE_AGAINST_NORMAL == "kPositiveExtentDirection"
+        assert EXTENT_DIRECTIONS["positive"] == "kPositiveExtentDirection", (
+            "an extrude's positive is along the normal; a hole's is not")
+        assert com._HOLE_ALONG_NORMAL != EXTENT_DIRECTIONS["positive"]
+
+    def test_the_two_enums_are_actually_different_values(self):
+        constants = Constants(None)
+        assert (constants.resolve(com._HOLE_ALONG_NORMAL)
+                != constants.resolve(com._HOLE_AGAINST_NORMAL))
+
+    class Part:
+        """A part whose centre of mass sits where the test puts it."""
+
+        def __init__(self, centroid=(3.0, 0.0, 0.0), origin=(0.0, 0.0, 0.0)):
+            point = lambda values: type("P", (), dict(zip("XYZ", values)))()
+            self.ComponentDefinition = type("CD", (), {
+                "MassProperties": type("MP", (), {"CenterOfMass": point(centroid)})(),
+            })()
+            self._origin = point(origin)
+
+        def sketch(self):
+            outer = self
+            return type("Sketch", (), {
+                "Application": type("App", (), {
+                    "TransientGeometry": type("TG", (), {
+                        "CreatePoint2d": staticmethod(lambda u, v: (u, v))})()})(),
+                "SketchToModelSpace": staticmethod(lambda point: outer._origin),
+            })()
+
+    def test_an_explicit_direction_is_obeyed(self):
+        part = self.Part(centroid=(-3.0, 0.0, 0.0))  # material the other way
+        for requested, expected in (("positive", True), ("negative", False)):
+            along, why = com._drilling_side(
+                requested, part, part.sketch(), (1.0, 0.0, 0.0))
+            assert along is expected
+            assert "the recipe asked" in why
+
+    def test_auto_drills_towards_the_material(self):
+        """The bracket: sketch on YZ at x=0, the part at x 0..90."""
+        part = self.Part(centroid=(3.0, 0.0, 0.0))
+        along, why = com._drilling_side("auto", part, part.sketch(), (1.0, 0.0, 0.0))
+        assert along is True
+        assert "the part lies along" in why
+
+    def test_auto_drills_the_other_way_when_the_material_is_there(self):
+        part = self.Part(centroid=(-3.0, 0.0, 0.0))
+        along, why = com._drilling_side("auto", part, part.sketch(), (1.0, 0.0, 0.0))
+        assert along is False
+
+    def test_a_plane_through_the_middle_goes_either_way(self):
+        """Both directions cut, so the choice cannot be wrong."""
+        part = self.Part(centroid=(0.0, 0.0, 0.0))
+        along, why = com._drilling_side("auto", part, part.sketch(), (1.0, 0.0, 0.0))
+        assert along is True
+        assert "through the middle" in why
+
+    def test_an_unmeasurable_normal_still_gives_an_answer(self):
+        part = self.Part()
+        along, why = com._drilling_side("auto", part, part.sketch(), None)
+        assert along is True
+        assert "could not be measured" in why
+
+    def test_an_unreadable_part_still_gives_an_answer(self):
+        class Broken:
+            @property
+            def ComponentDefinition(self):
+                raise RuntimeError("no mass properties")
+
+        along, why = com._drilling_side(
+            "auto", Broken(), self.Part().sketch(), (1.0, 0.0, 0.0))
+        assert along is True
+        assert "could not be located" in why
+
+    def test_nothing_deletes_or_flips_a_hole_any_more(self):
         import inspect
 
         source = inspect.getsource(com.ComBackend.hole)
-        assert "_flip_extent(feature, opposite)" in source
-        assert "_delete_quietly" not in source, "deleting loses the sketch"
+        assert "_delete_quietly" not in source, "deleting a hole loses its sketch"
+        assert not hasattr(com, "_flip_extent"), "neither route is writable"
+        assert "_drilling_side" in source
 
-    def test_flipping_falls_through_to_the_definition(self):
-        """Whichever of the two this release lets you write to."""
-        definition = type("Definition", (), {"ExtentDirection": 0})()
+    def test_auto_is_the_default_a_recipe_gets(self):
+        from inventor_mcp.schema import HoleOp
 
-        class OnDefinitionOnly:
-            def __init__(self):
-                object.__setattr__(self, "Definition", definition)
-
-            def __setattr__(self, name, value):
-                raise RuntimeError("not settable on the feature itself")
-
-        assert com._flip_extent(OnDefinitionOnly(), 7) is True
-        assert definition.ExtentDirection == 7
-
-    def test_flipping_prefers_the_feature_when_that_works(self):
-        class OnTheFeature:
-            ExtentDirection = 0
-            Definition = type("D", (), {"ExtentDirection": 0})()
-
-        feature = OnTheFeature()
-        assert com._flip_extent(feature, 7) is True
-        assert feature.ExtentDirection == 7
-        assert OnTheFeature.Definition.ExtentDirection == 0, "should not have got that far"
-
-    def test_flipping_reports_failure_rather_than_pretending(self):
-        class Immovable:
-            def __setattr__(self, name, value):
-                raise RuntimeError("read only")
-
-            @property
-            def Definition(self):
-                raise AttributeError("no definition")
-
-        assert com._flip_extent(Immovable(), 7) is False
+        assert HoleOp.model_fields["direction"].default == "auto"
 
 
 class TestConvexityFromLoops:

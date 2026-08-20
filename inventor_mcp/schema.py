@@ -310,6 +310,12 @@ class Selector(Base):
 
 BooleanOp = Literal["join", "cut", "intersect", "new_body"]
 Direction = Literal["positive", "negative", "symmetric"]
+
+#: Which way a hole is drilled, relative to its sketch plane's own normal --
+#: the same meaning `direction` has on an extrude. "auto" is the sensible
+#: default and what almost every recipe wants: a hole placed on a face is
+#: drilled into the part, and the backend can see which side that is.
+HoleDirection = Literal["auto", "positive", "negative"]
 PlaneRef = str  # "xy" | "xz" | "yz" | "face:<handle>" | "plane:<name>" | a work-plane name
 AxisRef = str  # "x" | "y" | "z" | sketch-entity name | edge handle
 
@@ -387,7 +393,12 @@ class HoleOp(OpBase):
     diameter: ValueSpec = Field(description="Nominal (drill) diameter.")
     depth: ValueSpec | None = Field(None, description="Blind depth. Omit for a through hole.")
     through_all: bool = True
-    direction: Direction = "negative"
+    direction: HoleDirection = Field(
+        "auto",
+        description="Which way to drill, along the sketch plane's normal "
+        "('positive'), against it ('negative'), or into whichever side the "
+        "material is on ('auto', the default and almost always right).",
+    )
     style: Literal["drilled", "counterbore", "countersink", "spotface"] = "drilled"
     cbore_diameter: ValueSpec | None = None
     cbore_depth: ValueSpec | None = None
