@@ -1,0 +1,53 @@
+name: tests
+
+# The recipe layer, the expression evaluator, the geometry expansion, the
+# selectors and the simulator all run without Autodesk Inventor, which is most
+# of the project. Only the COM backend needs a CAD seat, and that half is
+# proved by scripts/live_smoke.py on a Windows machine by hand.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  offline:
+    name: pytest (no Inventor needed)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Test
+        run: pytest -q
+      - name: Every example still builds against the simulator
+        run: |
+          for recipe in examples/*.json; do
+            echo "--- $recipe"
+            python scripts/live_smoke.py "$recipe" --backend mock
+          done
+
+  importable-on-windows:
+    name: imports on Windows without Inventor
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: The server starts and the COM backend degrades cleanly
+        run: |
+          python -m inventor_mcp --help
+          python -c "from inventor_mcp.backend import create_backend; b = create_backend('auto'); print('fell back to', b.name)"

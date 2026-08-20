@@ -338,6 +338,19 @@ recipe reaches them, so a sixth example is what would prove them. See
 [docs/INVENTOR_SETUP.md](docs/INVENTOR_SETUP.md) for what is confirmed, what is
 not, and the Inventor API quirks that cost the most time getting there.
 
+## Inventor versions
+
+Driven against **Inventor 2027.1** on Windows with Python 3.14 and pywin32, and
+nothing else. Every quirk recorded in
+[docs/INVENTOR_SETUP.md](docs/INVENTOR_SETUP.md) was measured there.
+
+Earlier versions are likely to need different enum values, and the COM backend
+reads them from Inventor's own type library first, so a machine with a working
+pywin32 cache should be fine. The fallback table is *not* verified — where its
+value is disputed the server now refuses rather than guessing, and
+`scripts/dump_constants.py` prints what Inventor actually says. Reports from
+2022–2026 are welcome and are the fastest way to widen this.
+
 ## Licence
 
 MIT — see [LICENSE](LICENSE).
