@@ -988,6 +988,12 @@ def profile_loops(plan: SketchPlan) -> list[list[str]]:
     return loops
 
 
+#: How many points a full circle or ellipse is sampled into. Sixty-four keeps the
+#: sampled area within a hundredth of a percent, which is well inside anything
+#: that depends on it.
+_ROUND = 64
+
+
 def _sample(primitive: Primitive, reverse: bool) -> list[tuple[float, float]]:
     """Points along a primitive from its start to its end, optionally reversed."""
     if isinstance(primitive, PLine):
@@ -1002,7 +1008,29 @@ def _sample(primitive: Primitive, reverse: bool) -> list[tuple[float, float]]:
             )
             for i in range(steps + 1)
         ]
-    else:  # pragma: no cover - circles and ellipses are single-primitive loops
+    elif isinstance(primitive, PCircle):
+        # Sampled rather than skipped: a circle is a whole loop on its own, and a
+        # loop with no points cannot be tested for containment -- which is how
+        # four circular bosses in one sketch were once counted as one boss with
+        # three holes in it. The area is still computed exactly elsewhere.
+        points = [
+            (primitive.center[0] + primitive.radius * math.cos(2 * math.pi * i / _ROUND),
+             primitive.center[1] + primitive.radius * math.sin(2 * math.pi * i / _ROUND))
+            for i in range(_ROUND)
+        ]
+    elif isinstance(primitive, PEllipse):
+        points = []
+        for i in range(_ROUND):
+            angle = 2 * math.pi * i / _ROUND
+            u = primitive.major_radius * math.cos(angle)
+            v = primitive.minor_radius * math.sin(angle)
+            points.append((
+                primitive.center[0] + u * math.cos(primitive.rotation)
+                - v * math.sin(primitive.rotation),
+                primitive.center[1] + u * math.sin(primitive.rotation)
+                + v * math.cos(primitive.rotation),
+            ))
+    else:  # pragma: no cover - every loop primitive is accounted for above
         return []
     return list(reversed(points)) if reverse else points
 

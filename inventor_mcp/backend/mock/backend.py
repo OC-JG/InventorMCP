@@ -1422,12 +1422,46 @@ def _selected_loops(sketch: _Sketch, profiles: Sequence[int] | str) -> list[list
 
 
 def _net_area(sketch: _Sketch, loops: Sequence[Sequence[str]]) -> float:
-    """Outer loop area minus the loops nested inside it."""
+    """The material a profile encloses: outer loops less the holes inside them.
+
+    Nesting is decided by containment, not by size. Taking the largest loop as
+    the outer boundary and every other loop as a hole in it is right for a plate
+    with holes and wrong for the case that reads identically: four separate
+    bosses in one sketch came out as one boss with three holes punched in it,
+    which is an area of zero, which is a feature that silently built nothing.
+    """
     if not loops:
         return 0.0
-    areas = [loop_area(sketch.plan, loop) for loop in loops]
-    outer = max(areas)
-    return max(outer - (sum(areas) - outer), 0.0)
+    outlines = [loop_points(sketch.plan, loop) for loop in loops]
+    total = 0.0
+    for index, loop in enumerate(loops):
+        area = loop_area(sketch.plan, loop)
+        if not area:
+            continue
+        depth = sum(
+            1 for other, outline in enumerate(outlines)
+            if other != index and _encloses(outline, outlines[index])
+        )
+        # Even depth is material, odd depth is a hole in it -- the even-odd rule,
+        # which handles a boss inside a pocket inside a plate as well as it
+        # handles a plate with holes.
+        total += -area if depth % 2 else area
+    return max(total, 0.0)
+
+
+def _encloses(outer: Sequence[tuple[float, float]],
+              inner: Sequence[tuple[float, float]]) -> bool:
+    """Whether *inner* lies within *outer*, by where its vertices fall.
+
+    The vertices rather than a single interior point, because a ring's outer
+    boundary encloses the centre of its own hole: asking whether the outer
+    circle's centroid is inside the inner circle says yes, and a washer then
+    counts both of its loops as holes and comes out with no area at all.
+    """
+    if len(outer) < 3 or len(inner) < 3:
+        return False
+    within = sum(1 for u, v in inner if _inside(outer, u, v))
+    return within * 2 > len(inner)
 
 
 def _loop_center(plan: SketchPlan, loop: Sequence[str]) -> tuple[float, float]:

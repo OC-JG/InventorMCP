@@ -116,6 +116,16 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 - Errors are sanitised on the way out, so a COM failure no longer ships an
   absolute path — a user name, a project directory, a network share.
 - Disputed enum fallback values refuse rather than guess.
+- **Separate profiles in one sketch were counted as holes in each other.** The
+  largest loop was taken as the outer boundary and every other loop as a hole in
+  it, which is right for a plate with holes and wrong for the case that reads
+  identically -- four circular bosses in one sketch came out as one boss with
+  three holes punched in it, an area of zero, a feature that silently built
+  nothing. Nesting is now decided by containment, by the even-odd rule, so a
+  boss inside a pocket inside a plate counts once. Circles and ellipses are
+  sampled into polygons for that test, which they were not before, and a ring's
+  loops are told apart by their vertices rather than by an interior point --
+  a washer's outer boundary encloses the centre of its own hole.
 - **A shelled box was estimated from its surface area**, which put the shipped
   enclosure at 59.1 cm^3 where the geometry says 43.6. A shelled prism is the
   outline inset by the wall thickness and swept, and the inset area of any simple

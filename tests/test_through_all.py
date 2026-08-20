@@ -252,3 +252,52 @@ class TestPappus:
             (root / "examples" / "expected" / "belt_pulley.json").read_text())
         measured = session.backend.mass_properties(result["document"]).volume
         assert measured == pytest.approx(expected["volume_cm3"], abs=5e-6)
+
+
+class TestSeparateProfilesInOneSketch:
+    """Four bosses are four bosses, not one boss with three holes in it."""
+
+    def test_disjoint_circles_all_add_material(self, session):
+        area = 4 * math.pi * 0.35**2
+        volume = build(session, [
+            {"op": "sketch", "name": "Pads", "plane": "xy", "entities": [
+                {"type": "circle", "center": [x, y], "diameter": 7}
+                for x in (-20, 20) for y in (-10, 10)]},
+            {"op": "extrude", "sketch": "Pads", "distance": 10},
+        ])
+        assert volume == pytest.approx(area * 1.0, rel=1e-6)
+
+    def test_a_hole_inside_a_profile_still_takes_area_away(self, session):
+        """The case the old rule got right, which the new one must not break."""
+        volume = build(session, [
+            {"op": "sketch", "name": "Washer", "plane": "xy", "entities": [
+                {"type": "circle", "center": [0, 0], "diameter": 40},
+                {"type": "circle", "center": [0, 0], "diameter": 20}]},
+            {"op": "extrude", "sketch": "Washer", "distance": 5},
+        ])
+        assert volume == pytest.approx(math.pi * (2.0**2 - 1.0**2) * 0.5, rel=1e-9)
+
+    def test_a_boss_inside_a_pocket_inside_a_plate_counts_once(self, session):
+        """Even-odd: depth 0 adds, depth 1 subtracts, depth 2 adds again."""
+        volume = build(session, [
+            {"op": "sketch", "name": "Nested", "plane": "xy", "entities": [
+                {"type": "rectangle", "center": [0, 0], "width": 40, "height": 40},
+                {"type": "circle", "center": [0, 0], "diameter": 20},
+                {"type": "circle", "center": [0, 0], "diameter": 6}]},
+            {"op": "extrude", "sketch": "Nested", "distance": 10},
+        ])
+        area = 4.0 * 4.0 - math.pi * 1.0**2 + math.pi * 0.3**2
+        assert volume == pytest.approx(area * 1.0, rel=1e-9)
+
+    def test_the_enclosure_builds_the_bosses_it_names(self, session):
+        import json
+
+        root = Path(__file__).resolve().parent.parent
+        recipe = PartRecipe.model_validate(
+            json.loads((root / "examples" / "enclosure_base.json").read_text()))
+        result = build_part(session, recipe)
+        assert result["ok"], result["errors"]
+        bosses = [op for op in result["operations"] if op.get("name") == "Bosses"]
+        assert bosses, "the recipe should build them, not just name their holes"
+        assert bosses[0]["measured"]["volume_change_cm3"] == pytest.approx(
+            4 * math.pi * 0.35**2 * 2.75, rel=1e-5)
