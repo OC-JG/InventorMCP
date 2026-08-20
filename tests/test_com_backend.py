@@ -904,29 +904,34 @@ class TestConvexityFromLoops:
             "Item": staticmethod(lambda index: items[index - 1]),
         })()
 
+    def segment(self, start, end):
+        point = lambda values: type("P", (), dict(zip("XYZ", values)))()
+        return type("G", (), {"StartPoint": point(start), "EndPoint": point(end)})()
+
     def edge(self, tangent, uses, midpoint=(0.0, 0.0, 0.0)):
-        """An edge with a parametric direction and one use per adjacent face.
+        """An edge with endpoints, and one use per adjacent face.
 
         `uses` is (face, runs_against_the_parametric_direction) per face. Each
-        use is given a `Next` whose edge lies on that face alone, which is how
-        the backend works out which face a use belongs to -- `EdgeUse.Face`
-        does not exist.
+        use gets a `Next` whose edge lies on that face alone and meets ours at
+        one end -- which is how the backend finds both the face and the
+        direction the loop runs, neither of which the API gives directly.
         """
+        begin = (0.0, 0.0, 0.0)
+        finish = tuple(float(component) for component in tangent)
         faces = [face for face, _ in uses]
+
         objects = []
-        for face, reversed_ in uses:
-            elsewhere = self.face((0.0, 0.0, 1.0))  # a face the edge does not touch
-            neighbour = type("Edge", (), {"Faces": self.collection([face, elsewhere])})()
-            use = type("EdgeUse", (), {
-                "Edge": type("Edge", (), {})(),
-                "IsParamReversed": reversed_,
+        for face, against in uses:
+            # A loop runs towards the vertex it shares with the edge that
+            # follows, so which end the neighbour meets sets the direction.
+            shared = begin if against else finish
+            elsewhere = self.face((0.0, 0.0, 1.0))  # a face our edge never touches
+            neighbour = type("Edge", (), {
+                "Faces": self.collection([face, elsewhere]),
+                "Geometry": self.segment(shared, tuple(c + 7.0 for c in shared)),
             })()
-            # A two-use ring: Next steps onto the neighbouring edge's use and
-            # back again, the way a real loop closes.
-            neighbour_use = type("EdgeUse", (), {
-                "Edge": neighbour, "IsParamReversed": False, "Next": use,
-            })()
-            type(use).Next = neighbour_use
+            use = type("EdgeUse", (), {"Edge": type("Edge", (), {})()})()
+            type(use).Next = type("EdgeUse", (), {"Edge": neighbour, "Next": use})()
             objects.append(use)
 
         box = type("Box", (), {
@@ -936,8 +941,7 @@ class TestConvexityFromLoops:
         return type("Edge", (), {
             "EdgeUses": self.collection(objects),
             "Faces": self.collection(faces),
-            "Geometry": type("G", (), {
-                "Direction": type("D", (), dict(zip("XYZ", tangent)))()})(),
+            "Geometry": self.segment(begin, finish),
             "Evaluator": type("Ev", (), {"RangeBox": box})(),
         })()
 
@@ -981,62 +985,57 @@ class TestConvexityFromLoops:
         assert com._convexity_from_loops(edge) is None
 
 
-class TestFindingTheFaceAnEdgeUseBelongsTo:
-    """EdgeUse.Face does not exist, so the link is made from the loop.
+class TestFindingTheFaceAndTheLoopDirection:
+    """Neither is given by the API, so both come from the loop.
 
     Measured on 2027.1: EdgeUse has Next, Previous, Edge, IsParamReversed and a
-    Parent that is the whole SurfaceBody -- no Face and no EdgeUseLoop. But the
-    next use round the loop names a neighbouring edge on the same face, and
-    that edge shares exactly one face with ours. That is enough.
+    Parent that is the whole SurfaceBody -- no Face, no EdgeUseLoop. And
+    IsParamReversed does not mean "runs against the loop": both uses of an edge
+    report False, which made the two faces contradict each other on all 24
+    edges of the probe's test part, so the exact method answered nothing.
+
+    Next gives both facts. The following edge lies on the same face and shares
+    exactly one face with ours, which names the face; it also meets ours at one
+    vertex, and a loop runs towards the vertex it shares with the edge that
+    follows, which gives the direction.
     """
 
-    def face(self, key):
-        box = type("Box", (), {
-            "MinPoint": type("P", (), dict(zip("XYZ", key[:3])))(),
-            "MaxPoint": type("P", (), dict(zip("XYZ", key[3:6])))(),
-        })()
-        return type("Face", (), {
-            "Evaluator": type("Ev", (), {"RangeBox": box, "Area": key[6]})(),
-            "name": key,
-        })()
+    def helper(self):
+        return TestConvexityFromLoops()
 
-    def edge_on(self, faces):
-        return type("Edge", (), {"Faces": type("Faces", (), {
-            "Count": len(faces),
-            "Item": staticmethod(lambda index: faces[index - 1]),
-        })()})()
+    def resolve(self, tangent, uses):
+        probe = self.helper()
+        edge = probe.edge(tangent, uses)
+        ends = com._edge_ends(edge)
+        faces = [face for face, _ in uses]
+        use = edge.EdgeUses.Item(1)
+        return com._use_face_and_tangent(use, ends, faces)
 
-    def use_chain(self, neighbours):
-        """A ring of uses whose Next walks through *neighbours* in order."""
-        uses = []
-        for edge in neighbours:
-            uses.append(type("EdgeUse", (), {"Edge": edge, "IsParamReversed": False})())
-        for index, use in enumerate(uses):
-            type(use).Next = uses[(index + 1) % len(uses)]
-        return uses[-1]  # so .Next is the first neighbour
+    def test_the_neighbour_names_the_face_and_the_direction(self):
+        probe = self.helper()
+        top, side = probe.face((0, 0, 1)), probe.face((0, -1, 0))
+        face, tangent = self.resolve((1, 0, 0), [(top, False), (side, True)])
+        assert face is top
+        assert tangent == pytest.approx((1.0, 0.0, 0.0))
 
-    def test_the_neighbour_names_the_face(self):
-        top, side = self.face((0, 0, 1, 6, 4, 1, 24.0)), self.face((0, 0, 0, 6, 0, 1, 6.0))
-        use = self.use_chain([self.edge_on([top, self.face((9, 9, 9, 9, 9, 9, 1.0))])])
-        assert com._use_face(use, [top, side]) is top
-
-    def test_a_neighbour_touching_both_is_stepped_past(self):
-        top, side = self.face((0, 0, 1, 6, 4, 1, 24.0)), self.face((0, 0, 0, 6, 0, 1, 6.0))
-        ambiguous = self.edge_on([top, side])
-        decisive = self.edge_on([side, self.face((9, 9, 9, 9, 9, 9, 1.0))])
-        use = self.use_chain([ambiguous, decisive])
-        assert com._use_face(use, [top, side]) is side
-
-    def test_a_loop_that_never_decides_gives_up(self):
-        top, side = self.face((0, 0, 1, 6, 4, 1, 24.0)), self.face((0, 0, 0, 6, 0, 1, 6.0))
-        use = self.use_chain([self.edge_on([top, side])])
-        assert com._use_face(use, [top, side]) is None
+    def test_a_use_running_the_other_way_reports_the_other_direction(self):
+        probe = self.helper()
+        top, side = probe.face((0, 0, 1)), probe.face((0, -1, 0))
+        face, tangent = self.resolve((1, 0, 0), [(top, True), (side, False)])
+        assert face is top
+        assert tangent == pytest.approx((-1.0, 0.0, 0.0))
 
     def test_two_faces_that_cannot_be_told_apart_give_up(self):
-        same = (0, 0, 0, 6, 4, 1, 24.0)
-        first, second = self.face(same), self.face(same)
-        use = self.use_chain([self.edge_on([first, second])])
-        assert com._use_face(use, [first, second]) is None
+        probe = self.helper()
+        first = probe.face((0, 0, 1))
+        second = type(first)  # a second handle on faces with the same identity
+        del second
+        same = probe.face((0, 0, 1))
+        edge = probe.edge((1, 0, 0), [(first, False), (same, True)])
+        ends = com._edge_ends(edge)
+        # Force the two candidates to share an identity, as coincident faces do.
+        assert com._use_face_and_tangent(
+            edge.EdgeUses.Item(1), ends, [first, first]) is None
 
     def test_an_unreadable_face_gives_up(self):
         class Opaque:
@@ -1044,9 +1043,29 @@ class TestFindingTheFaceAnEdgeUseBelongsTo:
             def Evaluator(self):
                 raise RuntimeError("no evaluator")
 
-        good = self.face((0, 0, 1, 6, 4, 1, 24.0))
-        use = self.use_chain([self.edge_on([good])])
-        assert com._use_face(use, [good, Opaque()]) is None
+        probe = self.helper()
+        good = probe.face((0, 0, 1))
+        edge = probe.edge((1, 0, 0), [(good, False), (probe.face((0, -1, 0)), True)])
+        ends = com._edge_ends(edge)
+        assert com._use_face_and_tangent(edge.EdgeUses.Item(1), ends, [good, Opaque()]) is None
+
+    def test_the_endpoints_are_read_from_the_geometry(self):
+        probe = self.helper()
+        edge = probe.edge((1, 0, 0), [(probe.face((0, 0, 1)), False),
+                                      (probe.face((0, -1, 0)), True)])
+        assert com._edge_ends(edge) == ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0))
+
+    def test_an_edge_with_no_readable_endpoints_gives_up(self):
+        assert com._edge_ends(type("Edge", (), {})()) is None
+
+    def test_a_use_with_no_isparamreversed_at_all_still_works(self):
+        """The flag is not consulted, so its absence cannot matter."""
+        probe = self.helper()
+        top, side = probe.face((0, 0, 1)), probe.face((0, -1, 0))
+        edge = probe.edge((1, 0, 0), [(top, False), (side, True)])
+        for index in (1, 2):
+            assert not hasattr(edge.EdgeUses.Item(index), "IsParamReversed")
+        assert com._convexity_from_loops(edge) == "convex"
 
 
 class TestConvexityFallsBackToSampling:

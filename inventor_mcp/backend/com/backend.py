@@ -2236,16 +2236,46 @@ def _face_key(face: Any) -> tuple[float, ...] | None:  # pragma: no cover - Wind
         return None
 
 
-def _use_face(use: Any, candidates: Sequence[Any]) -> Any | None:  # pragma: no cover
-    """Which of the edge's two faces this edge use belongs to.
+def _unit(vector: Sequence[float]) -> tuple[float, ...] | None:
+    length = math.sqrt(sum(component * component for component in vector))
+    if length < 1e-12:
+        return None
+    return tuple(component / length for component in vector)
 
-    `EdgeUse.Face` and `EdgeUse.EdgeUseLoop` do not exist on 2027.1 and
-    `EdgeUse.Parent` is the whole `SurfaceBody`, so the link cannot be followed
-    from the use.  It can be made from the loop instead: `Next` steps to the
-    following use round the same loop, whose edge lies on the same face, and
-    that neighbouring edge shares exactly one face with ours.  A neighbour
-    touching both -- or a loop of a single edge, where `Next` comes back to
-    where it started -- is stepped past.
+
+def _edge_ends(edge: Any) -> tuple[tuple[float, ...], ...] | None:  # pragma: no cover
+    """The edge's two endpoints, in centimetres."""
+    for route in (
+        lambda: (edge.Geometry.StartPoint, edge.Geometry.EndPoint),
+        lambda: (edge.StartVertex.Point, edge.StopVertex.Point),
+    ):
+        try:
+            first, second = route()
+            return (
+                (float(first.X), float(first.Y), float(first.Z)),
+                (float(second.X), float(second.Y), float(second.Z)),
+            )
+        except Exception:
+            continue
+    return None
+
+
+def _use_face_and_tangent(
+    use: Any, ends: tuple[tuple[float, ...], ...], candidates: Sequence[Any]
+) -> tuple[Any, tuple[float, ...]] | None:  # pragma: no cover - Windows only
+    """The face an edge use lies on, and the direction its loop runs.
+
+    Neither piece comes from the API directly.  ``EdgeUse.Face`` does not exist
+    on 2027.1 and ``Parent`` is the whole ``SurfaceBody``; and
+    ``IsParamReversed`` does not mean "runs against the loop" -- both uses of
+    an edge report False, so taking it at its word made every edge's two uses
+    contradict each other and the exact method answered nothing at all.
+
+    Both are available from the loop itself.  ``Next`` names the following use,
+    whose edge lies on the same face and shares exactly one face with ours --
+    which identifies the face.  That edge also shares exactly one *vertex* with
+    ours, and a loop runs along an edge towards the vertex it shares with the
+    edge that follows -- which gives the direction.
     """
     keys = [_face_key(face) for face in candidates]
     if len(keys) != 2 or any(key is None for key in keys) or keys[0] == keys[1]:
@@ -2255,15 +2285,30 @@ def _use_face(use: Any, candidates: Sequence[Any]) -> Any | None:  # pragma: no 
     for _ in range(4):
         try:
             neighbour = neighbour.Next
-            faces = neighbour.Edge.Faces
+            following = neighbour.Edge
+            faces = following.Faces
             touched = {
                 _face_key(faces.Item(index)) for index in range(1, int(faces.Count) + 1)
             }
+            other_ends = _edge_ends(following)
         except Exception:
             return None
         shared = [face for face, key in zip(candidates, keys) if key in touched]
-        if len(shared) == 1:
-            return shared[0]
+        if len(shared) != 1 or other_ends is None:
+            continue  # a neighbour touching both faces settles nothing
+
+        meeting = [
+            index for index, point in enumerate(ends)
+            if any(math.dist(point, other) < 1e-7 for other in other_ends)
+        ]
+        if len(meeting) != 1:
+            continue  # both ends met, or neither: try the next one round
+        finish = ends[meeting[0]]
+        begin = ends[1 - meeting[0]]
+        tangent = _unit([end - start for start, end in zip(begin, finish)])
+        if tangent is None:
+            continue
+        return shared[0], tangent
     return None
 
 
@@ -2271,21 +2316,20 @@ def _convexity_from_loops(edge: Any) -> str | None:  # pragma: no cover - Window
     """Convexity from the orientation of the faces' boundary loops.
 
     A face's boundary runs anticlockwise about its outward normal, so the
-    face's material lies to the left of the loop direction -- which is
+    face's material lies to the left of the loop -- which is
     ``normal x tangent``.  If that direction points *into* the neighbouring
-    face's outward normal the two faces close over the material and the edge
-    is an inside corner; if it points away, an outside one.
+    face's outward normal the two faces close over the material and the edge is
+    an inside corner; if it points away, an outside one.
 
-    This is exact rather than sampled, and it is asked of both faces so that a
-    disagreement is reported as "don't know" instead of a coin toss.
+    Both faces are asked independently and have to agree, so anything the
+    method cannot settle comes back as "don't know" rather than a coin toss.
     """
     uses = _edge_uses(edge)
     if uses is None or len(uses) != 2:
         return None
-    tangent = _edge_direction(edge)
-    if tangent is None:  # a circle has no single direction
-        return None
-
+    ends = _edge_ends(edge)
+    if ends is None or math.dist(*ends) < 1e-9:
+        return None  # a closed curve has no endpoints to orient it by
     try:
         collection = edge.Faces
         faces = [collection.Item(index) for index in range(1, int(collection.Count) + 1)]
@@ -2294,22 +2338,19 @@ def _convexity_from_loops(edge: Any) -> str | None:  # pragma: no cover - Window
     if len(faces) != 2:
         return None
 
+    resolved = [_use_face_and_tangent(use, ends, faces) for use in uses]
+    if any(item is None for item in resolved):
+        return None
+    if _face_key(resolved[0][0]) == _face_key(resolved[1][0]):
+        return None  # both uses landed on the same face, so neither is trusted
+
     verdicts = set()
-    for index, use in enumerate(uses):
-        face, other = _use_face(use, faces), _use_face(uses[1 - index], faces)
-        if face is None or other is None:
-            return None
-        if _face_key(face) == _face_key(other):
-            return None  # both uses resolved to the same face: no answer
-        normal, other_normal = _face_normal(face), _face_normal(other)
+    for index, (face, tangent) in enumerate(resolved):
+        normal = _face_normal(face)
+        other_normal = _face_normal(resolved[1 - index][0])
         if normal is None or other_normal is None:
             return None
-        try:
-            reversed_ = bool(use.IsParamReversed)
-        except Exception:
-            return None
-        forward = tuple(-c for c in tangent) if reversed_ else tangent
-        alignment = sum(a * b for a, b in zip(_cross(normal, forward), other_normal))
+        alignment = sum(a * b for a, b in zip(_cross(normal, tangent), other_normal))
         if abs(alignment) < 1e-9:  # tangent faces meet smoothly
             return None
         verdicts.add("concave" if alignment > 0 else "convex")

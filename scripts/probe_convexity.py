@@ -130,12 +130,28 @@ def main(argv=None) -> int:
             print(f"  EdgeUse.{name:25} {result}")
         faces = sample.Faces
         candidates = [faces.Item(i) for i in range(1, int(faces.Count) + 1)]
-        resolved = [com._use_face(use, candidates) for use in uses]
-        named = sum(1 for face in resolved if face is not None)
-        print(f"\n  {named} of {len(uses)} edge uses resolved to a face by walking "
-              "the loop")
+        ends = com._edge_ends(sample)
+        print(f"\n  endpoints              {ends}")
+        # IsParamReversed reading the same on both uses is what broke the first
+        # attempt at this, so print both rather than just one.
+        flags = []
+        for use in uses:
+            try:
+                flags.append(bool(use.IsParamReversed))
+            except Exception:
+                flags.append(None)
+        print(f"  IsParamReversed        {flags}"
+              + ("   <- identical, so it cannot mean 'against the loop'"
+                 if len(set(flags)) == 1 else ""))
+        resolved = [com._use_face_and_tangent(use, ends, candidates) for use in uses]
+        named = sum(1 for item in resolved if item is not None)
+        print(f"  resolved by the loop   {named} of {len(uses)} uses")
+        for item in resolved:
+            if item is not None:
+                print(f"    face area {item[0].Evaluator.Area * 100:8.1f} mm2  "
+                      f"loop runs {tuple(round(c, 3) for c in item[1])}")
         if named == len(uses):
-            distinct = len({com._face_key(face) for face in resolved})
+            distinct = len({com._face_key(item[0]) for item in resolved})
             print(f"  and they name {distinct} distinct face(s) "
                   f"{'-- correct' if distinct == 2 else '-- WRONG, they should differ'}")
         loop = getattr(uses[0], "EdgeUseLoop", None)
@@ -161,9 +177,12 @@ def main(argv=None) -> int:
                 reason = "no edge uses on this edge"
             elif com._edge_direction(raw) is None:
                 reason = "not a straight edge, so it has no single tangent"
-            elif any(com._use_face(use, [raw.Faces.Item(i)
-                                        for i in range(1, int(raw.Faces.Count) + 1)])
-                     is None for use in uses):
+            elif com._edge_ends(raw) is None:
+                reason = "its endpoints could not be read"
+            elif any(com._use_face_and_tangent(
+                        use, com._edge_ends(raw),
+                        [raw.Faces.Item(i) for i in range(1, int(raw.Faces.Count) + 1)]
+                     ) is None for use in uses):
                 reason = "no route from an edge use back to its face"
             else:
                 reason = "the uses disagreed, or the faces meet smoothly"
