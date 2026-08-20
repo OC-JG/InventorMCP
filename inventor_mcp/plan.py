@@ -222,13 +222,17 @@ class SketchPlan:
                 return None
             if ref.point in (PointRef.START, PointRef.END):
                 return (ref.entity, ref.point.value)
-            if ref.point is PointRef.SELF:
+            if ref.point in (PointRef.SELF, PointRef.CENTER):
                 try:
                     primitive = self.by_id(ref.entity)
                 except KeyError:
                     return None
-                if isinstance(primitive, PPoint):
+                # A standalone point is a point; so is a circle's centre, which
+                # is how a bolt circle's construction lines all start together.
+                if ref.point is PointRef.SELF and isinstance(primitive, PPoint):
                     return (ref.entity, PointRef.SELF.value)
+                if ref.point is PointRef.CENTER and isinstance(primitive, PCircle):
+                    return (ref.entity, PointRef.CENTER.value)
             return None
 
         for constraint in self.constraints:

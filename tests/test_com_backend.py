@@ -786,12 +786,54 @@ class TestHoleDirectionIsNotTheCallersProblem:
 
         com._delete_quietly(Stubborn())  # the retry matters more than the tidying
 
-    def test_both_directions_are_tried_whatever_the_extent(self):
+    def test_the_other_direction_is_reached_by_flipping_not_rebuilding(self):
+        """A hole consumes its sketch, so the second build has no centres.
+
+        That is what happened to the bracket: the first attempt removed
+        nothing, deleting it took the sketch with it, and the retry errored on
+        geometry that no longer existed -- leaving no sketch in the tree and a
+        confusing second error on top of the first.
+        """
         import inspect
 
         source = inspect.getsource(com.ComBackend.hole)
-        assert "directions = [requested, opposite]" in source
-        assert "if request.through_all else" not in source
+        assert "_flip_extent(feature, opposite)" in source
+        assert "_delete_quietly" not in source, "deleting loses the sketch"
+
+    def test_flipping_falls_through_to_the_definition(self):
+        """Whichever of the two this release lets you write to."""
+        definition = type("Definition", (), {"ExtentDirection": 0})()
+
+        class OnDefinitionOnly:
+            def __init__(self):
+                object.__setattr__(self, "Definition", definition)
+
+            def __setattr__(self, name, value):
+                raise RuntimeError("not settable on the feature itself")
+
+        assert com._flip_extent(OnDefinitionOnly(), 7) is True
+        assert definition.ExtentDirection == 7
+
+    def test_flipping_prefers_the_feature_when_that_works(self):
+        class OnTheFeature:
+            ExtentDirection = 0
+            Definition = type("D", (), {"ExtentDirection": 0})()
+
+        feature = OnTheFeature()
+        assert com._flip_extent(feature, 7) is True
+        assert feature.ExtentDirection == 7
+        assert OnTheFeature.Definition.ExtentDirection == 0, "should not have got that far"
+
+    def test_flipping_reports_failure_rather_than_pretending(self):
+        class Immovable:
+            def __setattr__(self, name, value):
+                raise RuntimeError("read only")
+
+            @property
+            def Definition(self):
+                raise AttributeError("no definition")
+
+        assert com._flip_extent(Immovable(), 7) is False
 
 
 class TestConvexityFromLoops:

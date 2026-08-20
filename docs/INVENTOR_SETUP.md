@@ -149,6 +149,11 @@ afternoon:
   work point into the sketch first.
 * A midpoint constraint moves the *point* onto the line, so the grounded sketch
   origin can never be that point.
+* **A hole consumes its sketch**, so a hole that removes nothing cannot be
+  deleted and rebuilt the other way round — the second attempt has no centres
+  left to place itself on, which is why the bracket's retry errored on top of
+  its first failure and left no sketch in the tree. Reverse the extent on the
+  feature in place instead (`_flip_extent`).
 * **A cut that meets no material still reports success.** Inventor builds the
   feature, changes nothing, and returns it. Two of the angle bracket's three
   geometry bugs hid behind an `ok` line that way. Cut extrudes and holes now

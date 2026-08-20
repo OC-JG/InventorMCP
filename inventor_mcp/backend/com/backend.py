@@ -738,8 +738,9 @@ class ComBackend(Backend):
             remember(entity, "end", "EndSketchPoint")
         elif isinstance(primitive, PCircle):
             entity = sketch.SketchCircles.AddByCenterRadius(
-                transient.CreatePoint2d(*primitive.center), primitive.radius
+                anchor("center", primitive.center), primitive.radius
             )
+            remember(entity, "center", "CenterSketchPoint")
         elif isinstance(primitive, PArc):
             start = _polar(primitive.center, primitive.radius, primitive.start_angle)
             end = _polar(primitive.center, primitive.radius, primitive.end_angle)
@@ -1218,70 +1219,72 @@ class ComBackend(Backend):
             if request.direction == "negative"
             else "kNegativeExtentDirection"
         )
-        # Which way a sketch plane faces is not something the caller should have
-        # to reason about, so a hole that finds no material is retried the other
-        # way.  Flipping a blind hole preserves its depth -- the depth is what
-        # the recipe meant, the side of the plane is not.
-        directions = [requested, opposite]
 
-        feature = None
-        failures: list[str] = []
-        measured: list[float | None] = []
         flipped = False
         before = _solid_volume(document)
+        measured: list[float | None] = []
         with self._batch(document), self._translate_errors("Hole"):
             placement = features.CreateSketchPlacementDefinition(centers)
-            for index, direction in enumerate(directions):
-                try:
-                    if request.through_all:
-                        feature = features.AddDrilledByThroughAllExtent(
-                            placement, request.diameter.expression, direction
-                        )
-                    else:
-                        assert request.depth is not None
-                        feature = _call_by_keyword(
-                            features.AddDrilledByDistanceExtent,
-                            [
-                                # Named, because the trailing arguments of this
-                                # family are not in the order they read: the
-                                # counterbore variant puts ExtentDirection at
-                                # index 3 and the bottom-tip arguments after it.
-                                {
-                                    "PlacementDefinition": placement,
-                                    "DiameterOrTapInfo": request.diameter.expression,
-                                    "Depth": request.depth.expression,
-                                    "ExtentDirection": direction,
-                                },
-                            ],
-                            positional=(
-                                placement, request.diameter.expression,
-                                request.depth.expression, direction,
-                            ),
-                        )
-                except Exception as exc:
-                    failures.append(_com_message(exc))
-                    continue
-                # Inventor is happy to drill into thin air and call it a
-                # success, so the feature only counts if the part got smaller.
-                # The update is deliberate: the volume has to be the one after
-                # this feature, not a cached one from before it.
-                _recompute(document)
-                measured.append(_solid_volume(document))
-                if _removed_material(document, before):
-                    if index:
-                        flipped = True
-                        logger.info("Hole in %s drilled the opposite way: the sketch "
-                                    "plane faces away from the material.", request.sketch)
-                    break
-                failures.append("the hole removed no material")
-                _delete_quietly(feature)
-                feature = None
-            if feature is None:
+            try:
+                if request.through_all:
+                    feature = features.AddDrilledByThroughAllExtent(
+                        placement, request.diameter.expression, requested
+                    )
+                else:
+                    assert request.depth is not None
+                    feature = _call_by_keyword(
+                        features.AddDrilledByDistanceExtent,
+                        [
+                            # Named, because the trailing arguments of this
+                            # family are not in the order they read: the
+                            # counterbore variant puts ExtentDirection at
+                            # index 3 and the bottom-tip arguments after it.
+                            {
+                                "PlacementDefinition": placement,
+                                "DiameterOrTapInfo": request.diameter.expression,
+                                "Depth": request.depth.expression,
+                                "ExtentDirection": requested,
+                            },
+                        ],
+                        positional=(
+                            placement, request.diameter.expression,
+                            request.depth.expression, requested,
+                        ),
+                    )
+            except Exception as exc:
                 raise FeatureError(
-                    f"Could not drill the hole: {self._explain_text(failures[0])}",
-                    hint=self._explain_dry_hole(
-                        document, sketch, centers, before, measured, failures),
-                )
+                    f"Could not drill the hole: {self._explain_text(_com_message(exc))}",
+                    hint="Check that the hole centres sit over material and that "
+                    "the diameter is smaller than the surrounding geometry.",
+                ) from exc
+
+            # Inventor is happy to drill into thin air and call it a success, so
+            # the feature only counts if the part got smaller. The update is
+            # deliberate: the volume has to be the one after this feature.
+            _recompute(document)
+            measured.append(_solid_volume(document))
+            if not _removed_material(document, before):
+                # Which way a sketch plane faces is not the caller's problem, so
+                # try the other way -- but *in place*. A hole consumes its
+                # sketch, so deleting the feature to build a second one leaves
+                # nothing to build it from: that is why the bracket's retry
+                # errored and why no sketch was left in the tree afterwards.
+                flipped = _flip_extent(feature, opposite)
+                if flipped:
+                    _recompute(document)
+                    measured.append(_solid_volume(document))
+                if not flipped or not _removed_material(document, before):
+                    raise FeatureError(
+                        "The hole built but removed no material, in either "
+                        "direction." if flipped else
+                        "The hole built but removed no material, and its "
+                        "direction could not be reversed to try the other way.",
+                        hint=self._explain_dry_hole(
+                            document, sketch, centers, before, measured, []),
+                    )
+                logger.info("Hole in %s drilled the opposite way: the sketch "
+                            "plane faces away from the material.", request.sketch)
+
             if request.name:
                 feature.Name = request.name
         return _feature_info(feature, "hole", {
@@ -2479,6 +2482,24 @@ def _describe_orientation(
     if flips:
         change = ", ".join(filter(None, [change, f"{' and '.join(flips)} reversed"]))
     return f"{seen}, {change}"
+
+
+def _flip_extent(feature: Any, direction: int) -> bool:  # pragma: no cover
+    """Reverse a feature's extent without rebuilding it, if that is possible.
+
+    Deleting and recreating is not an option for a hole: it consumes its
+    sketch, so the second attempt has no centres to place itself on.
+    """
+    for describe, target in (("the feature", lambda: feature),
+                             ("its definition", lambda: feature.Definition)):
+        try:
+            resolved = target()
+            resolved.ExtentDirection = direction
+        except Exception:
+            continue
+        logger.info("Reversed the hole's extent through %s.", describe)
+        return True
+    return False
 
 
 def _recompute(document: Any) -> None:  # pragma: no cover - Windows only
