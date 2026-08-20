@@ -1044,6 +1044,80 @@ def loop_points(plan: SketchPlan, loop: Sequence[str]) -> list[tuple[float, floa
     return points
 
 
+def polygon_centroid(points: Sequence[tuple[float, float]]) -> tuple[float, float] | None:
+    """The area centroid of a closed polygon, or None if it encloses nothing.
+
+    Not the bounding box's centre, and not the mean of the vertices. Pappus's
+    theorem needs the real one: a groove profile that is a triangle has its
+    centroid a third of the way from base to apex, and using the box centre put
+    the pulley's groove 2.6% out in a direction nothing would have questioned.
+    """
+    total = 0.0
+    cx = cy = 0.0
+    count = len(points)
+    if count < 3:
+        return None
+    for index in range(count):
+        x0, y0 = points[index]
+        x1, y1 = points[(index + 1) % count]
+        cross = x0 * y1 - x1 * y0
+        total += cross
+        cx += (x0 + x1) * cross
+        cy += (y0 + y1) * cross
+    if abs(total) < 1e-12:
+        return None
+    return (cx / (3 * total), cy / (3 * total))
+
+
+def clip_to_box(points: Sequence[tuple[float, float]],
+                low_u: float, high_u: float,
+                low_v: float, high_v: float) -> list[tuple[float, float]]:
+    """The polygon trimmed to a rectangle, by Sutherland-Hodgman.
+
+    Used to ask what a revolved *cut* actually removes. A groove profile is
+    normally drawn to overshoot the part so the cut is certain to break through,
+    and charging the overshoot as removed material is the difference between a
+    pulley of 65.6 cm^3 and one of 68.0.
+    """
+    polygon = list(points)
+    for inside, intersect in (
+        (lambda p: p[0] >= low_u, lambda a, b: _cross_u(a, b, low_u)),
+        (lambda p: p[0] <= high_u, lambda a, b: _cross_u(a, b, high_u)),
+        (lambda p: p[1] >= low_v, lambda a, b: _cross_v(a, b, low_v)),
+        (lambda p: p[1] <= high_v, lambda a, b: _cross_v(a, b, high_v)),
+    ):
+        if not polygon:
+            return []
+        clipped: list[tuple[float, float]] = []
+        for index in range(len(polygon)):
+            current = polygon[index]
+            previous = polygon[index - 1]
+            if inside(current):
+                if not inside(previous):
+                    clipped.append(intersect(previous, current))
+                clipped.append(current)
+            elif inside(previous):
+                clipped.append(intersect(previous, current))
+        polygon = clipped
+    return polygon
+
+
+def _cross_u(a: tuple[float, float], b: tuple[float, float], at: float) -> tuple[float, float]:
+    span = b[0] - a[0]
+    if span == 0:  # pragma: no cover - the edge is on the boundary already
+        return (at, a[1])
+    t = (at - a[0]) / span
+    return (at, a[1] + t * (b[1] - a[1]))
+
+
+def _cross_v(a: tuple[float, float], b: tuple[float, float], at: float) -> tuple[float, float]:
+    span = b[1] - a[1]
+    if span == 0:  # pragma: no cover - the edge is on the boundary already
+        return (a[0], at)
+    t = (at - a[1]) / span
+    return (a[0] + t * (b[0] - a[0]), at)
+
+
 def loop_area(plan: SketchPlan, loop: Sequence[str]) -> float:
     """Area enclosed by a closed loop, in cm^2 (arcs are sampled)."""
     if len(loop) == 1:

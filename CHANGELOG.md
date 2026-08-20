@@ -116,6 +116,20 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 - Errors are sanitised on the way out, so a COM failure no longer ships an
   absolute path — a user name, a project directory, a network share.
 - Disputed enum fallback values refuse rather than guess.
+- **A revolved cut was charged for the material it overshoots.** A groove
+  profile is drawn past the rim on purpose, so the cut certainly breaks
+  through; the simulator swept the whole profile and took 2.6 cm^3 of air off
+  the belt pulley. A cut is now clipped to the body's own extent about the axis
+  before Pappus is applied.
+- **Pappus was using the bounding box's centre, not the centroid.** A triangular
+  groove profile has its centroid a third of the way from base to apex, so the
+  pulley's groove was 2.6% out in a direction nothing would have questioned. A
+  rectangular profile is the case where the two agree, which is why the flanged
+  shaft never showed it.
+- **The belt pulley drilled its own bore twice.** The revolved blank starts at
+  the bore radius, so the final hole removed nothing -- which the live backend
+  now refuses outright, and rightly. The redundant operation is gone, and the
+  example's volume was derived by hand before any live run.
 - A drawing check reported a **countersink angle as an invented 15.7 mm
   length**. An angle is 1.5708 in Inventor's units and was being compared
   against the drawing's millimetres; angles are now checked separately against

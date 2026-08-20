@@ -1,0 +1,5 @@
+{
+  "volume_cm3": 68.006231,
+  "span_mm": [80.0, 80.0, 16.0],
+  "checked": "blank pi*(4.0^2-0.6^2)*1.6 = 78.615215, less a revolved groove of 5.519604 and five lightening holes of 1.017876 each. The groove is the triangle clipped at the blank's 40 mm radius: it is drawn out to 41 so the cut certainly breaks through, and the 2.567 cm3 of overshoot removes nothing. Derived by hand, never seen live."
+}

@@ -1,0 +1,4 @@
+{
+  "volume_cm3": 22.20661,
+  "checked": "a 20 mm solid section swept 90 deg on a 45 mm centreline: by Pappus, pi*1.0^2 cm2 times the (pi/2)*4.5 cm the centroid travels. Derived by hand, never seen live. No span recorded: the sweep's end discs should leave x and y at 0..55 mm, but that is a prediction and the simulator's own bounds are approximate for a sweep."
+}

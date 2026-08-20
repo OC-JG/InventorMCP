@@ -28,7 +28,14 @@ from typing import Any, Iterable, Sequence
 
 from ...errors import DocumentError, FeatureError, ParameterError, SelectionError, SketchError
 from ...expressions import UnitContext, evaluate
-from ...geometry import loop_area, loop_points, plan_bounds, profile_loops
+from ...geometry import (
+    clip_to_box,
+    loop_area,
+    loop_points,
+    plan_bounds,
+    polygon_centroid,
+    profile_loops,
+)
 from ...expressions import referenced_parameters
 from ...plan import PArc, PCircle, PEllipse, PLine, PPoint, SketchPlan
 from ...units import Dim, Quantity, from_internal, lookup_unit
@@ -726,10 +733,15 @@ class MockBackend(Backend):
         loops = _selected_loops(sketch, request.profiles)
         if not loops:
             raise FeatureError(f"Sketch {sketch.name!r} has no closed profile to revolve.")
-        area = _net_area(sketch, loops)
         angle = request.angle.value if request.angle else 2 * math.pi
-        # Pappus's theorem about the sketch-space centroid distance to the axis.
-        radius = _centroid_radius(sketch, loops, request.axis)
+        # Pappus's theorem: the swept volume is the profile's area times the
+        # distance its *centroid* travels. A cut is clipped to the body first --
+        # a groove profile is drawn to overshoot so the cut certainly breaks
+        # through, and charging the overshoot as removed material is the
+        # difference between a pulley of 65.6 cm^3 and one of 68.0.
+        window = (_revolve_window(document, sketch, request.axis)
+                  if request.operation == "cut" else None)
+        area, radius = _pappus(sketch, loops, request.axis, window)
         volume = area * radius * angle
         was = document.volume
         if request.operation == "cut":
@@ -1641,12 +1653,79 @@ def _hole_points(sketch: _Sketch, indices: Sequence[int]) -> list[tuple[float, f
     return points
 
 
-def _centroid_radius(sketch: _Sketch, loops: Sequence[Sequence[str]], axis: AxisSpec) -> float:
-    minx, miny, maxx, maxy = plan_bounds(sketch.plan)
-    if axis.kind == "work_axis" and axis.value in ("x", "y", "z"):
-        # Distance from the sketch centroid to the axis, in sketch space.
-        return abs((miny + maxy) / 2) if axis.value == "x" else abs((minx + maxx) / 2)
-    return max(abs(minx), abs(maxx))
+def _radial_axis(sketch: _Sketch, axis: AxisSpec) -> int | None:
+    """Which of the sketch's own axes measures radius, 0 for u and 1 for v.
+
+    None when the answer is not clear: a revolve about the sketch plane's own
+    normal is degenerate, and an axis given as a sketch line or an edge is not
+    resolved here.
+    """
+    if axis.kind != "work_axis" or axis.value not in ("x", "y", "z"):
+        return None
+    wanted = "xyz".index(axis.value)
+    (u_axis, _), (v_axis, _), _ = _PLANES[sketch.base_plane][0]
+    if wanted == v_axis:
+        return 0
+    if wanted == u_axis:
+        return 1
+    return None
+
+
+def _revolve_window(document: _Document, sketch: _Sketch,
+                    axis: AxisSpec) -> tuple[float, float, float, float] | None:
+    """The part of the sketch plane the body occupies, in sketch coordinates.
+
+    A cut outside this removes nothing, so clipping to it is what makes a
+    revolved cut's volume the material it actually takes away.
+    """
+    radial = _radial_axis(sketch, axis)
+    if radial is None or not document.bounds:
+        return None
+    along = "xyz".index(axis.value)
+    reach = max(
+        max(abs(document.bounds[index]), abs(document.bounds[index + 3]))
+        for index in range(3) if index != along
+    )
+    low, high = document.bounds[along], document.bounds[along + 3]
+    if radial == 0:
+        return (-reach, reach, low, high)
+    return (low, high, -reach, reach)
+
+
+def _pappus(sketch: _Sketch, loops: Sequence[Sequence[str]], axis: AxisSpec,
+            window: tuple[float, float, float, float] | None
+            ) -> tuple[float, float]:
+    """The profile's area and its centroid's distance from the axis.
+
+    The centroid is the area centroid, not the bounding box's centre. Pappus
+    needs the real one: a triangular groove profile has its centroid a third of
+    the way from base to apex, and the box centre put the pulley's groove 2.6%
+    out in a direction nothing would have questioned.
+    """
+    radial = _radial_axis(sketch, axis)
+    total_area = 0.0
+    moment = 0.0
+    for index, loop in enumerate(loops):
+        points = loop_points(sketch.plan, loop)
+        if window is not None:
+            points = clip_to_box(points, *window)
+        centroid = polygon_centroid(points)
+        if centroid is None:
+            continue
+        area = abs(sum(
+            points[i][0] * points[(i + 1) % len(points)][1]
+            - points[(i + 1) % len(points)][0] * points[i][1]
+            for i in range(len(points))
+        )) / 2
+        # An inner loop is a hole in the profile, so it takes area away and
+        # takes its own moment with it.
+        sign = 1.0 if index == 0 or len(loops) == 1 else -1.0
+        distance = abs(centroid[radial]) if radial is not None else abs(centroid[0])
+        total_area += sign * area
+        moment += sign * area * distance
+    if total_area <= 0:
+        return (0.0, 0.0)
+    return (total_area, moment / total_area)
 
 
 def _pattern_targets(document: _Document, names: Sequence[str]) -> list[_Feature]:

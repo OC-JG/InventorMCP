@@ -17,6 +17,8 @@ import math
 
 import pytest
 
+from pathlib import Path
+
 from inventor_mcp.backend.mock.backend import _Slab, _through_all_distance
 from inventor_mcp.builder import build_part
 from inventor_mcp.schema import PartRecipe
@@ -169,3 +171,84 @@ class TestTheSlabItself:
 
     def test_beyond_the_sweep_it_covers_nothing(self):
         assert self.slab().interval_along(0, (2.0, 0.5, 5.0)) is None
+
+
+class TestPappus:
+    """A revolved profile's volume, which is where the pulley's 2.4 cm^3 went."""
+
+    def test_the_centroid_is_the_area_centroid_not_the_box_centre(self):
+        """A triangle's centroid is a third of the way in, not half."""
+        from inventor_mcp.geometry import polygon_centroid
+
+        triangle = [(4.1, 0.25), (3.5, 0.8), (4.1, 1.35)]
+        centre, _ = polygon_centroid(triangle)
+        assert centre == pytest.approx(3.9)          # (4.1 + 3.5 + 4.1) / 3
+        box_centre = (3.5 + 4.1) / 2
+        assert centre != pytest.approx(box_centre)   # 3.8: what it used to use
+
+    def test_a_rectangle_is_the_case_where_both_agree(self):
+        from inventor_mcp.geometry import polygon_centroid
+
+        assert polygon_centroid(
+            [(0.6, 0.0), (4.0, 0.0), (4.0, 1.6), (0.6, 1.6)]) == pytest.approx((2.3, 0.8))
+
+    def test_a_degenerate_polygon_has_no_centroid(self):
+        from inventor_mcp.geometry import polygon_centroid
+
+        assert polygon_centroid([(0, 0), (1, 1)]) is None
+        assert polygon_centroid([(0, 0), (1, 0), (2, 0)]) is None
+
+    def test_clipping_trims_the_overshoot_and_nothing_else(self):
+        from inventor_mcp.geometry import clip_to_box, polygon_centroid
+
+        triangle = [(4.1, 0.25), (3.5, 0.8), (4.1, 1.35)]
+        clipped = clip_to_box(triangle, -9.9, 4.0, -9.9, 9.9)
+        assert len(clipped) == 3
+        assert max(u for u, _ in clipped) == pytest.approx(4.0)
+        assert polygon_centroid(clipped)[0] == pytest.approx(4.0 - 0.5 / 3)
+
+    def test_a_polygon_wholly_inside_is_untouched(self):
+        from inventor_mcp.geometry import clip_to_box
+
+        square = [(1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 2.0)]
+        assert clip_to_box(square, 0, 3, 0, 3) == square
+
+    def test_a_polygon_wholly_outside_clips_to_nothing(self):
+        from inventor_mcp.geometry import clip_to_box
+
+        assert clip_to_box([(5.0, 5.0), (6.0, 5.0), (6.0, 6.0)], 0, 1, 0, 1) == []
+
+    def test_a_revolved_groove_removes_only_what_is_there(self, session):
+        """The pulley: a groove drawn past the rim removes the rim, not the air."""
+        import math
+
+        blank = math.pi * (4.0**2 - 0.6**2) * 1.6
+        volume = build(session, [
+            {"op": "sketch", "name": "Section", "plane": "xz", "entities": [
+                {"type": "polyline", "closed": True, "points": [
+                    [6, 0], [40, 0], [40, 16], [6, 16]]}]},
+            {"op": "revolve", "name": "Blank", "sketch": "Section", "axis": "z"},
+            {"op": "sketch", "name": "Groove", "plane": "xz", "entities": [
+                {"type": "polyline", "closed": True, "points": [
+                    [41, 2.5], [35, 8], [41, 13.5]]}]},
+            {"op": "revolve", "name": "VGroove", "sketch": "Groove", "axis": "z",
+             "operation": "cut"},
+        ])
+        # The clipped triangle: base 9.1667 mm at r = 40, apex 5 mm deep.
+        clipped_area = 0.91667 * 0.5 / 2
+        groove = clipped_area * (4.0 - 0.5 / 3) * 2 * math.pi
+        assert volume == pytest.approx(blank - groove, rel=1e-4)
+
+    def test_the_shipped_pulley_matches_the_hand_calculation(self, session):
+        """Which is what `examples/expected/belt_pulley.json` records."""
+        import json
+
+        root = Path(__file__).resolve().parent.parent
+        recipe = PartRecipe.model_validate(
+            json.loads((root / "examples" / "belt_pulley.json").read_text()))
+        result = build_part(session, recipe)
+        assert result["ok"], result["errors"]
+        expected = json.loads(
+            (root / "examples" / "expected" / "belt_pulley.json").read_text())
+        measured = session.backend.mass_properties(result["document"]).volume
+        assert measured == pytest.approx(expected["volume_cm3"], abs=5e-6)

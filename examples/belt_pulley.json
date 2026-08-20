@@ -139,27 +139,7 @@
       ],
       "axis": "z",
       "count": "lighten_count"
-    },
-    {
-      "op": "sketch",
-      "name": "Centre",
-      "plane": "xy",
-      "entities": [
-        {
-          "type": "point",
-          "position": [
-            0,
-            0
-          ]
-        }
-      ]
-    },
-    {
-      "op": "hole",
-      "name": "Bore",
-      "sketch": "Centre",
-      "diameter": "bore_d",
-      "through_all": true
     }
-  ]
+  ],
+  "description": "V-belt pulley: a revolved blank with a revolved groove cut and a ring of lightening holes. The bore is the revolve's own inner radius, not a separate hole."
 }
