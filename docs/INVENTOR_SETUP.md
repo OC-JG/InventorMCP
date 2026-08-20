@@ -145,13 +145,19 @@ afternoon:
   geometry bugs hid behind an `ok` line that way. Cut extrudes and holes now
   compare the volume before and after and refuse to pass off a no-op as a
   feature; a hole that finds nothing is retried the other way first.
-* **The XZ plane's first axis runs along model -X.** A profile drawn from 0 to 90
-  in sketch X came out spanning -90 to 0, which silently put a second sketch's
-  features on the wrong side of the part. A recipe's coordinates mean the axes
-  the plane is named after, on every plane alike, so the COM backend reflects
-  the plan's first axis on the way in (`SketchPlan.mirrored_u`) and the geometry
-  lands where it was asked for. `_MIRRORED_PLANES` in the COM backend is the
-  list; add to it if another release orients a plane differently.
+* **A sketch plane's axes do not follow its name, and are now measured rather
+  than assumed.** The XZ plane runs its first axis along model -X: a profile
+  drawn from 0 to 90 came out spanning -90 to 0. The YZ plane differs again, and
+  that put the angle bracket's upright holes off the part entirely — they drilled
+  air in both directions. Neither is derivable from the plane's name and both are
+  silent, so guessing cost a round trip each time. The backend now creates the
+  sketch, asks it via `SketchToModelSpace` where its own axes point, and
+  transforms the plan to suit before drawing anything (`_sketch_axes`,
+  `_orientation_matrix`, `SketchPlan.reoriented`). That covers any signed
+  permutation, so an offset work plane and an axis-aligned face get the same
+  treatment for free. `_MIRRORED_PLANES` survives only as the fallback for when
+  the measurement fails, and the measured axes are reported on every sketch
+  result — `live_smoke.py` prints them.
 
 ## Known-shaky areas
 
@@ -166,19 +172,28 @@ These are the parts of the COM backend most likely to need adjustment, and why:
   carried through the recipe and reported, but the COM path currently creates a
   drilled hole. The recipe records the intent, so upgrading this does not change
   any recipe.
-- **Edge convexity** is decided from the boundary loops: a face's boundary runs
-  anticlockwise about its outward normal, so the material lies to the left of
-  the loop, and whether that direction faces into the neighbouring face's normal
-  is the answer. That needs `Edge.EdgeUses` and `EdgeUse.IsParamReversed`, for
-  which makepy generates no module on 2027.1 — late binding asks the object
-  rather than the wrapper, so it may work anyway. Where it does not, the answer
-  falls back to sampling a point on each face (`Face.PointOnFace`), and that
-  point is arbitrary: on a face with an inner loop — the top of a plate with a
-  slot through it — it can land on the far side of the edge and flip the answer.
-  Six of the bracket's eight slot-opening edges came back `convex` and two
-  `concave`, for geometry identical by symmetry. Run
-  `scripts/probe_convexity.py` to see which path this machine takes; while it is
-  the fallback, narrow a `concave`/`convex` selector with `min_length` or `near`.
+- **Edge convexity is decided by sampling on 2027.1, and sampling is imperfect.**
+  The exact method reads the boundary loops: a face's boundary runs anticlockwise
+  about its outward normal, so the material lies to the left of the loop, and
+  whether that direction faces into the neighbouring face's normal is the answer.
+  `Edge.EdgeUses` and `EdgeUse.IsParamReversed` are both present — but
+  `EdgeUse.Face` and `EdgeUse.EdgeUseLoop` are not, and `EdgeUse.Parent` is the
+  `SurfaceBody`, so there is no route from a use back to its face and the method
+  cannot be applied. `EdgeUse.Next` and `EdgeUse.Edge` do exist, so the link can
+  be made from the other end — walk the loop and ask which of the edge's two
+  faces owns the neighbouring edge — which is the fix, not yet written.
+  Meanwhile the fallback samples a point on each face (`Face.PointOnFace`) and
+  asks which side of the edge it fell on. `scripts/probe_convexity.py` scores it
+  at **23 of 24** on a plate with a pocket: the one it gets wrong is a
+  pocket-opening edge, where the underside's own sample point sits across the
+  pocket. Narrow a `concave`/`convex` selector with `min_length` or `near` until
+  the exact method lands.
+- **Convexity is never known for a circular edge**, because a full circle has no
+  single tangent and the sampler needs planar normals on both sides. That is
+  exactly where you want it: the `flanged_shaft` chamfer asked for `circular`
+  with `limit: 2` and got the shaft's free end *and* its flange junction, one
+  convex and one concave, which removed and re-added the same 0.0884 cm³ for a
+  net change of nothing. `near` says which end is meant; `convex` cannot, yet.
 - **Face normals** are read via `GetNormalAtParam` with `IsParamReversed` applied.
   If `top`/`bottom` selectors pick the wrong faces, that is where to look.
 - **`FullyConstrained`** is not exposed under that name on 2027.1, so sketches

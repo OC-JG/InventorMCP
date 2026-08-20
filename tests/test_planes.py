@@ -319,3 +319,99 @@ class TestMirroringKeepsCoincidencesCoincident:
         pick = lambda pl: [(r.entity, r.point) for c in pl.constraints for r in c.refs
                            if r.entity in lines and r.point is not PointRef.SELF]
         assert pick(plan.mirrored_u()) == pick(plan)
+
+
+class TestMeasuredOrientation:
+    """The backend measures where a sketch's axes point; it does not guess.
+
+    Guessing cost two rounds. The XZ plane runs its first axis along model -X,
+    which put an L-profile at x -90..0; the YZ plane orders its axes some other
+    way again, which put the angle bracket's upright holes off the part entirely
+    and drilled air in both directions. Neither is derivable from the plane's
+    name, and both are silent. So the sketch is created, asked where its axes
+    are, and the geometry transformed to suit before anything is drawn.
+    """
+
+    def matrix(self, along_u, along_v):
+        from inventor_mcp.backend.com import backend as com
+
+        return com._orientation_matrix((along_u, along_v))
+
+    X, Y, Z = (1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)
+
+    def negated(self, axis):
+        return tuple(-c for c in axis)
+
+    def test_the_convention_matches_the_simulators(self):
+        """Both backends have to agree on what a recipe's coordinates mean."""
+        from inventor_mcp.backend.com.backend import _RECIPE_AXES
+
+        for plane, facing in (("xy", 2), ("xz", 1), ("yz", 0)):
+            intended_u, intended_v = _RECIPE_AXES[facing]
+            assert map3d(plane, 1.0, 0.0, 0.0) == pytest.approx(intended_u)
+            assert map3d(plane, 0.0, 1.0, 0.0) == pytest.approx(intended_v)
+            assert plane_normal(plane)[facing] == pytest.approx(1.0)
+
+    def test_a_plane_already_pointing_the_right_way_needs_no_transform(self):
+        assert self.matrix(self.X, self.Y) == (1.0, 0.0, 0.0, 1.0)
+        assert self.matrix(self.X, self.Z) == (1.0, 0.0, 0.0, 1.0)
+        assert self.matrix(self.Y, self.Z) == (1.0, 0.0, 0.0, 1.0)
+
+    def test_inventors_xz_plane_comes_out_as_the_mirror_we_already_shipped(self):
+        """u along -X, v along +Z: measured on 2027.1."""
+        assert self.matrix(self.negated(self.X), self.Z) == (-1.0, 0.0, 0.0, 1.0)
+
+    def test_a_plane_with_its_axes_swapped_is_handled_too(self):
+        """Which is the shape the YZ failure has, if the order is the problem."""
+        matrix = self.matrix(self.Z, self.Y)
+        assert matrix == (0.0, 1.0, 1.0, 0.0)
+        assert matrix[0] * matrix[3] - matrix[1] * matrix[2] < 0, "a swap reflects"
+
+    @pytest.mark.parametrize("along_u,along_v,plane", [
+        ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), "xy"),
+        ((-1.0, 0.0, 0.0), (0.0, 1.0, 0.0), "xy"),
+        ((1.0, 0.0, 0.0), (0.0, -1.0, 0.0), "xy"),
+        ((-1.0, 0.0, 0.0), (0.0, -1.0, 0.0), "xy"),
+        ((0.0, 1.0, 0.0), (1.0, 0.0, 0.0), "xy"),
+        ((0.0, -1.0, 0.0), (1.0, 0.0, 0.0), "xy"),
+        ((-1.0, 0.0, 0.0), (0.0, 0.0, 1.0), "xz"),
+        ((0.0, 0.0, 1.0), (1.0, 0.0, 0.0), "xz"),
+        ((0.0, 0.0, -1.0), (0.0, 1.0, 0.0), "yz"),
+        ((0.0, 0.0, 1.0), (0.0, -1.0, 0.0), "yz"),
+        ((0.0, -1.0, 0.0), (0.0, 0.0, -1.0), "yz"),
+    ])
+    def test_the_recipes_point_lands_where_the_recipe_asked(self, along_u, along_v, plane):
+        """The property that matters, for every orientation a plane could have.
+
+        Put the recipe's point through the transform, then place it using the
+        sketch's *own* axes -- which is what Inventor will do with it. It has to
+        arrive at the model position the recipe named, which is what `map3d`
+        says. That is the whole contract, and it held for none of these before.
+        """
+        matrix = self.matrix(along_u, along_v)
+        assert matrix is not None, f"{along_u} / {along_v} should be reconcilable"
+        a, b, c, d = matrix
+
+        recipe_u, recipe_v = 9.0, 4.0
+        sketch_u = a * recipe_u + b * recipe_v
+        sketch_v = c * recipe_u + d * recipe_v
+        landed = tuple(sketch_u * along_u[axis] + sketch_v * along_v[axis]
+                       for axis in range(3))
+
+        assert landed == pytest.approx(map3d(plane, recipe_u, recipe_v, 0.0))
+
+    def test_without_the_transform_the_point_lands_somewhere_else(self):
+        """A guard on the test above: it would pass trivially on an identity."""
+        along_u, along_v = (-1.0, 0.0, 0.0), (0.0, 0.0, 1.0)  # Inventor's XZ
+        untransformed = tuple(9.0 * along_u[axis] + 4.0 * along_v[axis] for axis in range(3))
+        assert untransformed != pytest.approx(map3d("xz", 9.0, 4.0, 0.0))
+
+    def test_a_plane_at_an_angle_is_left_alone(self):
+        """No agreed meaning for its axes, so the coordinates pass through."""
+        tilted = (0.7071, 0.7071, 0.0)
+        assert self.matrix(tilted, self.Z) is None
+
+    def test_unmeasurable_axes_are_left_alone(self):
+        from inventor_mcp.backend.com import backend as com
+
+        assert com._orientation_matrix(None) is None

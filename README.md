@@ -272,7 +272,7 @@ Errors come back as data, not exceptions:
 Values may be numbers (in the recipe's units) or expressions:
 
 ```
-"plate_w / 2"        "1.5 in"        "wall * 2 + 3 mm"      "sqrt(2) * pcd / 2"
+"plate_w / 2"        "1.5 in"        "wall * 2 + 3 mm"      "sqrt(2) * bolt_pcd / 2"
 "sin(30 deg) * r"    "max(t, 3 mm)"  "flange_d - 16"
 ```
 

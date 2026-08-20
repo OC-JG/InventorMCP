@@ -123,6 +123,9 @@ def main(argv: list[str] | None = None) -> int:
                   f"dimensions={result.get('dimensions')} "
                   f"profiles={result.get('profiles')} "
                   f"fully_constrained={result.get('fully_constrained')}")
+            axes = result.get("axes")
+            if axes:
+                print(f"         sketch axes: {axes}")
             inferred = result.get("inferred_constraints") or 0
             refused = result.get("refused_constraints") or 0
             if inferred:

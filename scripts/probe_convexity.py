@@ -149,9 +149,15 @@ def main(argv=None) -> int:
         sampled = com._convexity_from_samples(raw)
         loop = com._convexity_from_loops(raw)
         if loop is None:
-            reason = "no edge uses" if com._edge_uses(raw) is None else (
-                "not a straight edge" if com._edge_direction(raw) is None
-                else "the uses disagreed, or the faces meet smoothly")
+            uses = com._edge_uses(raw)
+            if uses is None:
+                reason = "no edge uses on this edge"
+            elif com._edge_direction(raw) is None:
+                reason = "not a straight edge, so it has no single tangent"
+            elif any(com._use_face(use) is None for use in uses):
+                reason = "no route from an edge use back to its face"
+            else:
+                reason = "the uses disagreed, or the faces meet smoothly"
             notes[reason] = notes.get(reason, 0) + 1
         for key, answer in (("sampled", sampled), ("loop", loop)):
             if answer == expected:

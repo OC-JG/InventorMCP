@@ -95,6 +95,11 @@ class SketchInfo(Info):
     #: Constraints Inventor refused as dependent on the others. The sketch still
     #: closes, but a degree of freedom is left in it.
     refused_constraints: int = 0
+    #: Where the sketch's own axes point in model space, as measured, and the
+    #: transform applied to the recipe's coordinates to suit them. A plane's
+    #: internal orientation is not derivable from its name, and getting it wrong
+    #: moves geometry silently, so what was measured is worth reporting.
+    axes: str | None = None
 
 
 @dataclass

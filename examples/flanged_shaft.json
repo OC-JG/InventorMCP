@@ -35,9 +35,9 @@
       "comment": "M6 clearance"
     },
     {
-      "name": "pcd",
+      "name": "bolt_pcd",
       "value": "flange_d - 16",
-      "comment": "bolt pitch circle diameter"
+      "comment": "Bolt-hole pitch circle diameter."
     }
   ],
   "operations": [
@@ -122,7 +122,7 @@
             0,
             0
           ],
-          "diameter": "pcd",
+          "diameter": "bolt_pcd",
           "count": 6
         }
       ]
@@ -140,7 +140,12 @@
       "edges": {
         "filter": "circular",
         "feature": "ShaftBody",
-        "limit": 2
+        "near": [
+          0,
+          0,
+          "flange_t + shaft_len"
+        ],
+        "limit": 1
       },
       "distance": 1.5
     }

@@ -108,8 +108,22 @@ _HEALTHY_STATUSES = {0, 15873}
 
 #: Sketch planes whose first axis runs opposite to the model axis they are
 #: named after.  Measured on Inventor 2027.1: a profile drawn from 0 to 90 in
-#: sketch X on the XZ plane comes out spanning -90 to 0 in model X.
+#: sketch X on the XZ plane comes out spanning -90 to 0 in model X.  Only used
+#: when the sketch's axes cannot be measured -- see ``_orientation_matrix``.
 _MIRRORED_PLANES = {"xz"}
+
+#: What a recipe's (u, v) mean for a plane facing each model axis: the axes
+#: named in the plane's own name, in that order.  Keyed by normal rather than
+#: by name so that an offset work plane, and a sketch on an axis-aligned face,
+#: follow the same rule as `xy` / `xz` / `yz` do.  tests/test_planes.py asserts
+#: this is the same convention the simulator's ``map3d`` implements.
+_RECIPE_AXES: dict[int, tuple[tuple[float, ...], tuple[float, ...]]] = {
+    0: ((0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),  # normal along X -> the YZ plane
+    1: ((1.0, 0.0, 0.0), (0.0, 0.0, 1.0)),  # normal along Y -> the XZ plane
+    2: ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0)),  # normal along Z -> the XY plane
+}
+
+_IDENTITY = (1.0, 0.0, 0.0, 1.0)
 
 #: DocumentTypeEnum -> the specific COM interface that carries its members.
 _DOCUMENT_INTERFACES = {
@@ -610,14 +624,25 @@ class ComBackend(Backend):
         app = self._require_app()
         transient = app.TransientGeometry
 
-        if plan.plane.lower() in _MIRRORED_PLANES:
-            plan = plan.mirrored_u()
         plane = self._resolve_plane(document, plan.plane, plan.offset_expression)
         with self._batch(document):
             with self._translate_errors("Creating the sketch", SketchError):
                 sketch = component.Sketches.Add(plane, False)
                 if plan.name:
                     sketch.Name = plan.name
+
+            # The sketch has to exist before its axes can be measured, and its
+            # axes have to be known before any geometry goes in: a plane's
+            # internal orientation is not derivable from its name, and guessing
+            # it wrong puts the geometry somewhere else on the part without any
+            # error to say so.
+            measured = _sketch_axes(sketch, transient)
+            orientation = _orientation_matrix(measured)
+            if orientation is None and plan.plane.lower() in _MIRRORED_PLANES:
+                orientation = (-1.0, 0.0, 0.0, 1.0)  # the measured XZ fallback
+            if orientation is not None and orientation != _IDENTITY:
+                plan = plan.reoriented(orientation)
+            axes = _describe_orientation(measured, orientation)
 
             objects: dict[str, Any] = {}
             # Endpoints that coincidence joins are built as one shared point
@@ -664,6 +689,7 @@ class ComBackend(Backend):
             fully_constrained=_fully_constrained(sketch),
             inferred_constraints=len(inferred),
             refused_constraints=len(refused),
+            axes=axes,
         )
 
     def _add_primitive(self, sketch: Any, transient: Any, primitive: Any,
@@ -2130,8 +2156,21 @@ def _edge_uses(edge: Any) -> list[Any] | None:  # pragma: no cover - Windows onl
         return None
 
 
+#: Set once an EdgeUse turns out not to lead back to its Face, so the whole
+#: loop-orientation path stops costing a COM round trip per edge.  On 2027.1
+#: neither `EdgeUse.Face` nor `EdgeUse.EdgeUseLoop` exists -- `Parent` is the
+#: SurfaceBody -- so the exact method is unreachable and sampling answers
+#: instead.  Reaching it needs the link made from the other end, walking
+#: `EdgeUse.Next` round the loop and asking which of the edge's two faces owns
+#: the neighbouring edge; `Next` and `Edge` are both present, so that will work.
+_no_route_to_face = False
+
+
 def _use_face(use: Any) -> Any | None:  # pragma: no cover - Windows only
     """The face an edge use belongs to, whichever way round this release says it."""
+    global _no_route_to_face
+    if _no_route_to_face:
+        return None
     for path in ("Face", "EdgeUseLoop.Face", "Parent.Face"):
         target = use
         try:
@@ -2139,8 +2178,12 @@ def _use_face(use: Any) -> Any | None:  # pragma: no cover - Windows only
                 target = getattr(target, step)
         except Exception:
             continue
-        if target is not None:
+        if target is not None and _face_normal(target) is not None:
             return target
+    _no_route_to_face = True
+    logger.info("This release exposes no route from an EdgeUse to its Face, so "
+                "convexity is decided by sampling. Edges bordering a face with "
+                "a hole in it may be misreported.")
     return None
 
 
@@ -2273,6 +2316,96 @@ def _removed_material(document: Any, before: float | None) -> bool:
     if after is None:
         return True
     return before - after > 1e-6
+
+
+def _sketch_axes(sketch: Any, transient: Any) -> tuple[tuple[float, ...], ...] | None:
+    """Where the sketch's own two axes point in model space, measured.
+
+    A plane's internal orientation is not derivable from its name -- Inventor's
+    XZ plane runs its first axis along model -X, and its YZ plane orders its
+    axes differently again -- so ask the sketch rather than assume.
+    """
+    try:
+        def at(u: float, v: float) -> tuple[float, float, float]:
+            point = sketch.SketchToModelSpace(transient.CreatePoint2d(u, v))
+            return (float(point.X), float(point.Y), float(point.Z))
+
+        origin, along_u, along_v = at(0.0, 0.0), at(1.0, 0.0), at(0.0, 1.0)
+    except Exception as exc:
+        logger.info("Could not measure the sketch's axes (%s); "
+                    "falling back to the plane-name table.", exc)
+        return None
+
+    axes = tuple(
+        tuple(far - near for far, near in zip(end, origin))
+        for end in (along_u, along_v)
+    )
+    for axis in axes:
+        if abs(math.sqrt(sum(c * c for c in axis)) - 1.0) > 1e-6:
+            logger.info("The sketch's axes are not unit vectors (%s); ignoring them.", axes)
+            return None
+    return axes
+
+
+def _orientation_matrix(
+    axes: tuple[tuple[float, ...], ...] | None,
+) -> tuple[float, float, float, float] | None:
+    """The transform from what a recipe means to what this sketch needs.
+
+    Returns None when the sketch's orientation cannot be reconciled with the
+    recipe's convention -- a plane at some angle to the model axes, say -- in
+    which case the coordinates are passed through as written, which is the only
+    honest thing to do with a plane whose axes have no agreed meaning.
+    """
+    if axes is None:
+        return None
+    along_u, along_v = axes
+    normal = _cross(along_u, along_v)
+    facing = max(range(3), key=lambda index: abs(normal[index]))
+    if abs(normal[facing]) < 0.999:  # not an axis-aligned plane
+        logger.info("Sketch plane normal %s is not axis-aligned; "
+                    "taking its coordinates as written.", normal)
+        return None
+
+    intended_u, intended_v = _RECIPE_AXES[facing]
+    matrix = tuple(
+        sum(a * b for a, b in zip(intended, axis))
+        for axis in (along_u, along_v)
+        for intended in (intended_u, intended_v)
+    )
+    snapped = tuple(round(value) for value in matrix)
+    if any(abs(value - exact) > 1e-6 for value, exact in zip(matrix, snapped)):
+        logger.info("Sketch axes %s do not line up with the model axes; "
+                    "taking its coordinates as written.", axes)
+        return None
+    return (float(snapped[0]), float(snapped[1]), float(snapped[2]), float(snapped[3]))
+
+
+def _describe_orientation(
+    axes: tuple[tuple[float, ...], ...] | None,
+    matrix: tuple[float, float, float, float] | None,
+) -> str:
+    """A one-line account of what was measured and what was done about it."""
+    def vector(values: tuple[float, ...]) -> str:
+        names = "XYZ"
+        parts = [f"{'-' if value < 0 else '+'}{names[index]}"
+                 for index, value in enumerate(values) if abs(value) > 0.5]
+        return "".join(parts) or "?"
+
+    if axes is None:
+        return "not measurable" + ("" if matrix is None else ", using the plane-name table")
+    seen = f"u->{vector(axes[0])} v->{vector(axes[1])}"
+    if matrix is None:
+        return f"{seen}, taken as written"
+    if matrix == _IDENTITY:
+        return f"{seen}, as the recipe means them"
+    swapped = abs(matrix[0]) < 0.5
+    flips = [name for name, value in (("u", matrix[0] or matrix[1]),
+                                      ("v", matrix[2] or matrix[3])) if value < 0]
+    change = "axes swapped" if swapped else ""
+    if flips:
+        change = ", ".join(filter(None, [change, f"{' and '.join(flips)} reversed"]))
+    return f"{seen}, {change}"
 
 
 def _delete_quietly(feature: Any) -> None:  # pragma: no cover

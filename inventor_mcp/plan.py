@@ -224,51 +224,74 @@ class SketchPlan:
                 parent[root_a] = root_b
         return {key: find(key) for key in parent}
 
-    def mirrored_u(self) -> "SketchPlan":
-        """A copy with the sketch's first axis reversed.
+    def reoriented(self, matrix: tuple[float, float, float, float]) -> "SketchPlan":
+        """A copy with its coordinates put through *matrix*, given as (a, b, c, d).
 
-        Inventor's XZ plane runs its horizontal axis along -X, so a profile
-        drawn from 0 to 90 comes out spanning -90 to 0.  A recipe that says
-        "x from 0 to 90" means model +X, and a sketch plane's internal
-        orientation is not something the author should have to know -- so the
-        geometry is mirrored on the way in and lands where it was asked for.
+        A sketch plane's own axes need not run the way its name suggests.
+        Inventor's XZ plane runs its first axis along model -X, so a profile
+        drawn from 0 to 90 came out spanning -90 to 0; its YZ plane orders its
+        axes differently again, which put the angle bracket's upright holes off
+        the part entirely.  None of that is something a recipe author should
+        have to know, so the backend measures where the sketch's axes actually
+        point and hands the geometry over pre-transformed, to land where it was
+        asked for.
 
-        Lengths, radii, and the angles between lines all survive a reflection,
-        so constraints and dimensions carry over unchanged -- except for which
-        *end* of an arc they name. Reflecting reverses an arc's sweep, so its
-        start and end swap places, and a coincidence that named the old start
-        has to name the new end or it points at the far side of the arc. That
-        is not a loud failure: the backend sees both references in one shared
-        point group and skips the constraint, so Inventor never gets the
-        chance to refuse it, and the sketch is quietly built wrong.
+        The matrix is the one that takes what the recipe means to what this
+        sketch needs::
+
+            u' = a*u + b*v
+            v' = c*u + d*v
+
+        Lengths, radii and the angles between lines survive any rotation or
+        reflection, so constraints and dimensions carry over -- except for
+        which *end* of an arc they name.  A reflection reverses an arc's sweep,
+        so its start and end swap places, and a coincidence that named the old
+        start has to name the new end or it points at the far side of the arc.
+        That cannot fail loudly: the backend sees both references in one shared
+        point group and skips the constraint, so Inventor never gets the chance
+        to refuse it and the sketch is quietly built wrong.
         """
         import copy
         import math as _math
 
-        mirrored = copy.deepcopy(self)
-        for primitive in mirrored.primitives:
-            if isinstance(primitive, PLine):
-                primitive.start = (-primitive.start[0], primitive.start[1])
-                primitive.end = (-primitive.end[0], primitive.end[1])
-            elif isinstance(primitive, PArc):
-                primitive.center = (-primitive.center[0], primitive.center[1])
-                # Reflecting the axis turns an angle t into pi - t, and reverses
-                # the sweep, so the endpoints swap to keep the arc going the
-                # same way round its centre.
-                start, end = primitive.start_angle, primitive.end_angle
-                primitive.start_angle = _math.pi - end
-                primitive.end_angle = _math.pi - start
-            elif isinstance(primitive, PEllipse):
-                primitive.center = (-primitive.center[0], primitive.center[1])
-                primitive.rotation = _math.pi - primitive.rotation
-            elif isinstance(primitive, PCircle):
-                primitive.center = (-primitive.center[0], primitive.center[1])
-            elif isinstance(primitive, PPoint):
-                primitive.position = (-primitive.position[0], primitive.position[1])
+        a, b, c, d = matrix
+        reflects = (a * d - b * c) < 0
 
-        # A line's start stays its start -- the point simply moves to its own
-        # mirror image. Only arcs swap ends, so only arcs are remapped.
-        swept = {p.id for p in mirrored.primitives if isinstance(p, PArc)}
+        def move(point: tuple[float, float]) -> tuple[float, float]:
+            u, v = point
+            return (a * u + b * v, c * u + d * v)
+
+        def direction(angle: float) -> float:
+            """Where a radius pointing at *angle* points once transformed."""
+            u, v = move((_math.cos(angle), _math.sin(angle)))
+            return _math.atan2(v, u)
+
+        out = copy.deepcopy(self)
+        for primitive in out.primitives:
+            if isinstance(primitive, PLine):
+                primitive.start = move(primitive.start)
+                primitive.end = move(primitive.end)
+            elif isinstance(primitive, PArc):
+                primitive.center = move(primitive.center)
+                start, end = direction(primitive.start_angle), direction(primitive.end_angle)
+                # A reflection turns the sweep round, so the endpoints swap to
+                # keep the arc going the same way about its centre.
+                primitive.start_angle, primitive.end_angle = (
+                    (end, start) if reflects else (start, end)
+                )
+            elif isinstance(primitive, PEllipse):
+                primitive.center = move(primitive.center)
+                primitive.rotation = direction(primitive.rotation)
+            elif isinstance(primitive, PCircle):
+                primitive.center = move(primitive.center)
+            elif isinstance(primitive, PPoint):
+                primitive.position = move(primitive.position)
+
+        # A line's start stays its start: the point simply moves to its image.
+        # Only arcs swap ends, and only under a reflection.
+        swept = (
+            {p.id for p in out.primitives if isinstance(p, PArc)} if reflects else set()
+        )
         other_end = {PointRef.START: PointRef.END, PointRef.END: PointRef.START}
 
         def remap(ref: Ref) -> Ref:
@@ -276,16 +299,19 @@ class SketchPlan:
                 return Ref(ref.entity, other_end[ref.point])
             return ref
 
-        mirrored.constraints = [
-            Constraint(c.kind, tuple(remap(r) for r in c.refs))
-            for c in mirrored.constraints
+        out.constraints = [
+            Constraint(k.kind, tuple(remap(r) for r in k.refs)) for k in out.constraints
         ]
-        mirrored.dimensions = [
-            Dimension(d.kind, tuple(remap(r) for r in d.refs), d.expression, d.value,
-                      d.name, (-d.text_offset[0], d.text_offset[1]))
-            for d in mirrored.dimensions
+        out.dimensions = [
+            Dimension(dim.kind, tuple(remap(r) for r in dim.refs), dim.expression,
+                      dim.value, dim.name, move(dim.text_offset))
+            for dim in out.dimensions
         ]
-        return mirrored
+        return out
+
+    def mirrored_u(self) -> "SketchPlan":
+        """A copy with the sketch's first axis reversed."""
+        return self.reoriented((-1.0, 0.0, 0.0, 1.0))
 
     def summary(self) -> dict:
         counts: dict[str, int] = {}
