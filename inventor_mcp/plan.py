@@ -209,16 +209,34 @@ class SketchPlan:
                 key = parent[key]
             return key
 
-        shareable = (PointRef.START, PointRef.END)
+        def shareable(ref: Ref) -> tuple[str, str] | None:
+            """The point this reference names, if a backend can share it.
+
+            A curve's start or end is one.  So is a standalone sketch point,
+            which is how a bolt circle joins each construction line to the
+            hole centre at its far end -- Inventor infers that coincidence as
+            the line is drawn and then refuses ours, which used to fail the
+            whole sketch even though the sketch was perfectly usable.
+            """
+            if ref.entity == ORIGIN.entity:
+                return None
+            if ref.point in (PointRef.START, PointRef.END):
+                return (ref.entity, ref.point.value)
+            if ref.point is PointRef.SELF:
+                try:
+                    primitive = self.by_id(ref.entity)
+                except KeyError:
+                    return None
+                if isinstance(primitive, PPoint):
+                    return (ref.entity, PointRef.SELF.value)
+            return None
+
         for constraint in self.constraints:
             if constraint.kind != "coincident" or len(constraint.refs) != 2:
                 continue
-            first, second = constraint.refs
-            if first.entity == ORIGIN.entity or second.entity == ORIGIN.entity:
+            a, b = (shareable(ref) for ref in constraint.refs)
+            if a is None or b is None:
                 continue
-            if first.point not in shareable or second.point not in shareable:
-                continue
-            a, b = (first.entity, first.point.value), (second.entity, second.point.value)
             root_a, root_b = find(a), find(b)
             if root_a != root_b:
                 parent[root_a] = root_b

@@ -589,23 +589,25 @@ class TestExtentDirections:
         assert set(EXTENT_DIRECTIONS) == {"positive", "negative", "symmetric"}
 
 
-class TestStructuralConstraints:
-    """Only coincidence closes a loop; everything else refines it.
+class TestRefusedConstraints:
+    """Whether a refusal mattered is asked of the sketch, not of the kind.
 
-    A refused coincident leaves a sketch with no profile, which is fatal. A
-    refused equal-length leaves a usable sketch with a degree of freedom in it,
-    which is worth reporting but not worth failing the whole part over.
+    Coincidence used to be treated as structural, so any refused coincident
+    failed the whole sketch. But Inventor infers coincidences for itself and
+    then refuses ours as duplicates, and a sketch of hole centres never had a
+    profile to lose -- Inventor's own hole tool populates from the bolt circle
+    it rejected. So the test is now the outcome: closed loops in the recipe and
+    no profile out of Inventor.
     """
 
-    def test_only_coincidence_is_structural(self):
-        assert com._STRUCTURAL_KINDS == {"coincident"}
+    def test_no_kind_is_fatal_on_its_own_any_more(self):
+        assert not hasattr(com, "_STRUCTURAL_KINDS")
 
-    def test_every_structural_kind_is_a_real_constraint_kind(self):
-        import typing
+    def test_the_outcome_is_what_is_checked(self):
+        import inspect
 
-        from inventor_mcp.plan import ConstraintKind
-
-        assert com._STRUCTURAL_KINDS <= set(typing.get_args(ConstraintKind))
+        source = inspect.getsource(com.ComBackend.build_sketch)
+        assert "profiles == 0 and profile_loops(plan)" in source
 
     def test_inferred_kinds_are_all_real_too(self):
         import typing

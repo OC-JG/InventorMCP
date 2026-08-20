@@ -32,6 +32,7 @@ from ...errors import (
     SelectionError,
     SketchError,
 )
+from ...geometry import profile_loops
 from ...plan import PArc, PCircle, PEllipse, PLine, PPoint, PointRef, Ref, SketchPlan
 from ...units import from_internal, inventor_symbol
 from ..base import (
@@ -677,6 +678,22 @@ class ComBackend(Backend):
 
         self._sketches.setdefault(doc_id, {})[sketch.Name] = sketch
         profiles = _count_profiles(sketch)
+        # Whether a refused constraint mattered is a question about the sketch
+        # that came out, not about the constraint's kind. A coincidence Inventor
+        # refuses is usually one it inferred for itself, and a sketch of hole
+        # centres never had a profile to lose -- Inventor's own hole tool
+        # populates from it happily. So ask the sketch instead of assuming: it
+        # is broken only if the recipe drew a closed loop and no profile came
+        # out of it.
+        if refused and profiles == 0 and profile_loops(plan):
+            raise SketchError(
+                f"Sketch {sketch.Name!r} has closed loops in the recipe but no "
+                f"profile, after {len(refused)} refused constraint(s): "
+                f"{'; '.join(refused[:3])}",
+                hint="Its geometry is not joined. Check for coordinates that do "
+                "not quite meet, or two entities Inventor considers already "
+                "constrained to each other.",
+            )
         return SketchInfo(
             id=self._next("sk"),
             name=str(sketch.Name),
@@ -744,9 +761,22 @@ class ComBackend(Backend):
                 primitive.minor_radius,
             )
         elif isinstance(primitive, PPoint):
-            entity = sketch.SketchPoints.Add(
-                transient.CreatePoint2d(*primitive.position), primitive.hole_center
-            )
+            # A standalone point can be the shared point of a group, which is
+            # how a bolt circle's construction lines meet their hole centres.
+            group = groups.get((primitive.id, PointRef.SELF.value))
+            entity = shared.get(group) if group is not None else None
+            if entity is None:
+                entity = sketch.SketchPoints.Add(
+                    transient.CreatePoint2d(*primitive.position), primitive.hole_center
+                )
+                if group is not None:
+                    shared[group] = entity
+            elif primitive.hole_center:
+                try:
+                    entity.HoleCenter = True
+                except Exception as exc:  # pragma: no cover - version-specific
+                    logger.info("Could not mark the shared point %s as a hole "
+                                "centre: %s", primitive.id, _com_message(exc))
         else:
             raise SketchError(f"Cannot create {type(primitive).__name__} in Inventor.")
 
@@ -904,13 +934,6 @@ class ComBackend(Backend):
         # if the constraint really is there, so check rather than assume.
         if _already_constrained(sketch, kind, targets):
             return ("inferred", f"{where}: Inventor had already applied it")
-
-        if kind in _STRUCTURAL_KINDS:
-            raise SketchError(
-                f"Could not apply {where}: {self._explain(first_error)}",
-                hint="Without it the sketch geometry is not joined, so no profile can "
-                "be built from it.",
-            )
 
         # Everything else refines a sketch that is already closed. Inventor
         # sometimes rejects one as dependent on the constraints around it; that
@@ -1203,6 +1226,7 @@ class ComBackend(Backend):
 
         feature = None
         failures: list[str] = []
+        measured: list[float | None] = []
         flipped = False
         before = _solid_volume(document)
         with self._batch(document), self._translate_errors("Hole"):
@@ -1239,6 +1263,10 @@ class ComBackend(Backend):
                     continue
                 # Inventor is happy to drill into thin air and call it a
                 # success, so the feature only counts if the part got smaller.
+                # The update is deliberate: the volume has to be the one after
+                # this feature, not a cached one from before it.
+                _recompute(document)
+                measured.append(_solid_volume(document))
                 if _removed_material(document, before):
                     if index:
                         flipped = True
@@ -1251,8 +1279,8 @@ class ComBackend(Backend):
             if feature is None:
                 raise FeatureError(
                     f"Could not drill the hole: {self._explain_text(failures[0])}",
-                    hint="Check that the hole centres sit over material and that the "
-                    "diameter is smaller than the surrounding geometry.",
+                    hint=self._explain_dry_hole(
+                        document, sketch, centers, before, measured, failures),
                 )
             if request.name:
                 feature.Name = request.name
@@ -1262,6 +1290,57 @@ class ComBackend(Backend):
             "style": request.style,
             "flipped": flipped,
         })
+
+    def _explain_dry_hole(self, document: Any, sketch: Any, centers: Any,
+                          before: float | None, measured: list[float | None],
+                          failures: list[str]) -> str:  # pragma: no cover
+        """Say where the hole centres actually are, and what the volume did.
+
+        A hole that builds and removes nothing has told us almost nothing about
+        why. Three rounds of guessing at this cost three runs, so the failure
+        now carries the measurements that would settle it: where each centre
+        lands in model space, which way the sketch faces, what the volume did on
+        each attempt, and how big the part is.
+        """
+        parts: list[str] = []
+        try:
+            positions = []
+            for index in range(1, int(centers.Count) + 1):
+                point = centers.Item(index)
+                model = sketch.SketchToModelSpace(point.Geometry)
+                positions.append(
+                    f"({model.X * 10:.1f}, {model.Y * 10:.1f}, {model.Z * 10:.1f})")
+            if positions:
+                parts.append("centres at " + ", ".join(positions[:4]) + " mm")
+        except Exception:
+            parts.append("could not read the centres' model positions")
+
+        axes = _sketch_axes(sketch, self._require_app().TransientGeometry)
+        if axes is not None:
+            normal = _cross(axes[0], axes[1])
+            parts.append("the sketch faces "
+                         f"({normal[0]:+.0f}, {normal[1]:+.0f}, {normal[2]:+.0f})")
+
+        try:
+            box = document.ComponentDefinition.RangeBox
+            parts.append(
+                "the part spans "
+                + " x ".join(
+                    f"{getattr(box.MinPoint, axis) * 10:.1f}.."
+                    f"{getattr(box.MaxPoint, axis) * 10:.1f}"
+                    for axis in "XYZ")
+                + " mm")
+        except Exception:
+            pass
+
+        readings = ", ".join("unreadable" if value is None else f"{value:.4f}"
+                             for value in measured)
+        parts.append(f"volume was {before if before is None else f'{before:.4f}'} cm^3 "
+                     f"and stayed at {readings or 'no reading'} on "
+                     f"{len(measured)} attempt(s)")
+        if len(failures) > 1:
+            parts.append(f"first refusal: {failures[0]}")
+        return "; ".join(parts) + ". Check the centres lie on the part."
 
     def _new_collection(self, kind: str) -> Any:  # pragma: no cover - Windows only
         """A collection of the type Inventor expects for *kind*.
@@ -1897,12 +1976,6 @@ def _feature_kind(feature: Any) -> str:  # pragma: no cover - Windows only
 #: Constraint kinds Inventor infers on its own while geometry is created.
 _INFERRED_KINDS = {"coincident", "horizontal", "vertical", "tangent"}
 
-#: Kinds that join geometry into a closed loop.  Without one of these there is
-#: no profile and the sketch is useless, so a failure is fatal.  Every other
-#: kind refines a sketch that already closes.
-_STRUCTURAL_KINDS = {"coincident"}
-
-
 def _already_constrained(sketch: Any, kind: str, targets: list[Any]) -> bool:  # pragma: no cover
     """True when the sketch already carries this exact constraint.
 
@@ -2406,6 +2479,14 @@ def _describe_orientation(
     if flips:
         change = ", ".join(filter(None, [change, f"{' and '.join(flips)} reversed"]))
     return f"{seen}, {change}"
+
+
+def _recompute(document: Any) -> None:  # pragma: no cover - Windows only
+    """Bring the document up to date, so a volume reading is the current one."""
+    try:
+        document.Update()
+    except Exception:
+        logger.debug("Could not update the document before measuring it.")
 
 
 def _delete_quietly(feature: Any) -> None:  # pragma: no cover
