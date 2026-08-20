@@ -1,0 +1,69 @@
+{
+  "name": "DuctTransition",
+  "units": "mm",
+  "material": "Aluminum",
+  "parameters": [
+    {
+      "name": "inlet_d",
+      "value": 60,
+      "comment": "round end"
+    },
+    {
+      "name": "outlet",
+      "value": 50,
+      "comment": "square end, across the flats"
+    },
+    {
+      "name": "height",
+      "value": 70
+    }
+  ],
+  "operations": [
+    {
+      "op": "sketch",
+      "name": "Inlet",
+      "plane": "xy",
+      "entities": [
+        {
+          "type": "circle",
+          "center": [
+            0,
+            0
+          ],
+          "diameter": "inlet_d"
+        }
+      ]
+    },
+    {
+      "op": "work_plane",
+      "name": "Top",
+      "kind": "offset",
+      "base": "xy",
+      "offset": "height"
+    },
+    {
+      "op": "sketch",
+      "name": "Outlet",
+      "plane": "Top",
+      "entities": [
+        {
+          "type": "rectangle",
+          "center": [
+            0,
+            0
+          ],
+          "width": "outlet",
+          "height": "outlet"
+        }
+      ]
+    },
+    {
+      "op": "loft",
+      "name": "Body",
+      "sketches": [
+        "Inlet",
+        "Outlet"
+      ]
+    }
+  ]
+}

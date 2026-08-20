@@ -492,3 +492,88 @@ class TestReorientingCarriesDimensions:
         assert plan.plane == "xz"
         before = [(d.kind, d.expression) for d in plan.dimensions]
         assert [(d.kind, d.expression) for d in plan.mirrored_u().dimensions] == before
+
+
+class TestSimulatorFidelity:
+    """Where the simulator was not merely approximate but wrong.
+
+    It is what 546 tests run against and what `validate_recipe` rehearses in,
+    so an answer that is wrong rather than rough is worth more than it looks.
+    Each of these was found by building a part that exercises it and checking
+    the number by hand.
+    """
+
+    def build(self, recipe):
+        from inventor_mcp.builder import build_part
+        from inventor_mcp.schema import PartRecipe
+        from inventor_mcp.session import Session
+
+        session = Session(backend_kind="mock")
+        session.ensure_backend().connect()
+        build_part(session, PartRecipe.model_validate(recipe))
+        return session.backend.mass_properties(session.active)
+
+    def test_a_sketch_on_a_work_plane_sits_at_the_planes_offset(self):
+        """The flanged shaft was built from z=0 and came out 12 mm short."""
+        properties = self.build({
+            "name": "OnTop", "units": "mm",
+            "operations": [
+                {"op": "sketch", "name": "Base", "plane": "xy", "entities": [
+                    {"type": "circle", "diameter": 40}]},
+                {"op": "extrude", "sketch": "Base", "distance": 12},
+                {"op": "work_plane", "name": "Upper", "kind": "offset",
+                 "base": "xy", "offset": 12},
+                {"op": "sketch", "name": "Boss", "plane": "Upper", "entities": [
+                    {"type": "circle", "diameter": 20}]},
+                {"op": "extrude", "sketch": "Boss", "distance": 30},
+            ]})
+        box = properties.bounding_box
+        assert (box[5] - box[2]) * 10 == pytest.approx(42.0), "12 + 30, not 30"
+
+    def test_a_swept_arc_has_a_length(self):
+        """Only straight segments counted, so an elbow had no volume at all."""
+        properties = self.build({
+            "name": "Elbow", "units": "mm",
+            "operations": [
+                {"op": "sketch", "name": "Path", "plane": "xy", "entities": [
+                    {"type": "arc", "center": [0, 0], "radius": 45,
+                     "start_angle": 0, "end_angle": 90}]},
+                {"op": "sketch", "name": "Profile", "plane": "yz", "entities": [
+                    {"type": "circle", "center": [45, 0], "diameter": 20}]},
+                {"op": "sweep", "profile_sketch": "Profile", "path_sketch": "Path"},
+            ]})
+        # Pappus: the section's area times the distance its centroid travels.
+        wanted = math.pi * 10 ** 2 * (45 * math.pi / 2) / 1000
+        assert properties.volume == pytest.approx(wanted, rel=1e-9)
+
+    def test_a_loft_has_a_volume_and_not_an_area(self):
+        """The mean area was being added as if it were a volume."""
+        properties = self.build({
+            "name": "Duct", "units": "mm",
+            "operations": [
+                {"op": "sketch", "name": "Lower", "plane": "xy", "entities": [
+                    {"type": "circle", "diameter": 60}]},
+                {"op": "work_plane", "name": "Top", "kind": "offset",
+                 "base": "xy", "offset": 70},
+                {"op": "sketch", "name": "Upper", "plane": "Top", "entities": [
+                    {"type": "rectangle", "center": [0, 0], "width": 50, "height": 50}]},
+                {"op": "loft", "sketches": ["Lower", "Upper"]},
+            ]})
+        mean_area = (math.pi * 30 ** 2 + 50 * 50) / 2
+        assert properties.volume == pytest.approx(mean_area * 70 / 1000, rel=1e-9)
+
+    def test_a_revolved_ring_is_not_a_ball(self):
+        """The bounds were expanded to a cube of the profile's reach."""
+        properties = self.build({
+            "name": "Ring", "units": "mm",
+            "operations": [
+                {"op": "sketch", "name": "Section", "plane": "xz", "entities": [
+                    {"type": "polyline", "closed": True, "points": [
+                        [6, 0], [40, 0], [40, 16], [6, 16]]}]},
+                {"op": "revolve", "sketch": "Section", "axis": "z"},
+            ]})
+        box = properties.bounding_box
+        spans = [round((box[axis + 3] - box[axis]) * 10, 3) for axis in range(3)]
+        assert spans == [80.0, 80.0, 16.0]
+        assert properties.volume == pytest.approx(
+            math.pi * (40 ** 2 - 6 ** 2) * 16 / 1000, rel=1e-9)

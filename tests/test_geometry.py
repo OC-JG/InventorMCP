@@ -507,3 +507,49 @@ class TestPolylineDimensions:
         plan = self.plan_for(self.BRACKET, parameters=self.BRACKET_PARAMS,
                              dimension=False)
         assert plan.dimensions == []
+
+
+class TestArcBounds:
+    """An arc is not its circle, and treating it as one loosens every bound.
+
+    `plan_bounds` feeds the rehearsal's "does this cut reach the part" check, so
+    a loose bound is a missed warning. A quarter arc of radius 45 was measuring
+    90 across.
+    """
+
+    def arc(self, start_deg, end_deg, radius=4.5, center=(0.0, 0.0)):
+        from inventor_mcp.plan import PArc
+
+        return PArc("a", center=center, radius=radius,
+                    start_angle=math.radians(start_deg), end_angle=math.radians(end_deg))
+
+    def bounds(self, arc):
+        from inventor_mcp.geometry import _arc_extremes
+
+        points = _arc_extremes(arc)
+        xs, ys = [p[0] for p in points], [p[1] for p in points]
+        return (min(xs), min(ys), max(xs), max(ys))
+
+    def test_a_quarter_arc_spans_one_quadrant(self):
+        assert self.bounds(self.arc(0, 90)) == pytest.approx((0.0, 0.0, 4.5, 4.5))
+
+    def test_a_half_arc_spans_a_half(self):
+        assert self.bounds(self.arc(0, 180)) == pytest.approx((-4.5, 0.0, 4.5, 4.5))
+
+    def test_a_full_circle_still_spans_everything(self):
+        assert self.bounds(self.arc(0, 360)) == pytest.approx((-4.5, -4.5, 4.5, 4.5))
+
+    def test_an_arc_over_the_top_includes_the_top(self):
+        """45 to 135 passes 90, so the maximum y is the radius, not the ends."""
+        low_x, low_y, high_x, high_y = self.bounds(self.arc(45, 135))
+        assert high_y == pytest.approx(4.5)
+        assert high_x == pytest.approx(4.5 * math.cos(math.radians(45)))
+
+    def test_an_arc_that_touches_no_extreme_is_bounded_by_its_ends(self):
+        low_x, low_y, high_x, high_y = self.bounds(self.arc(10, 80))
+        assert high_x == pytest.approx(4.5 * math.cos(math.radians(10)))
+        assert high_y == pytest.approx(4.5 * math.sin(math.radians(80)))
+
+    def test_an_off_centre_arc_moves_with_its_centre(self):
+        shifted = self.bounds(self.arc(0, 90, center=(10.0, 5.0)))
+        assert shifted == pytest.approx((10.0, 5.0, 14.5, 9.5))

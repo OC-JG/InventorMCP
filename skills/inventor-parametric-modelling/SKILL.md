@@ -272,5 +272,9 @@ fastener rather than deriving one.
   the current COM path drills a plain hole. Do not promise a user a tapped hole.
 - Revolve, sweep, loft, patterns and threads are written but have never been run
   against a live Inventor. Treat a success there with suspicion and check the
-  `measured` block hard.
+  `measured` block hard. `examples/belt_pulley.json`, `pipe_bend.json`,
+  `duct_transition.json` and `threaded_boss.json` each isolate one of them.
+- **Counts are not parametric.** `count`, `sides`, `rows` and `columns` take a
+  plain integer, not an expression, so a pattern's count cannot be driven by a
+  parameter. Say so rather than implying the whole part is revisable.
 - Assemblies, drawings and sheet metal are not supported at all.

@@ -1048,6 +1048,29 @@ def loop_area(plan: SketchPlan, loop: Sequence[str]) -> float:
     return abs(area) / 2.0
 
 
+def _arc_extremes(arc: PArc) -> list[tuple[float, float]]:
+    """The points that bound an arc: its ends, and any axis extreme it passes.
+
+    Treating an arc as its whole circle was doubling the bounding box of a
+    swept elbow -- a quarter arc of radius 45 measured 90 across instead of 45.
+    Bounds are used to decide whether a cut reaches the part at all, so a loose
+    one is a missed warning.
+    """
+    start, end = arc.start_angle, arc.end_angle
+    sweep = (end - start) % (2 * math.pi) or 2 * math.pi
+    points = [
+        (arc.center[0] + arc.radius * math.cos(angle),
+         arc.center[1] + arc.radius * math.sin(angle))
+        for angle in (start, end)
+    ]
+    for quarter in range(4):
+        angle = quarter * math.pi / 2
+        if (angle - start) % (2 * math.pi) <= sweep:
+            points.append((arc.center[0] + arc.radius * math.cos(angle),
+                           arc.center[1] + arc.radius * math.sin(angle)))
+    return points
+
+
 def plan_bounds(plan: SketchPlan) -> tuple[float, float, float, float]:
     """Axis-aligned bounds of the model geometry, in cm."""
     xs: list[float] = []
@@ -1062,8 +1085,9 @@ def plan_bounds(plan: SketchPlan) -> tuple[float, float, float, float]:
             xs.extend([primitive.center[0] - primitive.radius, primitive.center[0] + primitive.radius])
             ys.extend([primitive.center[1] - primitive.radius, primitive.center[1] + primitive.radius])
         elif isinstance(primitive, PArc):
-            xs.extend([primitive.center[0] - primitive.radius, primitive.center[0] + primitive.radius])
-            ys.extend([primitive.center[1] - primitive.radius, primitive.center[1] + primitive.radius])
+            for x, y in _arc_extremes(primitive):
+                xs.append(x)
+                ys.append(y)
         elif isinstance(primitive, PEllipse):
             xs.extend([primitive.center[0] - primitive.major_radius, primitive.center[0] + primitive.major_radius])
             ys.extend([primitive.center[1] - primitive.major_radius, primitive.center[1] + primitive.major_radius])

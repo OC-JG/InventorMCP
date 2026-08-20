@@ -1,0 +1,92 @@
+{
+  "name": "ThreadedBoss",
+  "units": "mm",
+  "material": "Steel",
+  "parameters": [
+    {
+      "name": "boss_d",
+      "value": 30
+    },
+    {
+      "name": "boss_h",
+      "value": 25
+    },
+    {
+      "name": "tap_d",
+      "value": 10.2,
+      "comment": "tapping size for M12 x 1.75"
+    },
+    {
+      "name": "tap_depth",
+      "value": 18
+    },
+    {
+      "name": "grid_pitch",
+      "value": 45
+    }
+  ],
+  "operations": [
+    {
+      "op": "sketch",
+      "name": "Round",
+      "plane": "xy",
+      "entities": [
+        {
+          "type": "circle",
+          "center": [
+            0,
+            0
+          ],
+          "diameter": "boss_d"
+        }
+      ]
+    },
+    {
+      "op": "extrude",
+      "name": "Body",
+      "sketch": "Round",
+      "distance": "boss_h"
+    },
+    {
+      "op": "sketch",
+      "name": "Centre",
+      "plane": "xy",
+      "entities": [
+        {
+          "type": "point",
+          "position": [
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "op": "hole",
+      "name": "TapHole",
+      "sketch": "Centre",
+      "diameter": "tap_d",
+      "depth": "tap_depth"
+    },
+    {
+      "op": "thread",
+      "name": "M12",
+      "designation": "M12x1.75",
+      "internal": true,
+      "faces": {
+        "kind": "face",
+        "filter": "cylindrical"
+      }
+    },
+    {
+      "op": "rectangular_pattern",
+      "name": "BossGrid",
+      "features": [
+        "Body"
+      ],
+      "axis1": "x",
+      "count1": 2,
+      "spacing1": "grid_pitch"
+    }
+  ]
+}

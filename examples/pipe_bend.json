@@ -1,0 +1,56 @@
+{
+  "name": "PipeBend",
+  "units": "mm",
+  "material": "Steel",
+  "parameters": [
+    {
+      "name": "tube_od",
+      "value": 20
+    },
+    {
+      "name": "bend_r",
+      "value": 45,
+      "comment": "centreline radius"
+    }
+  ],
+  "operations": [
+    {
+      "op": "sketch",
+      "name": "Path",
+      "plane": "xy",
+      "entities": [
+        {
+          "type": "arc",
+          "center": [
+            0,
+            0
+          ],
+          "radius": "bend_r",
+          "start_angle": 0,
+          "end_angle": 90
+        }
+      ]
+    },
+    {
+      "op": "sketch",
+      "name": "Profile",
+      "plane": "yz",
+      "entities": [
+        {
+          "type": "circle",
+          "center": [
+            "bend_r",
+            0
+          ],
+          "diameter": "tube_od"
+        }
+      ]
+    },
+    {
+      "op": "sweep",
+      "name": "Tube",
+      "profile_sketch": "Profile",
+      "path_sketch": "Path"
+    }
+  ]
+}

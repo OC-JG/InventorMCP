@@ -132,6 +132,12 @@ class _Sketch:
     plan: SketchPlan
     loops: list[list[str]]
     consumed_by: str | None = None
+    #: The origin plane this sketch really lies on, and how far along its normal.
+    #: A sketch on a named work plane carries the plane's own offset, which the
+    #: plan does not know about -- without this the flanged shaft was built from
+    #: z=0 rather than from the top of its flange, and came out 12 mm short.
+    base_plane: str = "xy"
+    offset: float = 0.0
 
 
 @dataclass
@@ -360,13 +366,30 @@ class MockBackend(Backend):
             raise SketchError(f"A sketch named {name!r} already exists.")
 
         loops = profile_loops(plan)
-        sketch = _Sketch(id=self._next("sk"), name=name, plan=plan, loops=loops)
+        base, offset = self._plane_and_offset(document, plan)
+        sketch = _Sketch(id=self._next("sk"), name=name, plan=plan, loops=loops,
+                         base_plane=base, offset=offset)
         document.sketches.append(sketch)
         document.modified = True
         self._record("build_sketch", name=name, plane=plan.plane, **plan.summary())
 
         free = _degrees_of_freedom(plan)
         return _sketch_info(sketch)
+
+    def _plane_and_offset(self, document: _Document,
+                          plan: SketchPlan) -> tuple[str, float]:
+        """Which origin plane a sketch really lies on, and how far along it.
+
+        A work plane contributes its own offset on top of any the sketch asks
+        for; a `face:` reference has no cheap answer, so it falls back to XY.
+        """
+        named = plan.plane.split(":")[0]
+        if named in _PLANES:
+            return named, plan.offset_value
+        if plan.plane in document.work_planes:
+            base, offset = document.work_planes[plan.plane]
+            return base, offset + plan.offset_value
+        return "xy", plan.offset_value
 
     def list_sketches(self, doc_id: str) -> list[SketchInfo]:
         document = self._doc(doc_id)
@@ -392,7 +415,7 @@ class MockBackend(Backend):
                 hint="Every profile must be a closed loop of non-construction geometry.",
             )
 
-        plane = sketch.plan.plane if sketch.plan.plane in _PLANES else "xy"
+        plane = sketch.base_plane
         if request.extent == "distance":
             assert request.distance is not None
             distance = request.distance.value
@@ -439,7 +462,7 @@ class MockBackend(Backend):
         feature_name: str,
     ) -> None:
         normal = plane_normal(plane)
-        offset = sketch.plan.offset_value
+        offset = sketch.offset
         if direction == "negative":
             near, far = -distance, 0.0
         elif direction == "symmetric":
@@ -599,13 +622,8 @@ class MockBackend(Backend):
         else:
             document.volume += volume
 
-        plane = sketch.plan.plane if sketch.plan.plane in _PLANES else "xy"
-        minx, miny, maxx, maxy = plan_bounds(sketch.plan)
-        reach = max(abs(minx), abs(maxx), abs(miny), abs(maxy))
-        for corner in (-reach, reach):
-            for other in (-reach, reach):
-                for depth in (-reach, reach):
-                    self._expand_bounds(document, [map3d(plane, corner, other, depth)])
+        if request.operation != "cut":
+            self._expand_for_revolve(document, sketch, request.axis)
 
         name = self._feature_name(document, request.name, "revolution")
         feature = _Feature(
@@ -640,11 +658,11 @@ class MockBackend(Backend):
         profile = document.find_sketch(request.profile_sketch)
         path = document.find_sketch(request.path_sketch)
         area = _net_area(profile, profile.loops)
-        length = sum(
-            primitive.length for primitive in path.plan.primitives if isinstance(primitive, PLine)
-        )
+        length = _path_length(path.plan)
         document.volume += area * length if request.operation != "cut" else -area * length
         document.volume = max(document.volume, 0.0)
+        if request.operation != "cut":
+            self._expand_for_sweep(document, profile, path)
         name = self._feature_name(document, request.name, "sweep")
         feature = _Feature(self._next("feat"), name, "sweep",
                            detail={"profile": profile.name, "path": path.name})
@@ -655,7 +673,15 @@ class MockBackend(Backend):
         document = self._doc(doc_id)
         sketches = [document.find_sketch(name) for name in request.sketches]
         areas = [_net_area(sketch, sketch.loops) for sketch in sketches]
-        document.volume += sum(areas) / max(len(areas), 1)
+        # The mean area times the distance between the outermost sections. The
+        # mean area on its own was being added as if it were a volume, so a
+        # 70 mm duct came out at a quarter of its size and the units did not
+        # even agree.
+        offsets = [sketch.offset for sketch in sketches]
+        span = abs(max(offsets) - min(offsets))
+        document.volume += (sum(areas) / max(len(areas), 1)) * span
+        if span:
+            self._expand_for_loft(document, sketches)
         name = self._feature_name(document, request.name, "loft")
         feature = _Feature(self._next("feat"), name, "loft",
                            detail={"sections": [s.name for s in sketches]})
@@ -671,7 +697,7 @@ class MockBackend(Backend):
                 f"Sketch {sketch.name!r} contains no hole-centre points.",
                 hint="Add `point`, `point_grid` or `bolt_circle` entities to the sketch.",
             )
-        plane = sketch.plan.plane if sketch.plan.plane in _PLANES else "xy"
+        plane = sketch.base_plane
         radius = request.diameter.value / 2
         depth = request.depth.value if request.depth else _through_all_distance(document, plane)
         removed = math.pi * radius**2 * depth * len(centers)
@@ -846,6 +872,72 @@ class MockBackend(Backend):
         document.features.append(feature)
         self._record("mirror", name=name)
         return _feature_info(feature)
+
+    def _expand_for_sweep(self, document: _Document, profile: Any, path: Any) -> None:
+        """Grow the bounds to cover the path, widened by the profile's reach."""
+        plane = path.base_plane
+        try:
+            low_u, low_v, high_u, high_v = plan_bounds(path.plan)
+            p_low_u, p_low_v, p_high_u, p_high_v = plan_bounds(profile.plan)
+        except Exception:  # pragma: no cover - an empty sketch cannot sweep
+            return
+        # Half the profile's own size, not its distance from the origin: a tube
+        # profile drawn out at radius 45 is 20 mm across, and treating 55 as its
+        # reach inflated the elbow's bounding box to 200 mm square.
+        reach = max(p_high_u - p_low_u, p_high_v - p_low_v) / 2
+        for u in (low_u - reach, high_u + reach):
+            for v in (low_v - reach, high_v + reach):
+                for w in (-reach, reach):
+                    self._expand_bounds(document, [map3d(plane, u, v, w)])
+
+    def _expand_for_loft(self, document: _Document, sketches: Sequence[Any]) -> None:
+        """Grow the bounds to cover every section, at its own offset."""
+        for sketch in sketches:
+            try:
+                low_u, low_v, high_u, high_v = plan_bounds(sketch.plan)
+            except Exception:  # pragma: no cover
+                continue
+            for u in (low_u, high_u):
+                for v in (low_v, high_v):
+                    self._expand_bounds(
+                        document, [map3d(sketch.base_plane, u, v, sketch.offset)])
+
+    def _expand_for_revolve(self, document: _Document, sketch: Any, axis: Any) -> None:
+        """Grow the bounds by the ring a revolve actually sweeps.
+
+        Not by a cube: revolving an annular section 16 mm wide about Z reaches
+        80 mm across and 16 mm high, and calling it 80 cubed made a pulley look
+        like a ball. The bounding box feeds the rehearsal's "does this cut reach
+        the part" check, so an over-estimate there is a missed warning.
+        """
+        plane = sketch.base_plane
+        try:
+            low_u, low_v, high_u, high_v = plan_bounds(sketch.plan)
+        except Exception:  # pragma: no cover - an empty sketch cannot revolve
+            return
+        turning = {"x": 0, "y": 1, "z": 2}.get(getattr(axis, "value", axis))
+        corners = [map3d(plane, u, v, 0.0)
+                   for u in (low_u, high_u) for v in (low_v, high_v)]
+        if turning is None:  # a sketch line or an edge: no cheap answer
+            reach = max(abs(value) for corner in corners for value in corner)
+            self._expand_bounds(document, [
+                (x, y, z) for x in (-reach, reach)
+                for y in (-reach, reach) for z in (-reach, reach)])
+            return
+
+        others = [index for index in range(3) if index != turning]
+        along = [corner[turning] for corner in corners]
+        radius = max(
+            math.dist([corner[index] for index in others], [0.0, 0.0])
+            for corner in corners
+        )
+        for low in (min(along), max(along)):
+            for first in (-radius, radius):
+                for second in (-radius, radius):
+                    point = [0.0, 0.0, 0.0]
+                    point[turning] = low
+                    point[others[0]], point[others[1]] = first, second
+                    self._expand_bounds(document, [tuple(point)])
 
     def work_plane(self, doc_id: str, request: WorkPlaneRequest) -> FeatureInfo:
         document = self._doc(doc_id)
@@ -1143,6 +1235,26 @@ def _bounds_center(bounds: list[float] | None) -> tuple[float, float, float] | N
         (bounds[1] + bounds[4]) / 2,
         (bounds[2] + bounds[5]) / 2,
     )
+
+
+def _path_length(plan: Any) -> float:
+    """How far a sweep travels, in cm.
+
+    Lines only was the previous answer, so an arc path contributed nothing and
+    a swept elbow came out with no volume at all.
+    """
+    total = 0.0
+    for primitive in plan.primitives:
+        if primitive.construction:
+            continue
+        if isinstance(primitive, PLine):
+            total += primitive.length
+        elif isinstance(primitive, PArc):
+            sweep = abs(primitive.end_angle - primitive.start_angle) % (2 * math.pi)
+            total += primitive.radius * (sweep or 2 * math.pi)
+        elif isinstance(primitive, PCircle):
+            total += 2 * math.pi * primitive.radius
+    return total
 
 
 def _sketch_info(sketch: Any) -> SketchInfo:
