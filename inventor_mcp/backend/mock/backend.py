@@ -372,6 +372,15 @@ class MockBackend(Backend):
         document = self._doc(doc_id)
         return [_sketch_info(sketch) for sketch in document.sketches]
 
+    def topology_counts(self, doc_id: str) -> dict[str, int]:
+        document = self._doc(doc_id)
+        counts = {"faces": 0, "edges": 0}
+        for topo in document.topology:
+            if topo.consumed:
+                continue
+            counts["faces" if topo.kind == "face" else "edges"] += 1
+        return counts
+
     # -- features ----------------------------------------------------------
     def extrude(self, doc_id: str, request: ExtrudeRequest) -> FeatureInfo:
         document = self._doc(doc_id)

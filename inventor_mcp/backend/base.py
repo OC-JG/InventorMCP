@@ -388,6 +388,17 @@ class Backend(ABC):
     @abstractmethod
     def close_document(self, doc_id: str, *, save: bool = False) -> None: ...
 
+    def topology_counts(self, doc_id: str) -> dict[str, int]:
+        """How many faces and edges the solid has, cheaply.
+
+        Read after every operation so a result can say whether the topology
+        moved as well as the volume: a cut that changed the volume but added no
+        faces, or a fillet that added faces and removed nothing, is worth
+        knowing about at the point it happened. A backend that cannot answer
+        returns nothing rather than a guess.
+        """
+        return {}
+
     @abstractmethod
     def set_material(self, doc_id: str, material: str, appearance: str | None = None) -> DocInfo: ...
 

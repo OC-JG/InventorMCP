@@ -247,3 +247,78 @@ class TestConvexity:
         assert com._com_passes_filter(outside, "concave") is False
         assert com._com_passes_filter(unknown, "concave") is False
         assert com._com_passes_filter(unknown, "convex") is False
+
+
+class TestEveryOperationReportsWhatItDid:
+    """An operation that only says it ran has told the model nothing.
+
+    A cut that met no material, a hole drilled past the part and a fillet on
+    the wrong edge all reported success. The volume was the witness every time,
+    and it was computed and then thrown away -- printed in a script for a human
+    to read rather than returned to the model that could act on it.
+    """
+
+    def test_a_cut_reports_the_material_it_removed(self, session, block):
+        [result] = apply(session, block, [
+            {"op": "sketch", "name": "P", "plane": "xy", "entities": [
+                {"type": "circle", "center": [0, 0], "diameter": 20}]},
+        ])
+        [cut] = apply(session, block, [
+            {"op": "extrude", "sketch": "P", "distance": 5, "operation": "cut"}])
+        assert cut["measured"]["volume_change_cm3"] < 0
+        assert "note" not in cut["measured"]
+
+    def test_an_operation_that_changed_nothing_says_so(self, session, block):
+        """The signal that was missing for three rounds of live debugging."""
+        [result] = apply(session, block, [
+            {"op": "rectangular_pattern", "axis1": "x", "count1": 3, "spacing1": 50}])
+        assert result["measured"]["note"] == "the volume did not change"
+
+    def test_the_topology_counts_come_back_too(self, session, block):
+        [result] = apply(session, block, [
+            {"op": "fillet", "edges": {"filter": "vertical"}, "radius": 5}])
+        assert result["measured"]["faces"] > 0
+        assert result["measured"]["edges"] > 0
+
+    def test_a_fillet_reports_the_edges_it_consumed(self, session, block):
+        [result] = apply(session, block, [
+            {"op": "fillet", "edges": {"filter": "vertical"}, "radius": 5}])
+        assert result["measured"]["edges_change"] != 0
+
+    def test_a_sketch_is_not_weighed(self, session, block):
+        """It adds no material, so a volume report would be noise."""
+        [result] = apply(session, block, [
+            {"op": "sketch", "name": "S", "plane": "xy", "entities": [
+                {"type": "circle", "diameter": 10}]}])
+        assert "measured" not in result
+
+    def test_the_first_measurement_admits_it_has_no_baseline(self, session):
+        from inventor_mcp.builder import build_part
+        from inventor_mcp.schema import PartRecipe
+
+        recipe = PartRecipe.model_validate(BLOCK)
+        operations = recipe.operations
+        recipe.operations = []
+        build_part(session, recipe)
+        context = session.context()
+        results = [apply_operation(session, context, op) for op in operations]
+        first = next(r for r in results if "measured" in r)
+        assert first["measured"]["note"] == "first measurement, nothing to compare"
+        assert "volume_change_cm3" not in first["measured"]
+
+    def test_a_growing_part_reports_a_bigger_span(self, session, block):
+        [result] = apply(session, block, [
+            {"op": "sketch", "name": "Tower", "plane": "xy", "entities": [
+                {"type": "circle", "center": [0, 0], "diameter": 10}]},
+        ])
+        [grown] = apply(session, block, [
+            {"op": "extrude", "sketch": "Tower", "distance": 30}])
+        assert grown["measured"]["span_mm"] != grown["measured"]["span_mm_was"]
+
+    def test_a_backend_that_cannot_measure_is_not_guessed_at(self, session, block):
+        """No measurement is reported rather than a fabricated one."""
+        from inventor_mcp.builder import measure
+
+        session.backend.mass_properties = lambda doc_id: (_ for _ in ()).throw(
+            RuntimeError("no solid"))
+        assert measure(session, block) is None

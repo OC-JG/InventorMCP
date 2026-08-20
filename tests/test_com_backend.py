@@ -1291,3 +1291,70 @@ class TestRefusedDimensions:
 
         source = inspect.getsource(com.ComBackend.build_sketch)
         assert "if profiles == 0 and profile_loops(plan):" in source
+
+
+class TestDisputedEnumValues:
+    """An unverified fallback must not be used where it is known to be disputed.
+
+    The table has never been exercised: on every machine this has run on the
+    type library was readable and won, so it was never consulted and never
+    checked. Two of its regions are contradicted by another project's published
+    2026 field notes -- the dimension orientations and the surface types. A
+    wrong value there is the quiet kind of wrong: an aligned dimension where a
+    horizontal one was meant, with nothing to see but a part that is subtly not
+    the part that was asked for.
+    """
+
+    def test_the_disputed_names_are_recorded_with_what_disputes_them(self):
+        from inventor_mcp.backend.com.constants import FALLBACK, SUSPECT
+
+        assert SUSPECT, "the point is to name them, not to carry a silent risk"
+        for name, why in SUSPECT.items():
+            assert name in FALLBACK, f"{name} is disputed but not in the table"
+            assert any(char.isdigit() for char in why), (
+                f"{name}'s note should say what value is claimed instead")
+
+    def test_a_disputed_value_refuses_rather_than_guessing(self):
+        from inventor_mcp.backend.com.constants import SUSPECT, Constants
+        from inventor_mcp.errors import BackendUnavailableError
+
+        constants = Constants(None)  # no type library, so the table is all there is
+        for name in SUSPECT:
+            with pytest.raises(BackendUnavailableError, match="disputed"):
+                constants.resolve(name)
+
+    def test_the_refusal_says_how_to_settle_it(self):
+        from inventor_mcp.backend.com.constants import Constants
+        from inventor_mcp.errors import BackendUnavailableError
+
+        with pytest.raises(BackendUnavailableError) as raised:
+            Constants(None).resolve("kHorizontalDim")
+        assert "dump_constants" in (raised.value.hint or "")
+        assert "gen_py" in (raised.value.hint or "")
+
+    def test_an_undisputed_value_still_works_from_the_table(self):
+        """Refusing everything would make a broken cache fatal for no reason."""
+        from inventor_mcp.backend.com.constants import Constants
+
+        assert Constants(None).resolve("kJoinOperation") == 20481
+
+    def test_the_type_library_is_still_preferred_over_the_table(self):
+        from inventor_mcp.backend.com.constants import Constants
+
+        class Library:
+            kHorizontalDim = 19201
+
+        constants = Constants(Library())
+        assert constants.resolve("kHorizontalDim") == 19201, (
+            "a measured value beats the table, disputed or not")
+
+    def test_using_the_table_at_all_warns_once(self, caplog):
+        import logging
+
+        from inventor_mcp.backend.com.constants import Constants
+
+        constants = Constants(None)
+        with caplog.at_level(logging.WARNING):
+            constants.resolve("kJoinOperation")
+            constants.resolve("kJoinOperation")
+        assert sum("kJoinOperation" in r.message for r in caplog.records) == 1

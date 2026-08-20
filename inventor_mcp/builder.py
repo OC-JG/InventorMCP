@@ -150,8 +150,70 @@ def apply_parameter(session: Session, context: DocumentContext, spec: ParameterS
 # ---------------------------------------------------------------------------
 
 
+def measure(session: Session, context: DocumentContext) -> dict[str, Any] | None:
+    """What the part is, right now, in the few numbers worth comparing."""
+    try:
+        properties = session.backend.mass_properties(context.doc_id)
+    except Exception:
+        return None
+    seen: dict[str, Any] = {"volume_cm3": round(properties.volume, 6)}
+    box = properties.bounding_box
+    if box:
+        seen["span_mm"] = [round((box[axis + 3] - box[axis]) * 10, 3) for axis in range(3)]
+        seen["at_mm"] = [round(value * 10, 3) for value in box]
+    try:
+        seen.update(session.backend.topology_counts(context.doc_id))
+    except Exception:
+        pass
+    return seen
+
+
+def _changed(before: dict[str, Any] | None,
+             after: dict[str, Any] | None) -> dict[str, Any] | None:
+    """What one operation did, in a form the model can act on.
+
+    An operation reporting only that it ran is the failure mode this project
+    keeps hitting: a cut that met no material, a hole drilled past the part and
+    a fillet on the wrong edge all reported success. The volume was the witness
+    every time -- so every operation now carries it, rather than leaving it to a
+    human reading a script afterwards.
+    """
+    if after is None:
+        return None
+    report: dict[str, Any] = {"volume_cm3": after["volume_cm3"]}
+    if "faces" in after:
+        report["faces"], report["edges"] = after["faces"], after["edges"]
+    if before is None:
+        report["note"] = "first measurement, nothing to compare"
+        return report
+
+    moved = after["volume_cm3"] - before["volume_cm3"]
+    report["volume_change_cm3"] = round(moved, 6)
+    if abs(moved) < 1e-9:
+        report["note"] = "the volume did not change"
+    for key, label in (("faces", "faces"), ("edges", "edges")):
+        if key in after and key in before and after[key] != before[key]:
+            report[f"{label}_change"] = after[key] - before[key]
+    if "span_mm" in after and "span_mm" in before and after["span_mm"] != before["span_mm"]:
+        report["span_mm_was"] = before["span_mm"]
+        report["span_mm"] = after["span_mm"]
+    return report
+
+
 def apply_operation(session: Session, context: DocumentContext, op: Operation) -> dict[str, Any]:
     """Execute one recipe operation and update the session's memory of the part."""
+    result = _apply_one(session, context, op)
+    if op.op == "sketch":
+        return result  # a sketch adds no material, so there is nothing to weigh
+    before, after = context.last_measurement, measure(session, context)
+    context.last_measurement = after
+    report = _changed(before, after)
+    if report is not None:
+        result["measured"] = report
+    return result
+
+
+def _apply_one(session: Session, context: DocumentContext, op: Operation) -> dict[str, Any]:
     backend: Backend = session.backend
     resolver = context.resolver
 

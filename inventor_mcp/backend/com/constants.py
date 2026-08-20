@@ -14,9 +14,12 @@ diagnosable rather than mysterious.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from ...errors import BackendUnavailableError
+
+logger = logging.getLogger(__name__)
 
 #: Best-effort fallback values, used only when the type library is unreadable.
 FALLBACK: dict[str, int] = {
@@ -87,6 +90,24 @@ FALLBACK: dict[str, int] = {
     # WeldBeadReliefShapeEnum placeholder kept out; add values here as needed.
 }
 
+#: Fallback values that another project's field notes contradict, with what
+#: they say instead.  These have never been exercised here: on every machine
+#: this has run on, the type library was readable and won, so the table was
+#: never consulted and never checked.  Where there is positive evidence of a
+#: conflict, guessing is worse than stopping -- a wrong dimension-orientation
+#: enum silently makes an aligned dimension where a horizontal one was meant,
+#: and the part is wrong in a way no error reports.
+#:
+#: Run ``scripts/dump_constants.py`` against a live Inventor to settle them.
+SUSPECT: dict[str, str] = {
+    "kAlignedDim": "19203 per NeonGlay/inventor-mcp's 2026 field notes",
+    "kHorizontalDim": "19201 per NeonGlay/inventor-mcp's 2026 field notes",
+    "kVerticalDim": "19202 per NeonGlay/inventor-mcp's 2026 field notes",
+    "kSphereSurface": "5894 per NeonGlay/inventor-mcp (which gives 5892 and 5893 "
+                      "both as Cone, shifting everything after it)",
+    "kTorusSurface": "5895 per NeonGlay/inventor-mcp, for the same reason",
+}
+
 
 class Constants:
     """Looks enum values up in the type library, falling back to :data:`FALLBACK`."""
@@ -95,6 +116,7 @@ class Constants:
         self._module = module
         self._sources: dict[str, str] = {}
         self._cache: dict[str, int] = {}
+        self._warned: set[str] = set()
 
     def resolve(self, name: str) -> int:
         if name in self._cache:
@@ -116,6 +138,24 @@ class Constants:
                 hint="Add it to inventor_mcp/backend/com/constants.py, or repair the "
                 "pywin32 type-library cache so values can be read from Inventor itself.",
             )
+        if source == "fallback":
+            if name in SUSPECT:
+                raise BackendUnavailableError(
+                    f"The fallback value for {name!r} is disputed: this table says "
+                    f"{value}, and {SUSPECT[name]}. It has never been verified here, "
+                    "because the type library has always been readable.",
+                    hint="Repair the pywin32 type-library cache so the value comes "
+                    "from Inventor itself: delete %LOCALAPPDATA%\\Temp\\gen_py and "
+                    "re-run. Or run scripts/dump_constants.py on a machine where the "
+                    "cache works and correct the table from what it prints.",
+                )
+            if name not in self._warned:
+                self._warned.add(name)
+                logger.warning(
+                    "Using the unverified fallback value %d for %s: the type library "
+                    "could not be read, so this is a table entry rather than a "
+                    "measurement. Run scripts/dump_constants.py to check it.",
+                    value, name)
         self._cache[name] = value
         self._sources[name] = source
         return value

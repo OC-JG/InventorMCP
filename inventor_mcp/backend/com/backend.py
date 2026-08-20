@@ -1804,6 +1804,18 @@ class ComBackend(Backend):
         self._topology[handle] = {"object": entity, "info": info, "direction": direction}
         return info
 
+    def topology_counts(self, doc_id: str) -> dict[str, int]:  # pragma: no cover
+        try:
+            bodies = self._doc(doc_id).ComponentDefinition.SurfaceBodies
+            faces = edges = 0
+            for index in range(1, int(bodies.Count) + 1):
+                body = bodies.Item(index)
+                faces += int(body.Faces.Count)
+                edges += int(body.Edges.Count)
+            return {"faces": faces, "edges": edges}
+        except Exception:
+            return {}
+
     def mass_properties(self, doc_id: str) -> MassProps:  # pragma: no cover
         document = self._doc(doc_id)
         component = document.ComponentDefinition

@@ -252,3 +252,61 @@ class TestDocumentLifecycle:
         status = call(connected, "session_status")
         assert len(status["documents"]) == 2
         assert call(connected, "activate_part", {"document": first["document"]})["ok"]
+
+
+class TestErrorsDoNotLeakTheFilesystem:
+    """An error travels to whatever is driving the server.
+
+    A COM failure readily carries an absolute path -- a user name, a project
+    directory, a network share. The filename is the part that helps diagnose;
+    the route to it is nobody else's business. Sanitising happens in
+    `to_dict`, on the way out, so no future error can forget to do it.
+    """
+
+    def sanitised(self, message, hint=None):
+        from inventor_mcp.errors import DocumentError
+
+        return DocumentError(message, hint=hint).to_dict()
+
+    def test_a_windows_path_keeps_only_its_filename(self):
+        payload = self.sanitised(r"Could not open C:\Users\James\Parts\bracket.ipt")
+        assert "James" not in payload["message"]
+        assert "bracket.ipt" in payload["message"]
+
+    def test_a_network_share_too(self):
+        payload = self.sanitised(r"export failed to \\FILESERVER\cad\jobs\x.step")
+        assert "FILESERVER" not in payload["message"]
+        assert "x.step" in payload["message"]
+
+    def test_and_a_home_directory(self):
+        payload = self.sanitised("reading /home/james/parts/shaft.ipt failed")
+        assert "james" not in payload["message"]
+        assert "shaft.ipt" in payload["message"]
+
+    def test_hints_are_sanitised_as_well(self):
+        payload = self.sanitised("nope", hint=r"try C:\Users\James\other.ipt")
+        assert "James" not in payload["hint"]
+
+    def test_the_explanation_survives(self):
+        """Over-matching would eat the sentence, which is the worse failure."""
+        payload = self.sanitised(
+            r"cannot write C:\Temp\a.png because the disk is full")
+        assert payload["message"].endswith("because the disk is full")
+
+    def test_two_paths_in_one_message_keep_the_words_between_them(self):
+        payload = self.sanitised(
+            r"C:\a\b.ipt and \\server\share\c.step both failed")
+        assert " and " in payload["message"]
+        assert payload["message"].endswith("both failed")
+        assert "server" not in payload["message"]
+
+    def test_a_message_with_no_path_is_untouched(self):
+        assert self.sanitised("The hole removed no material.")["message"] == (
+            "The hole removed no material.")
+
+    def test_a_spaced_path_is_only_partly_redacted_and_that_is_deliberate(self):
+        """The documented limit: the root and user name still go."""
+        payload = self.sanitised(r"open C:\Users\Jo\My Parts\x.ipt")
+        assert "C:" not in payload["message"]
+        assert "Jo" not in payload["message"].replace("Parts", "")
+        assert "x.ipt" in payload["message"]
