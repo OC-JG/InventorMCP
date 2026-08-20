@@ -1007,21 +1007,18 @@ def _sample(primitive: Primitive, reverse: bool) -> list[tuple[float, float]]:
     return list(reversed(points)) if reverse else points
 
 
-def loop_area(plan: SketchPlan, loop: Sequence[str]) -> float:
-    """Area enclosed by a closed loop, in cm^2 (arcs are sampled).
+def loop_points(plan: SketchPlan, loop: Sequence[str]) -> list[tuple[float, float]]:
+    """A closed loop as an ordered polygon, arcs sampled, in sketch coordinates.
 
-    Segments are chained end-to-end before the shoelace sum, because the loop
-    walker returns them in connection order but not necessarily in a consistent
-    direction -- and a polygon assembled from mis-oriented segments crosses
-    itself and reports nonsense.
+    Segments are chained end-to-end rather than taken in the order the loop
+    walker returns them: it gives them in connection order but not in a
+    consistent direction, and a polygon assembled from mis-oriented segments
+    crosses itself. A self-crossing polygon reports a nonsense area and answers
+    "is this point inside" wrongly, which is the same bug twice.
     """
     if len(loop) == 1:
         primitive = plan.by_id(loop[0])
-        if isinstance(primitive, PCircle):
-            return math.pi * primitive.radius**2
-        if isinstance(primitive, PEllipse):
-            return math.pi * primitive.major_radius * primitive.minor_radius
-        return 0.0
+        return _sample(primitive, False)
 
     points: list[tuple[float, float]] = []
     cursor: tuple[float, float] | None = None
@@ -1044,7 +1041,20 @@ def loop_area(plan: SketchPlan, loop: Sequence[str]) -> float:
         segment = list(reversed(forward)) if reverse else forward
         points.extend(segment[:-1])
         cursor = segment[-1]
+    return points
 
+
+def loop_area(plan: SketchPlan, loop: Sequence[str]) -> float:
+    """Area enclosed by a closed loop, in cm^2 (arcs are sampled)."""
+    if len(loop) == 1:
+        primitive = plan.by_id(loop[0])
+        if isinstance(primitive, PCircle):
+            return math.pi * primitive.radius**2
+        if isinstance(primitive, PEllipse):
+            return math.pi * primitive.major_radius * primitive.minor_radius
+        return 0.0
+
+    points = loop_points(plan, loop)
     area = 0.0
     for current, following_point in zip(points, points[1:] + points[:1]):
         area += current[0] * following_point[1] - following_point[0] * current[1]

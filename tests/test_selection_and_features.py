@@ -269,10 +269,31 @@ class TestEveryOperationReportsWhatItDid:
         assert "note" not in cut["measured"]
 
     def test_an_operation_that_changed_nothing_says_so(self, session, block):
-        """The signal that was missing for three rounds of live debugging."""
+        """The signal that was missing for three rounds of live debugging.
+
+        A work plane is the example because it genuinely adds no material. A
+        pattern used to serve here, back when the simulator did not model an
+        occurrence's volume -- which meant a pattern that worked and a cut that
+        met no material looked identical, the very thing this reports.
+        """
         [result] = apply(session, block, [
-            {"op": "rectangular_pattern", "axis1": "x", "count1": 3, "spacing1": 50}])
+            {"op": "work_plane", "base": "xy", "offset": 10}])
         assert result["measured"]["note"] == "the volume did not change"
+
+    def test_a_pattern_of_a_cut_removes_more_material(self, session, block):
+        """An occurrence does what its seed did, so three slots remove three."""
+        apply(session, block, [
+            {"op": "sketch", "name": "Slot", "plane": "xy", "entities": [
+                {"type": "circle", "center": [-15, 0], "diameter": 6}]},
+        ])
+        [cut] = apply(session, block, [
+            {"op": "extrude", "sketch": "Slot", "distance": 20, "operation": "cut"}])
+        one = cut["measured"]["volume_change_cm3"]
+        assert one < 0
+        [pattern] = apply(session, block, [
+            {"op": "rectangular_pattern", "features": [cut["name"]],
+             "axis1": "x", "count1": 3, "spacing1": 15}])
+        assert pattern["measured"]["volume_change_cm3"] == pytest.approx(2 * one)
 
     def test_the_topology_counts_come_back_too(self, session, block):
         [result] = apply(session, block, [

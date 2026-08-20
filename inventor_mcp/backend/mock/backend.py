@@ -7,10 +7,15 @@ where Inventor is not installed -- so a model can be checked for
 "is the wall thickness larger than the plate?" before anyone opens Inventor.
 
 It is deliberately *not* a geometry kernel.  Bodies are tracked as a bounding
-box plus a volume estimate, and topology is synthesised from the sketch loops
-that produced it.  That is enough to exercise selectors and catch the mistakes
-that matter, and the reported numbers are labelled as estimates everywhere
-they surface.
+box, a volume estimate and the list of prisms that made them, and topology is
+synthesised from the sketch loops that produced it.  That is enough to exercise
+selectors and catch the mistakes that matter, and the reported numbers are
+labelled as estimates everywhere they surface.
+
+The prism list earns its keep on the one question a bounding box answers badly:
+how thick is the part *here*.  An L-section's box is as deep as the upright is
+tall, so a through-cut in its base was charged fifteen times the material it
+removes -- and a mirror of that cut doubled the error.
 """
 
 from __future__ import annotations
@@ -23,7 +28,7 @@ from typing import Any, Iterable, Sequence
 
 from ...errors import DocumentError, FeatureError, ParameterError, SelectionError, SketchError
 from ...expressions import UnitContext, evaluate
-from ...geometry import loop_area, plan_bounds, profile_loops
+from ...geometry import loop_area, loop_points, plan_bounds, profile_loops
 from ...expressions import referenced_parameters
 from ...plan import PArc, PCircle, PEllipse, PLine, PPoint, SketchPlan
 from ...units import Dim, Quantity, from_internal, lookup_unit
@@ -142,12 +147,71 @@ class _Sketch:
 
 
 @dataclass
+class _Slab:
+    """A prism the part is made of: a 2D profile swept along its plane normal.
+
+    Recorded so that "how thick is the part here" can be answered from the
+    geometry that built it rather than from a bounding box. An L-section's box
+    is 90 mm deep where the L itself is 6, and a through-cut charged the box.
+    """
+
+    plane: str
+    #: The loop's vertices in sketch coordinates, closed.
+    outline: list[tuple[float, float]]
+    #: Where the sweep starts and ends along the plane's normal.
+    near: float
+    far: float
+
+    def interval_along(self, axis: int,
+                       through: tuple[float, float, float]) -> tuple[float, float] | None:
+        """This prism's extent along *axis* over the point *through*, if it covers it.
+
+        Two cases, because a prism is a profile and a length. When *axis* is the
+        sweep direction the extent is simply the sweep, provided the point lies
+        inside the profile. When *axis* lies in the sketch plane the extent is
+        the profile's own reach along that sketch direction at the point's other
+        coordinate -- a vertical scan of the outline -- provided the point lies
+        within the sweep.
+        """
+        (u_axis, u_sign), (v_axis, v_sign), (w_axis, w_sign) = _PLANES[self.plane][0]
+        u = through[u_axis] * u_sign
+        v = through[v_axis] * v_sign
+        w = through[w_axis] * w_sign
+
+        if axis == w_axis:
+            if not _inside(self.outline, u, v):
+                return None
+            low, high = min(self.near, self.far), max(self.near, self.far)
+            return (low * w_sign, high * w_sign) if w_sign > 0 else (high * w_sign, low * w_sign)
+
+        if not min(self.near, self.far) <= w <= max(self.near, self.far):
+            return None
+        if axis == u_axis:
+            reach = _scan(self.outline, v, across=True)
+            sign = u_sign
+        elif axis == v_axis:
+            reach = _scan(self.outline, u, across=False)
+            sign = v_sign
+        else:  # pragma: no cover - a plane's three axes are all accounted for
+            return None
+        if reach is None:
+            return None
+        low, high = reach
+        return (low * sign, high * sign) if sign > 0 else (high * sign, low * sign)
+
+
+@dataclass
 class _Feature:
     id: str
     name: str
     kind: str
     suppressed: bool = False
     detail: dict[str, Any] = field(default_factory=dict)
+    #: How much this feature changed the volume, in cm^3, signed. Recorded so a
+    #: mirror or a pattern of it can say what *its* occurrences do: an
+    #: occurrence repeats whatever the seed did, and without this the simulator
+    #: had to report a mirrored cut as removing nothing.
+    volume_delta: float | None = None
 
 
 @dataclass
@@ -166,6 +230,10 @@ class _Document:
     topology: list[_Topo] = field(default_factory=list)
     volume: float = 0.0
     bounds: list[float] | None = None  # xmin, ymin, zmin, xmax, ymax, zmax
+    #: The prisms the solid is made of, in creation order. Only joined extrudes
+    #: are recorded -- enough to answer "how thick is the part here", which is
+    #: what a through-all cut has to know.
+    slabs: list[_Slab] = field(default_factory=list)
 
     def find_sketch(self, name: str) -> _Sketch:
         for sketch in self.sketches:
@@ -422,22 +490,32 @@ class MockBackend(Backend):
             assert request.distance is not None
             distance = request.distance.value
         else:
-            distance = _through_all_distance(document, plane)
+            # Measured over the profile itself: how thick the part is *there*,
+            # which for a slot at the end of an L-bracket's base is the base and
+            # not the whole 90 mm the bounding box would charge for.
+            centre = _loop_center(sketch.plan, loops[0])
+            distance = _through_all_distance(
+                document, plane, over=map3d(plane, centre[0], centre[1], sketch.offset))
 
         area = _net_area(sketch, loops)
         name = self._feature_name(document, request.name, "extrusion")
         signed = area * distance
+        was = document.volume
         if request.operation == "cut":
             document.volume = max(document.volume - signed, 0.0)
         else:
             document.volume += signed
+        moved = document.volume - was
 
         self._synthesise_extrude_topology(document, sketch, loops, plane, distance, request.direction, name)
+        if request.operation != "cut":
+            self._record_slabs(document, sketch, loops, plane, distance, request.direction)
 
         feature = _Feature(
             id=self._next("feat"),
             name=name,
             kind="extrude",
+            volume_delta=moved,
             detail={
                 "sketch": sketch.name,
                 "operation": request.operation,
@@ -452,6 +530,24 @@ class MockBackend(Backend):
         document.modified = True
         self._record("extrude", name=name, sketch=sketch.name, operation=request.operation)
         return _feature_info(feature)
+
+    def _record_slabs(self, document: _Document, sketch: _Sketch,
+                      loops: Sequence[Sequence[str]], plane: str,
+                      distance: float, direction: str) -> None:
+        """Remember the prisms this extrude added, for later thickness queries."""
+        if direction == "negative":
+            near, far = -distance, 0.0
+        elif direction == "symmetric":
+            near, far = -distance / 2, distance / 2
+        else:
+            near, far = 0.0, distance
+        near += sketch.offset
+        far += sketch.offset
+        for loop in loops:
+            outline = loop_points(sketch.plan, loop)
+            if len(outline) >= 3:
+                document.slabs.append(
+                    _Slab(plane=plane, outline=outline, near=near, far=far))
 
     def _synthesise_extrude_topology(
         self,
@@ -619,10 +715,12 @@ class MockBackend(Backend):
         # Pappus's theorem about the sketch-space centroid distance to the axis.
         radius = _centroid_radius(sketch, loops, request.axis)
         volume = area * radius * angle
+        was = document.volume
         if request.operation == "cut":
             document.volume = max(document.volume - volume, 0.0)
         else:
             document.volume += volume
+        moved = document.volume - was
 
         if request.operation != "cut":
             self._expand_for_revolve(document, sketch, request.axis)
@@ -632,6 +730,7 @@ class MockBackend(Backend):
             id=self._next("feat"),
             name=name,
             kind="revolve",
+            volume_delta=moved,
             detail={
                 "sketch": sketch.name,
                 "axis": request.axis.value,
@@ -661,12 +760,14 @@ class MockBackend(Backend):
         path = document.find_sketch(request.path_sketch)
         area = _net_area(profile, profile.loops)
         length = _path_length(path.plan)
+        was = document.volume
         document.volume += area * length if request.operation != "cut" else -area * length
         document.volume = max(document.volume, 0.0)
+        moved = document.volume - was
         if request.operation != "cut":
             self._expand_for_sweep(document, profile, path)
         name = self._feature_name(document, request.name, "sweep")
-        feature = _Feature(self._next("feat"), name, "sweep",
+        feature = _Feature(self._next("feat"), name, "sweep", volume_delta=moved,
                            detail={"profile": profile.name, "path": path.name})
         document.features.append(feature)
         return _feature_info(feature)
@@ -681,11 +782,13 @@ class MockBackend(Backend):
         # even agree.
         offsets = [sketch.offset for sketch in sketches]
         span = abs(max(offsets) - min(offsets))
+        was = document.volume
         document.volume += (sum(areas) / max(len(areas), 1)) * span
+        moved = document.volume - was
         if span:
             self._expand_for_loft(document, sketches)
         name = self._feature_name(document, request.name, "loft")
-        feature = _Feature(self._next("feat"), name, "loft",
+        feature = _Feature(self._next("feat"), name, "loft", volume_delta=moved,
                            detail={"sections": [s.name for s in sketches]})
         document.features.append(feature)
         return _feature_info(feature)
@@ -701,9 +804,16 @@ class MockBackend(Backend):
             )
         plane = sketch.base_plane
         radius = request.diameter.value / 2
-        depth = request.depth.value if request.depth else _through_all_distance(document, plane)
+        if request.depth:
+            depth = request.depth.value
+        else:
+            first = centers[0]
+            depth = _through_all_distance(
+                document, plane, over=map3d(plane, first[0], first[1], sketch.offset))
         removed = (math.pi * radius**2 * depth + _style_volume(request, radius)) * len(centers)
+        was = document.volume
         document.volume = max(document.volume - removed, 0.0)
+        moved = document.volume - was
 
         name = self._feature_name(document, request.name, "hole")
         for index, (u, v) in enumerate(centers):
@@ -734,6 +844,7 @@ class MockBackend(Backend):
             id=self._next("feat"),
             name=name,
             kind="hole",
+            volume_delta=moved,
             detail={
                 "count": len(centers),
                 "diameter": request.diameter.as_dict(),
@@ -779,6 +890,7 @@ class MockBackend(Backend):
         name = self._feature_name(document, requested_name, kind)
         total_length = sum(match.length or 0.0 for match in matches)
         # Removing (fillet) or adding (chamfer) a prism of roughly this size.
+        was = document.volume
         document.volume = max(document.volume - total_length * size * size * 0.2146, 0.0)
         for match in matches:
             match.consumed = True
@@ -786,6 +898,7 @@ class MockBackend(Backend):
             id=self._next("feat"),
             name=name,
             kind=kind,
+            volume_delta=document.volume - was,
             detail={**detail, "edges": len(matches), "edge_ids": [m.id for m in matches]},
         )
         document.features.append(feature)
@@ -806,6 +919,7 @@ class MockBackend(Backend):
             id=self._next("feat"),
             name=name,
             kind="shell",
+            volume_delta=-removed,
             detail={
                 "thickness": request.thickness.as_dict(),
                 "direction": request.direction,
@@ -817,21 +931,50 @@ class MockBackend(Backend):
         self._record("shell", name=name, removed_faces=len(openings))
         return _feature_info(feature)
 
+    def _repeat(self, document: _Document, targets: Sequence[_Feature],
+                extra: int) -> tuple[float, str]:
+        """Apply *extra* more copies of what *targets* did to the volume.
+
+        An occurrence does whatever its seed did, so a mirrored slot cut removes
+        the same again. The simulator used to say "occurrence volume is not
+        estimated" and leave the total unchanged, which made a mirrored cut look
+        like a cut that had failed -- the angle bracket read 16 cm^3 heavy, and
+        anything reasoning from a rehearsal inherited that.
+
+        This is exact while occurrences do not overlap each other or run off the
+        part, which is the normal case and the only one a pattern is usually
+        asked for. It says so rather than implying more.
+        """
+        if extra <= 0:
+            return 0.0, "no additional occurrences"
+        unknown = [target.name for target in targets if target.volume_delta is None]
+        if unknown:
+            return 0.0, ("volume not modelled: nothing was recorded for "
+                         + ", ".join(unknown))
+        seed = sum(target.volume_delta or 0.0 for target in targets)
+        was = document.volume
+        document.volume = max(document.volume + seed * extra, 0.0)
+        moved = document.volume - was
+        return moved, (f"{extra} more occurrence(s) of {moved:+.4f} cm^3 in total, "
+                       "assuming they do not overlap each other or the part's edge")
+
     def rectangular_pattern(self, doc_id: str, request: RectangularPatternRequest) -> FeatureInfo:
         document = self._doc(doc_id)
         targets = _pattern_targets(document, request.features)
         occurrences = request.count1 * request.count2
         name = self._feature_name(document, request.name, "pattern")
+        moved, why = self._repeat(document, targets, occurrences - 1)
         feature = _Feature(
             id=self._next("feat"),
             name=name,
             kind="rectangular_pattern",
+            volume_delta=moved,
             detail={
                 "features": [t.name for t in targets],
                 "count1": request.count1,
                 "count2": request.count2,
                 "occurrences": occurrences,
-                "note": _VOLUME_NOT_MODELLED,
+                "volume_note": why,
             },
         )
         document.features.append(feature)
@@ -842,15 +985,17 @@ class MockBackend(Backend):
         document = self._doc(doc_id)
         targets = _pattern_targets(document, request.features)
         name = self._feature_name(document, request.name, "pattern")
+        moved, why = self._repeat(document, targets, request.count - 1)
         feature = _Feature(
             id=self._next("feat"),
             name=name,
             kind="circular_pattern",
+            volume_delta=moved,
             detail={
                 "features": [t.name for t in targets],
                 "count": request.count,
                 "angle_deg": round(math.degrees(request.angle.value), 4),
-                "note": _VOLUME_NOT_MODELLED,
+                "volume_note": why,
             },
         )
         document.features.append(feature)
@@ -861,12 +1006,14 @@ class MockBackend(Backend):
         document = self._doc(doc_id)
         targets = _pattern_targets(document, request.features)
         name = self._feature_name(document, request.name, "mirror")
+        moved, why = self._repeat(document, targets, 1)
         feature = _Feature(
             id=self._next("feat"),
             name=name,
             kind="mirror",
+            volume_delta=moved,
             detail={"features": [t.name for t in targets], "plane": request.plane,
-                    "note": _VOLUME_NOT_MODELLED},
+                    "volume_note": why},
         )
         document.features.append(feature)
         self._record("mirror", name=name)
@@ -1281,17 +1428,109 @@ def _style_volume(request: HoleRequest, radius: float) -> float:
     return 0.0
 
 
-def _through_all_distance(document: _Document, plane: str = "xy") -> float:
-    """How far a through-feature must travel: the body's span along the plane normal."""
+def _inside(outline: Sequence[tuple[float, float]], u: float, v: float) -> bool:
+    """Whether (u, v) is inside the closed polygon *outline*, by ray crossing."""
+    inside = False
+    count = len(outline)
+    for index in range(count):
+        (u1, v1), (u2, v2) = outline[index], outline[(index + 1) % count]
+        if (v1 > v) != (v2 > v):
+            span = v2 - v1
+            if span == 0:  # pragma: no cover - guarded by the test above
+                continue
+            crossing = u1 + (v - v1) / span * (u2 - u1)
+            if u < crossing:
+                inside = not inside
+    return inside
+
+
+def _scan(outline: Sequence[tuple[float, float]], at: float,
+          *, across: bool) -> tuple[float, float] | None:
+    """Where the polygon reaches, along one sketch axis, at a fixed other one.
+
+    ``across=False`` scans the v extent at ``u = at`` -- how tall the profile is
+    at that horizontal position, which for an L-section at the far end of the
+    base is the thickness of the base. ``across=True`` is the same question the
+    other way round.
+    """
+    hits: list[float] = []
+    count = len(outline)
+    for index in range(count):
+        first, second = outline[index], outline[(index + 1) % count]
+        fixed1, fixed2 = (first[1], second[1]) if across else (first[0], second[0])
+        free1, free2 = (first[0], second[0]) if across else (first[1], second[1])
+        if (fixed1 > at) == (fixed2 > at):
+            continue
+        span = fixed2 - fixed1
+        if span == 0:  # pragma: no cover - guarded above
+            continue
+        hits.append(free1 + (at - fixed1) / span * (free2 - free1))
+    if len(hits) < 2:
+        return None
+    return min(hits), max(hits)
+
+
+def _through_all_distance(document: _Document, plane: str = "xy",
+                         over: tuple[float, float, float] | None = None) -> float:
+    """How much *material* a through-feature passes through, along the normal.
+
+    The body's whole span along that axis is the wrong answer for anything but a
+    plate. The angle bracket is 90 mm tall and its base 6 mm thick, so slots cut
+    down through the base were charged 90 mm of material and the simulator
+    reported the part 36 cm^3 light -- a fifteen-fold error inside a number that
+    looked plausible, and a mirror of that cut doubled it.
+
+    Given *over* -- a model-space point the feature passes through -- the answer
+    is measured off the prisms that actually built the part: see
+    :func:`_material_interval`. Without it, or when no prism covers that point,
+    the span stands as before. The span is an over-estimate rather than an
+    under-estimate, which is the right way round for a cut: too much material
+    removed shows up as a volume that is obviously wrong, where too little looks
+    like a cut that worked.
+    """
     if not document.bounds:
         return 1.0
     normal = plane_normal(plane)
     axis = max(range(3), key=lambda index: abs(normal[index]))
-    span = document.bounds[axis + 3] - document.bounds[axis]
-    if span > 0:
-        return span
-    spans = [document.bounds[i + 3] - document.bounds[i] for i in range(3)]
+    spans = [document.bounds[index + 3] - document.bounds[index] for index in range(3)]
+    if over is not None:
+        interval = _material_interval(document, axis, over)
+        if interval is not None:
+            low, high = interval
+            if high - low > 0:
+                return high - low
+    if spans[axis] > 0:
+        return spans[axis]
     return max(spans) or 1.0
+
+
+def _material_interval(document: _Document, axis: int,
+                       through: tuple[float, float, float]) -> tuple[float, float] | None:
+    """The extent of material along *axis* over the point *through*, or None.
+
+    Built from the prisms the part is made of: every joined extrude is a 2D
+    profile swept along its plane's normal, so asking "how thick is the part
+    here" is a question about those profiles rather than about a bounding box.
+    An L-section's bounding box is 90 mm deep where the L itself is 6, which is
+    exactly the difference that mattered.
+
+    Returns None when no prism covers the point -- a revolve, a sweep or a loft
+    is not recorded this way, and inventing an answer for one would be worse
+    than falling back to the span.
+
+    Cuts are not subtracted from the prisms, so two through-cuts in the same
+    place are each charged the full thickness. That over-removes, which is the
+    safer direction: a volume that is obviously too small gets looked at, where
+    a cut credited with removing nothing looks like a cut that worked.
+    """
+    intervals: list[tuple[float, float]] = []
+    for slab in document.slabs:
+        interval = slab.interval_along(axis, through)
+        if interval is not None:
+            intervals.append(interval)
+    if not intervals:
+        return None
+    return min(low for low, _ in intervals), max(high for _, high in intervals)
 
 
 def _hole_points(sketch: _Sketch, indices: Sequence[int]) -> list[tuple[float, float]]:

@@ -340,10 +340,29 @@ class TestTheWholeSurfaceEndToEnd:
         assert any("volume_change_cm3" in report for report in measured)
 
     def test_an_operation_that_did_nothing_says_so_to_the_client(self, connected):
-        built = call(connected, "build_part_from_recipe", {"recipe": self.recipe()})
-        notes = [op["measured"].get("note") for op in built["operations"]
+        """A work plane adds no material, and the client has to be told.
+
+        The bracket's mirror used to serve as the example, back when the
+        simulator did not model what an occurrence removes. It does now, so the
+        no-op has to be something that really is one.
+        """
+        call(connected, "build_part_from_recipe", {"recipe": self.recipe()})
+        applied = call(connected, "apply_operations", {"operations": [
+            {"op": "work_plane", "base": "xy", "offset": 10}]})
+        assert applied["ok"] is True
+        notes = [op["measured"].get("note") for op in applied["applied"]
                  if "measured" in op]
         assert "the volume did not change" in notes
+
+    def test_the_mirrored_cut_removes_material_too(self, connected):
+        """The bracket mirrors a slot cut; both slots have to be in the volume."""
+        built = call(connected, "build_part_from_recipe", {"recipe": self.recipe()})
+        by_name = {op.get("name"): op for op in built["operations"] if "measured" in op}
+        cut = by_name["SlotCut"]["measured"]["volume_change_cm3"]
+        mirrored = by_name["SlotPair"]["measured"]["volume_change_cm3"]
+        assert cut < 0
+        # Both are rounded to six decimals on the way out, so compare there.
+        assert mirrored == pytest.approx(cut, abs=1e-5)
 
     def test_appending_operations_reports_too(self, connected):
         call(connected, "build_part_from_recipe", {"recipe": self.recipe()})

@@ -100,6 +100,20 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 - The simulator counted a counterbore as a whole cylinder rather than an
   annulus over the bore it already counted, and ignored a countersink entirely.
   Every counterbored plate came out lighter than it is.
+- **A mirror or a pattern changed no volume at all.** An occurrence does
+  whatever its seed did, so a mirrored slot cut removes the same again -- the
+  simulator said "occurrence volume is not estimated" and left the total alone,
+  which made a mirrored cut indistinguishable from a cut that had failed. Each
+  feature now records what it did to the volume and an occurrence repeats it.
+- **A through-all feature was charged the body's whole span** along the cut
+  axis. Right for a plate, wrong for everything else: the angle bracket is 90 mm
+  tall with a 6 mm base, so its base slots were charged 90 mm of material. The
+  distance is now measured over the profile from the prisms that built the part,
+  which is exact for an extruded body and falls back to the span for a revolve,
+  sweep or loft rather than guessing. Between this and the mirror fix the
+  bracket went from 27.15 cm^3 to 41.28 against Inventor's 43.20; the rest is
+  the fillet estimate, which is still a subtraction whichever way the edge
+  turns.
 - Four simulator answers that were wrong rather than approximate: a sketch on a
   named work plane ignored the plane's offset (the flanged shaft was built 12 mm
   low), a sweep summed only straight path segments so an arc path had no length,
