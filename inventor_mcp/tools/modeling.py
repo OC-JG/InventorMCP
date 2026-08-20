@@ -66,6 +66,57 @@ def register(server: Any, session: Session) -> None:
         return result
 
     @server.tool(
+        description="Check a recipe against a 2D drawing you have read.\n\n"
+        "A drawing is a specification, not a picture: tracing its outlines gives "
+        "geometry with no parameters, which is the one thing this server exists "
+        "not to produce. So read the drawing into a `reading` -- its views, its "
+        "dimensions, its projection angle, its notes -- write a recipe whose "
+        "PARAMETERS are those dimensions, and then call this to check one against "
+        "the other.\n\n"
+        "It reports: every drawing dimension that reached the model (`matched`), "
+        "every one that did not (`missing` -- misread or left out), every number "
+        "the model asserts as a bare literal that the drawing never gives "
+        "(`invented`), and values correctly computed from drawing dimensions "
+        "(`derived`, which is what a parametric model should do). It also checks "
+        "the part's overall size against what the views show.\n\n"
+        "Record anything you could not make out in `unreadable` rather than "
+        "guessing. A missed dimension is recoverable; an invented one is not.",
+    )
+    @guard
+    def check_against_drawing(
+        recipe: Annotated[dict[str, Any], Field(description="The recipe to check.")],
+        reading: Annotated[dict[str, Any], Field(
+            description="What the drawing says. See `drawing_reading_schema`.")],
+    ) -> dict[str, Any]:
+        from ..drawing import DrawingReading, compare
+
+        parsed = PartRecipe.model_validate(recipe)
+        read = DrawingReading.model_validate(reading)
+        rehearsal = rehearse(parsed)
+        if not rehearsal["ok"]:
+            return {
+                "ok": False,
+                "error": "the recipe does not build, so it cannot be compared",
+                "findings": rehearsal["findings"],
+            }
+        result = compare(read, rehearsal)
+        result["rehearsal"] = {
+            "warnings": rehearsal["warnings"],
+            "result": rehearsal.get("result"),
+        }
+        return result
+
+    @server.tool(
+        description="The JSON Schema for a drawing reading -- what to write down "
+        "when you look at a 2D drawing, before writing any recipe.",
+    )
+    @guard
+    def drawing_reading_schema() -> dict[str, Any]:
+        from ..drawing import DrawingReading
+
+        return {"json_schema": DrawingReading.model_json_schema()}
+
+    @server.tool(
         description="Build a parametric part from a recipe. Creates the part, declares every "
         "parameter, then runs the operations in order. This is the main text-to-model "
         "entry point.\n\n" + RECIPE_CHEATSHEET,

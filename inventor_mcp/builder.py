@@ -561,7 +561,21 @@ def check_recipe(recipe: PartRecipe) -> dict[str, Any]:
     return {
         "ok": not findings,
         "findings": findings,
-        "sketches": {name: plan.summary() | {"profiles": profiles[name]} for name, plan in plans.items()},
+        # What each parameter was written as, so a value can be told apart from
+        # a value derived from other values.
+        "parameter_expressions": {
+            spec.name: str(spec.value) for spec in recipe.parameters
+        },
+        "sketches": {
+            name: plan.summary() | {
+                "profiles": profiles[name],
+                # The resolved value behind each expression, which is what a
+                # drawing can be compared against: the recipe says
+                # "plate_w - 2 * edge_margin" and the drawing says 96.
+                "driving": {d.expression: d.value for d in plan.dimensions},
+            }
+            for name, plan in plans.items()
+        },
         "parameters": {name: q.value for name, q in resolver.known().items()},
     }
 

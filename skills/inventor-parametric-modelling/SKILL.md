@@ -172,6 +172,53 @@ The base lengthens, the slots move with it, the upright and the fillet stay put.
 Nothing is rebuilt. If any of that does not happen, some number in the recipe
 was written as a literal.
 
+## From a drawing to a model
+
+A drawing is a **specification**, not a picture. Tracing its outlines gives
+geometry with no parameters, which is the one thing this server exists not to
+produce. Reading its dimensions gives you the driving values, and those become
+the parameters.
+
+So do it in two steps, and keep them apart:
+
+1. **Read the drawing** into a reading — its views, its dimensions, its
+   projection angle, its notes. `drawing_reading_schema` gives the shape.
+2. **Write a recipe whose parameters are those dimensions**, then call
+   `check_against_drawing` to check one against the other.
+
+The reading is worth writing down separately rather than going straight to a
+recipe, because a drawing is *redundantly* specified on purpose — three views of
+one part, each constraining the others — and that redundancy is what lets the
+model be checked:
+
+- **`missing`** — a dimension on the drawing that no parameter or driving
+  dimension in the model has. It was misread or left out. This is the commonest
+  drawing-reading mistake and it is invisible without the check, because the
+  model is perfectly self-consistent and simply not the part on the sheet.
+- **`invented`** — a bare literal in the model that the drawing never gives.
+  Either read it off the drawing or write it as an expression of values that
+  are.
+- **`derived`** — computed from drawing dimensions. This is what a parametric
+  model *should* do: a 96 mm hole spacing on a 120 mm plate with a 12 mm margin
+  is right, and it is reported separately so it does not read as a fault.
+- The **overall size** is checked against the views. A part the right shape and
+  the wrong size passes every other check.
+
+Two things to be careful about when reading:
+
+- **The projection angle.** First angle (ISO, European) and third angle (ASME,
+  US) put the right-hand view on opposite sides of the front view, so reading
+  one as the other mirrors the part. Look for the projection symbol near the
+  title block, and say `unknown` rather than guessing — the check warns when you
+  do, which is better than a silently mirrored model.
+- **What you cannot make out.** Put it in `unreadable`. A missed dimension is
+  recoverable; an invented one is not, because nothing downstream can tell it
+  from a real one.
+
+Reference dimensions — bracketed, or marked REF — restate something already
+fixed, so mark them `reference: true` and they are not expected to appear as
+their own parameter.
+
 ## Select by intent, never by index
 
 Edge and face indices renumber after every feature, so an index captured before

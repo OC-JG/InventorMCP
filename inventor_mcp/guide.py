@@ -22,6 +22,11 @@ Workflow:
    point of the whole thing: iterate on parameters, not on geometry.
 6. `export_model` / `capture_view` -- STEP/STL/IGES out, or a PNG to look at.
 
+Working from a 2D drawing? Read it into a `reading` first (`drawing_reading_schema`),
+write a recipe whose parameters are its dimensions, then `check_against_drawing`.
+A drawing is a specification, not a picture: tracing its outlines gives geometry
+with no parameters, and reading its dimensions gives you the model.
+
 Model the part the way a mechanical engineer would: name the driving dimensions as
 parameters, then write every size as an expression of them. A model whose numbers are
 hard-coded is not parametric and cannot be revised.
