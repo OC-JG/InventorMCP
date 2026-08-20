@@ -194,3 +194,94 @@ class TestTheWorkedExamplesWork:
             assert used == declared, (
                 f"SKILL.md:{line}: {sorted(declared - used)} never appears in an "
                 "expression, so the example teaches a frozen number")
+
+
+class TestTheStandardParts:
+    """The fastener templates have to build, and be the right size.
+
+    A hexagon given across its corners rather than its flats is 15% too big:
+    an M16 nut a 24 mm spanner will not fit. It is the commonest way a hex part
+    is wrong, and the only way to know is to measure one.
+    """
+
+    REFERENCE = SKILL.parent / "references" / "standard-parts.md"
+
+    @pytest.fixture(scope="class")
+    def reference(self) -> str:
+        return self.REFERENCE.read_text()
+
+    def recipes(self, text: str) -> dict:
+        out = {}
+        for match in re.finditer(r"```json\n(.*?)\n```", text, re.DOTALL):
+            if '"operations"' not in match.group(1):
+                continue
+            recipe = json.loads(match.group(1))
+            out[recipe["name"]] = recipe
+        return out
+
+    def test_the_reference_exists_and_holds_parts(self, reference):
+        assert self.recipes(reference), "no buildable recipes in the reference"
+
+    def test_every_part_rehearses_clean(self, reference):
+        from inventor_mcp.builder import rehearse
+        from inventor_mcp.schema import PartRecipe
+
+        for name, recipe in self.recipes(reference).items():
+            report = rehearse(PartRecipe.model_validate(recipe))
+            assert report["ok"], f"{name}: {report['findings']}"
+            assert report["warnings"] == [], (
+                f"{name}: {[w['warning'] for w in report['warnings']]}")
+
+    def build(self, recipe):
+        from inventor_mcp.builder import build_part
+        from inventor_mcp.schema import PartRecipe
+        from inventor_mcp.session import Session
+
+        session = Session(backend_kind="mock")
+        session.ensure_backend().connect()
+        build_part(session, PartRecipe.model_validate(recipe))
+        return session.backend.mass_properties(session.active)
+
+    def test_the_hex_nut_measures_its_across_flats_size(self, reference):
+        """24 mm across the flats, 27.713 across the corners: 24 / cos 30."""
+        import math
+
+        nut = self.recipes(reference)["HexNut_M16"]
+        box = self.build(nut).bounding_box
+        across_corners = (box[3] - box[0]) * 10
+        across_flats = (box[4] - box[1]) * 10
+        assert across_flats == pytest.approx(24.0, abs=1e-3)
+        assert across_corners == pytest.approx(24.0 / math.cos(math.pi / 6), abs=1e-3)
+
+    def test_the_hex_nut_has_the_volume_the_standard_implies(self, reference):
+        import math
+
+        nut = self.recipes(reference)["HexNut_M16"]
+        wanted = ((3 ** 0.5 / 2) * 24 ** 2 * 14.8 - math.pi * 8 ** 2 * 14.8) / 1000
+        assert self.build(nut).volume == pytest.approx(wanted, rel=1e-6)
+
+    def test_the_washer_does_too(self, reference):
+        import math
+
+        washer = self.recipes(reference)["Washer_M8"]
+        wanted = math.pi * (8 ** 2 - 4.2 ** 2) * 1.6 / 1000
+        assert self.build(washer).volume == pytest.approx(wanted, rel=1e-6)
+
+    def test_every_fastener_asks_for_across_flats(self, reference):
+        """`inscribed` on a fastener is the bug this reference exists to prevent."""
+        for name, recipe in self.recipes(reference).items():
+            for op in recipe["operations"]:
+                for entity in op.get("entities", []):
+                    if entity.get("type") == "polygon":
+                        assert entity.get("fit") == "circumscribed", (
+                            f"{name} gives its hexagon across the corners")
+
+    def test_the_standards_disagreement_is_recorded(self, reference):
+        """DIN 934 M10 is 17 mm across flats; ISO 4032 M10 is 16."""
+        assert "ISO 4032" in reference and "DIN 934" in reference
+        assert "17" in reference and "16" in reference
+
+    def test_it_says_what_the_templates_do_not_do(self, reference):
+        """A tapped hole that drills plain, and a missing conical chamfer."""
+        assert "recorded, not cut" in reference.lower() or "not in its geometry" in reference
+        assert "conical" in reference

@@ -251,6 +251,14 @@ Then check `measure_part`: the span that should have grown should have grown. If
 nothing moved, the geometry was never driven by that parameter — go back and look
 at the sketch's `driven by` list.
 
+## Standard parts
+
+`references/standard-parts.md` holds parametric templates for hex nuts, washers
+and standoffs, with the dimension tables and the hexagon trap spelt out — a
+hexagon given across its corners rather than its flats is 15% oversize, which is
+an M16 nut a 24 mm spanner will not fit. Read that file when asked for a
+fastener rather than deriving one.
+
 ## Things worth knowing before you start
 
 - Lengths are in the document's units (mm by default), angles in degrees. The
