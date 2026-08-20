@@ -57,6 +57,15 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 - `examples/cover_plate.json` — counterbored and countersunk holes, with its
   volume derived by hand and written to `examples/expected/` *before* any live
   run, so the first run checks the geometry rather than recording it.
+- **The simulator is used as an oracle for the live build.** Now that it
+  predicts an extruded part to within a rounding error, `build_part_from_recipe`
+  rehearses first and reports any operation whose live volume change disagrees
+  with the prediction. Deltas are compared rather than totals, so one wrong
+  operation does not flag every one after it, and each kind of operation gets
+  the tolerance its model deserves -- two percent for a prism or a hole, thirty
+  for a fillet's corner estimate, nothing at all for a thread. A fillet on the
+  wrong edge, a cut on the wrong side and a hole that met no material each
+  shipped here at least once; all three announce themselves this way.
 - An escape hatch, off unless the machine's owner turns it on.
   `INVENTOR_MCP_ESCAPE_HATCH=on` registers `run_inventor_script`, which runs
   Python against the live API for what a recipe has no words for -- sheet metal,

@@ -331,6 +331,13 @@ fastener rather than deriving one.
   styles has yet been built against a live Inventor — the read-back is what makes
   that survivable rather than silent, so treat a first success with the same
   suspicion as the operations below.
+- **Read `divergence` if the build reports it.** Every build is rehearsed in the
+  simulator first, and an operation whose live volume change disagrees with the
+  prediction is listed there with both numbers. The simulator predicts an
+  extruded part to within a rounding error, so a disagreement usually means
+  Inventor did something the recipe did not ask for — the wrong edge, the wrong
+  side, or nothing at all. Do not report a part as finished with a divergence
+  unexplained.
 - **A failed build leaves the part where it stopped**, on purpose: the
   half-built part is usually what explains the failure. Pass
   `rollback_on_error: true` to `build_part_from_recipe` or `apply_operations`

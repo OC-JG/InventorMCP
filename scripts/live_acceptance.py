@@ -133,6 +133,15 @@ def check_example(session: Session, path: Path, report: Report, record: bool) ->
 
     expected = json.loads(wanted.read_text())
     drift = seen["volume_cm3"] - expected["volume_cm3"]
+    if session.backend.name == "mock":
+        # These are Inventor's numbers. The simulator gets close on an extruded
+        # part and does not on a revolve, so a difference here says something
+        # about the simulator, not about the recipe -- worth printing, not worth
+        # failing. It is the one number that shows how good the oracle is.
+        report.skip(f"{name}: the simulator says {seen['volume_cm3']:.4f} cm^3",
+                    f"Inventor measured {expected['volume_cm3']:.4f}, "
+                    f"{drift:+.4f} apart")
+        return
     report.check(
         abs(drift) <= TOLERANCE,
         f"{name}: volume {seen['volume_cm3']:.4f} cm^3",

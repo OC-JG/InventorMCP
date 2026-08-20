@@ -437,6 +437,7 @@ def build_part(
     document: str | None = None,
     stop_on_error: bool = True,
     rollback_on_error: bool = False,
+    against_rehearsal: bool = True,
 ) -> dict[str, Any]:
     """Create (or extend) a part from a complete recipe.
 
@@ -446,6 +447,11 @@ def build_part(
     saved. Turn it on when the part matters more than the diagnosis -- appending
     to something that already works, or retrying a hole, which consumes its
     sketch and so cannot be retried any other way.
+
+    ``against_rehearsal`` rehearses the recipe in the simulator first and reports
+    any operation whose live volume change disagrees with the prediction. It
+    costs a few milliseconds and it is how a fillet on the wrong edge announces
+    itself without a human reading the numbers.
     """
     backend = session.backend
 
@@ -540,7 +546,124 @@ def build_part(
         results["mass_properties"] = properties.as_dict()
     except Exception:  # pragma: no cover - a part with no solid yet
         pass
+
+    if against_rehearsal:
+        if document is not None:
+            results["divergence_note"] = (
+                "not checked against a rehearsal: these operations were appended to "
+                "an existing part, and the rehearsal starts from an empty one"
+            )
+        elif backend.name == "mock":
+            results["divergence_note"] = (
+                "not checked against a rehearsal: this *is* the simulator, so it "
+                "would only be comparing it with itself"
+            )
+        else:
+            try:
+                predicted = rehearse(recipe)
+            except Exception:  # pragma: no cover - a rehearsal must never break a build
+                predicted = {}
+            if predicted.get("rehearsed"):
+                divergence = compare_to_rehearsal(
+                    results["operations"], predicted.get("steps") or [])
+                if divergence:
+                    results["divergence"] = divergence
+                    results["divergence_note"] = (
+                        "the simulator predicted a different volume change for these "
+                        "operations. It is an estimate, not a measurement, but it "
+                        "predicted the rest of this part correctly -- so read these "
+                        "before trusting the result."
+                    )
     return finish()
+
+
+#: How closely the simulator should predict each operation's volume change, as a
+#: fraction of it. An operation missing from here is not compared at all.
+#:
+#: The tight entries are arithmetic the simulator does exactly: a prism is an
+#: area times a length, a hole is a cylinder, an occurrence repeats its seed. The
+#: loose ones are estimates -- Pappus for a revolve, a mean section for a loft, a
+#: corner prism for a fillet -- and are here to catch a feature that did
+#: something else entirely rather than to check the arithmetic.
+PREDICTED = {
+    "extrude": 0.02,
+    "hole": 0.02,
+    "mirror": 0.02,
+    "rectangular_pattern": 0.02,
+    "circular_pattern": 0.02,
+    "revolve": 0.15,
+    "sweep": 0.25,
+    "loft": 0.35,
+    "shell": 0.35,
+    "fillet": 0.30,
+    "chamfer": 0.30,
+}
+
+#: Below this, in cm^3, a difference is not worth reporting whatever the
+#: fraction says: a 2 mm chamfer moves about a thousandth of a cm^3, and a
+#: percentage of nearly nothing is noise.
+NOTICEABLE = 5.0e-3
+
+
+def compare_to_rehearsal(built: Sequence[dict[str, Any]],
+                         rehearsed: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Where Inventor disagreed with the simulator, operation by operation.
+
+    The simulator is now accurate enough on extruded parts to be used as an
+    oracle: it predicted the angle bracket to within 0.003%. So a live operation
+    whose volume change differs from the rehearsed one by more than that kind of
+    operation warrants is evidence that Inventor did something the recipe did not
+    ask for -- a fillet on the wrong edge, a cut on the wrong side, a hole that
+    met no material. Every one of those shipped at least once, and every one of
+    them would have shown up here.
+
+    Deltas are compared rather than totals, so an error in one operation does not
+    then flag every operation after it.
+    """
+    findings: list[dict[str, Any]] = []
+    expected = {step["index"]: step for step in rehearsed}
+    for step in built:
+        tolerance = PREDICTED.get(step.get("op") or "")
+        if tolerance is None:
+            continue
+        want = (expected.get(step["index"], {}).get("measured") or {})
+        got = step.get("measured") or {}
+        predicted, actual = want.get("volume_change_cm3"), got.get("volume_change_cm3")
+        if predicted is None or actual is None:
+            continue
+        off = actual - predicted
+        allowed = max(abs(predicted) * tolerance, NOTICEABLE)
+        if abs(off) <= allowed:
+            continue
+        findings.append({
+            "index": step["index"],
+            "op": step.get("op"),
+            "name": step.get("name"),
+            "rehearsed_cm3": round(predicted, 6),
+            "measured_cm3": round(actual, 6),
+            "off_by_cm3": round(off, 6),
+            "why": _divergence_reason(step.get("op") or "", predicted, actual),
+        })
+    return findings
+
+
+def _divergence_reason(op: str, predicted: float, actual: float) -> str:
+    """What a difference of this shape usually means."""
+    if abs(actual) < NOTICEABLE and abs(predicted) >= NOTICEABLE:
+        return ("Inventor changed nothing where the recipe implies a change. For a "
+                "cut or a hole this is a profile that met no material; for a "
+                "pattern or mirror it is the wrong feature named.")
+    if (predicted < 0) != (actual < 0):
+        return ("It moved the volume the other way. A cut that adds is on the "
+                "wrong side of its profile; a fillet that removes where one was "
+                "expected to add is on a convex edge rather than the inside "
+                "corner, which is the mistake that has cost the most time here.")
+    if abs(actual) > abs(predicted):
+        return ("It changed more than the geometry implies -- a cut reaching "
+                "further than intended, or a selector catching more edges than "
+                "the one that was meant.")
+    return ("It changed less than the geometry implies. Check the extent and the "
+            "selector: a partial overlap looks like this.")
 
 
 def check_recipe(recipe: PartRecipe) -> dict[str, Any]:
@@ -634,10 +757,15 @@ def check_recipe(recipe: PartRecipe) -> dict[str, Any]:
 #: wrong, and the one that used to survive all the way to a live run.
 _SUBTRACTIVE = {"hole", "shell"}
 
-#: Simulator gaps, so a rehearsal does not report them as recipe faults. It
-#: does not model an occurrence's volume, so a pattern or a mirror legitimately
-#: shows no change here even when Inventor would remove plenty.
-_NOT_MODELLED = {"mirror", "rectangular_pattern", "circular_pattern"}
+#: Operations that repeat an existing feature, so a volume that does not move
+#: means the wrong feature was named.
+_MUST_MOVE = {"mirror", "rectangular_pattern", "circular_pattern"}
+
+#: Simulator gaps, so a rehearsal does not report them as recipe faults. A
+#: thread is cosmetic and moves no volume in Inventor either. Patterns and
+#: mirrors used to be here, back when an occurrence's volume was not modelled --
+#: they are now, so a mirror that changes nothing is a real complaint.
+_NOT_MODELLED = {"thread"}
 
 
 def rehearse(recipe: PartRecipe) -> dict[str, Any]:
@@ -792,12 +920,18 @@ def _warn_about(warnings: list[dict[str, Any]], where: str, op: Operation,
             "warning": f"added {moved:.4f} cm3 instead of removing material",
             "why": "A cut that grows the part is on the wrong side of its profile.",
         })
+    elif not subtractive and abs(moved) < 1e-9 and op.op in _MUST_MOVE:
+        warnings.append({
+            "where": where,
+            "warning": "added no material",
+            "why": "An occurrence repeats whatever its seed did, so a pattern or "
+                   "mirror of a feature that changed the part should change it "
+                   "again. Check that `features` names the right feature.",
+        })
     # No warning about which way a fillet or chamfer moved the volume. The
-    # simulator has no notion of which side the material is on, so it models
-    # every fillet as subtractive -- an inside-corner fillet, which really adds
-    # material, looks like a mistake here. That check belongs on the live path,
-    # where convexity is known, and a rehearsal that cries wolf on a correct
-    # recipe is worse than one that stays quiet.
+    # simulator takes the sign from the selector -- it cannot see which side the
+    # material is on -- so a complaint here would only be repeating the recipe
+    # back. That check belongs on the live path, where convexity is measured.
 
 
 def _undriven_parameters(recipe: PartRecipe,

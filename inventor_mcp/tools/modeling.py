@@ -141,6 +141,13 @@ def register(server: Any, session: Session) -> None:
                               "best evidence about what went wrong. Turn it on when the part "
                               "matters more than the diagnosis."),
         ] = False,
+        against_rehearsal: Annotated[
+            bool,
+            Field(description="Rehearse in the simulator first and report any operation whose "
+                              "live volume change disagrees with the prediction. On by "
+                              "default: it costs milliseconds and it is how a fillet on the "
+                              "wrong edge announces itself. Read `divergence` if it appears."),
+        ] = True,
     ) -> dict[str, Any]:
         parsed = PartRecipe.model_validate(recipe)
         session.ensure_backend()
@@ -156,7 +163,8 @@ def register(server: Any, session: Session) -> None:
                             "build anyway and see how far it gets.",
                 }
         result = build_part(session, parsed, document=document, stop_on_error=stop_on_error,
-                            rollback_on_error=rollback_on_error)
+                            rollback_on_error=rollback_on_error,
+                            against_rehearsal=against_rehearsal)
         context = session.context(result["document"])
         if "mass_properties" in result:
             result["bounding_box"] = display_box(
