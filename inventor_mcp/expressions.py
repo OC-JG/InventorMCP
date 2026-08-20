@@ -407,7 +407,16 @@ def _render(node: ast.AST, promoted: Mapping[int, str]) -> str:
         return f"{text} {unit}" if unit else text
     if isinstance(node, ast.UnaryOp):
         sign = "-" if isinstance(node.op, ast.USub) else "+"
-        rendered = f"{sign}{_render(node.operand, promoted)}"
+        operand = _render(node.operand, promoted)
+        # Brackets for the same reason the BinOp branch below uses them, and
+        # for a sharper one: without them `-(a + 2)` renders as `-a + 2`,
+        # which is a different number. The BinOp branch had this right from
+        # the start; this one silently handed Inventor the wrong expression
+        # while the simulator kept the right value, so the two disagreed and
+        # neither complained.
+        if isinstance(node.operand, (ast.BinOp, ast.UnaryOp)):
+            operand = f"({operand})"
+        rendered = f"{sign}{operand}"
         return f"({rendered}) * 1 {unit}" if unit else rendered
     if isinstance(node, ast.BinOp):
         operator = _OPERATORS.get(type(node.op))

@@ -219,3 +219,106 @@ class TestNormalisedForInventor:
         assert result.normalised == "w - (count) * 1 mm"
         assert evaluate(result.normalised, params, self.context()).value == pytest.approx(
             result.value)
+
+
+class TestNegationSurvivesNormalisation:
+    """What Inventor is handed has to be the same number the recipe meant.
+
+    `normalised` exists because Inventor's parser will not add a length
+    parameter to a bare number, so `flange_d - 16` has to go out as
+    `flange_d - 16 mm`. Rewriting it must not change its value -- and under a
+    unary minus it did: `-(a + 2)` came out as `-a + 2`, four millimetres
+    different, with the simulator keeping the right value and neither side
+    complaining.
+    """
+
+    def check(self, source, params=None):
+        from inventor_mcp.expressions import UnitContext, evaluate
+        from inventor_mcp.units import to_internal
+
+        table = {name: to_internal(value, "mm")
+                 for name, value in (params or {"a": 100.0}).items()}
+        units = UnitContext(length="mm", angle="deg")
+        original = evaluate(source, table, units)
+        again = evaluate(original.normalised, table, units)
+        return original, again
+
+    @pytest.mark.parametrize("source", [
+        "-(a + 2)",
+        "-(a - 2)",
+        "-(2 + a)",
+        "-(a * 2 + 1)",
+        "-(-(a + 2))",
+        "-(a + 2) * 2",
+        "2 * -(a + 2)",
+        "-a + 2",
+        "-a",
+        "(a + 2) * 2",
+        "a / (a + 2)",
+    ])
+    def test_rewriting_never_changes_the_value(self, source):
+        original, again = self.check(source)
+        assert again.value == pytest.approx(original.value), (
+            f"{source!r} normalised to {original.normalised!r}")
+
+    def test_the_brackets_are_actually_kept(self):
+        original, _ = self.check("-(a + 2)")
+        assert original.normalised == "-(a + 2 mm)"
+
+    def test_a_bare_negation_needs_no_brackets(self):
+        original, _ = self.check("-a + 2")
+        assert original.normalised == "-a + 2 mm"
+
+
+class TestUnsignedDimensions:
+    """A driving dimension is a magnitude, so a negative one has to be flipped.
+
+    Flipping used to mean deleting a leading minus, which is the negation only
+    when that minus governs the whole expression. `-a` negates to `a`; `-a + 2`
+    does not negate to `a + 2`. With a = 100 mm that shipped a dimension of
+    +102 mm for a distance the recipe put at -98 mm.
+    """
+
+    def resolver(self):
+        from inventor_mcp.resolve import Resolver
+        from inventor_mcp.units import to_internal
+
+        resolver = Resolver("mm", "deg")
+        resolver.declare("a", to_internal(100.0, "mm"))
+        return resolver
+
+    @pytest.mark.parametrize("source", [
+        "-a + 2", "-(a + 2)", "2 - a", "-a", "-a - 5", "-a * 2", "-(a * 2 + 1)",
+    ])
+    def test_the_emitted_dimension_is_the_magnitude(self, source):
+        from inventor_mcp.geometry import _magnitude
+
+        resolver = self.resolver()
+        signed = resolver.length(source)
+        assert signed.value < 0, "fixture should be negative"
+        unsigned = _magnitude(signed)
+        assert unsigned.value == pytest.approx(-signed.value)
+        # And the expression Inventor evaluates has to agree with that value,
+        # which is the half that was wrong.
+        assert resolver.length(unsigned.expression).value == pytest.approx(unsigned.value), (
+            f"{source!r} emitted {unsigned.expression!r}")
+
+    def test_a_positive_value_is_left_exactly_as_written(self):
+        from inventor_mcp.geometry import _magnitude
+
+        resolved = self.resolver().length("a + 2")
+        assert _magnitude(resolved) is resolved
+
+    def test_a_whole_expression_negation_stays_readable(self):
+        """No gratuitous brackets where deleting the minus is genuinely right."""
+        from inventor_mcp.geometry import _magnitude
+
+        assert _magnitude(self.resolver().length("-a")).expression == "a"
+        assert _magnitude(self.resolver().length("-(a + 2)")).expression == "(a + 2 mm)"
+
+    def test_abs_is_no_longer_emitted(self):
+        """Nothing ever confirmed Inventor's parser accepts abs()."""
+        from inventor_mcp.geometry import _magnitude
+
+        for source in ("2 - a", "-a + 2", "-a * 2"):
+            assert "abs" not in _magnitude(self.resolver().length(source)).expression

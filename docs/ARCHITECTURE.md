@@ -154,7 +154,7 @@ it can write anything will often guess instead.
 
 ## Testing
 
-213 tests, none of which need Inventor.
+350 tests, none of which need Inventor.
 
 The shipped examples are part of the suite: each must parse, pass the static checks,
 build, and produce a solid body, and every declared parameter must be referenced or

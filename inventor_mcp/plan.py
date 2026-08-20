@@ -233,8 +233,14 @@ class SketchPlan:
         orientation is not something the author should have to know -- so the
         geometry is mirrored on the way in and lands where it was asked for.
 
-        Constraints and dimensions are unaffected: they refer to entities, and
-        mirroring preserves lengths, angles between lines, and horizontality.
+        Lengths, radii, and the angles between lines all survive a reflection,
+        so constraints and dimensions carry over unchanged -- except for which
+        *end* of an arc they name. Reflecting reverses an arc's sweep, so its
+        start and end swap places, and a coincidence that named the old start
+        has to name the new end or it points at the far side of the arc. That
+        is not a loud failure: the backend sees both references in one shared
+        point group and skips the constraint, so Inventor never gets the
+        chance to refuse it, and the sketch is quietly built wrong.
         """
         import copy
         import math as _math
@@ -260,9 +266,23 @@ class SketchPlan:
             elif isinstance(primitive, PPoint):
                 primitive.position = (-primitive.position[0], primitive.position[1])
 
+        # A line's start stays its start -- the point simply moves to its own
+        # mirror image. Only arcs swap ends, so only arcs are remapped.
+        swept = {p.id for p in mirrored.primitives if isinstance(p, PArc)}
+        other_end = {PointRef.START: PointRef.END, PointRef.END: PointRef.START}
+
+        def remap(ref: Ref) -> Ref:
+            if ref.entity in swept and ref.point in other_end:
+                return Ref(ref.entity, other_end[ref.point])
+            return ref
+
+        mirrored.constraints = [
+            Constraint(c.kind, tuple(remap(r) for r in c.refs))
+            for c in mirrored.constraints
+        ]
         mirrored.dimensions = [
-            Dimension(d.kind, d.refs, d.expression, d.value, d.name,
-                      (-d.text_offset[0], d.text_offset[1]))
+            Dimension(d.kind, tuple(remap(r) for r in d.refs), d.expression, d.value,
+                      d.name, (-d.text_offset[0], d.text_offset[1]))
             for d in mirrored.dimensions
         ]
         return mirrored

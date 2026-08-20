@@ -205,3 +205,117 @@ class TestMirroringForInventorsXzPlane:
         from inventor_mcp.backend.com import backend as com
 
         assert com._MIRRORED_PLANES == {"xz"}
+
+
+class TestMirroringKeepsCoincidencesCoincident:
+    """The invariant the arc-endpoint bug broke, stated once for all sketches.
+
+    A coincident constraint asserts two points are one point. If mirroring
+    moves them apart, the sketch is wrong -- and wrong *silently*: the COM
+    backend sees both references in one shared-point group and skips the
+    constraint, so Inventor is never given the chance to refuse it.
+
+    Reflecting reverses an arc's sweep, so its start and end swap places and
+    a reference to the old start has to be remapped to the new end. Lines need
+    no remapping: the endpoint simply moves to its own mirror image.
+    """
+
+    def point(self, plan, ref):
+        from inventor_mcp.plan import PArc, PCircle, PLine, PointRef, PPoint
+
+        primitive = plan.by_id(ref.entity)
+        if isinstance(primitive, PLine):
+            if ref.point is PointRef.START:
+                return primitive.start
+            if ref.point is PointRef.END:
+                return primitive.end
+            if ref.point is PointRef.MID:
+                return tuple((a + b) / 2 for a, b in zip(primitive.start, primitive.end))
+            return None
+        if isinstance(primitive, PArc):
+            if ref.point is PointRef.CENTER:
+                return primitive.center
+            angle = {PointRef.START: primitive.start_angle,
+                     PointRef.END: primitive.end_angle}.get(ref.point)
+            if angle is None:
+                return None
+            return (primitive.center[0] + primitive.radius * math.cos(angle),
+                    primitive.center[1] + primitive.radius * math.sin(angle))
+        if isinstance(primitive, PPoint):
+            return primitive.position
+        if isinstance(primitive, PCircle):
+            return primitive.center
+        return None
+
+    def widest_gap(self, plan):
+        """How far apart the two ends of any coincidence are, in cm."""
+        from inventor_mcp.plan import ORIGIN
+
+        worst = 0.0
+        checked = 0
+        for constraint in plan.constraints:
+            if constraint.kind != "coincident" or len(constraint.refs) != 2:
+                continue
+            if any(ref.entity == ORIGIN.entity for ref in constraint.refs):
+                continue
+            first, second = (self.point(plan, ref) for ref in constraint.refs)
+            if first is None or second is None:
+                continue
+            checked += 1
+            worst = max(worst, math.dist(first, second))
+        assert checked, "the fixture has no coincidences to check"
+        return worst
+
+    def plan_for(self, entity, plane="xy"):
+        from inventor_mcp.builder import build_part
+        from inventor_mcp.schema import PartRecipe
+        from inventor_mcp.session import Session
+
+        session = Session(backend_kind="mock")
+        session.ensure_backend().connect()
+        build_part(session, PartRecipe.model_validate({
+            "name": "Fixture", "units": "mm",
+            "operations": [{"op": "sketch", "name": "S", "plane": plane,
+                            "entities": [entity]}],
+        }))
+        return session.backend._doc(session.active).sketches[0].plan
+
+    ENTITIES = [
+        {"type": "slot", "center": [30, 0], "length": 20, "width": 8, "angle": 0},
+        {"type": "slot", "center": [30, 10], "length": 24, "width": 6, "angle": 30},
+        {"type": "rectangle", "center": [20, 0], "width": 40, "height": 25},
+        {"type": "polyline", "points": [[0, 0], [40, 0], [40, 6], [0, 6]], "closed": True},
+    ]
+
+    @pytest.mark.parametrize("entity", ENTITIES, ids=lambda e: e["type"])
+    def test_coincidences_start_out_coincident(self, entity):
+        assert self.widest_gap(self.plan_for(entity)) == pytest.approx(0.0, abs=1e-9)
+
+    @pytest.mark.parametrize("entity", ENTITIES, ids=lambda e: e["type"])
+    def test_and_stay_coincident_through_the_mirror(self, entity):
+        """8 mm apart before the fix, on any entity with an arc in it."""
+        mirrored = self.plan_for(entity).mirrored_u()
+        assert self.widest_gap(mirrored) == pytest.approx(0.0, abs=1e-9)
+
+    def test_an_arcs_endpoint_references_are_swapped_over(self):
+        from inventor_mcp.plan import PArc, PointRef
+
+        plan = self.plan_for(self.ENTITIES[0])
+        arcs = {p.id for p in plan.primitives if isinstance(p, PArc)}
+        before = [(str(r), r.point) for c in plan.constraints for r in c.refs
+                  if r.entity in arcs and r.point in (PointRef.START, PointRef.END)]
+        after = [(str(r), r.point) for c in plan.mirrored_u().constraints for r in c.refs
+                 if r.entity in arcs and r.point in (PointRef.START, PointRef.END)]
+        assert before, "the fixture should reference arc endpoints"
+        assert [p for _, p in after] == [
+            PointRef.END if p is PointRef.START else PointRef.START for _, p in before]
+
+    def test_a_lines_endpoint_references_are_left_alone(self):
+        """The point moves to its own mirror image; start is still start."""
+        from inventor_mcp.plan import PLine, PointRef
+
+        plan = self.plan_for(self.ENTITIES[2])  # a plain rectangle: lines only
+        lines = {p.id for p in plan.primitives if isinstance(p, PLine)}
+        pick = lambda pl: [(r.entity, r.point) for c in pl.constraints for r in c.refs
+                           if r.entity in lines and r.point is not PointRef.SELF]
+        assert pick(plan.mirrored_u()) == pick(plan)

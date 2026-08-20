@@ -46,7 +46,7 @@ Check it starts before wiring it into anything:
 
 ```powershell
 python -m inventor_mcp --backend mock --help
-pytest                            # 213 tests, no Inventor needed
+pytest                            # 350 tests, no Inventor needed
 ```
 
 Python 3.10+.
@@ -317,7 +317,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for why it is split that way, a
 
 ```bash
 pip install -e ".[dev]"
-pytest                      # 298 tests, no Inventor required
+pytest                      # 350 tests, no Inventor required
 ```
 
 ### Status

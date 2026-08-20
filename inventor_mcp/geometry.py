@@ -11,11 +11,13 @@ bookkeeping is checked without Inventor running.
 
 from __future__ import annotations
 
+import ast
 import math
 from itertools import count
 from typing import Iterable, Sequence
 
-from .errors import SketchError
+from .errors import ExpressionError, SketchError
+from .expressions import _parse
 from .plan import (
     ORIGIN,
     Constraint,
@@ -64,14 +66,37 @@ def _at_origin(value: float) -> bool:
     return abs(value) <= TOL
 
 
+def _negate(source: str) -> str:
+    """*source* with its sign flipped, kept readable where it safely can be.
+
+    Dropping a leading minus is the negation only when that minus governs the
+    whole expression.  ``-a`` negates to ``a``, but ``-a + 2`` negates to
+    ``a - 2`` and emphatically not to ``a + 2`` -- which is what dropping the
+    character gives, and what shipped: with ``a = 100 mm`` the recipe meant
+    -98 mm and Inventor was driven to +102 mm, four millimetres out, while the
+    simulator kept the right number and agreed with nobody.
+
+    Whether the minus governs the whole expression is a question about the
+    parse tree, so ask the parser rather than the first character.  Where it
+    does not, wrap: ``-(...)`` is arithmetic Inventor certainly understands,
+    which the previous fallback of ``abs(...)`` never was.
+    """
+    source = source.strip()
+    try:
+        node = _parse(source).body
+    except ExpressionError:  # pragma: no cover - resolution parsed it already
+        return f"-({source})"
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+        # A top-level unary minus means the text really does start with one.
+        return source[1:].strip()
+    return f"-({source})"
+
+
 def _magnitude(resolved: Resolved) -> Resolved:
     """The same value as a positive quantity, since dimensions are unsigned."""
     if resolved.value >= 0:
         return resolved
-    source = resolved.expression.strip()
-    if source.startswith("-"):
-        return Resolved(source[1:].strip(), -resolved.value, resolved.dim)
-    return Resolved(f"abs({source})", -resolved.value, resolved.dim)
+    return Resolved(_negate(resolved.expression), -resolved.value, resolved.dim)
 
 
 def _anchor(
