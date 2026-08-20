@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 import pytest
 
 from inventor_mcp.backend.mock.backend import map3d, plane_normal
 from inventor_mcp.builder import build_part
 from inventor_mcp.schema import PartRecipe
+
+_ROOT = Path(__file__).resolve().parent.parent
 
 
 def disc_on(plane: str) -> PartRecipe:
@@ -415,3 +418,77 @@ class TestMeasuredOrientation:
         from inventor_mcp.backend.com import backend as com
 
         assert com._orientation_matrix(None) is None
+
+
+class TestReorientingCarriesDimensions:
+    """A transform has to move what a dimension *means*, not just where it is.
+
+    Under a swap the two sketch axes trade places, so a dimension still called
+    "horizontal" would measure the other one: the right number on the wrong
+    axis, which is the quietest kind of wrong there is. The words have to swap
+    with the axes they name. No plane has needed a swap yet, but
+    `_orientation_matrix` can return one, and a polyline now emits horizontal
+    and vertical dimensions by the handful.
+    """
+
+    def plan(self):
+        from inventor_mcp.plan import PLine, Ref, SketchPlan
+
+        plan = SketchPlan(plane="xz")
+        plan.add(PLine(id="l1", start=(0.0, 0.0), end=(9.0, 0.0)))
+        plan.add(PLine(id="l2", start=(9.0, 0.0), end=(9.0, 4.0)))
+        plan.constrain("horizontal", Ref("l1"))
+        plan.constrain("vertical", Ref("l2"))
+        plan.constrain("horizontal_align", Ref("l1"), Ref("l2"))
+        plan.dimension("horizontal", [Ref("l1")], "base_len", 9.0, optional=True)
+        plan.dimension("vertical", [Ref("l2")], "height", 4.0)
+        return plan
+
+    SWAP = (0.0, 1.0, 1.0, 0.0)
+    MIRROR = (-1.0, 0.0, 0.0, 1.0)
+
+    def test_a_swap_renames_the_axes_a_dimension_measures(self):
+        swapped = self.plan().reoriented(self.SWAP)
+        assert [d.kind for d in swapped.dimensions] == ["vertical", "horizontal"]
+
+    def test_a_swap_renames_the_constraints_too(self):
+        swapped = self.plan().reoriented(self.SWAP)
+        assert [c.kind for c in swapped.constraints] == [
+            "vertical", "horizontal", "vertical_align"]
+
+    def test_a_mirror_leaves_the_names_alone(self):
+        """Reflection reverses an axis; it does not exchange the two."""
+        mirrored = self.plan().reoriented(self.MIRROR)
+        assert [d.kind for d in mirrored.dimensions] == ["horizontal", "vertical"]
+        assert [c.kind for c in mirrored.constraints] == [
+            "horizontal", "vertical", "horizontal_align"]
+
+    def test_the_expressions_and_values_are_untouched(self):
+        for matrix in (self.SWAP, self.MIRROR):
+            moved = self.plan().reoriented(matrix)
+            assert [(d.expression, d.value) for d in moved.dimensions] == [
+                ("base_len", 9.0), ("height", 4.0)]
+
+    def test_the_optional_flag_survives(self):
+        """It is constructed positionally, so it is easy to drop by accident."""
+        for matrix in (self.SWAP, self.MIRROR):
+            moved = self.plan().reoriented(matrix)
+            assert [d.optional for d in moved.dimensions] == [True, False]
+
+    def test_the_bracket_keeps_measuring_the_axes_it_meant_to(self):
+        """Its section really is on xz, which really is mirrored on 2027.1."""
+        import json
+
+        from inventor_mcp.builder import build_part
+        from inventor_mcp.schema import PartRecipe
+        from inventor_mcp.session import Session
+
+        session = Session(backend_kind="mock")
+        session.ensure_backend().connect()
+        recipe = PartRecipe.model_validate(
+            json.loads((_ROOT / "examples" / "angle_bracket.json").read_text()))
+        build_part(session, recipe)
+        plan = session.backend._doc(session.active).sketches[0].plan
+        assert plan.plane == "xz"
+        before = [(d.kind, d.expression) for d in plan.dimensions]
+        assert [(d.kind, d.expression) for d in plan.mirrored_u().dimensions] == before

@@ -128,6 +128,20 @@ def main(argv: list[str] | None = None) -> int:
                   f"dimensions={result.get('dimensions')} "
                   f"profiles={result.get('profiles')} "
                   f"fully_constrained={result.get('fully_constrained')}")
+            driving = result.get("driving_dimensions") or 0
+            refused_dims = result.get("refused_dimensions") or 0
+            driven = result.get("driven_parameters") or []
+            if driving or refused_dims:
+                print(f"         driving={driving} refused={refused_dims}")
+            if driven:
+                print(f"         driven by: {', '.join(driven)}")
+            elif result.get("profiles"):
+                # The condition that shipped: a closed profile whose size came
+                # from parameters that then drove nothing.
+                print("         WARNING: this sketch has a profile and no parameter "
+                      "drives any of its dimensions")
+            for expression in result.get("undriven_expressions") or []:
+                print(f"         WARNING: {expression!r} did not reach the model")
             axes = result.get("axes")
             if axes:
                 print(f"         sketch axes: {axes}")

@@ -12,6 +12,7 @@ bookkeeping is checked without Inventor running.
 from __future__ import annotations
 
 import ast
+import logging
 import math
 from itertools import count
 from typing import Iterable, Sequence
@@ -31,7 +32,7 @@ from .plan import (
     Ref,
     SketchPlan,
 )
-from .resolve import Resolved, Resolver
+from .resolve import Resolved, Resolver, _is_simple
 from .schema import (
     ArcEntity,
     BoltCircleEntity,
@@ -51,6 +52,16 @@ from .schema import (
 
 #: Coordinates closer than this (in cm) are treated as the same point.
 TOL = 1.0e-7
+
+#: A gap smaller than this is aligned rather than dimensioned.  TOL is a
+#: nanometre: the right test for "is this segment axis-aligned", and the wrong
+#: one for "is this worth asking Inventor to hold", since a sub-micron driving
+#: dimension sits below the solver's own tolerance and is a redundancy
+#: candidate rather than a constraint.
+DIM_MIN = 1.0e-4
+
+
+logger = logging.getLogger(__name__)
 
 
 class _Ids:
@@ -203,23 +214,27 @@ def _plan_line(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: LineEntity
 
 def _plan_polyline(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: PolylineEntity) -> None:
     first, first_x, first_y = _anchor(resolver, spec.points[0])
-    points = [first] + [resolver.point2d(p) for p in spec.points[1:]]
+    # The expressions are kept, not just the numbers: they are what ends up
+    # driving the outline, and resolver.point2d throws them away.
+    coords = [resolver.coordinates(point) for point in spec.points]
+    points = [first] + [(x.value, y.value) for x, y in coords[1:]]
     if spec.closed and math.dist(points[0], points[-1]) <= TOL:
-        points = points[:-1]
+        points, coords = points[:-1], coords[:-1]
     if len(points) < 2:
         raise SketchError("A polyline needs at least two distinct points.")
 
-    pairs = list(zip(points, points[1:]))
+    segments = [(index, index + 1) for index in range(len(points) - 1)]
     if spec.closed:
-        pairs.append((points[-1], points[0]))
+        segments.append((len(points) - 1, 0))
 
     lines = []
-    for start, end in pairs:
-        if math.dist(start, end) <= TOL:
+    for start, end in segments:
+        if math.dist(points[start], points[end]) <= TOL:
             raise SketchError("A polyline may not contain a zero-length segment.")
         lines.append(
             plan.add(
-                PLine(ids.next("line"), spec.construction, spec.centerline, start=start, end=end),
+                PLine(ids.next("line"), spec.construction, spec.centerline,
+                      start=points[start], end=points[end]),
                 spec.name,
             )
         )
@@ -230,15 +245,154 @@ def _plan_polyline(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: Polyli
         plan.constrain("coincident", Ref(lines[-1].id, PointRef.END), Ref(lines[0].id, PointRef.START))
 
     if spec.dimension:
+        kinds: list[str | None] = []
         for line in lines:
             dx, dy = line.end[0] - line.start[0], line.end[1] - line.start[1]
             if _at_origin(dy):
+                kinds.append("horizontal")
                 plan.constrain("horizontal", Ref(line.id))
             elif _at_origin(dx):
+                kinds.append("vertical")
                 plan.constrain("vertical", Ref(line.id))
+            else:
+                kinds.append(None)
+                if abs(dx) <= DIM_MIN or abs(dy) <= DIM_MIN:
+                    logger.warning(
+                        "Polyline segment %s is within a micron of axis-aligned but not "
+                        "aligned (dx=%.3g dy=%.3g cm); it will be treated as oblique, "
+                        "which changes how the outline is dimensioned.",
+                        line.id, dx, dy)
+        _dimension_rails(plan, coords, segments, kinds, lines)
 
     _locate(plan, resolver, Ref(lines[0].id, PointRef.START), points[0], spec.locate,
             x_expression=first_x, y_expression=first_y)
+
+
+def _dimension_rails(
+    plan: SketchPlan,
+    coords: Sequence[tuple[Resolved, ...]],
+    segments: Sequence[tuple[int, int]],
+    kinds: Sequence[str | None],
+    lines: Sequence[PLine],
+) -> None:
+    """Drive an axis-aligned outline from its recipe's own expressions.
+
+    A polyline used to carry no dimensions at all, so an L-section's
+    ``base_len`` and ``upright_h`` were evaluated once when the recipe was
+    written and then thrown away: the profile could not be revised, which is
+    the one thing a parametric model is for.
+
+    The count has to be exact.  Emitting a dimension per vertex duplicates what
+    the horizontal and vertical constraints already say, and Inventor refuses a
+    redundant dimension -- so the rule counts what is genuinely free and
+    dimensions only that.
+
+    A *rail* is a set of vertices that a chain of constraints already forces to
+    share one coordinate: a horizontal segment equates its two vertices' Y, a
+    vertical segment equates their X.  Every rail after the first on each axis
+    is one free coordinate, so it gets one dimension, measured back to the rail
+    holding vertex 0 -- the corner ``_locate`` pins, so every measurement
+    chains from a known point.  Nothing else is emitted, ever.
+    """
+    count = len(coords)
+    # parents[0] groups vertices sharing an X coordinate, parents[1] a Y.
+    parents = [{index: index for index in range(count)} for _ in range(2)]
+
+    def find(axis: int, index: int) -> int:
+        while parents[axis][index] != index:
+            parents[axis][index] = parents[axis][parents[axis][index]]
+            index = parents[axis][index]
+        return index
+
+    for (start, end), kind in zip(segments, kinds):
+        # A horizontal segment fixes both ends' Y; a vertical one fixes their X.
+        axis = 1 if kind == "horizontal" else 0 if kind == "vertical" else None
+        if axis is None:
+            continue  # an oblique segment constrains neither, so it frees none
+        first, second = find(axis, start), find(axis, end)
+        if first != second:
+            parents[axis][first] = second
+
+    def vertex_ref(index: int) -> Ref:
+        if index < len(lines):
+            return Ref(lines[index].id, PointRef.START)
+        return Ref(lines[-1].id, PointRef.END)
+
+    joined = {frozenset(segment): index for index, segment in enumerate(segments)}
+
+    for axis in (0, 1):
+        datum = find(axis, 0)
+        rails: dict[int, list[int]] = {}
+        for index in range(count):
+            rails.setdefault(find(axis, index), []).append(index)
+
+        for root, members in sorted(rails.items(), key=lambda item: min(item[1])):
+            if root == datum:
+                continue
+            # Measure whichever pair spans least across the page, preferring two
+            # ends of one segment: a length on a line along its own axis is the
+            # shape _plan_rectangle already ships and Inventor already accepts.
+            here, there = min(
+                ((a, b) for a in rails[datum] for b in members),
+                key=lambda pair: (
+                    round(abs(coords[pair[0]][1 - axis].value
+                              - coords[pair[1]][1 - axis].value), 9),
+                    0 if frozenset(pair) in joined else 1,
+                    pair,
+                ),
+            )
+            _drive_rail(plan, coords, lines, joined, axis, here, there, vertex_ref)
+
+
+def _drive_rail(
+    plan: SketchPlan,
+    coords: Sequence[tuple[Resolved, ...]],
+    lines: Sequence[PLine],
+    joined: dict,
+    axis: int,
+    here: int,
+    there: int,
+    vertex_ref,
+) -> None:
+    """One dimension, or one alignment where there is no distance to drive."""
+    from_, to = coords[here][axis], coords[there][axis]
+    segment = joined.get(frozenset((here, there)))
+    if segment is not None:
+        line = lines[segment]
+        refs = ((Ref(line.id, PointRef.START), Ref(line.id, PointRef.END))
+                if (here, there) == (segment, segment + 1) or here < there
+                else (Ref(line.id, PointRef.END), Ref(line.id, PointRef.START)))
+    else:
+        refs = (vertex_ref(here), vertex_ref(there))
+
+    kind = "horizontal" if axis == 0 else "vertical"
+    gap = to.value - from_.value
+    if from_.expression.strip() == to.expression.strip() or abs(gap) <= DIM_MIN:
+        # Nothing to drive: the two coordinates are the same expression, or the
+        # same number to within the solver's own tolerance. An alignment costs
+        # the identical degree of freedom and cannot be refused as redundant.
+        plan.constrain("vertical_align" if axis == 0 else "horizontal_align", *refs)
+        if from_.expression.strip() != to.expression.strip():
+            plan.undriven_expressions.append(to.expression)
+        return
+
+    if _at_origin(from_.value):
+        driving = _magnitude(to)
+    elif _at_origin(to.value):
+        driving = _magnitude(from_)
+    else:
+        high, low = (to, from_) if gap > 0 else (from_, to)
+        subtrahend = low.expression.strip()
+        if not _is_simple(subtrahend):
+            subtrahend = f"({subtrahend})"
+        driving = Resolved(f"{high.expression.strip()} - {subtrahend}",
+                           high.value - low.value, high.dim)
+
+    across = (coords[here][1 - axis].value + coords[there][1 - axis].value) / 2
+    middle = (from_.value + to.value) / 2
+    offset = (middle, across - 0.4) if axis == 0 else (across - 0.4, middle)
+    plan.dimension(kind, refs, driving.expression, abs(driving.value),
+                   text_offset=offset, optional=True)
 
 
 def _plan_rectangle(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: RectangleEntity) -> None:

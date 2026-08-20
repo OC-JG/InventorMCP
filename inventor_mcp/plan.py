@@ -138,6 +138,11 @@ class Dimension:
     value: float
     name: str | None = None
     text_offset: tuple[float, float] = (0.0, 0.0)
+    #: True for a dimension the planner added to remove a degree of freedom
+    #: rather than because the recipe asked for it. Inventor refusing one of
+    #: these is survivable -- the sketch keeps a degree of freedom, which is
+    #: what it had before the dimension existed. A required one failing is not.
+    optional: bool = False
 
 
 @dataclass
@@ -155,6 +160,9 @@ class SketchPlan:
     labels: dict[str, list[str]] = field(default_factory=dict)
     #: primitive ids that are hole centres, in creation order
     hole_centers: list[str] = field(default_factory=list)
+    #: expressions the planner had to drop, so a run can say which parameter
+    #: did not reach the model rather than leaving it to be noticed later
+    undriven_expressions: list[str] = field(default_factory=list)
 
     def add(self, primitive: Primitive, label: str | None = None) -> Primitive:
         self.primitives.append(primitive)
@@ -177,9 +185,10 @@ class SketchPlan:
         *,
         name: str | None = None,
         text_offset: tuple[float, float] = (0.0, 0.0),
+        optional: bool = False,
     ) -> None:
         self.dimensions.append(
-            Dimension(kind, tuple(refs), expression, value, name, text_offset)
+            Dimension(kind, tuple(refs), expression, value, name, text_offset, optional)
         )
 
     def by_id(self, primitive_id: str) -> Primitive:
@@ -321,12 +330,26 @@ class SketchPlan:
                 return Ref(ref.entity, other_end[ref.point])
             return ref
 
+        # Under a swap the two axes trade places, so a "horizontal" dimension
+        # would measure the other one -- the right number on the wrong axis,
+        # which is the quietest kind of wrong. The words have to swap with the
+        # axes they name.
+        swapped = abs(a) < 0.5
+        other_axis = {"horizontal": "vertical", "vertical": "horizontal",
+                      "horizontal_align": "vertical_align",
+                      "vertical_align": "horizontal_align"}
+
+        def renamed(kind: str) -> str:
+            return other_axis.get(kind, kind) if swapped else kind
+
         out.constraints = [
-            Constraint(k.kind, tuple(remap(r) for r in k.refs)) for k in out.constraints
+            Constraint(renamed(k.kind), tuple(remap(r) for r in k.refs))
+            for k in out.constraints
         ]
         out.dimensions = [
-            Dimension(dim.kind, tuple(remap(r) for r in dim.refs), dim.expression,
-                      dim.value, dim.name, move(dim.text_offset))
+            Dimension(renamed(dim.kind), tuple(remap(r) for r in dim.refs),
+                      dim.expression, dim.value, dim.name, move(dim.text_offset),
+                      dim.optional)
             for dim in out.dimensions
         ]
         return out

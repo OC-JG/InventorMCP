@@ -95,6 +95,19 @@ class SketchInfo(Info):
     #: Constraints Inventor refused as dependent on the others. The sketch still
     #: closes, but a degree of freedom is left in it.
     refused_constraints: int = 0
+    #: Dimensions Inventor accepted *and* stored an expression for. These are
+    #: the only ones that actually drive anything.
+    driving_dimensions: int = 0
+    #: Dimensions Inventor refused, or would not store an expression for. The
+    #: sketch survives with a degree of freedom left in it.
+    refused_dimensions: int = 0
+    #: Recipe parameters that reached at least one driving dimension. A sketch
+    #: with closed loops and none of these is not parametric, however many
+    #: dimensions it appears to carry.
+    driven_parameters: list[str] = field(default_factory=list)
+    #: Expressions the planner had to drop, so a run names the parameter that
+    #: did not reach the model.
+    undriven_expressions: list[str] = field(default_factory=list)
     #: Where the sketch's own axes point in model space, as measured, and the
     #: transform applied to the recipe's coordinates to suit them. A plane's
     #: internal orientation is not derivable from its name, and getting it wrong

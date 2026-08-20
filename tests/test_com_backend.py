@@ -1162,3 +1162,132 @@ class TestConvexityNeverSecondGuessesTheLoops:
         from inventor_mcp.backend.base import TopoInfo
 
         assert "convexity_from" in TopoInfo.__dataclass_fields__
+
+
+class TestRefusedDimensions:
+    """A refused dimension leaves a degree of freedom; it does not kill a sketch.
+
+    It used to. `_add_dimension` ran inside `_translate_errors(..., SketchError)`
+    so one dimension Inventor called redundant took the whole sketch with it --
+    which is why polyline profiles shipped carrying no dimensions at all and
+    could not be revised. Constraints had the soft path all along; dimensions
+    now have the same one.
+    """
+
+    class Parameter:
+        def __init__(self, storable=True):
+            for name, value in (("storable", storable), ("Expression", None),
+                                ("Name", None)):
+                object.__setattr__(self, name, value)
+
+        def __setattr__(self, name, value):
+            if name == "Expression" and not self.storable:
+                raise RuntimeError("Inventor will not store that")
+            object.__setattr__(self, name, value)
+
+    class Created:
+        def __init__(self, storable=True, deletable=True):
+            self.Parameter = TestRefusedDimensions.Parameter(storable)
+            self.deletable = deletable
+            self.deleted = False
+
+        def Delete(self):
+            if not self.deletable:
+                raise RuntimeError("will not delete")
+            self.deleted = True
+
+    def backend_with(self, outcome):
+        """A backend whose dimension creation does whatever the test wants."""
+        backend = com.ComBackend.__new__(com.ComBackend)
+        backend._create_dimension = lambda *args: outcome()
+        backend._entity = lambda sketch, objects, ref: ref
+        backend._explain = lambda exc: str(exc)
+        return backend
+
+    def dimension(self, **extra):
+        from inventor_mcp.plan import Ref
+
+        fields = {"kind": "horizontal", "refs": (Ref("l1"),), "expression": "base_len",
+                  "value": 9.0, "name": None, "text_offset": (0.0, 0.0),
+                  "optional": True}
+        fields.update(extra)
+        return type("D", (), fields)()
+
+    def sketch(self):
+        return type("Sketch", (), {"DimensionConstraints": object()})()
+
+    def transient(self):
+        return type("TG", (), {"CreatePoint2d": staticmethod(lambda *a: a)})()
+
+    def test_a_dimension_inventor_refuses_is_reported_not_raised(self):
+        def refuse():
+            raise RuntimeError("the dimension is redundant")
+
+        backend = self.backend_with(refuse)
+        outcome, note = backend._add_dimension(
+            self.sketch(), self.transient(), {}, self.dimension())
+        assert outcome == "refused"
+        assert "redundant" in note
+
+    def test_an_accepted_dimension_stores_its_expression(self):
+        created = self.Created()
+        backend = self.backend_with(lambda: created)
+        outcome, _ = backend._add_dimension(
+            self.sketch(), self.transient(), {}, self.dimension())
+        assert outcome == "applied"
+        assert created.Parameter.Expression == "base_len"
+
+    def test_a_dimension_that_will_not_hold_its_expression_is_taken_back_out(self):
+        """A frozen number has spent the degree of freedom and drives nothing."""
+        created = self.Created(storable=False)
+        backend = self.backend_with(lambda: created)
+        outcome, note = backend._add_dimension(
+            self.sketch(), self.transient(), {}, self.dimension())
+        assert outcome == "refused"
+        assert created.deleted is True
+        assert "would not store" in note
+
+    def test_one_that_will_neither_hold_nor_be_removed_is_fatal(self):
+        """A frozen number silently standing in the model is the worst case."""
+        from inventor_mcp.errors import SketchError
+
+        created = self.Created(storable=False, deletable=False)
+        backend = self.backend_with(lambda: created)
+        with pytest.raises(SketchError, match="frozen number"):
+            backend._add_dimension(self.sketch(), self.transient(), {}, self.dimension())
+
+    def test_a_planner_bug_still_raises(self):
+        """An unsupported kind is our fault, not Inventor's judgement."""
+        from inventor_mcp.errors import SketchError
+
+        def unsupported():
+            raise SketchError("Unsupported dimension 'spiral'.")
+
+        backend = self.backend_with(unsupported)
+        with pytest.raises(SketchError, match="Unsupported"):
+            backend._add_dimension(self.sketch(), self.transient(), {}, self.dimension())
+
+    def test_the_recipes_own_dimensions_go_first(self):
+        """So an author's dimension claims its degree of freedom before a rail."""
+        import inspect
+
+        source = inspect.getsource(com.ComBackend.build_sketch)
+        assert 'if not getattr(d, "optional", False)' in source
+        assert "for dimension in required:" in source
+        assert source.index("for dimension in required:") < source.index(
+            "for dimension in optional:")
+
+    def test_a_required_refusal_is_still_fatal(self):
+        import inspect
+
+        source = inspect.getsource(com.ComBackend.build_sketch)
+        required = source[source.index("for dimension in required:"):
+                          source.index("for dimension in optional:")]
+        assert "raise SketchError" in required
+
+    def test_the_profile_check_no_longer_needs_something_to_have_been_refused(self):
+        """A dimension the solver acted on can break a loop with nothing refused."""
+        import inspect
+
+        source = inspect.getsource(com.ComBackend.build_sketch)
+        assert "if profiles == 0 and profile_loops(plan):" in source

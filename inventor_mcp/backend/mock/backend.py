@@ -23,6 +23,7 @@ from typing import Any, Iterable, Sequence
 from ...errors import DocumentError, FeatureError, ParameterError, SelectionError, SketchError
 from ...expressions import UnitContext, evaluate
 from ...geometry import loop_area, plan_bounds, profile_loops
+from ...expressions import referenced_parameters
 from ...plan import PArc, PCircle, PEllipse, PLine, PPoint, SketchPlan
 from ...units import Dim, Quantity, from_internal, lookup_unit
 from ..base import (
@@ -365,34 +366,11 @@ class MockBackend(Backend):
         self._record("build_sketch", name=name, plane=plan.plane, **plan.summary())
 
         free = _degrees_of_freedom(plan)
-        return SketchInfo(
-            id=sketch.id,
-            name=name,
-            plane=plan.plane,
-            entities=len(plan.primitives),
-            constraints=len(plan.constraints),
-            dimensions=len(plan.dimensions),
-            profiles=len(loops),
-            hole_centers=len(plan.hole_centers),
-            fully_constrained=free <= 0,
-            degrees_of_freedom=max(free, 0),
-        )
+        return _sketch_info(sketch)
 
     def list_sketches(self, doc_id: str) -> list[SketchInfo]:
         document = self._doc(doc_id)
-        return [
-            SketchInfo(
-                id=sketch.id,
-                name=sketch.name,
-                plane=sketch.plan.plane,
-                entities=len(sketch.plan.primitives),
-                constraints=len(sketch.plan.constraints),
-                dimensions=len(sketch.plan.dimensions),
-                profiles=len(sketch.loops),
-                hole_centers=len(sketch.plan.hole_centers),
-            )
-            for sketch in document.sketches
-        ]
+        return [_sketch_info(sketch) for sketch in document.sketches]
 
     # -- features ----------------------------------------------------------
     def extrude(self, doc_id: str, request: ExtrudeRequest) -> FeatureInfo:
@@ -1155,6 +1133,36 @@ def _bounds_center(bounds: list[float] | None) -> tuple[float, float, float] | N
         (bounds[0] + bounds[3]) / 2,
         (bounds[1] + bounds[4]) / 2,
         (bounds[2] + bounds[5]) / 2,
+    )
+
+
+def _sketch_info(sketch: Any) -> SketchInfo:
+    """One account of a sketch, so building and listing cannot disagree.
+
+    The simulator does no solving, so it can never refuse a dimension -- but
+    *which parameters reach a dimension* is a property of the plan, and that is
+    the half that says whether the sketch is parametric at all.
+    """
+    plan = sketch.plan
+    free = _degrees_of_freedom(plan)
+    return SketchInfo(
+        id=sketch.id,
+        name=sketch.name,
+        plane=plan.plane,
+        entities=len(plan.primitives),
+        constraints=len(plan.constraints),
+        dimensions=len(plan.dimensions),
+        profiles=len(sketch.loops),
+        hole_centers=len(plan.hole_centers),
+        fully_constrained=free <= 0,
+        degrees_of_freedom=max(free, 0),
+        driving_dimensions=len(plan.dimensions),
+        driven_parameters=sorted(
+            {name
+             for dimension in plan.dimensions
+             for name in referenced_parameters(dimension.expression)}
+        ),
+        undriven_expressions=list(plan.undriven_expressions),
     )
 
 

@@ -326,3 +326,184 @@ class TestSharedPoints:
                        "points": [[0, 0], [40, 0], [40, 20], [0, 20]]}])
         groups = plan.shared_point_groups()
         assert len(set(groups.values())) == 4
+
+
+class TestPolylineDimensions:
+    """An outline has to be driven by the expressions it was written with.
+
+    A polyline used to emit constraints and no dimensions, so an L-section's
+    base_len and upright_h were evaluated once and discarded: the profile could
+    not be revised, which is the only thing a parametric model is for.
+
+    The count has to be exact. A dimension per vertex repeats what the
+    horizontal and vertical constraints already say, and Inventor refuses a
+    redundant dimension -- which used to kill the whole sketch. So the rule
+    counts what is genuinely free: a *rail* is a set of vertices that
+    constraints already force to share a coordinate, and every rail after the
+    first on each axis is one free coordinate and gets one dimension.
+    """
+
+    def plan_for(self, points, closed=True, locate="origin", parameters=None, **extra):
+        from inventor_mcp.geometry import plan_sketch
+        from inventor_mcp.resolve import Resolver
+        from inventor_mcp.schema import SketchOp
+        from inventor_mcp.units import to_internal
+
+        resolver = Resolver("mm", "deg")
+        for name, value in (parameters or {}).items():
+            resolver.declare(name, to_internal(value, "mm"))
+        entity = {"type": "polyline", "points": points, "closed": closed,
+                  "locate": locate, **extra}
+        return plan_sketch(
+            SketchOp.model_validate({"op": "sketch", "name": "S", "plane": "xy",
+                                     "entities": [entity]}), resolver)
+
+    BRACKET = [[0, 0], ["base_len", 0], ["base_len", "thk"],
+               ["thk", "thk"], ["thk", "upright_h"], [0, "upright_h"]]
+    BRACKET_PARAMS = {"base_len": 90, "upright_h": 70, "thk": 6}
+
+    def test_the_bracket_section_gets_four_driving_dimensions(self):
+        plan = self.plan_for(self.BRACKET, parameters=self.BRACKET_PARAMS)
+        assert len(plan.dimensions) == 4
+
+    def test_each_one_carries_the_recipe_expression_verbatim(self):
+        """Verbatim, because that is what makes a parameter edit work."""
+        plan = self.plan_for(self.BRACKET, parameters=self.BRACKET_PARAMS)
+        assert [(d.kind, d.expression) for d in plan.dimensions] == [
+            ("horizontal", "base_len"),
+            ("horizontal", "thk"),
+            ("vertical", "thk"),
+            ("vertical", "upright_h"),
+        ]
+
+    def test_the_values_are_right_too(self):
+        plan = self.plan_for(self.BRACKET, parameters=self.BRACKET_PARAMS)
+        assert [d.value for d in plan.dimensions] == pytest.approx([9.0, 0.6, 0.6, 7.0])
+
+    def test_every_parameter_reaches_a_dimension(self):
+        from inventor_mcp.expressions import referenced_parameters
+
+        plan = self.plan_for(self.BRACKET, parameters=self.BRACKET_PARAMS)
+        driven = set()
+        for dimension in plan.dimensions:
+            driven |= referenced_parameters(dimension.expression)
+        assert driven == {"base_len", "upright_h", "thk"}
+
+    def test_thk_drives_two_dimensions_because_an_l_section_means_that(self):
+        plan = self.plan_for(self.BRACKET, parameters=self.BRACKET_PARAMS)
+        assert [d.expression for d in plan.dimensions].count("thk") == 2
+
+    def test_they_are_measured_along_a_single_lines_own_axis(self):
+        """The shape _plan_rectangle already ships, which Inventor accepts."""
+        plan = self.plan_for(self.BRACKET, parameters=self.BRACKET_PARAMS)
+        for dimension in plan.dimensions:
+            entities = {ref.entity for ref in dimension.refs}
+            assert len(entities) == 1, f"{dimension.expression} spans two entities"
+
+    def test_they_are_all_optional(self):
+        """So Inventor refusing one leaves the sketch, not kills it."""
+        plan = self.plan_for(self.BRACKET, parameters=self.BRACKET_PARAMS)
+        assert all(d.optional for d in plan.dimensions)
+
+    def test_the_recipes_own_dimensions_are_not_optional(self):
+        from inventor_mcp.geometry import plan_sketch
+        from inventor_mcp.resolve import Resolver
+        from inventor_mcp.schema import SketchOp
+
+        plan = plan_sketch(SketchOp.model_validate({
+            "op": "sketch", "name": "S", "plane": "xy",
+            "entities": [{"type": "rectangle", "center": [0, 0],
+                          "width": 40, "height": 20}]}), Resolver("mm", "deg"))
+        assert plan.dimensions and not any(d.optional for d in plan.dimensions)
+
+    @pytest.mark.parametrize("points,closed,expected", [
+        # A rectangle: 2 X rails, 2 Y rails -> 1 + 1.
+        ([[0, 0], [40, 0], [40, 20], [0, 20]], True, 2),
+        # The L: 3 X rails, 3 Y rails -> 2 + 2.
+        ([[0, 0], [90, 0], [90, 6], [6, 6], [6, 70], [0, 70]], True, 4),
+        # An open three-point L: 2 X rails, 2 Y rails.
+        ([[0, 0], [40, 0], [40, 20]], False, 2),
+        # A C-channel: 4 X rails, 4 Y rails -> 3 + 3.
+        ([[0, 0], [40, 0], [40, 10], [10, 10], [10, 30], [40, 30],
+          [40, 40], [0, 40]], True, 6),
+        # A right triangle: the hypotenuse is oblique so it frees nothing.
+        ([[0, 0], [40, 0], [0, 20]], True, 2),
+    ])
+    def test_the_count_matches_the_free_coordinates(self, points, closed, expected):
+        plan = self.plan_for(points, closed=closed)
+        emitted = len(plan.dimensions) + sum(
+            1 for c in plan.constraints
+            if c.kind in ("horizontal_align", "vertical_align")
+            and all(r.entity != "__origin__" for r in c.refs))
+        assert emitted == expected
+
+    def test_the_simulator_calls_the_bracket_fully_constrained(self):
+        from inventor_mcp.builder import build_part
+        from inventor_mcp.schema import PartRecipe
+        from inventor_mcp.session import Session
+
+        session = Session(backend_kind="mock")
+        session.ensure_backend().connect()
+        build_part(session, PartRecipe.model_validate({
+            "name": "L", "units": "mm",
+            "parameters": [{"name": k, "value": v} for k, v in self.BRACKET_PARAMS.items()],
+            "operations": [
+                {"op": "sketch", "name": "S", "plane": "xy", "entities": [
+                    {"type": "polyline", "points": self.BRACKET, "closed": True}]},
+                {"op": "extrude", "sketch": "S", "distance": 50},
+            ]}))
+        [info] = [s for s in session.backend.list_sketches(session.active)]
+        assert info.degrees_of_freedom == 0
+        assert sorted(info.driven_parameters) == ["base_len", "thk", "upright_h"]
+
+    def test_a_centred_outline_subtracts_signed_coordinates(self):
+        """The sign trap: -w/2 must not become +w/2 on the way to a dimension."""
+        from inventor_mcp.expressions import UnitContext, evaluate
+        from inventor_mcp.units import to_internal
+
+        plan = self.plan_for(
+            [["-w/2", "-h/2"], ["w/2", "-h/2"], ["w/2", "h/2"], ["-w/2", "h/2"]],
+            parameters={"w": 40, "h": 20})
+        table = {"w": to_internal(40, "mm"), "h": to_internal(20, "mm")}
+        units = UnitContext(length="mm", angle="deg")
+        for dimension in plan.dimensions:
+            assert evaluate(dimension.expression, table, units).value == pytest.approx(
+                dimension.value), f"{dimension.expression!r} does not mean {dimension.value}"
+        # Four in total: two rails spanning the outline, and the two `_locate`
+        # emits to position a first vertex that is not at the origin.
+        rails = [d for d in plan.dimensions if d.optional]
+        assert [(d.kind, d.expression, round(d.value, 6)) for d in rails] == [
+            ("horizontal", "w/2 - (-w/2)", 4.0),
+            ("vertical", "h/2 - (-h/2)", 2.0),
+        ]
+
+    def test_a_rail_at_the_datum_coordinate_is_aligned_not_dimensioned_to_zero(self):
+        """A comb: the far teeth return to the datum's own X."""
+        plan = self.plan_for(
+            [[0, 0], [0, 10], [20, 10], [20, 0], [40, 0], [40, 10],
+             [60, 10], [60, 0]], closed=True)
+        assert all(d.value > 1e-4 for d in plan.dimensions), "no zero dimensions"
+
+    def test_a_dependent_direction_constraint_frees_nothing(self):
+        """Three collinear vertical points: one X rail, so no X dimension.
+
+        The two vertical constraints put all three vertices on one X rail, so
+        that axis is fully determined and contributes nothing. The three Y
+        coordinates are genuinely independent, so two of them are dimensioned.
+        """
+        plan = self.plan_for([[0, 0], [0, 10], [0, 20]], closed=False)
+        rails = [d for d in plan.dimensions if d.optional]
+        assert [d.kind for d in rails] == ["vertical", "vertical"]
+        assert [round(d.value, 6) for d in rails] == [1.0, 2.0]
+
+    def test_locate_none_leaves_the_outline_free_to_move(self):
+        plan = self.plan_for(self.BRACKET, locate="none",
+                             parameters=self.BRACKET_PARAMS)
+        assert len(plan.dimensions) == 4
+        assert not any(r.entity == "__origin__"
+                       for c in plan.constraints for r in c.refs)
+
+    def test_asking_for_no_dimensions_still_means_no_dimensions(self):
+        plan = self.plan_for(self.BRACKET, parameters=self.BRACKET_PARAMS,
+                             dimension=False)
+        assert plan.dimensions == []

@@ -32,6 +32,7 @@ from ...errors import (
     SelectionError,
     SketchError,
 )
+from ...expressions import referenced_parameters
 from ...geometry import profile_loops
 from ...plan import PArc, PCircle, PEllipse, PLine, PPoint, PointRef, Ref, SketchPlan
 from ...units import from_internal, inventor_symbol
@@ -672,9 +673,46 @@ class ComBackend(Backend):
                 logger.info("Sketch %s: Inventor had already applied %d constraint(s): %s",
                             sketch.Name, len(inferred), "; ".join(inferred[:5]))
 
+            # The recipe's own dimensions go first and are required: a refusal
+            # there means the part is not the one that was asked for. The
+            # planner's own degree-of-freedom dimensions go second and are
+            # optional, so an author's dimension claims its degree of freedom
+            # before a generated one can spend it.
+            driving: list[str] = []
+            refused_dimensions: list[str] = []
+            required = [d for d in plan.dimensions if not getattr(d, "optional", False)]
+            optional = [d for d in plan.dimensions if getattr(d, "optional", False)]
+
             with self._translate_errors("Applying sketch dimensions", SketchError):
-                for dimension in plan.dimensions:
-                    self._add_dimension(sketch, transient, objects, dimension)
+                for dimension in required:
+                    outcome, note = self._add_dimension(
+                        sketch, transient, objects, dimension)
+                    if outcome == "applied":
+                        driving.append(note)
+                    else:
+                        raise SketchError(
+                            f"Inventor refused the dimension {note}.",
+                            hint="It was asked for by the recipe, so the part cannot "
+                            "be built without it. Check it is not already implied by "
+                            "another dimension or constraint.",
+                        )
+
+            for dimension in optional:
+                try:
+                    outcome, note = self._add_dimension(
+                        sketch, transient, objects, dimension)
+                except SketchError:
+                    raise
+                except Exception as exc:  # pragma: no cover - version-specific
+                    outcome, note = "refused", f"{dimension.expression!r}: {exc}"
+                if outcome == "applied":
+                    driving.append(note)
+                else:
+                    refused_dimensions.append(note)
+            if refused_dimensions:
+                logger.info("Sketch %s: Inventor refused %d dimension(s): %s",
+                            sketch.Name, len(refused_dimensions),
+                            "; ".join(refused_dimensions[:5]))
 
         self._sketches.setdefault(doc_id, {})[sketch.Name] = sketch
         profiles = _count_profiles(sketch)
@@ -685,11 +723,15 @@ class ComBackend(Backend):
         # populates from it happily. So ask the sketch instead of assuming: it
         # is broken only if the recipe drew a closed loop and no profile came
         # out of it.
-        if refused and profiles == 0 and profile_loops(plan):
+        # Not `refused and ...`: a dimension the solver acted on can break a
+        # loop just as a refused constraint can, so the question is asked of
+        # the sketch either way.
+        if profiles == 0 and profile_loops(plan):
             raise SketchError(
                 f"Sketch {sketch.Name!r} has closed loops in the recipe but no "
-                f"profile, after {len(refused)} refused constraint(s): "
-                f"{'; '.join(refused[:3])}",
+                f"profile, after {len(refused)} refused constraint(s) and "
+                f"{len(refused_dimensions)} refused dimension(s): "
+                f"{'; '.join(refused[:2] + refused_dimensions[:2])}",
                 hint="Its geometry is not joined. Check for coordinates that do "
                 "not quite meet, or two entities Inventor considers already "
                 "constrained to each other.",
@@ -706,6 +748,10 @@ class ComBackend(Backend):
             fully_constrained=_fully_constrained(sketch),
             inferred_constraints=len(inferred),
             refused_constraints=len(refused),
+            driving_dimensions=len(driving),
+            refused_dimensions=len(refused_dimensions),
+            driven_parameters=_driven_parameters(plan, driving),
+            undriven_expressions=list(plan.undriven_expressions),
             axes=axes,
         )
 
@@ -945,11 +991,57 @@ class ComBackend(Backend):
         return ("refused", where)
 
     def _add_dimension(self, sketch: Any, transient: Any, objects: dict[str, Any],
-                       dimension: Any) -> None:  # pragma: no cover
+                       dimension: Any) -> tuple[str, str]:  # pragma: no cover
+        """Apply one driving dimension, reporting whether Inventor took it.
+
+        Parallel to :meth:`_add_constraint`.  A dimension the planner added to
+        remove a degree of freedom can be refused as redundant -- Inventor does
+        that readily, as the polygon's closing equality shows -- and refusing
+        one leaves the sketch exactly as it was before the dimension existed,
+        which is survivable.  It used to raise, so a single redundant dimension
+        killed the whole sketch; that is why polyline profiles carried none at
+        all and could not be revised.
+
+        An unsupported kind or a reference to an entity that was never created
+        still raises: those are bugs in the planner, not Inventor's judgement.
+        """
         dimensions = sketch.DimensionConstraints
         targets = [self._entity(sketch, objects, ref) for ref in dimension.refs]
         text = transient.CreatePoint2d(*_text_point(dimension))
+        where = f"{dimension.kind} {dimension.expression!r}"
 
+        try:
+            created = self._create_dimension(dimensions, dimension, targets, text)
+        except SketchError:
+            raise
+        except Exception as exc:
+            return ("refused", f"{where}: {self._explain(exc)}")
+
+        # The expression -- not the number -- is what makes the model
+        # parametric. A dimension standing with a frozen number has consumed
+        # the degree of freedom and drives nothing, which is worse than not
+        # having it at all, so it is taken back out.
+        try:
+            created.Parameter.Expression = dimension.expression
+            if dimension.name:
+                created.Parameter.Name = dimension.name
+        except Exception as exc:
+            note = f"{where}: Inventor would not store the expression ({self._explain(exc)})"
+            try:
+                created.Delete()
+            except Exception as removal:
+                raise SketchError(
+                    f"Dimension {where} was created but its expression could not be "
+                    f"stored, and it could not be removed either ({removal}). The "
+                    "sketch now holds a frozen number where a parameter should be.",
+                    hint="Rebuild this sketch; the model is not parametric as it "
+                    "stands.",
+                ) from exc
+            return ("refused", note)
+        return ("applied", where)
+
+    def _create_dimension(self, dimensions: Any, dimension: Any, targets: list[Any],
+                          text: Any) -> Any:  # pragma: no cover
         if dimension.kind in ("distance", "horizontal", "vertical"):
             orientation = {
                 "distance": "kAlignedDim",
@@ -969,11 +1061,7 @@ class ComBackend(Backend):
             created = dimensions.AddTwoLineAngle(targets[0], targets[1], text)
         else:
             raise SketchError(f"Unsupported dimension {dimension.kind!r}.")
-
-        # The expression -- not the number -- is what makes the model parametric.
-        created.Parameter.Expression = dimension.expression
-        if dimension.name:
-            created.Parameter.Name = dimension.name
+        return created
 
     def list_sketches(self, doc_id: str) -> list[SketchInfo]:  # pragma: no cover
         document = self._doc(doc_id)
@@ -2423,6 +2511,26 @@ def _convexity_from_samples(edge: Any) -> str | None:  # pragma: no cover
     if abs(alignment) < 1e-6:
         return None
     return "concave" if alignment > 0 else "convex"
+
+
+def _driven_parameters(plan: SketchPlan, applied: Sequence[str]) -> list[str]:
+    """Which of the recipe's parameters reached a dimension Inventor accepted.
+
+    A sketch can carry dimensions and still not be parametric, if every one of
+    them is a frozen number. This is the difference, and it is worth reporting
+    rather than leaving to be discovered by editing a parameter and watching
+    nothing move.
+    """
+    names: set[str] = set()
+    stored = {note for note in applied}
+    for dimension in plan.dimensions:
+        if not any(repr(dimension.expression) in note for note in stored):
+            continue
+        try:
+            names |= referenced_parameters(dimension.expression)
+        except Exception:  # pragma: no cover - a malformed expression cannot drive
+            continue
+    return sorted(names)
 
 
 def _solid_volume(document: Any) -> float | None:

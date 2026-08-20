@@ -153,6 +153,17 @@ afternoon:
   on a hole centre, and asking for those six coincidences explicitly was refused
   every time — while Inventor's own hole tool populated from that same sketch
   quite happily.
+* **A refused *dimension* is survivable too, if the planner added it.** It used
+  to raise, so one dimension Inventor called redundant killed the whole sketch —
+  which is why polyline profiles shipped carrying no dimensions at all and could
+  not be revised. Dimensions the recipe asked for are still required and a
+  refusal is fatal; dimensions the planner added to remove a degree of freedom
+  are optional, and a refusal leaves the sketch exactly as it was before. The
+  required ones are applied first, so an author's dimension claims its degree of
+  freedom before a generated one can spend it. A dimension Inventor accepts but
+  will not store an expression for is deleted and counted as refused: a frozen
+  number has spent the degree of freedom and drives nothing, which is worse than
+  not having it.
 * **A refused constraint is judged by the sketch it leaves behind**, not by its
   kind. Coincidence used to be treated as always-fatal, on the reasoning that
   without it the geometry is not joined. True of a profile sketch, false of a
