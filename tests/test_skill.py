@@ -7,6 +7,7 @@ none, because it is believed.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -137,3 +138,59 @@ class TestTheClaimsAboutBehaviourHold:
             assert operation in lowered
             assert operation in setup, (
                 f"{operation} is called unproven in the Skill; keep the docs agreeing")
+
+
+class TestTheWorkedExamplesWork:
+    """Every recipe in the Skill has to build, or it teaches a broken pattern.
+
+    These are the few-shot material a model copies from. A recipe that no longer
+    validates is worse than no example at all, because it will be imitated.
+    """
+
+    def recipes(self, skill: str) -> list[tuple[int, dict]]:
+        import json
+
+        found = []
+        for match in re.finditer(r"```json\n(.*?)\n```", skill, re.DOTALL):
+            body = match.group(1)
+            if '"operations"' not in body:
+                continue  # a fragment illustrating one field, not a whole recipe
+            found.append((skill[: match.start()].count("\n") + 1, json.loads(body)))
+        return found
+
+    def test_the_skill_contains_worked_examples(self, skill):
+        assert len(self.recipes(skill)) >= 2, (
+            "the reasoning from a sentence to a recipe is the thing worth teaching")
+
+    def test_every_one_of_them_rehearses_clean(self, skill):
+        from inventor_mcp.builder import rehearse
+        from inventor_mcp.schema import PartRecipe
+
+        for line, recipe in self.recipes(skill):
+            report = rehearse(PartRecipe.model_validate(recipe))
+            assert report["ok"], (
+                f"SKILL.md:{line} ({recipe.get('name')}) does not build: "
+                f"{report['findings']}")
+            assert report["warnings"] == [], (
+                f"SKILL.md:{line} ({recipe.get('name')}) rehearses with warnings: "
+                f"{[w['warning'] for w in report['warnings']]}")
+
+    def test_and_every_declared_parameter_drives_something(self, skill):
+        """The examples teach that; they had better do it."""
+        from inventor_mcp.builder import rehearse
+        from inventor_mcp.schema import PartRecipe
+
+        for line, recipe in self.recipes(skill):
+            report = rehearse(PartRecipe.model_validate(recipe))
+            idle = [w for w in report["warnings"] if "drive nothing" in w["warning"]]
+            assert not idle, f"SKILL.md:{line}: {idle}"
+
+    def test_they_use_expressions_rather_than_literals_for_derived_sizes(self, skill):
+        """The point of the examples is this habit, so check they show it."""
+        for line, recipe in self.recipes(skill):
+            declared = {spec["name"] for spec in recipe.get("parameters", [])}
+            body = json.dumps(recipe)
+            used = {name for name in declared if f'"{name}' in body or f' {name}' in body}
+            assert used == declared, (
+                f"SKILL.md:{line}: {sorted(declared - used)} never appears in an "
+                "expression, so the example teaches a frozen number")

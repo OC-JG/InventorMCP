@@ -73,6 +73,105 @@ Check the number against what you expect. A 9 mm hole 6 mm deep removes
 π×4.5²×6 = 382 mm³ = 0.382 cm³. If the report says something else, something
 else happened.
 
+## From a sentence to a recipe
+
+The hard part is not the JSON, it is deciding **which numbers are the driving
+dimensions**. Name the ones a person would put on a drawing; write everything
+else as an expression of those. That decision is what makes the part revisable.
+
+### "A 120 × 80 × 8 mounting plate, four M6 clearance holes 12 mm in from the edges, corners rounded 10"
+
+Driving dimensions: the two overall sizes, the thickness, the hole size, the
+edge margin, the corner radius. Six numbers, all of which a person would
+dimension. The hole *spacing* is not one of them — it follows from the plate
+size and the margin, so it is an expression.
+
+```json
+{
+  "name": "MountingPlate", "units": "mm", "material": "Aluminum",
+  "parameters": [
+    {"name": "plate_w", "value": 120, "comment": "overall width"},
+    {"name": "plate_d", "value": 80, "comment": "overall depth"},
+    {"name": "thk", "value": 8},
+    {"name": "hole_d", "value": 6.6, "comment": "M6 clearance"},
+    {"name": "edge_margin", "value": 12, "comment": "hole centre to edge"},
+    {"name": "corner_r", "value": 10}
+  ],
+  "operations": [
+    {"op": "sketch", "name": "Outline", "plane": "xy", "entities": [
+      {"type": "rectangle", "center": [0, 0], "width": "plate_w", "height": "plate_d"}]},
+    {"op": "extrude", "name": "Plate", "sketch": "Outline", "distance": "thk"},
+    {"op": "fillet", "name": "Corners", "edges": {"filter": "vertical"}, "radius": "corner_r"},
+    {"op": "sketch", "name": "Holes", "plane": "xy", "entities": [
+      {"type": "point_grid", "center": [0, 0], "columns": 2, "rows": 2,
+       "x_spacing": "plate_w - 2 * edge_margin",
+       "y_spacing": "plate_d - 2 * edge_margin"}]},
+    {"op": "hole", "name": "Fixings", "sketch": "Holes", "diameter": "hole_d",
+     "through_all": true}
+  ]
+}
+```
+
+Note `"x_spacing": "plate_w - 2 * edge_margin"`. Written as `96` it would build
+the same plate and then be wrong the moment the plate got wider. And
+`{"filter": "vertical"}` for the corners rather than four edge indices, because
+a box's four upright edges are exactly what "vertical" means.
+
+### "An L-bracket: base 90 long, upright 70 tall, 6 thick, 50 wide. Two 20 × 9 slots in the base, 30 apart. Round the inside corner 8"
+
+An L-section is a **polyline** profile, extruded. Its six vertices are all
+expressions of `base_len`, `upright_h` and `thk` — that is what makes the
+outline revisable, and writing them as numbers is the commonest way to produce
+a part that looks right and cannot be changed.
+
+```json
+{
+  "name": "AngleBracket", "units": "mm", "material": "Steel",
+  "parameters": [
+    {"name": "base_len", "value": 90}, {"name": "upright_h", "value": 70},
+    {"name": "width", "value": 50}, {"name": "thk", "value": 6},
+    {"name": "slot_len", "value": 20}, {"name": "slot_w", "value": 9},
+    {"name": "slot_pitch", "value": 30}, {"name": "fillet_r", "value": 8}
+  ],
+  "operations": [
+    {"op": "sketch", "name": "Section", "plane": "xz", "entities": [
+      {"type": "polyline", "closed": true, "points": [
+        [0, 0], ["base_len", 0], ["base_len", "thk"],
+        ["thk", "thk"], ["thk", "upright_h"], [0, "upright_h"]]}]},
+    {"op": "extrude", "name": "Body", "sketch": "Section", "distance": "width",
+     "direction": "symmetric"},
+    {"op": "sketch", "name": "Slots", "plane": "xy", "entities": [
+      {"type": "slot", "center": ["base_len - 25", "slot_pitch / 2"],
+       "length": "slot_len", "width": "slot_w", "angle": 0}]},
+    {"op": "extrude", "name": "SlotCut", "sketch": "Slots", "extent": "through_all",
+     "operation": "cut", "direction": "positive"},
+    {"op": "mirror", "name": "SlotPair", "features": ["SlotCut"], "plane": "xz"},
+    {"op": "fillet", "name": "InsideCorner", "radius": "fillet_r",
+     "edges": {"kind": "edge", "filter": "concave", "min_length": 40, "limit": 1}}
+  ]
+}
+```
+
+Three choices worth copying:
+
+- **The section is on `xz`** so the extrusion runs along Y and gives the width.
+  Draw the profile as you would on paper; the server handles the plane's real
+  orientation.
+- **One slot, then a mirror.** Two hand-placed slots would need their positions
+  keeping in step by hand; a mirror keeps them symmetric by construction.
+- **The inside corner is selected by `concave`**, not by a point. `min_length: 40`
+  excludes the 20 mm slot edges, and `limit: 1` takes the one that remains.
+
+### Revising it
+
+```
+set_parameters([{"name": "base_len", "value": 120}])
+```
+
+The base lengthens, the slots move with it, the upright and the fillet stay put.
+Nothing is rebuilt. If any of that does not happen, some number in the recipe
+was written as a literal.
+
 ## Select by intent, never by index
 
 Edge and face indices renumber after every feature, so an index captured before

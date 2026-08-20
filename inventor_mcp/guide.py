@@ -12,8 +12,10 @@ Turns a description of a part into a real parametric Autodesk Inventor model.
 
 Workflow:
 1. `connect` -- picks a live Inventor session, or a simulator if Inventor is absent.
-2. `validate_recipe` -- static check of a recipe. Free, needs no Inventor, catches
-   unit mistakes, unclosed profiles and missing references. Use it before building.
+2. `validate_recipe` -- checks the recipe AND rehearses it in the simulator, reporting
+   what each operation would do to the part. Free, needs no Inventor. Read its
+   `warnings`: a cut whose profile misses the part, or a parameter that drives no
+   geometry, is a valid recipe that builds the wrong thing. Always run it first.
 3. `build_part_from_recipe` -- creates the part: parameters first, then sketches and features.
 4. `inspect_part` / `select_topology` / `measure_part` -- see what actually exists.
 5. `set_parameters` -- change a driving dimension and the model updates. This is the
