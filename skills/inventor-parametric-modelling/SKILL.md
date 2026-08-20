@@ -18,12 +18,36 @@ them. `"width": "plate_w"`, not `"width": 120`.
 ## The loop
 
 1. `connect` — a live Inventor if there is one, otherwise the simulator.
-2. `validate_recipe` — free, needs no Inventor, catches unit mistakes and
-   unclosed profiles. Always worth a call before building.
+2. **`validate_recipe` — always, before building.** It does not merely check the
+   schema: it builds the whole recipe in the simulator and reports what each
+   operation would do. Free, instant, needs no Inventor.
 3. `build_part_from_recipe` — parameters first, then sketches and features.
 4. Read what came back (see below). Do not assume it worked.
 5. `set_parameters` — change a driving dimension; the model updates.
 6. `export_model` / `capture_view`.
+
+### What to read in the rehearsal
+
+`warnings` is the important field. A recipe can pass every schema check and
+still build the wrong part, and these are the ways it does:
+
+- **`sketch 'X' does not reach the part`** — the profile lies outside the part
+  entirely, so the cut will meet nothing. Fix the plane or the coordinates.
+- **`removed no material`** — same conclusion, reached from the volume.
+- **`a, b drive nothing`** — those parameters are declared and never referenced,
+  so the part is not revisable through them. Write the sizes that depend on them
+  as expressions.
+
+Then read `steps` and check each `volume_change_cm3` against what you meant. A
+9 mm hole 6 mm deep removes π×4.5²×6 = 0.382 cm³. If the rehearsal says
+something else, work out why before spending a CAD seat on it.
+
+Two things the rehearsal cannot tell you, because the simulator has no
+booleans and no notion of which side the material is on:
+
+- whether a cut that *overlaps* the part removes the right amount;
+- which way a fillet or chamfer will move the volume. It models every fillet as
+  subtractive, so an inside-corner fillet looks wrong here and is not.
 
 ## Read the report on every operation
 

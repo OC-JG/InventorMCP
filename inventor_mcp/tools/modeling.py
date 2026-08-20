@@ -6,7 +6,13 @@ from typing import Annotated, Any
 
 from pydantic import Field, TypeAdapter
 
-from ..builder import apply_operation, apply_parameter, build_part, check_recipe
+from ..builder import (
+    apply_operation,
+    apply_parameter,
+    build_part,
+    check_recipe,
+    rehearse,
+)
 from ..guide import MODELLING_NOTES, RECIPE_CHEATSHEET
 from ..schema import Operation, ParameterSpec, PartRecipe, recipe_json_schema
 from ..session import Session
@@ -33,17 +39,27 @@ def register(server: Any, session: Session) -> None:
         return payload
 
     @server.tool(
-        description="Statically check a part recipe without touching Inventor: expressions, "
-        "units, sketch closure, references between operations, hole centres. "
-        "Returns per-sketch geometry counts and every problem found. "
-        "Cheap -- run it before `build_part_from_recipe`.\n\n" + RECIPE_CHEATSHEET,
+        description="Check a part recipe without touching Inventor, then rehearse it: "
+        "expressions, units, sketch closure, references between operations and hole "
+        "centres, and then a full build in the simulator reporting what each "
+        "operation would do to the part.\n\n"
+        "Read the `warnings`. They are the things a valid recipe gets wrong: a cut "
+        "whose profile misses the part, a parameter that drives no geometry. Read "
+        "`steps` for the volume each operation moves, and check those numbers "
+        "against what you intended -- a 9 mm hole 6 mm deep removes 0.382 cm3.\n\n"
+        "Free and instant. Always run it before `build_part_from_recipe`.\n\n"
+        + RECIPE_CHEATSHEET,
     )
     @guard
     def validate_recipe(
         recipe: Annotated[dict[str, Any], Field(description="The recipe object to check.")],
+        rehearsal: Annotated[bool, Field(
+            description="Also build it in the simulator and report what each operation "
+                        "would do. Free, needs no Inventor, and catches a valid recipe "
+                        "that builds the wrong part.")] = True,
     ) -> dict[str, Any]:
         parsed = PartRecipe.model_validate(recipe)
-        result = check_recipe(parsed)
+        result = rehearse(parsed) if rehearsal else check_recipe(parsed)
         result["name"] = parsed.name
         result["units"] = parsed.units
         result["operation_count"] = len(parsed.operations)

@@ -566,6 +566,228 @@ def check_recipe(recipe: PartRecipe) -> dict[str, Any]:
     }
 
 
+#: Operations whose whole purpose is to remove material. One of these that
+#: changes nothing has missed the part -- the single most common way a recipe is
+#: wrong, and the one that used to survive all the way to a live run.
+_SUBTRACTIVE = {"hole", "shell"}
+
+#: Simulator gaps, so a rehearsal does not report them as recipe faults. It
+#: does not model an occurrence's volume, so a pattern or a mirror legitimately
+#: shows no change here even when Inventor would remove plenty.
+_NOT_MODELLED = {"mirror", "rectangular_pattern", "circular_pattern"}
+
+
+def rehearse(recipe: PartRecipe) -> dict[str, Any]:
+    """Build the recipe in the simulator and report what it would do.
+
+    Static checks catch a malformed recipe; they cannot catch a well-formed one
+    that builds the wrong part. A cut whose profile misses the material, a
+    parameter that drives nothing, a selector that matches no edge -- all of
+    those are only visible once something is built, and all of them have
+    reached a live Inventor at least once before being noticed.
+
+    The simulator can see every one of them, in milliseconds, on any machine.
+    So a rehearsal is worth far more than a schema check: write a recipe, run
+    it here, read the complaints, and only then spend a CAD seat on it.
+    """
+    from .backend.mock.backend import MockBackend
+    from .session import Session
+
+    static = check_recipe(recipe)
+    report: dict[str, Any] = {
+        "ok": static["ok"],
+        "findings": list(static["findings"]),
+        "warnings": [],
+        "sketches": static["sketches"],
+        "parameters": static["parameters"],
+        "rehearsed": False,
+    }
+    if not static["ok"]:
+        report["hint"] = "Fix the findings first; the rehearsal needs a valid recipe."
+        return report
+
+    session = Session(backend_kind="mock")
+    session._backend = MockBackend()
+    session.backend.connect()
+    document = session.backend.new_part(
+        recipe.name, units=recipe.units, angle_units=recipe.angle_units)
+    context = session.register(document, recipe.units, recipe.angle_units)
+
+    for spec in recipe.parameters:
+        try:
+            apply_parameter(session, context, spec)
+        except Exception as exc:
+            report["findings"].append({"where": f"parameter {spec.name}", "error": str(exc)})
+            report["ok"] = False
+            return report
+
+    steps: list[dict[str, Any]] = []
+    for index, op in enumerate(recipe.operations):
+        where = f"operation {index} ({op.op}" + (f", {op.name}" if op.name else "") + ")"
+        # Where the part was before this operation: a cut has to be judged
+        # against what it was aimed at, not against what it left behind.
+        was = measure(session, context) or {}
+        try:
+            outcome = apply_operation(session, context, op)
+        except Exception as exc:
+            report["findings"].append({
+                "where": where, "error": str(exc), "hint": getattr(exc, "hint", None),
+            })
+            report["ok"] = False
+            report["steps"] = steps
+            report["rehearsed"] = True
+            report["hint"] = ("The recipe is valid but does not build. The simulator "
+                              "stopped here, so Inventor would too.")
+            return report
+        step = {"index": index, "op": op.op, "name": op.name}
+        if "measured" in outcome:
+            step["measured"] = outcome["measured"]
+        steps.append(step)
+        _warn_about(report["warnings"], where, op, outcome)
+
+        target = getattr(op, "sketch", None) or context.last_sketch
+        subtractive = op.op in _SUBTRACTIVE or getattr(op, "operation", None) == "cut"
+        box = [value / 10 for value in was["at_mm"]] if "at_mm" in was else None
+        if subtractive and target in context.plans and not _profile_reaches_the_part(
+                context.plans[target], box):
+            report["warnings"].append({
+                "where": where,
+                "warning": f"sketch {target!r} does not reach the part",
+                "why": "Its geometry lies entirely outside the part's bounding box "
+                       "in its own plane, so this will cut empty air. The simulator "
+                       "cannot see this -- it has no booleans -- but the bounding "
+                       "boxes can.",
+            })
+
+    report["steps"] = steps
+    report["rehearsed"] = True
+    report["result"] = measure(session, context)
+    report["warnings"].extend(_undriven_parameters(recipe, context))
+    return report
+
+
+def _profile_reaches_the_part(plan: Any, box: Sequence[float] | None) -> bool:
+    """Whether a sketch's geometry overlaps the part at all, in its own plane.
+
+    The simulator cannot answer this: it has no booleans, so it subtracts a
+    cut's prismatic volume whether or not the profile meets anything. But the
+    question is answerable from the bounding boxes alone, and answering it
+    conservatively -- only ever reporting a *certain* miss -- catches the single
+    most expensive class of mistake in this project's history. The bracket's
+    slots cut empty air for three rounds.
+    """
+    from .backend.mock.backend import _PLANES, map3d
+    from .geometry import plan_bounds
+
+    if box is None or plan.plane.lower() not in _PLANES:
+        return True  # a work plane or a face: no cheap answer, so do not guess
+    try:
+        low_u, low_v, high_u, high_v = plan_bounds(plan)
+    except Exception:
+        return True
+    if low_u > high_u or low_v > high_v:
+        return True
+
+    # Which model axes the sketch's own two run along.
+    corners = [map3d(plan.plane, low_u, low_v, 0.0), map3d(plan.plane, high_u, high_v, 0.0)]
+    normal = _PLANES[plan.plane.lower()][1]
+    for axis in range(3):
+        if normal[axis]:
+            continue  # the extrusion direction; a cut may travel any distance along it
+        near, far = sorted((corners[0][axis], corners[1][axis]))
+        if far < box[axis] - TOUCHING or near > box[axis + 3] + TOUCHING:
+            return False
+    return True
+
+
+#: How far apart two things may be and still count as touching, in cm. A cut
+#: exactly on a face is a legitimate design, so the test has to be generous.
+TOUCHING = 1.0e-4
+
+
+def _warn_about(warnings: list[dict[str, Any]], where: str, op: Operation,
+                outcome: dict[str, Any]) -> None:
+    """Complaints about an operation that ran but probably did the wrong thing."""
+    measured = outcome.get("measured")
+    if measured is None or op.op in _NOT_MODELLED:
+        return
+    moved = measured.get("volume_change_cm3")
+    if moved is None:
+        return
+
+    subtractive = op.op in _SUBTRACTIVE or getattr(op, "operation", None) == "cut"
+    if subtractive and abs(moved) < 1e-9:
+        warnings.append({
+            "where": where,
+            "warning": "removed no material",
+            "why": "Inventor will build the feature and change nothing. Check the "
+                   "plane and the coordinates against the part's bounding box.",
+        })
+    elif subtractive and moved > 0:
+        warnings.append({
+            "where": where,
+            "warning": f"added {moved:.4f} cm3 instead of removing material",
+            "why": "A cut that grows the part is on the wrong side of its profile.",
+        })
+    # No warning about which way a fillet or chamfer moved the volume. The
+    # simulator has no notion of which side the material is on, so it models
+    # every fillet as subtractive -- an inside-corner fillet, which really adds
+    # material, looks like a mistake here. That check belongs on the live path,
+    # where convexity is known, and a rehearsal that cries wolf on a correct
+    # recipe is worse than one that stays quiet.
+
+
+def _undriven_parameters(recipe: PartRecipe,
+                         context: DocumentContext) -> list[dict[str, Any]]:
+    """Parameters that were declared and then drive nothing.
+
+    A recipe can name every dimension and still hard-code the geometry, which
+    builds the right shape once and cannot be revised. That is the failure the
+    whole project exists to prevent, so it is worth saying out loud.
+    """
+    from .expressions import referenced_parameters
+
+    def named_in(text: Any) -> set[str]:
+        """Parameters an arbitrary recipe value refers to, if it is an expression.
+
+        Plenty of strings in a recipe are not: a thread designation like
+        "M5x0.8", a material, a filter name. Those refer to no parameter, so an
+        unparseable string contributes nothing rather than raising.
+        """
+        if isinstance(text, str):
+            try:
+                return referenced_parameters(text)
+            except Exception:
+                return set()
+        if isinstance(text, dict):
+            return set().union(*(named_in(value) for value in text.values())) \
+                if text else set()
+        if isinstance(text, (list, tuple)):
+            return set().union(*(named_in(item) for item in text)) if text else set()
+        return set()
+
+    driven: set[str] = set()
+    for plan in context.plans.values():
+        for dimension in plan.dimensions:
+            driven |= named_in(dimension.expression)
+    for spec in recipe.parameters:
+        driven |= named_in(spec.value)
+    for op in recipe.operations:
+        driven |= named_in(op.model_dump())
+
+    declared = [spec.name for spec in recipe.parameters]
+    idle = [name for name in declared if name not in driven]
+    if not idle:
+        return []
+    return [{
+        "where": "parameters",
+        "warning": f"{', '.join(idle)} drive nothing",
+        "why": "Declared but never referenced, so changing them moves no geometry. "
+               "Write the sizes that depend on them as expressions -- "
+               '"width": "plate_w" rather than "width": 120.',
+    }]
+
+
 def _loops(plan: Any) -> list[list[str]]:
     from .geometry import profile_loops
 

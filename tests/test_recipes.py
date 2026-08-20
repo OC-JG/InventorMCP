@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import math
+import pathlib
 
 import pytest
 from pydantic import ValidationError
@@ -261,3 +263,144 @@ class TestUnitsInRecipes:
         result = build(session, recipe)
         assert result["ok"], result["errors"]
         assert result["parameters"][0]["units"] == "deg"
+
+
+class TestRehearsal:
+    """A recipe can be valid and still build the wrong part.
+
+    Static checks catch a malformed recipe. They cannot catch a well-formed one
+    whose cut misses the material or whose parameters drive nothing -- and both
+    of those reached a live Inventor before anyone noticed. The simulator can
+    see them in milliseconds on any machine, so validation builds the thing.
+    """
+
+    def rehearse(self, recipe):
+        from inventor_mcp.builder import rehearse
+        from inventor_mcp.schema import PartRecipe
+
+        return rehearse(PartRecipe.model_validate(recipe))
+
+    PLATE = {
+        "name": "Plate", "units": "mm",
+        "parameters": [{"name": "size", "value": 40}, {"name": "thk", "value": 10}],
+        "operations": [
+            {"op": "sketch", "name": "Base", "plane": "xy", "entities": [
+                {"type": "rectangle", "center": [0, 0], "width": "size", "height": "size"}]},
+            {"op": "extrude", "name": "Body", "sketch": "Base", "distance": "thk"},
+        ],
+    }
+
+    def with_extra(self, *operations):
+        import copy
+
+        recipe = copy.deepcopy(self.PLATE)
+        recipe["operations"].extend(operations)
+        return recipe
+
+    def test_a_good_recipe_rehearses_clean(self):
+        report = self.rehearse(self.PLATE)
+        assert report["ok"] is True
+        assert report["rehearsed"] is True
+        assert report["warnings"] == []
+
+    def test_it_reports_what_each_operation_moved(self):
+        report = self.rehearse(self.PLATE)
+        [extrude] = [s for s in report["steps"] if s["op"] == "extrude"]
+        assert extrude["measured"]["volume_cm3"] == pytest.approx(16.0)
+
+    def test_and_the_finished_part(self):
+        report = self.rehearse(self.PLATE)
+        assert report["result"]["volume_cm3"] == pytest.approx(16.0)
+        assert report["result"]["span_mm"] == [40.0, 40.0, 10.0]
+
+    def test_a_cut_that_misses_the_part_is_caught(self):
+        """The bracket's slots cut empty air for three live rounds."""
+        report = self.rehearse(self.with_extra(
+            {"op": "sketch", "name": "Miss", "plane": "xy", "entities": [
+                {"type": "circle", "center": [500, 0], "diameter": 10}]},
+            {"op": "extrude", "sketch": "Miss", "distance": 5, "operation": "cut"},
+        ))
+        assert any("does not reach the part" in w["warning"] for w in report["warnings"])
+
+    def test_a_cut_that_lands_on_the_part_is_not_complained_about(self):
+        report = self.rehearse(self.with_extra(
+            {"op": "sketch", "name": "Hit", "plane": "xy", "entities": [
+                {"type": "circle", "center": [0, 0], "diameter": 10}]},
+            {"op": "extrude", "sketch": "Hit", "distance": 5, "operation": "cut"},
+        ))
+        assert report["warnings"] == []
+
+    def test_a_cut_just_touching_the_edge_is_allowed(self):
+        """Cutting flush with a face is a legitimate design, not a mistake."""
+        report = self.rehearse(self.with_extra(
+            {"op": "sketch", "name": "Edge", "plane": "xy", "entities": [
+                {"type": "circle", "center": [20, 0], "diameter": 10}]},
+            {"op": "extrude", "sketch": "Edge", "distance": 5, "operation": "cut"},
+        ))
+        assert report["warnings"] == []
+
+    def test_a_parameter_that_drives_nothing_is_named(self):
+        import copy
+
+        frozen = copy.deepcopy(self.PLATE)
+        frozen["operations"][0]["entities"][0]["width"] = 40
+        frozen["operations"][0]["entities"][0]["height"] = 40
+        frozen["operations"][1]["distance"] = 10
+        report = self.rehearse(frozen)
+        [warning] = [w for w in report["warnings"] if "drive nothing" in w["warning"]]
+        assert "size" in warning["warning"] and "thk" in warning["warning"]
+
+    def test_a_parameter_used_only_through_another_parameter_counts_as_driving(self):
+        import copy
+
+        recipe = copy.deepcopy(self.PLATE)
+        recipe["parameters"].append({"name": "half", "value": "size / 2"})
+        recipe["operations"].append(
+            {"op": "sketch", "name": "Hole", "plane": "xy", "entities": [
+                {"type": "point", "position": ["half", 0]}]})
+        recipe["operations"].append(
+            {"op": "hole", "sketch": "Hole", "diameter": 5, "depth": 5})
+        assert not [w for w in self.rehearse(recipe)["warnings"]
+                    if "drive nothing" in w["warning"]]
+
+    def test_a_recipe_that_does_not_build_says_where_it_stopped(self):
+        report = self.rehearse(self.with_extra(
+            {"op": "fillet", "edges": {"feature": "Nothing"}, "radius": 2}))
+        assert report["ok"] is False
+        assert report["rehearsed"] is True
+        assert "operation 2" in report["findings"][-1]["where"]
+
+    def test_a_malformed_recipe_never_reaches_the_rehearsal(self):
+        import copy
+
+        broken = copy.deepcopy(self.PLATE)
+        broken["operations"][1]["distance"] = "no_such_parameter"
+        report = self.rehearse(broken)
+        assert report["ok"] is False
+        assert report["rehearsed"] is False
+        assert "Fix the findings first" in report["hint"]
+
+    def test_a_thread_designation_is_not_read_as_an_expression(self):
+        """M5x0.8 refers to no parameter; it must not raise."""
+        report = self.rehearse(self.with_extra(
+            {"op": "sketch", "name": "Tap", "plane": "xy", "entities": [
+                {"type": "point", "position": [0, 0]}]},
+            {"op": "hole", "sketch": "Tap", "diameter": 5, "depth": 6, "tap": "M5x0.8"},
+        ))
+        assert report["ok"] is True
+
+    def test_a_fillet_is_not_judged_on_which_way_the_volume_went(self):
+        """The simulator models every fillet as subtractive; a real inside
+        corner adds material, and warning about that would cry wolf."""
+        report = self.rehearse(self.with_extra(
+            {"op": "fillet", "edges": {"filter": "vertical"}, "radius": 3}))
+        assert report["warnings"] == []
+
+    @pytest.mark.parametrize("path", sorted(
+        (pathlib.Path(__file__).resolve().parent.parent / "examples").glob("*.json")),
+        ids=lambda p: p.stem)
+    def test_every_shipped_example_rehearses_without_a_warning(self, path):
+        report = self.rehearse(json.loads(path.read_text()))
+        assert report["ok"] is True
+        assert report["warnings"] == [], (
+            f"{path.stem}: {[w['warning'] for w in report['warnings']]}")
