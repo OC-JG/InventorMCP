@@ -134,8 +134,17 @@ afternoon:
 * Optional-with-default arguments are safer passed explicitly;
   `Profiles.AddForSolid()` failed until `Combine` was supplied.
 * Inventor **infers coincident constraints** from coordinates as geometry is
-  created, then rejects an explicit duplicate as invalid. Build chained curves
-  from the previous curve's `SketchPoint` instead.
+  created, then rejects an explicit duplicate as invalid. Build the shared point
+  once and hand it to both entities. That covers standalone sketch points as
+  well as chained curve endpoints: a bolt circle's construction lines each end
+  on a hole centre, and asking for those six coincidences explicitly was refused
+  every time — while Inventor's own hole tool populated from that same sketch
+  quite happily.
+* **A refused constraint is judged by the sketch it leaves behind**, not by its
+  kind. Coincidence used to be treated as always-fatal, on the reasoning that
+  without it the geometry is not joined. True of a profile sketch, false of a
+  sketch of hole centres, which never had a profile to lose. A sketch has failed
+  only if the recipe drew a closed loop and no profile came out of it.
 * `PlanarSketch.OriginPoint` cannot be constrained against. Project the origin
   work point into the sketch first.
 * A midpoint constraint moves the *point* onto the line, so the grounded sketch
