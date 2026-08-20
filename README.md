@@ -331,8 +331,11 @@ inventor_mcp/
   server.py        assembly: tools, resources, prompts, CLI
 ```
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for why it is split that way, and
-[docs/INVENTOR_SETUP.md](docs/INVENTOR_SETUP.md) for the Windows/COM specifics.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for why it is split that way,
+[docs/INVENTOR_SETUP.md](docs/INVENTOR_SETUP.md) for the Windows/COM specifics,
+and [docs/DECISIONS.md](docs/DECISIONS.md) for the choices that surprise
+people — why a failed build is left where it stopped, why the simulator counts
+as a real implementation, and why an honest "unknown" beats a heuristic.
 
 ## Development
 
