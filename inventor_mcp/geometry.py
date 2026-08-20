@@ -1069,6 +1069,50 @@ def polygon_centroid(points: Sequence[tuple[float, float]]) -> tuple[float, floa
     return (cx / (3 * total), cy / (3 * total))
 
 
+def inset_area(points: Sequence[tuple[float, float]], distance: float) -> float | None:
+    """The area of the polygon offset inward by *distance*, or None if it collapses.
+
+    Exact for any simple polygon whose inward offset does not self-intersect,
+    which is the case a wall thickness is. The identity is
+    ``A - P*d + d^2 * sum(tan(turn/2))``: each straight edge loses a strip of
+    length times distance, and each corner is then double-counted or
+    under-counted by an amount that depends only on how sharply it turns. A
+    right-angle corner contributes ``+d^2``; a fully rounded outline's many tiny
+    turns sum to ``+pi*d^2``, which is the Steiner formula; a reflex corner
+    contributes a negative amount.
+
+    This is what makes a shelled box exactly predictable rather than estimated:
+    the cavity is the outline inset by the wall thickness, swept.
+    """
+    count = len(points)
+    if count < 3 or distance <= 0:
+        return None
+    area = 0.0
+    perimeter = 0.0
+    corners = 0.0
+    for index in range(count):
+        previous = points[index - 1]
+        here = points[index]
+        following = points[(index + 1) % count]
+        area += here[0] * following[1] - following[0] * here[1]
+        perimeter += math.dist(here, following)
+        incoming = (here[0] - previous[0], here[1] - previous[1])
+        outgoing = (following[0] - here[0], following[1] - here[1])
+        if math.hypot(*incoming) == 0 or math.hypot(*outgoing) == 0:
+            continue
+        cross = incoming[0] * outgoing[1] - incoming[1] * outgoing[0]
+        dot = incoming[0] * outgoing[0] + incoming[1] * outgoing[1]
+        turn = math.atan2(cross, dot)
+        corners += math.tan(turn / 2)
+    signed = area / 2
+    # The turning angles are signed by the winding direction; the corner term has
+    # to be read the same way round as the area.
+    if signed < 0:
+        corners = -corners
+    inner = abs(signed) - perimeter * distance + distance**2 * corners
+    return inner if inner > 0 else None
+
+
 def clip_to_box(points: Sequence[tuple[float, float]],
                 low_u: float, high_u: float,
                 low_v: float, high_v: float) -> list[tuple[float, float]]:

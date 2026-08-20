@@ -167,3 +167,102 @@ class TestThroughTheBuild:
         result = build_part(session, self.recipe())
         assert result["ok"] is True
         assert "divergence" not in result
+
+
+class TestAHollowPartIsNotJudged:
+    """After a shell, the simulator over-removes and must not report it.
+
+    It has no booleans: a cut into a hollow box takes a whole prism out here
+    where Inventor takes only the walls it meets. The enclosure's cable entry
+    removes 5.04 cm^3 in the simulator and 0.36 in the model, both correctly for
+    what they are, so comparing them would fault a correct recipe.
+    """
+
+    @pytest.fixture
+    def session(self) -> Session:
+        session = Session(backend_kind="mock")
+        session.ensure_backend().connect()
+        return session
+
+    def rehearsal(self) -> dict:
+        from inventor_mcp.builder import rehearse
+
+        recipe = PartRecipe.model_validate(
+            json.loads((EXAMPLES / "enclosure_base.json").read_text()))
+        report = rehearse(recipe)
+        assert report["ok"], report["findings"]
+        return report
+
+    def test_the_steps_after_a_shell_are_marked(self):
+        steps = self.rehearsal()["steps"]
+        kinds = {step["op"]: step for step in steps}
+        assert kinds["shell"].get("predictable") is not False, "the shell itself is"
+        assert kinds["hole"]["predictable"] is False
+        assert "no booleans" in kinds["hole"]["why_not"]
+
+    def test_the_steps_before_it_are_not(self):
+        steps = self.rehearsal()["steps"]
+        first = [s for s in steps if s["op"] == "extrude"][0]
+        assert "predictable" not in first
+
+    def test_a_marked_step_is_skipped_by_the_comparison(self):
+        rehearsed = [dict(step(0, "hole", -0.6), predictable=False)]
+        assert compare_to_rehearsal([step(0, "hole", -0.05)], rehearsed) == []
+        # And without the mark it would have been reported, so the mark is doing
+        # the work rather than the numbers happening to agree.
+        assert compare_to_rehearsal([step(0, "hole", -0.05)], [step(0, "hole", -0.6)])
+
+
+class TestTheShellItself:
+    """Which *is* predictable, because a shelled prism is an inset sweep."""
+
+    @pytest.fixture
+    def session(self) -> Session:
+        session = Session(backend_kind="mock")
+        session.ensure_backend().connect()
+        return session
+
+    def test_a_box_with_its_top_off_is_walls_and_a_floor(self, session):
+        from inventor_mcp.builder import build_part
+
+        result = build_part(session, PartRecipe.model_validate({
+            "name": "Box", "units": "mm", "operations": [
+                {"op": "sketch", "name": "Outline", "plane": "xy", "entities": [
+                    {"type": "rectangle", "center": [0, 0], "width": 100, "height": 70}]},
+                {"op": "extrude", "name": "Block", "sketch": "Outline", "distance": 35},
+                {"op": "shell", "name": "Cavity", "thickness": 2.5,
+                 "faces": {"kind": "face", "filter": "top"}},
+            ]}))
+        assert result["ok"], result["errors"]
+        volume = session.backend.mass_properties(result["document"]).volume
+        # 10 x 7 x 3.5 block, less a 9.5 x 6.5 cavity 3.25 deep.
+        assert volume == pytest.approx(10 * 7 * 3.5 - 9.5 * 6.5 * 3.25, rel=1e-9)
+
+    def test_it_says_where_the_number_came_from(self, session):
+        from inventor_mcp.builder import build_part
+
+        result = build_part(session, PartRecipe.model_validate({
+            "name": "Box", "units": "mm", "operations": [
+                {"op": "sketch", "name": "O", "plane": "xy", "entities": [
+                    {"type": "rectangle", "center": [0, 0], "width": 40, "height": 40}]},
+                {"op": "extrude", "sketch": "O", "distance": 20},
+                {"op": "shell", "thickness": 2, "faces": {"kind": "face", "filter": "top"}},
+            ]}))
+        document = session.backend._doc(result["document"])
+        shell = [f for f in document.features if f.kind == "shell"][0]
+        assert shell.detail["volume_from"] == "the outline inset by the wall thickness, swept"
+
+    def test_a_revolved_body_falls_back_and_admits_it(self, session):
+        from inventor_mcp.builder import build_part
+
+        result = build_part(session, PartRecipe.model_validate({
+            "name": "Cup", "units": "mm", "operations": [
+                {"op": "sketch", "name": "P", "plane": "xz", "entities": [
+                    {"type": "rectangle", "corner": [0, 0], "width": 20, "height": 30}]},
+                {"op": "revolve", "name": "Blank", "sketch": "P", "axis": "z"},
+                {"op": "shell", "thickness": 2, "faces": {"kind": "face", "filter": "top"}},
+            ]}))
+        assert result["ok"], result["errors"]
+        document = session.backend._doc(result["document"])
+        shell = [f for f in document.features if f.kind == "shell"][0]
+        assert "not a single prism" in shell.detail["volume_from"]

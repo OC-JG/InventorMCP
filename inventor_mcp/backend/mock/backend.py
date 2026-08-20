@@ -30,6 +30,7 @@ from ...errors import DocumentError, FeatureError, ParameterError, SelectionErro
 from ...expressions import UnitContext, evaluate
 from ...geometry import (
     clip_to_box,
+    inset_area,
     loop_area,
     loop_points,
     plan_bounds,
@@ -953,8 +954,7 @@ class MockBackend(Backend):
         if document.volume <= 0:
             raise FeatureError("Nothing to shell: the part has no solid body yet.")
         openings = self._match(document, request.faces) if request.faces.ids or request.faces.filter != "all" else []
-        surface = sum(match.area or 0.0 for match in document.topology if match.kind == "face")
-        removed = max(document.volume - surface * request.thickness.value, 0.0)
+        removed, how = self._hollow_out(document, request, openings)
         document.volume -= removed
         name = self._feature_name(document, request.name, "shell")
         feature = _Feature(
@@ -966,6 +966,7 @@ class MockBackend(Backend):
                 "thickness": request.thickness.as_dict(),
                 "direction": request.direction,
                 "removed_faces": len(openings),
+                "volume_from": how,
             },
         )
         document.features.append(feature)
@@ -999,6 +1000,43 @@ class MockBackend(Backend):
         moved = document.volume - was
         return moved, (f"{extra} more occurrence(s) of {moved:+.4f} cm^3 in total, "
                        "assuming they do not overlap each other or the part's edge")
+
+    def _hollow_out(self, document: _Document, request: ShellRequest,
+                    openings: Sequence[_Topo]) -> tuple[float, str]:
+        """How much a shell takes out, exactly where that is knowable.
+
+        A shelled prism is the outline inset by the wall thickness, swept: the
+        cavity's cross-section is an exact function of the outline, and the only
+        question is how much of the sweep it spans -- one wall thickness less for
+        each face left in place. That makes the commonest shell (a box with its
+        top removed) predictable rather than estimated, which is what lets a live
+        one be checked against it.
+
+        Anything else falls back to the old estimate -- the surface area times the
+        thickness -- and says so, because a shell of a revolved or swept body is
+        not a prism and pretending otherwise would be worse than approximating.
+        """
+        thickness = request.thickness.value
+        if len(document.slabs) == 1 and request.direction == "inside":
+            slab = document.slabs[0]
+            inner = inset_area(slab.outline, thickness)
+            sweep = abs(slab.far - slab.near)
+            if inner is not None and sweep > 0:
+                # An opening perpendicular to the sweep is a cap: it leaves the
+                # cavity running all the way to that end.
+                normal = plane_normal(slab.plane)
+                caps = sum(
+                    1 for face in openings
+                    if face.normal is not None
+                    and abs(sum(a * b for a, b in zip(face.normal, normal))) > 0.9
+                )
+                depth = sweep - thickness * max(2 - caps, 0)
+                if depth > 0:
+                    return (min(inner * depth, document.volume),
+                            "the outline inset by the wall thickness, swept")
+        surface = sum(match.area or 0.0 for match in document.topology if match.kind == "face")
+        return (max(document.volume - surface * thickness, 0.0),
+                "estimated from the surface area: this body is not a single prism")
 
     def rectangular_pattern(self, doc_id: str, request: RectangularPatternRequest) -> FeatureInfo:
         document = self._doc(doc_id)

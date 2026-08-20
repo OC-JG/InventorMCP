@@ -116,6 +116,19 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 - Errors are sanitised on the way out, so a COM failure no longer ships an
   absolute path — a user name, a project directory, a network share.
 - Disputed enum fallback values refuse rather than guess.
+- **A shelled box was estimated from its surface area**, which put the shipped
+  enclosure at 59.1 cm^3 where the geometry says 43.6. A shelled prism is the
+  outline inset by the wall thickness and swept, and the inset area of any simple
+  polygon is exact: `A - P*d + d^2 * sum(tan(turn/2))`, which gives the rounded
+  100x70 outline's cavity to seven figures. A body that is not one prism -- a
+  revolve, a sweep -- falls back to the old estimate and says so in the feature's
+  detail rather than implying more.
+- **The oracle would have cried wolf on a hollow part.** The simulator has no
+  booleans, so a cut into a shelled box removes a whole prism there where
+  Inventor removes only the walls it meets -- the enclosure's cable entry is 5.04
+  cm^3 against a real 0.36. Steps after a shell are marked unpredictable in the
+  rehearsal and skipped by the comparison, which is the difference between a
+  check worth reading and one that faults correct recipes.
 - **A revolved cut was charged for the material it overshoots.** A groove
   profile is drawn past the rim on purpose, so the cut certainly breaks
   through; the simulator swept the whole profile and took 2.6 cm^3 of air off

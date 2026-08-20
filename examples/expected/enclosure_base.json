@@ -1,0 +1,5 @@
+{
+  "volume_cm3": 43.163573,
+  "span_mm": [100.0, 70.0, 35.0],
+  "checked": "Derived by hand, never seen live, and resting on four readings of the recipe that the first run will confirm or refute. 100x70x35 block = 245; four r6 vertical fillets take 4*36*(1-pi/4)*35 = 1.081593; the shell removes a cavity of 32.5 mm depth over an inset 95x65 section with r3.5 corners, 200.345747, leaving 43.572660. The four boss holes are asked for at 30.5 mm deep but sit over the 2.5 mm floor, so they take 0.049087 and not 0.598729 -- the recipe names bosses it never builds. The cable entry cuts one 12x6x2.5 slab out of each end wall, 0.360000. If the live volume is about 0.55 cm3 lower, the holes found more material than this assumes; if it is 0.36 higher, the cable cut missed a wall."
+}

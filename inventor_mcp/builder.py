@@ -626,7 +626,10 @@ def compare_to_rehearsal(built: Sequence[dict[str, Any]],
         tolerance = PREDICTED.get(step.get("op") or "")
         if tolerance is None:
             continue
-        want = (expected.get(step["index"], {}).get("measured") or {})
+        counterpart = expected.get(step["index"], {})
+        if counterpart.get("predictable") is False:
+            continue
+        want = (counterpart.get("measured") or {})
         got = step.get("measured") or {}
         predicted, actual = want.get("volume_change_cm3"), got.get("volume_change_cm3")
         if predicted is None or actual is None:
@@ -821,6 +824,11 @@ def rehearse(recipe: PartRecipe) -> dict[str, Any]:
             return report
 
     steps: list[dict[str, Any]] = []
+    #: A shell makes the part hollow, and the simulator has no booleans -- so
+    #: every later cut removes a whole prism here where Inventor removes only the
+    #: walls it meets. Those steps are marked so nothing downstream compares them
+    #: and calls a correct model wrong.
+    hollow = False
     for index, op in enumerate(recipe.operations):
         where = f"operation {index} ({op.op}" + (f", {op.name}" if op.name else "") + ")"
         # Where the part was before this operation: a cut has to be judged
@@ -838,9 +846,15 @@ def rehearse(recipe: PartRecipe) -> dict[str, Any]:
             report["hint"] = ("The recipe is valid but does not build. The simulator "
                               "stopped here, so Inventor would too.")
             return report
-        step = {"index": index, "op": op.op, "name": op.name}
+        step: dict[str, Any] = {"index": index, "op": op.op, "name": op.name}
         if "measured" in outcome:
             step["measured"] = outcome["measured"]
+        if hollow:
+            step["predictable"] = False
+            step["why_not"] = ("the part is hollow and the simulator has no "
+                               "booleans, so this removes a whole prism here "
+                               "where Inventor removes only the walls it meets")
+        hollow = hollow or op.op == "shell"
         steps.append(step)
         _warn_about(report["warnings"], where, op, outcome)
 
