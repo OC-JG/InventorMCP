@@ -137,4 +137,14 @@ Practical notes that save a rebuild:
   hole spacing is "plate_w - 2 * edge_margin" survives a change of width.
 * `validate_recipe` costs nothing and catches most mistakes. Run it first.
 * Handles from `select_topology` are only valid until the model next rebuilds.
+* A failed build leaves the part where it stopped, because that is usually what
+  explains the failure. Pass `rollback_on_error` when the part matters more than
+  the diagnosis -- and to retry a hole, which consumes its sketch and cannot be
+  retried any other way.
+* Assemblies, drawings and sheet metal are genuinely not supported. If a request
+  needs one, say so rather than approximating it as a part. There is an escape
+  hatch for reaching Inventor's API directly, but it is off unless the machine's
+  owner has set INVENTOR_MCP_ESCAPE_HATCH=on; if `run_inventor_script` is not in
+  your tool list, it is off, and telling the user how to turn it on is more use
+  than a workaround.
 """

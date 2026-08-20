@@ -57,6 +57,14 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 - `examples/cover_plate.json` — counterbored and countersunk holes, with its
   volume derived by hand and written to `examples/expected/` *before* any live
   run, so the first run checks the geometry rather than recording it.
+- An escape hatch, off unless the machine's owner turns it on.
+  `INVENTOR_MCP_ESCAPE_HATCH=on` registers `run_inventor_script`, which runs
+  Python against the live API for what a recipe has no words for -- sheet metal,
+  iLogic, drawing views. Without the variable the tool is not registered, so the
+  model cannot see that it exists: a tool that is absent cannot be talked into
+  being used, which a tool that is present and refusing can. There is no sandbox
+  and no pretence of one; a script that raises is rolled back by default and
+  every call is logged with the code it ran.
 - Opt-in rollback. `rollback_on_error` on `build_part_from_recipe` and
   `apply_operations` wraps the work in one of Inventor's own transactions and
   aborts it if anything fails. Off by default, because a half-built part is the

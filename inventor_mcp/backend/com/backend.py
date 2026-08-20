@@ -1946,6 +1946,51 @@ class ComBackend(Backend):
             pass
         return {"rebuilt": True, "errors": errors}
 
+    # -- escape hatch ------------------------------------------------------
+    def run_script(self, doc_id: str | None, code: str) -> dict[str, Any]:  # pragma: no cover
+        """Execute *code* against the live API, on the thread that owns it.
+
+        A plain ``exec`` with the API objects in scope. There is no sandbox and
+        no attempt at one: this runs in the server's own process, and anything
+        that could restrict it could be undone by the code it is restricting.
+        The protection is that the tool exposing this is not registered unless
+        the machine's owner turns it on -- see ``inventor_mcp/tools/escape.py``.
+
+        The Inventor objects have to be reached from here rather than passed in,
+        because this must run on the apartment that created them, and this method
+        is what the marshalling proxy routes there.
+        """
+        import io
+        from contextlib import redirect_stdout
+
+        app = self._require_app()
+        document = self._doc(doc_id) if doc_id else None
+        scope: dict[str, Any] = {
+            "application": app,
+            "app": app,
+            "document": document,
+            "component": document.ComponentDefinition if document is not None else None,
+            "transient": app.TransientGeometry,
+            "transient_objects": app.TransientObjects,
+            "constants": self._constants,
+            "k": self._k,
+            "backend": self,
+            "result": None,
+        }
+        printed = io.StringIO()
+        with redirect_stdout(printed):
+            exec(code, scope)  # noqa: S102 - the whole point of this method
+        outcome = scope.get("result")
+        report: dict[str, Any] = {"ran": True, "printed": printed.getvalue()}
+        if outcome is not None:
+            report["result"] = _describe_value(outcome)
+        if document is not None:
+            _recompute(document)
+            volume = _solid_volume(document)
+            if volume is not None:
+                report["volume_cm3"] = round(volume, 6)
+        return report
+
     # -- output ------------------------------------------------------------
     def export(self, doc_id: str, request: ExportRequest) -> dict[str, Any]:  # pragma: no cover
         document = self._doc(doc_id)
@@ -2204,6 +2249,30 @@ def _set_radius_expression(feature: Any, expression: str) -> bool:  # pragma: no
         except Exception:
             continue
     return False
+
+
+def _describe_value(value: Any) -> Any:  # pragma: no cover - Windows only
+    """A script's return value in something JSON can carry.
+
+    A COM object is not serialisable and its repr is not informative, so what
+    goes back is its type and the few properties worth knowing rather than a
+    string nobody can act on.
+    """
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_describe_value(item) for item in value[:50]]
+    if isinstance(value, dict):
+        return {str(key): _describe_value(item) for key, item in list(value.items())[:50]}
+    described: dict[str, Any] = {"type": type(value).__name__}
+    for name in ("Name", "Type", "Count", "Value", "Expression", "Volume", "Area"):
+        try:
+            attribute = getattr(value, name)
+        except Exception:
+            continue
+        if isinstance(attribute, (str, int, float, bool)):
+            described[name] = attribute
+    return described
 
 
 def _hole_diameter(feature: Any) -> float | None:  # pragma: no cover - Windows only

@@ -512,6 +512,18 @@ class Backend(ABC):
         """Undo everything since :meth:`begin_transaction`. False if it could not."""
         return False
 
+    # -- escape hatch ------------------------------------------------------
+    def run_script(self, doc_id: str | None, code: str) -> dict[str, Any]:
+        """Run Python against the live API, for what the recipe cannot say.
+
+        Not abstract, and refuses by default: a backend that has no live API to
+        reach has nothing to offer here, and pretending otherwise would let a
+        script "succeed" against nothing.
+        """
+        raise NotImplementedError(
+            f"The {self.name} backend has no live Inventor API to run a script against."
+        )
+
     # -- output ------------------------------------------------------------
     @abstractmethod
     def export(self, doc_id: str, request: ExportRequest) -> dict[str, Any]: ...

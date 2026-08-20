@@ -109,6 +109,27 @@ inventor-mcp --transport streamable-http
 Every flag has an environment variable too: `INVENTOR_MCP_BACKEND`,
 `INVENTOR_MCP_TRANSPORT`, `INVENTOR_MCP_LOG_LEVEL`.
 
+### The escape hatch
+
+Inventor's API is much larger than the recipe schema — sheet metal, iLogic,
+drawing views, assemblies. If you need one of those, you can hand the model the
+API directly:
+
+```powershell
+set INVENTOR_MCP_ESCAPE_HATCH=on
+```
+
+That registers one extra tool, `run_inventor_script`, which executes Python
+against the live application. **There is no sandbox.** It runs in the server's
+own process with the same rights as whoever started it, so it can do anything
+you can do at that keyboard. Every call is logged with the code it ran, and a
+script that raises is rolled back by default — but that is containment of
+mistakes, not of intent.
+
+Without the variable the tool is not registered at all, so the model cannot see
+that it exists, and no prompt can talk it into using something that is not
+there. That is the intended state for anything unattended.
+
 ### Check it worked
 
 Ask Claude to call `connect`. A healthy live connection replies:

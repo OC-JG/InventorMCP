@@ -1099,6 +1099,42 @@ class MockBackend(Backend):
         self._documents[doc_id] = snapshot
         return True
 
+    # -- escape hatch ------------------------------------------------------
+    def run_script(self, doc_id: str | None, code: str) -> dict[str, Any]:
+        """Run *code* against the simulator's own model.
+
+        Implemented so the tool layer around the escape hatch can be tested at
+        all, and because a script that only reads is often answerable here. What
+        it exposes is the simulator's dataclasses, not Inventor's API, so a
+        script written against `application` fails rather than misleads.
+        """
+        import io
+        from contextlib import redirect_stdout
+
+        document = self._doc(doc_id) if doc_id else None
+        scope: dict[str, Any] = {
+            "document": document,
+            "component": document,
+            "backend": self,
+            "application": None,
+            "app": None,
+            "result": None,
+        }
+        printed = io.StringIO()
+        with redirect_stdout(printed):
+            exec(code, scope)  # noqa: S102 - the whole point of this method
+        report: dict[str, Any] = {
+            "ran": True,
+            "simulated": True,
+            "printed": printed.getvalue(),
+            "note": "this ran against the simulator's own model, not Inventor's API",
+        }
+        if scope.get("result") is not None:
+            report["result"] = _describe_value(scope["result"])
+        if document is not None:
+            report["volume_cm3"] = round(document.volume, 6)
+        return report
+
     # -- output ------------------------------------------------------------
     def export(self, doc_id: str, request: ExportRequest) -> dict[str, Any]:
         document = self._doc(doc_id)
@@ -1196,6 +1232,22 @@ def _edge_direction(plane: str, line: PLine) -> tuple[float, float, float]:
     dy = line.end[1] - line.start[1]
     length = math.hypot(dx, dy) or 1.0
     return map3d(plane, dx / length, dy / length, 0.0)
+
+
+def _describe_value(value: Any) -> Any:
+    """A script's return value in something JSON can carry."""
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_describe_value(item) for item in value[:50]]
+    if isinstance(value, dict):
+        return {str(key): _describe_value(item) for key, item in list(value.items())[:50]}
+    described: dict[str, Any] = {"type": type(value).__name__}
+    for name in ("name", "kind", "volume", "id", "expression", "value"):
+        attribute = getattr(value, name, None)
+        if isinstance(attribute, (str, int, float, bool)):
+            described[name] = attribute
+    return described
 
 
 def _style_volume(request: HoleRequest, radius: float) -> float:
