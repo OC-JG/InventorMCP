@@ -128,6 +128,10 @@ class TopoInfo(Info):
     #: "convex" (an outside corner) or "concave" (an inside one), when it can
     #: be determined. ``None`` means unknown, which never matches either filter.
     convexity: str | None = None
+    #: How that was decided -- "loops" is exact, "sampled" is a heuristic that
+    #: a face with a hole in it can fool. Worth showing, because a wrong
+    #: convexity puts a fillet on the wrong edge with nothing else to see.
+    convexity_from: str | None = None
 
 
 @dataclass

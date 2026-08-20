@@ -683,18 +683,18 @@ class TestEdgeConvexity:
         # Top face and a side face of a block; both point away from the material.
         top = self.face((0, 0, 1), (-45, 0, 6))
         side = self.face((0, -1, 0), (-45, -25, 3))
-        assert com._edge_convexity(self.edge((-45, -25, 6), [top, side])) == "convex"
+        assert com._edge_convexity(self.edge((-45, -25, 6), [top, side])) == ("convex", "sampled")
 
     def test_an_l_section_inside_corner_is_concave(self):
         # The exact case the body-centre heuristic got wrong: the base's top
         # face meeting the upright's inner face.
         base_top = self.face((0, 0, 1), (-45, 0, 6))
         upright = self.face((-1, 0, 0), (-6, 0, 38))
-        assert com._edge_convexity(self.edge((-6, 0, 6), [base_top, upright])) == "concave"
+        assert com._edge_convexity(self.edge((-6, 0, 6), [base_top, upright])) == ("concave", "sampled")
 
     def test_an_edge_with_one_face_is_unknown(self):
         top = self.face((0, 0, 1), (0, 0, 6))
-        assert com._edge_convexity(self.edge((0, 0, 6), [top])) is None
+        assert com._edge_convexity(self.edge((0, 0, 6), [top])) == (None, "sampled")
 
     def test_a_curved_face_leaves_it_unknown(self):
         class Curved:
@@ -702,7 +702,7 @@ class TestEdgeConvexity:
             PointOnFace = type("P", (), {"X": 0, "Y": 0, "Z": 0})()
 
         top = self.face((0, 0, 1), (0, 0, 6))
-        assert com._edge_convexity(self.edge((0, 0, 6), [top, Curved()])) is None
+        assert com._edge_convexity(self.edge((0, 0, 6), [top, Curved()])) == (None, "sampled")
 
 
 class TestNoOpFeatures:
@@ -1078,7 +1078,7 @@ class TestConvexityFallsBackToSampling:
         side = self.face((0, -1, 0), (-45, -25, 3))
         edge = self.sampled_only_edge((-45, -25, 6), [top, side])
         assert com._convexity_from_loops(edge) is None
-        assert com._edge_convexity(edge) == "convex"
+        assert com._edge_convexity(edge) == ("convex", "sampled")
 
     def test_the_loop_answer_wins_where_sampling_gets_it_wrong(self):
         """The bracket's own edge87, in centimetres, with the samples that beat it.
@@ -1096,4 +1096,50 @@ class TestConvexityFallsBackToSampling:
         edge = probe.edge((1, 0, 0), [(base_top, False), (slot_wall, True)],
                           midpoint=(6.5, 1.95, 0.6))
         assert com._convexity_from_samples(edge) == "concave", "the sampler is fooled"
-        assert com._edge_convexity(edge) == "convex", "the loops are not"
+        assert com._edge_convexity(edge) == ("convex", "loops"), "the loops are not"
+
+
+class TestConvexityNeverSecondGuessesTheLoops:
+    """An unknown answer is better than a sampled one, where loops exist.
+
+    Sampling was the fallback for any edge the loops could not settle, which
+    meant a loop that looked and declined got overruled by a heuristic that a
+    face with a hole in it can fool. That is how the bracket's "inside corner"
+    fillet moved onto a 56 mm convex edge after the upright was drilled --
+    silently, with a plausible-looking volume change.
+
+    Unknown matches no filter, so it surfaces as "the selector matched no
+    edges". Wrong, but visibly wrong, which the wrong fillet was not.
+    """
+
+    def probe(self):
+        return TestConvexityFromLoops()
+
+    def test_where_the_loops_decide_they_decide(self):
+        probe = self.probe()
+        top, front = probe.face((0, 0, 1)), probe.face((0, -1, 0))
+        edge = probe.edge((1, 0, 0), [(top, False), (front, True)])
+        assert com._edge_convexity(edge) == ("convex", "loops")
+
+    def test_where_the_loops_decline_the_sampler_is_not_asked(self):
+        """Tangent faces: the loops look, find no corner, and that stands."""
+        probe = self.probe()
+        flat = probe.face((0, 0, 1), point=(30.0, 0.0, 0.0))
+        tangent = probe.face((0, 0, 1), point=(0.0, -0.5, 0.2))
+        edge = probe.edge((1, 0, 0), [(flat, False), (tangent, True)])
+        assert com._convexity_from_loops(edge) is None
+        assert com._edge_convexity(edge) == (None, "loops declined")
+
+    def test_only_a_missing_loop_layer_falls_back(self):
+        """An older release, or a surface body with no edge uses at all."""
+        fallback = TestConvexityFallsBackToSampling()
+        top = fallback.face((0, 0, 1), (-45, 0, 6))
+        side = fallback.face((0, -1, 0), (-45, -25, 3))
+        edge = fallback.sampled_only_edge((-45, -25, 6), [top, side])
+        assert com._edge_convexity(edge) == ("convex", "sampled")
+
+    def test_the_answer_says_which_method_gave_it(self):
+        """So a topology dump shows whether an edge can be trusted."""
+        from inventor_mcp.backend.base import TopoInfo
+
+        assert "convexity_from" in TopoInfo.__dataclass_fields__

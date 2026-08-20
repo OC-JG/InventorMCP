@@ -1683,7 +1683,7 @@ class ComBackend(Backend):
             length = _edge_length(entity)
             geometry = _curve_type(entity)
             direction = _edge_direction(entity)
-            convexity = _edge_convexity(entity)
+            convexity, decided_by = _edge_convexity(entity)
             info = TopoInfo(
                 id=handle,
                 kind="edge",
@@ -1693,6 +1693,7 @@ class ComBackend(Backend):
                 length=length,
                 geometry=geometry,
                 convexity=convexity,
+                convexity_from=decided_by,
             )
         else:
             try:
@@ -2319,25 +2320,30 @@ def _convexity_from_loops(edge: Any) -> str | None:  # pragma: no cover - Window
     return verdicts.pop()
 
 
-def _edge_convexity(edge: Any, _unused: Any = None) -> str | None:  # pragma: no cover
-    """Whether an edge is an outside corner or an inside one.
+def _edge_convexity(edge: Any, _unused: Any = None) -> tuple[str | None, str]:  # pragma: no cover
+    """Whether an edge is an outside corner or an inside one, and how we know.
 
-    Decided from the boundary loops where the release exposes them, because
-    that is exact.  Otherwise fall back to sampling: for each of the two
-    adjacent faces, take the direction from the edge towards a point on that
-    face and test it against the *other* face's outward normal.
+    The boundary loops give an exact answer, so they decide wherever they can.
+    Sampling -- taking the direction from the edge towards a point on each
+    adjacent face and testing it against the other face's normal -- is only as
+    good as the sample: ``Face.PointOnFace`` returns an arbitrary interior
+    point, and on a face with an inner loop it can lie on the far side of the
+    edge and invert the answer.  Drilling the bracket's upright put two inner
+    loops in the face beside its L-junction and moved the "inside corner"
+    fillet onto a convex edge.
 
-    Sampling is only as good as the sample.  ``Face.PointOnFace`` returns an
-    arbitrary interior point, and on a face with an inner loop -- the underside
-    of a plate with a pocket in it -- that point can lie on the far side of the
-    edge and invert the answer.  On the angle bracket it put two of the eight
-    slot-opening edges in the concave set and the other six in the convex one,
-    for geometry that is identical by symmetry.
+    So sampling is used only where the loops are not *available* at all -- an
+    older release, a surface body -- and never to second-guess a loop that
+    looked and declined.  An unknown convexity matches no filter, which
+    surfaces as "the selector matched no edges": wrong, but visibly wrong,
+    which a quietly mis-filleted corner is not.
     """
     decided = _convexity_from_loops(edge)
     if decided is not None:
-        return decided
-    return _convexity_from_samples(edge)
+        return (decided, "loops")
+    if _edge_uses(edge) is not None:
+        return (None, "loops declined")
+    return (_convexity_from_samples(edge), "sampled")
 
 
 def _convexity_from_samples(edge: Any) -> str | None:  # pragma: no cover

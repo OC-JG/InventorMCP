@@ -165,6 +165,10 @@ def main(argv: list[str] | None = None) -> int:
                     extra = "  along  " + ",".join(f"{c:5.2f}" for c in match.direction)
                 if match.convexity:
                     extra += f"  {match.convexity}"
+                # Which method decided it: "loops" is exact, "sampled" is a
+                # heuristic a face with a hole in it can fool.
+                if match.convexity_from and match.convexity_from != "loops":
+                    extra += f" ({match.convexity_from})"
                 # Positions are printed in mm, so sizes are too: mm for an
                 # edge's length, mm^2 for a face's area.
                 if kind == "face":
