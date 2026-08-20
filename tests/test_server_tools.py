@@ -310,3 +310,69 @@ class TestErrorsDoNotLeakTheFilesystem:
         assert "C:" not in payload["message"]
         assert "Jo" not in payload["message"].replace("Parts", "")
         assert "x.ipt" in payload["message"]
+
+
+class TestTheWholeSurfaceEndToEnd:
+    """A client's path, which nothing exercised until now.
+
+    `live_smoke.py` imports the builder directly, so the tool layer had never
+    been driven from end to end -- against Inventor or the simulator. Every
+    integration seam between the tools, the builder and a backend is here.
+    """
+
+    def recipe(self):
+        from pathlib import Path
+
+        path = Path(__file__).resolve().parent.parent / "examples" / "angle_bracket.json"
+        return json.loads(path.read_text())
+
+    def test_a_recipe_builds_through_the_tool(self, connected):
+        built = call(connected, "build_part_from_recipe", {"recipe": self.recipe()})
+        assert built["ok"] is True
+        assert len(built["operations"]) == 8
+
+    def test_the_measurement_reaches_the_client(self, connected):
+        """The whole point of computing it: the model has to see it."""
+        built = call(connected, "build_part_from_recipe", {"recipe": self.recipe()})
+        measured = [op["measured"] for op in built["operations"] if "measured" in op]
+        assert len(measured) == 5, "every non-sketch operation should report"
+        assert all("volume_cm3" in report for report in measured)
+        assert any("volume_change_cm3" in report for report in measured)
+
+    def test_an_operation_that_did_nothing_says_so_to_the_client(self, connected):
+        built = call(connected, "build_part_from_recipe", {"recipe": self.recipe()})
+        notes = [op["measured"].get("note") for op in built["operations"]
+                 if "measured" in op]
+        assert "the volume did not change" in notes
+
+    def test_appending_operations_reports_too(self, connected):
+        call(connected, "build_part_from_recipe", {"recipe": self.recipe()})
+        applied = call(connected, "apply_operations", {"operations": [
+            {"op": "sketch", "name": "Extra", "plane": "xy", "entities": [
+                {"type": "circle", "center": [40, 0], "diameter": 12}]},
+            {"op": "extrude", "sketch": "Extra", "distance": 4, "operation": "cut"},
+        ]})
+        assert applied["ok"] is True
+        cut = next(op for op in applied["applied"] if op["op"] == "extrude")
+        assert cut["measured"]["volume_change_cm3"] < 0
+
+    def test_a_parameter_can_be_changed_through_the_tool(self, connected):
+        call(connected, "build_part_from_recipe", {"recipe": self.recipe()})
+        changed = call(connected, "set_parameters",
+                       {"parameters": [{"name": "base_len", "value": 120}]})
+        assert changed["ok"] is True
+
+    def test_the_part_can_be_measured_and_inspected(self, connected):
+        call(connected, "build_part_from_recipe", {"recipe": self.recipe()})
+        measured = call(connected, "measure_part")
+        assert measured["volume_cm3"] > 0
+        assert measured["bounding_box"]["size"][0] > 0
+        inspected = call(connected, "inspect_part")
+        assert inspected["features"] and inspected["sketches"]
+
+    def test_a_sketch_reports_which_parameters_drive_it(self, connected):
+        """So a model can tell a parametric outline from a frozen one."""
+        call(connected, "build_part_from_recipe", {"recipe": self.recipe()})
+        inspected = call(connected, "inspect_part")
+        section = next(s for s in inspected["sketches"] if s["name"] == "Section")
+        assert sorted(section["driven_parameters"]) == ["base_len", "thk", "upright_h"]
