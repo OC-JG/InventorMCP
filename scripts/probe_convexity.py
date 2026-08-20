@@ -128,9 +128,16 @@ def main(argv=None) -> int:
         for name, result in attributes(uses[0], ["IsParamReversed", "Face", "EdgeUseLoop",
                                                  "Edge", "Parent", "Next", "Previous"]).items():
             print(f"  EdgeUse.{name:25} {result}")
-        face = com._use_face(uses[0])
-        print("\n  an EdgeUse does reach its Face" if face is not None
-              else "\n  NO route from an EdgeUse to its Face")
+        faces = sample.Faces
+        candidates = [faces.Item(i) for i in range(1, int(faces.Count) + 1)]
+        resolved = [com._use_face(use, candidates) for use in uses]
+        named = sum(1 for face in resolved if face is not None)
+        print(f"\n  {named} of {len(uses)} edge uses resolved to a face by walking "
+              "the loop")
+        if named == len(uses):
+            distinct = len({com._face_key(face) for face in resolved})
+            print(f"  and they name {distinct} distinct face(s) "
+                  f"{'-- correct' if distinct == 2 else '-- WRONG, they should differ'}")
         loop = getattr(uses[0], "EdgeUseLoop", None)
         if loop is not None:
             for name, result in attributes(loop, ["Face", "IsOuterEdgeLoop", "EdgeUses"]).items():
@@ -154,7 +161,9 @@ def main(argv=None) -> int:
                 reason = "no edge uses on this edge"
             elif com._edge_direction(raw) is None:
                 reason = "not a straight edge, so it has no single tangent"
-            elif any(com._use_face(use) is None for use in uses):
+            elif any(com._use_face(use, [raw.Faces.Item(i)
+                                        for i in range(1, int(raw.Faces.Count) + 1)])
+                     is None for use in uses):
                 reason = "no route from an edge use back to its face"
             else:
                 reason = "the uses disagreed, or the faces meet smoothly"

@@ -197,22 +197,22 @@ These are the parts of the COM backend most likely to need adjustment, and why:
   carried through the recipe and reported, but the COM path currently creates a
   drilled hole. The recipe records the intent, so upgrading this does not change
   any recipe.
-- **Edge convexity is decided by sampling on 2027.1, and sampling is imperfect.**
-  The exact method reads the boundary loops: a face's boundary runs anticlockwise
-  about its outward normal, so the material lies to the left of the loop, and
-  whether that direction faces into the neighbouring face's normal is the answer.
-  `Edge.EdgeUses` and `EdgeUse.IsParamReversed` are both present — but
-  `EdgeUse.Face` and `EdgeUse.EdgeUseLoop` are not, and `EdgeUse.Parent` is the
-  `SurfaceBody`, so there is no route from a use back to its face and the method
-  cannot be applied. `EdgeUse.Next` and `EdgeUse.Edge` do exist, so the link can
-  be made from the other end — walk the loop and ask which of the edge's two
-  faces owns the neighbouring edge — which is the fix, not yet written.
-  Meanwhile the fallback samples a point on each face (`Face.PointOnFace`) and
-  asks which side of the edge it fell on. `scripts/probe_convexity.py` scores it
-  at **23 of 24** on a plate with a pocket: the one it gets wrong is a
-  pocket-opening edge, where the underside's own sample point sits across the
-  pocket. Narrow a `concave`/`convex` selector with `min_length` or `near` until
-  the exact method lands.
+- **Edge convexity is decided from the boundary loops**, which is exact. A
+  face's boundary runs anticlockwise about its outward normal, so the material
+  lies to the left of the loop, and whether that direction faces into the
+  neighbouring face's normal is the answer. `EdgeUse.Face` and
+  `EdgeUse.EdgeUseLoop` do not exist on 2027.1 and `EdgeUse.Parent` is the whole
+  `SurfaceBody`, so the link from a use to its face is made from the loop
+  instead: `EdgeUse.Next` steps to the following use, whose edge lies on the
+  same face, and that neighbouring edge shares exactly one face with ours.
+  Sampling a point on each face (`Face.PointOnFace`) remains the fallback, and
+  it is only as good as the sample: on a face with an inner loop the point can
+  land across the hole and invert the answer. That cost a run — adding the
+  bracket's upright holes put two inner loops in the face beside its L-junction,
+  and the "inside corner" fillet moved onto a 56 mm convex edge, removing
+  0.7634 cm³ where the right edge would have added 0.6867. Run
+  `scripts/probe_convexity.py` to check which path a machine takes; the sampler
+  alone scores 23 of 24 on its plate-with-a-pocket.
 - **Convexity is never known for a circular edge**, because a full circle has no
   single tangent and the sampler needs planar normals on both sides. That is
   exactly where you want it: the `flanged_shaft` chamfer asked for `circular`

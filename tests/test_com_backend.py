@@ -882,39 +882,63 @@ class TestConvexityFromLoops:
     face stops being trustworthy.
     """
 
+    _serial = iter(range(1, 999))
+
     def face(self, normal, point=(0.0, 0.0, 0.0)):
+        """A planar face with an outward normal and its own identity."""
+        tag = float(next(self._serial))
+        box = type("Box", (), {
+            "MinPoint": type("P", (), {"X": 0.0, "Y": 0.0, "Z": 0.0})(),
+            "MaxPoint": type("P", (), {"X": tag, "Y": tag, "Z": tag})(),
+        })()
         return type("Face", (), {
             "Geometry": type("G", (), {"Normal": type("N", (), dict(zip("XYZ", normal)))()})(),
             "IsParamReversed": False,
             "PointOnFace": type("P", (), dict(zip("XYZ", point)))(),
+            "Evaluator": type("Ev", (), {"RangeBox": box, "Area": tag})(),
+        })()
+
+    def collection(self, items):
+        return type("Collection", (), {
+            "Count": len(items),
+            "Item": staticmethod(lambda index: items[index - 1]),
         })()
 
     def edge(self, tangent, uses, midpoint=(0.0, 0.0, 0.0)):
         """An edge with a parametric direction and one use per adjacent face.
 
-        `uses` is (face, runs_against_the_parametric_direction) per face.
+        `uses` is (face, runs_against_the_parametric_direction) per face. Each
+        use is given a `Next` whose edge lies on that face alone, which is how
+        the backend works out which face a use belongs to -- `EdgeUse.Face`
+        does not exist.
         """
-        objects = [
-            type("EdgeUse", (), {"Face": face, "IsParamReversed": reversed_})()
-            for face, reversed_ in uses
-        ]
-        collection = type("EdgeUses", (), {
-            "Count": len(objects),
-            "Item": staticmethod(lambda index: objects[index - 1]),
-        })()
+        faces = [face for face, _ in uses]
+        objects = []
+        for face, reversed_ in uses:
+            elsewhere = self.face((0.0, 0.0, 1.0))  # a face the edge does not touch
+            neighbour = type("Edge", (), {"Faces": self.collection([face, elsewhere])})()
+            use = type("EdgeUse", (), {
+                "Edge": type("Edge", (), {})(),
+                "IsParamReversed": reversed_,
+            })()
+            # A two-use ring: Next steps onto the neighbouring edge's use and
+            # back again, the way a real loop closes.
+            neighbour_use = type("EdgeUse", (), {
+                "Edge": neighbour, "IsParamReversed": False, "Next": use,
+            })()
+            type(use).Next = neighbour_use
+            objects.append(use)
+
         box = type("Box", (), {
             "MinPoint": type("P", (), dict(zip("XYZ", midpoint)))(),
             "MaxPoint": type("P", (), dict(zip("XYZ", midpoint)))(),
         })()
         return type("Edge", (), {
-            "EdgeUses": collection,
+            "EdgeUses": self.collection(objects),
+            "Faces": self.collection(faces),
             "Geometry": type("G", (), {
                 "Direction": type("D", (), dict(zip("XYZ", tangent)))()})(),
             "Evaluator": type("Ev", (), {"RangeBox": box})(),
-            "Faces": type("Faces", (), {
-                "Count": len(uses),
-                "Item": staticmethod(lambda index: uses[index - 1][0]),
-            })(),
         })()
 
     def test_the_plates_top_front_edge_is_convex(self):
@@ -957,13 +981,76 @@ class TestConvexityFromLoops:
         assert com._convexity_from_loops(edge) is None
 
 
-class TestConvexityFallsBackToSampling:
-    """Loop orientation is preferred; sampling still answers when it cannot.
+class TestFindingTheFaceAnEdgeUseBelongsTo:
+    """EdgeUse.Face does not exist, so the link is made from the loop.
 
-    `EdgeUse` has no generated module on 2027.1, so this path may or may not be
-    reachable at run time. Late binding asks the object rather than the
-    wrapper, so it is worth trying -- but not worth losing the old answer over.
+    Measured on 2027.1: EdgeUse has Next, Previous, Edge, IsParamReversed and a
+    Parent that is the whole SurfaceBody -- no Face and no EdgeUseLoop. But the
+    next use round the loop names a neighbouring edge on the same face, and
+    that edge shares exactly one face with ours. That is enough.
     """
+
+    def face(self, key):
+        box = type("Box", (), {
+            "MinPoint": type("P", (), dict(zip("XYZ", key[:3])))(),
+            "MaxPoint": type("P", (), dict(zip("XYZ", key[3:6])))(),
+        })()
+        return type("Face", (), {
+            "Evaluator": type("Ev", (), {"RangeBox": box, "Area": key[6]})(),
+            "name": key,
+        })()
+
+    def edge_on(self, faces):
+        return type("Edge", (), {"Faces": type("Faces", (), {
+            "Count": len(faces),
+            "Item": staticmethod(lambda index: faces[index - 1]),
+        })()})()
+
+    def use_chain(self, neighbours):
+        """A ring of uses whose Next walks through *neighbours* in order."""
+        uses = []
+        for edge in neighbours:
+            uses.append(type("EdgeUse", (), {"Edge": edge, "IsParamReversed": False})())
+        for index, use in enumerate(uses):
+            type(use).Next = uses[(index + 1) % len(uses)]
+        return uses[-1]  # so .Next is the first neighbour
+
+    def test_the_neighbour_names_the_face(self):
+        top, side = self.face((0, 0, 1, 6, 4, 1, 24.0)), self.face((0, 0, 0, 6, 0, 1, 6.0))
+        use = self.use_chain([self.edge_on([top, self.face((9, 9, 9, 9, 9, 9, 1.0))])])
+        assert com._use_face(use, [top, side]) is top
+
+    def test_a_neighbour_touching_both_is_stepped_past(self):
+        top, side = self.face((0, 0, 1, 6, 4, 1, 24.0)), self.face((0, 0, 0, 6, 0, 1, 6.0))
+        ambiguous = self.edge_on([top, side])
+        decisive = self.edge_on([side, self.face((9, 9, 9, 9, 9, 9, 1.0))])
+        use = self.use_chain([ambiguous, decisive])
+        assert com._use_face(use, [top, side]) is side
+
+    def test_a_loop_that_never_decides_gives_up(self):
+        top, side = self.face((0, 0, 1, 6, 4, 1, 24.0)), self.face((0, 0, 0, 6, 0, 1, 6.0))
+        use = self.use_chain([self.edge_on([top, side])])
+        assert com._use_face(use, [top, side]) is None
+
+    def test_two_faces_that_cannot_be_told_apart_give_up(self):
+        same = (0, 0, 0, 6, 4, 1, 24.0)
+        first, second = self.face(same), self.face(same)
+        use = self.use_chain([self.edge_on([first, second])])
+        assert com._use_face(use, [first, second]) is None
+
+    def test_an_unreadable_face_gives_up(self):
+        class Opaque:
+            @property
+            def Evaluator(self):
+                raise RuntimeError("no evaluator")
+
+        good = self.face((0, 0, 1, 6, 4, 1, 24.0))
+        use = self.use_chain([self.edge_on([good])])
+        assert com._use_face(use, [good, Opaque()]) is None
+
+
+class TestConvexityFallsBackToSampling:
+    """Loop orientation is preferred; sampling still answers when it cannot."""
 
     def sampled_only_edge(self, midpoint, faces):
         """No EdgeUses at all, as an older release or a surface body might be."""

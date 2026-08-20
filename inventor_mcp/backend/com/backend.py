@@ -2221,34 +2221,48 @@ def _edge_uses(edge: Any) -> list[Any] | None:  # pragma: no cover - Windows onl
         return None
 
 
-#: Set once an EdgeUse turns out not to lead back to its Face, so the whole
-#: loop-orientation path stops costing a COM round trip per edge.  On 2027.1
-#: neither `EdgeUse.Face` nor `EdgeUse.EdgeUseLoop` exists -- `Parent` is the
-#: SurfaceBody -- so the exact method is unreachable and sampling answers
-#: instead.  Reaching it needs the link made from the other end, walking
-#: `EdgeUse.Next` round the loop and asking which of the edge's two faces owns
-#: the neighbouring edge; `Next` and `Edge` are both present, so that will work.
-_no_route_to_face = False
-
-
-def _use_face(use: Any) -> Any | None:  # pragma: no cover - Windows only
-    """The face an edge use belongs to, whichever way round this release says it."""
-    global _no_route_to_face
-    if _no_route_to_face:
+def _face_key(face: Any) -> tuple[float, ...] | None:  # pragma: no cover - Windows only
+    """A cheap identity for a face, since COM objects will not compare."""
+    try:
+        box = face.Evaluator.RangeBox
+        return (
+            round(float(box.MinPoint.X), 7), round(float(box.MinPoint.Y), 7),
+            round(float(box.MinPoint.Z), 7), round(float(box.MaxPoint.X), 7),
+            round(float(box.MaxPoint.Y), 7), round(float(box.MaxPoint.Z), 7),
+            round(float(face.Evaluator.Area), 7),
+        )
+    except Exception:
         return None
-    for path in ("Face", "EdgeUseLoop.Face", "Parent.Face"):
-        target = use
+
+
+def _use_face(use: Any, candidates: Sequence[Any]) -> Any | None:  # pragma: no cover
+    """Which of the edge's two faces this edge use belongs to.
+
+    `EdgeUse.Face` and `EdgeUse.EdgeUseLoop` do not exist on 2027.1 and
+    `EdgeUse.Parent` is the whole `SurfaceBody`, so the link cannot be followed
+    from the use.  It can be made from the loop instead: `Next` steps to the
+    following use round the same loop, whose edge lies on the same face, and
+    that neighbouring edge shares exactly one face with ours.  A neighbour
+    touching both -- or a loop of a single edge, where `Next` comes back to
+    where it started -- is stepped past.
+    """
+    keys = [_face_key(face) for face in candidates]
+    if len(keys) != 2 or any(key is None for key in keys) or keys[0] == keys[1]:
+        return None
+
+    neighbour = use
+    for _ in range(4):
         try:
-            for step in path.split("."):
-                target = getattr(target, step)
+            neighbour = neighbour.Next
+            faces = neighbour.Edge.Faces
+            touched = {
+                _face_key(faces.Item(index)) for index in range(1, int(faces.Count) + 1)
+            }
         except Exception:
-            continue
-        if target is not None and _face_normal(target) is not None:
-            return target
-    _no_route_to_face = True
-    logger.info("This release exposes no route from an EdgeUse to its Face, so "
-                "convexity is decided by sampling. Edges bordering a face with "
-                "a hole in it may be misreported.")
+            return None
+        shared = [face for face, key in zip(candidates, keys) if key in touched]
+        if len(shared) == 1:
+            return shared[0]
     return None
 
 
@@ -2271,11 +2285,21 @@ def _convexity_from_loops(edge: Any) -> str | None:  # pragma: no cover - Window
     if tangent is None:  # a circle has no single direction
         return None
 
+    try:
+        collection = edge.Faces
+        faces = [collection.Item(index) for index in range(1, int(collection.Count) + 1)]
+    except Exception:
+        return None
+    if len(faces) != 2:
+        return None
+
     verdicts = set()
     for index, use in enumerate(uses):
-        face, other = _use_face(use), _use_face(uses[1 - index])
+        face, other = _use_face(use, faces), _use_face(uses[1 - index], faces)
         if face is None or other is None:
             return None
+        if _face_key(face) == _face_key(other):
+            return None  # both uses resolved to the same face: no answer
         normal, other_normal = _face_normal(face), _face_normal(other)
         if normal is None or other_normal is None:
             return None
