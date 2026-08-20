@@ -20,18 +20,28 @@ instead of added. Each of those was a wrong answer wearing the clothes of an
 estimate.
 | `flanged_shaft` | 93.6305 cm³ | π·40²·12 flange + π·12.5²·90 shaft − π·5²·102 bore − 6 bolt holes − chamfer by Pappus |
 
-`cover_plate` is the other way round: its volume was **derived by hand first**
-and written down before any live run, so the first run is a real check of the
-counterbore and countersink rather than a recording of whatever they did.
+Four more are the other way round: their volumes were **derived by hand first**
+and written down before any live run, so the first run is a real check rather
+than a recording of whatever the code happened to build.
 
 | Example | Volume | Derived from |
 |---|---|---|
 | `cover_plate` | 56.255104 cm³ | 60 cm³ plate − 4×(0.34212 bore + 0.40142 counterbore annulus) − (0.50265 bore + 0.26808 cone) |
+| `pipe_bend` | 22.206610 cm³ | Pappus: π·1.0² cm² × (π/2)·4.5 cm travelled by the centroid |
+| `threaded_boss` | 33.872087 cm³ | 2 × π·1.5²·2.5 bosses − one flat-bottomed π·0.51²·1.8 tap hole |
+| `belt_pulley` | 68.006231 cm³ | 78.615215 blank − 5.519604 groove (clipped at the 40 mm rim) − 5 × 1.017876 lightening holes |
+
+Deriving those three found more than it recorded: the pulley was drilling its
+own bore twice, a revolved cut was being charged for the air it overshoots, and
+Pappus was using the bounding box's centre instead of the centroid. A number
+worth writing down is worth working out.
 
 The counterbore term is an *annulus*, not a cylinder: the bore through it is
 already counted. Counting the whole cylinder is a mistake the simulator used to
 make, and it made every counterbored plate lighter than it is.
 
-`hex_standoff` and `enclosure_base` have never had their volumes captured live.
-The first run seeds them; **check the arithmetic before trusting the number**, or
+`hex_standoff`, `enclosure_base` and `duct_transition` have never had their
+volumes captured live, and none is analytically tractable here -- a loft's
+cross-section does not interpolate linearly in area, so its volume is not the
+mean section times the span. The first run seeds them; **check the arithmetic before trusting the number**, or
 it becomes a regression test for whatever it happened to build.
