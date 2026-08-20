@@ -41,6 +41,11 @@ def main(argv: list[str] | None = None) -> int:
                         help="Keep going after a failure. Off by default, because a failed "
                              "parameter makes every later step fail for the same reason.")
     parser.add_argument("--verbose", action="store_true", help="Traceback for every failure.")
+    parser.add_argument("--edit", action="append", metavar="NAME=VALUE", default=[],
+                        help="After building, change a parameter and rebuild, then "
+                             "report what moved. Repeatable. This is the whole "
+                             "premise of a parametric model, so it is worth "
+                             "checking rather than assuming.")
     parser.add_argument("--topology", action="store_true",
                         help="List the finished part's edges and faces with their positions. "
                              "Use it to check what a selector would actually match.")
@@ -176,6 +181,57 @@ def main(argv: list[str] | None = None) -> int:
                 else:
                     size = f"{(match.length or 0) * 10:10.2f} mm "
                 print(f"    {match.id:>8}  {match.geometry:<12} ({where}) {size}{extra}")
+
+    if args.edit and not failures:
+        print()
+        print("=" * 68)
+        print("Changing parameters and rebuilding")
+        print("=" * 68)
+        before = backend.mass_properties(context.doc_id)
+        for assignment in args.edit:
+            name, _, value = assignment.partition("=")
+            name, value = name.strip(), value.strip()
+            if not value:
+                print(f"[{FAIL}] --edit {assignment!r} needs NAME=VALUE")
+                failures.append(f"edit {assignment}")
+                continue
+            step(f"parameter {name} = {value!r}",
+                 lambda name=name, value=value: backend.set_parameter(
+                     context.doc_id, name, value, units=recipe.units))
+        result = step("rebuild", lambda: backend.rebuild(context.doc_id))
+        if result and result.get("simulated"):
+            # The simulator records new parameter values without re-solving, so
+            # every size it reports afterwards is stale. Judging the edit on
+            # those numbers would fail every recipe, parametric or not.
+            print(f"         {result.get('note', 'the simulator does not re-solve geometry')}")
+            print("         Skipping the verdict: run this against Inventor.")
+            args.edit = []
+        if result and result.get("errors"):
+            print(f"[{FAIL}] the rebuild left {len(result['errors'])} feature(s) in error")
+            for entry in result["errors"][:5]:
+                print(f"         {entry}")
+            failures.append("rebuild left features in error")
+
+        after = backend.mass_properties(context.doc_id) if args.edit else before
+        if not args.edit:
+            return 0 if not failures else 1
+        print(f"         volume {before.volume:.4f} -> {after.volume:.4f} cm^3"
+              f"   ({after.volume - before.volume:+.4f})")
+        for axis, name in enumerate("XYZ"):
+            was = (before.bounding_box[axis + 3] - before.bounding_box[axis]) * 10
+            now = (after.bounding_box[axis + 3] - after.bounding_box[axis]) * 10
+            moved = "" if abs(now - was) < 1e-4 else "   <- moved"
+            print(f"         span {name}: {was:8.3f} -> {now:8.3f} mm{moved}")
+        # A parameter that changes nothing at all is the failure this exists to
+        # catch: the geometry was built from its value and then never driven by
+        # it, so the recipe only looked parametric.
+        if (abs(after.volume - before.volume) < 1e-9
+                and all(abs((after.bounding_box[axis + 3] - after.bounding_box[axis])
+                            - (before.bounding_box[axis + 3] - before.bounding_box[axis]))
+                        < 1e-9 for axis in range(3))):
+            print(f"[{FAIL}] nothing moved. The geometry is not driven by "
+                  "these parameters.")
+            failures.append("the edit moved nothing")
 
     if args.export:
         out = Path(args.export).resolve()
