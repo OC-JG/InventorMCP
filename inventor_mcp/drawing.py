@@ -23,6 +23,7 @@ checks possible.
 
 from __future__ import annotations
 
+import math
 from typing import Any, Literal, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -32,6 +33,10 @@ from .units import to_internal
 #: How close two lengths must be to count as the same dimension, in cm.
 #: Generous enough for a value read off a drawing to a tenth of a millimetre.
 MATCHES = 5.0e-3
+
+#: The same for an angle, in degrees. A drawing gives a countersink as 90 and
+#: nobody writes 90.01.
+ANGLE_MATCHES = 0.05
 
 
 class DrawingDimension(BaseModel):
@@ -172,15 +177,42 @@ def compare(reading: DrawingReading, rehearsal: dict[str, Any]) -> dict[str, Any
         })
 
     asserted = _numbers_the_model_asserts(rehearsal)
+    angles = _angles_the_model_asserts(rehearsal)
     for dimension in reading.driving():
         if dimension.kind == "angle":
-            continue  # angles are not in the length pool; compared separately
+            near = [name for name, value in angles.items()
+                    if abs(value - dimension.value) <= ANGLE_MATCHES]
+            if near:
+                report["matched"].append({
+                    "drawing": f"{dimension.label} = {dimension.value} deg",
+                    "model": sorted(f"parameter {name}" for name in near),
+                })
+            else:
+                report["ok"] = False
+                report["missing"].append({
+                    "drawing": f"{dimension.label} = {dimension.value} deg",
+                    "why": "No angle parameter in the model has this value. An "
+                           "angle read off a drawing has to become a parameter "
+                           "like any other length.",
+                })
+            continue
         wanted = reading.in_cm(dimension.value)
         near = [name for name, value in asserted.items() if abs(value - wanted) <= MATCHES]
         if near:
             report["matched"].append({
                 "drawing": f"{dimension.label} = {dimension.value} {reading.units}",
                 "model": sorted(near),
+            })
+        elif halved := [name for name, value in asserted.items()
+                        if abs(value - wanted / 2) <= MATCHES]:
+            # A symmetric feature is dimensioned from its centre line, so a
+            # 76 mm bolt pitch reaches the model as a 38 mm half-spacing. A
+            # drawing gives the pitch; refusing to see it there would report a
+            # correct model as having ignored the dimension.
+            report["matched"].append({
+                "drawing": f"{dimension.label} = {dimension.value} {reading.units}",
+                "model": sorted(halved),
+                "as": "half of it, measured from the centre line",
             })
         else:
             report["ok"] = False
@@ -231,14 +263,32 @@ def compare(reading: DrawingReading, rehearsal: dict[str, Any]) -> dict[str, Any
 
 
 def _numbers_the_model_asserts(rehearsal: dict[str, Any]) -> dict[str, float]:
-    """Every length the model states, in cm, keyed by where it came from."""
+    """Every length the model states, in cm, keyed by where it came from.
+
+    Lengths only. A 90 degree angle is 1.5708 in Inventor's units, so leaving it
+    in would have it compared against the drawing's millimetres -- and a
+    countersink angle was duly reported as a 15.7 mm literal nobody had drawn.
+    Angles are checked separately, against the drawing's angle dimensions.
+    """
+    kinds = rehearsal.get("parameter_dimensions") or {}
     found: dict[str, float] = {}
     for name, value in (rehearsal.get("parameters") or {}).items():
-        found[f"parameter {name}"] = value
+        if kinds.get(name, "length") == "length":
+            found[f"parameter {name}"] = value
     for name, summary in (rehearsal.get("sketches") or {}).items():
         for expression, value in (summary.get("driving") or {}).items():
             found[f"{name}: {expression}"] = value
     return found
+
+
+def _angles_the_model_asserts(rehearsal: dict[str, Any]) -> dict[str, float]:
+    """Every angle the model states, in degrees, keyed by parameter name."""
+    kinds = rehearsal.get("parameter_dimensions") or {}
+    return {
+        name: math.degrees(value)
+        for name, value in (rehearsal.get("parameters") or {}).items()
+        if kinds.get(name) == "angle"
+    }
 
 
 def _derived_from_parameters(rehearsal: dict[str, Any]) -> set[str]:

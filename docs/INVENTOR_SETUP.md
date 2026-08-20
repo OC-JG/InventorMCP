@@ -312,15 +312,31 @@ arbitrary paths.
 `scripts/live_acceptance.py` is the one command worth running after any change
 that could touch geometry. It builds every example and checks the volume, face
 count, edge count and bounding span against `examples/expected/`, then runs the
-three things that can only be answered by a real Inventor:
+things that can only be answered by a real Inventor:
 
 - **a parameter edit moves the geometry** — widen `base_len` to 120 and the
   bracket's X span must follow. If it stays at 90 the outline is not driven by
   its parameters, which is the failure the whole project exists to prevent.
+- **every hole style builds as the style asked for** — one hole of each style
+  through one block, with the volume removed checked against what the geometry
+  says. The backend already refuses a style Inventor will not confirm, so a
+  failure here means either the argument order is wrong on this release or the
+  shape is wrong despite the right label. `scripts/probe_hole_styles.py` prints
+  the same cases with the enum values and the thread tables, which is what to
+  run next.
+- **a failed build rolls back** — Inventor's `TransactionManager` is asked to
+  undo a build that broke halfway, and the volume has to come back. Written
+  against the simulator, which copies the document aside; whether an abort
+  restores a *consumed sketch*, which is the failure rollback exists for, has
+  never been checked.
 - **Inventor from a pool of threads** — sixteen calls from eight threads, which
   is what an MCP client does and what nothing had ever done here.
 - **the enum fallback table** — compares every entry against Inventor's own type
   library and prints a corrected block to paste in.
+
+Run them in that order if time is short: the parameter edit is the premise of
+the project, the hole styles are the newest untested code, and the rest have
+never had a chance to be wrong yet.
 
 ```powershell
 python scripts\live_acceptance.py                    # check
@@ -332,3 +348,10 @@ It exits non-zero on any failure, so it can gate a change rather than being
 read. Two examples have no captured volume yet; the first run seeds them, and a
 seeded number is only as good as the arithmetic behind it — check it before
 trusting it, or it becomes a regression test for whatever it happened to build.
+`cover_plate` is the exception: its volume was derived by hand and written down
+before any live run, so its first run is a real check.
+
+`--backend mock` runs the same script without Inventor. Most checks skip, but the
+example loop still prints how far the simulator's volume is from Inventor's
+recorded one, which is the cheapest measure of how good the rehearsal oracle is.
+It reads 0.0013 cm^3 on the angle bracket and 0.0469 on the flanged shaft.

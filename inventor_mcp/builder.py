@@ -749,6 +749,12 @@ def check_recipe(recipe: PartRecipe) -> dict[str, Any]:
             for name, plan in plans.items()
         },
         "parameters": {name: q.value for name, q in resolver.known().items()},
+        # What kind of quantity each one is, because a 90 degree angle is 1.5708
+        # in Inventor's units and would otherwise look like a 15.7 mm length to
+        # anything comparing numbers -- a drawing check reported exactly that.
+        "parameter_dimensions": {
+            name: q.dim.value for name, q in resolver.known().items()
+        },
     }
 
 
@@ -791,6 +797,8 @@ def rehearse(recipe: PartRecipe) -> dict[str, Any]:
         "warnings": [],
         "sketches": static["sketches"],
         "parameters": static["parameters"],
+        "parameter_expressions": static["parameter_expressions"],
+        "parameter_dimensions": static["parameter_dimensions"],
         "rehearsed": False,
     }
     if not static["ok"]:

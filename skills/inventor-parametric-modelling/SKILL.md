@@ -219,6 +219,19 @@ Reference dimensions — bracketed, or marked REF — restate something already
 fixed, so mark them `reference: true` and they are not expected to appear as
 their own parameter.
 
+Two conveniences worth knowing, so a correct model is not reported as wrong:
+
+- **Angles are checked against angle parameters**, in degrees, not thrown in
+  with the lengths. Give a countersink's included angle as `"kind": "angle"`.
+- **A symmetric pitch matches the half the model drives.** A drawing gives a
+  bolt pitch of 76 mm; a centred grid is driven by 38 mm from the centre line.
+  The check finds it and says so.
+
+`examples/drawings/cover_plate.json` is a full reading, and
+`examples/cover_plate.json` is the recipe that satisfies it — counterbored bolt
+holes, a countersunk centre hole, and every dimension on the sheet reaching a
+parameter. Read the pair before writing your first one.
+
 ## Select by intent, never by index
 
 Edge and face indices renumber after every feature, so an index captured before

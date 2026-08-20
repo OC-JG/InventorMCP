@@ -66,6 +66,9 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   for a fillet's corner estimate, nothing at all for a thread. A fillet on the
   wrong edge, a cut on the wrong side and a hole that met no material each
   shipped here at least once; all three announce themselves this way.
+- A worked drawing pair: `examples/drawings/cover_plate.json` is a full reading
+  of a sheet and `examples/cover_plate.json` is the recipe that satisfies it,
+  checked by the test suite so the documentation cannot drift from what works.
 - An escape hatch, off unless the machine's owner turns it on.
   `INVENTOR_MCP_ESCAPE_HATCH=on` registers `run_inventor_script`, which runs
   Python against the live API for what a recipe has no words for -- sheet metal,
@@ -106,6 +109,13 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 - Errors are sanitised on the way out, so a COM failure no longer ships an
   absolute path — a user name, a project directory, a network share.
 - Disputed enum fallback values refuse rather than guess.
+- A drawing check reported a **countersink angle as an invented 15.7 mm
+  length**. An angle is 1.5708 in Inventor's units and was being compared
+  against the drawing's millimetres; angles are now checked separately against
+  the model's angle parameters, and a drawing angle the model never declares is
+  reported as missing rather than passing unnoticed. A symmetric pitch also
+  matches the half-spacing a centred grid is really driven by, since a drawing
+  gives the pitch and refusing to see it there faults a correct model.
 - The simulator counted a counterbore as a whole cylinder rather than an
   annulus over the bore it already counted, and ignored a countersink entirely.
   Every counterbored plate came out lighter than it is.

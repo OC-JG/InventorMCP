@@ -192,3 +192,151 @@ class TestThroughTheTool:
                             {"recipe": recipe, "reading": PLATE_DRAWING})
         assert payload["ok"] is False
         assert "does not build" in payload["error"]
+
+
+class TestAnglesAreNotLengths:
+    """A 90 degree angle is 1.5708 in Inventor's units, which is not 15.7 mm."""
+
+    def reading(self, **changes) -> dict:
+        base = {
+            "units": "mm",
+            "projection": "third_angle",
+            "overall": [100, 60, 10],
+            "dimensions": [
+                {"label": "overall length", "value": 100},
+                {"label": "overall width", "value": 60},
+                {"label": "thickness", "value": 10, "kind": "thickness"},
+                {"label": "centre hole", "value": 8, "kind": "diameter"},
+                {"label": "countersink at face", "value": 16, "kind": "diameter"},
+                {"label": "countersink included angle", "value": 90, "kind": "angle"},
+            ],
+        }
+        base.update(changes)
+        return base
+
+    def recipe(self, angle: float = 90) -> dict:
+        return {
+            "name": "Plate", "units": "mm",
+            "parameters": [
+                {"name": "plate_l", "value": 100},
+                {"name": "plate_w", "value": 60},
+                {"name": "plate_t", "value": 10},
+                {"name": "spigot_d", "value": 8},
+                {"name": "csink_d", "value": 16},
+                {"name": "csink_inc", "value": angle, "unit": "deg"},
+            ],
+            "operations": [
+                {"op": "sketch", "name": "Body", "plane": "xy", "entities": [
+                    {"type": "rectangle", "center": [0, 0],
+                     "width": "plate_l", "height": "plate_w"}]},
+                {"op": "extrude", "name": "Plate", "sketch": "Body",
+                 "distance": "plate_t"},
+                {"op": "sketch", "name": "C", "plane": "xy", "entities": [
+                    {"type": "point", "position": [0, 0]}]},
+                {"op": "hole", "sketch": "C", "diameter": "spigot_d",
+                 "through_all": True, "style": "countersink",
+                 "csink_diameter": "csink_d", "csink_angle": "csink_inc"},
+            ],
+        }
+
+    def check(self, reading: dict, recipe: dict) -> dict:
+        parsed = PartRecipe.model_validate(recipe)
+        rehearsal = rehearse(parsed)
+        assert rehearsal["ok"], rehearsal["findings"]
+        return compare(DrawingReading.model_validate(reading), rehearsal)
+
+    def test_an_angle_parameter_is_not_reported_as_an_invented_length(self):
+        """It used to come out as a 15.708 mm literal nobody had drawn."""
+        result = self.check(self.reading(), self.recipe())
+        assert result["invented"] == []
+        assert result["ok"] is True
+
+    def test_the_drawing_angle_is_matched_against_it(self):
+        result = self.check(self.reading(), self.recipe())
+        matched = {entry["drawing"] for entry in result["matched"]}
+        assert "countersink included angle = 90.0 deg" in matched
+
+    def test_a_model_with_the_wrong_angle_is_caught(self):
+        result = self.check(self.reading(), self.recipe(angle=82))
+        assert result["ok"] is False
+        [missing] = [m for m in result["missing"] if "angle" in m["drawing"]]
+        assert "No angle parameter" in missing["why"]
+
+    def test_an_angle_the_model_never_declares_is_caught(self):
+        recipe = self.recipe()
+        recipe["parameters"] = [p for p in recipe["parameters"]
+                                if p["name"] != "csink_inc"]
+        recipe["operations"][-1]["csink_angle"] = "90 deg"
+        result = self.check(self.reading(), recipe)
+        assert result["ok"] is False
+        assert any("angle" in m["drawing"] for m in result["missing"])
+
+
+class TestACentreLineDimension:
+    """A symmetric pitch reaches the model as a half-spacing."""
+
+    def test_a_pitch_matches_the_half_the_model_drives(self):
+        rehearsal = {
+            "parameters": {"hole_pitch_half": 3.8},
+            "parameter_dimensions": {"hole_pitch_half": "length"},
+            "sketches": {},
+            "result": {"span_mm": [100.0, 60.0, 10.0]},
+        }
+        reading = DrawingReading.model_validate({
+            "units": "mm", "overall": [100, 60, 10],
+            "dimensions": [{"label": "bolt pitch", "value": 76}],
+        })
+        result = compare(reading, rehearsal)
+        assert result["ok"] is True
+        [entry] = result["matched"]
+        assert entry["as"] == "half of it, measured from the centre line"
+
+    def test_it_does_not_match_anything_else(self):
+        """Half is a convention, not a licence to accept any factor."""
+        rehearsal = {
+            "parameters": {"something": 2.5},
+            "parameter_dimensions": {"something": "length"},
+            "sketches": {},
+            "result": {"span_mm": [100.0, 60.0, 10.0]},
+        }
+        reading = DrawingReading.model_validate({
+            "units": "mm", "overall": [100, 60, 10],
+            "dimensions": [{"label": "bolt pitch", "value": 76}],
+        })
+        assert compare(reading, rehearsal)["ok"] is False
+
+
+class TestTheWorkedExample:
+    """`examples/drawings/cover_plate.json` against `examples/cover_plate.json`.
+
+    The pair is the documentation for this route: a reading anyone can compare
+    with the recipe beside it. If the check ever stops passing, one of the two
+    has drifted and the Skill is teaching something that does not work.
+    """
+
+    def result(self) -> dict:
+        reading = DrawingReading.model_validate(
+            json.loads((EXAMPLES / "drawings" / "cover_plate.json").read_text()))
+        recipe = PartRecipe.model_validate(
+            json.loads((EXAMPLES / "cover_plate.json").read_text()))
+        rehearsal = rehearse(recipe)
+        assert rehearsal["ok"], rehearsal["findings"]
+        return compare(reading, rehearsal)
+
+    def test_the_recipe_satisfies_the_drawing(self):
+        result = self.result()
+        assert result["ok"] is True, result["missing"]
+
+    def test_every_driving_dimension_reaches_the_model(self):
+        assert self.result()["missing"] == []
+
+    def test_the_model_invents_nothing(self):
+        assert self.result()["invented"] == []
+
+    def test_the_derived_values_are_reported_as_derived(self):
+        """A hole spacing computed from the plate and the margin is correct."""
+        derived = {entry["model"] for entry in self.result().get("derived", [])}
+        assert any("edge_margin" in name for name in derived)
+
+    def test_there_is_nothing_to_warn_about(self):
+        assert self.result()["warnings"] == []
