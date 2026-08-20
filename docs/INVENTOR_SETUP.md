@@ -287,3 +287,29 @@ Inventor automation runs with the permissions of the logged-in user and can open
 modify and overwrite files. Run the server against a scratch directory when driving
 it from an autonomous agent, and be aware that `open_part` and `save_part` take
 arbitrary paths.
+
+## The live acceptance run
+
+`scripts/live_acceptance.py` is the one command worth running after any change
+that could touch geometry. It builds every example and checks the volume, face
+count, edge count and bounding span against `examples/expected/`, then runs the
+three things that can only be answered by a real Inventor:
+
+- **a parameter edit moves the geometry** — widen `base_len` to 120 and the
+  bracket's X span must follow. If it stays at 90 the outline is not driven by
+  its parameters, which is the failure the whole project exists to prevent.
+- **Inventor from a pool of threads** — sixteen calls from eight threads, which
+  is what an MCP client does and what nothing had ever done here.
+- **the enum fallback table** — compares every entry against Inventor's own type
+  library and prints a corrected block to paste in.
+
+```powershell
+python scripts\live_acceptance.py                    # check
+python scripts\live_acceptance.py --record           # reseed expectations
+python scripts\live_acceptance.py --only bracket     # one example
+```
+
+It exits non-zero on any failure, so it can gate a change rather than being
+read. Two examples have no captured volume yet; the first run seeds them, and a
+seeded number is only as good as the arithmetic behind it — check it before
+trusting it, or it becomes a regression test for whatever it happened to build.
