@@ -86,7 +86,7 @@ of the API surface:
 |---|---|
 | `mounting_plate.json` | Sketch geometry, constraints, dimensions, extrude, fillet by selector, hole from a point grid |
 | `hex_standoff.json` | Polygon construction-circle constraints, tapped hole, chamfer on circular edges |
-| `flanged_shaft.json` | Offset work plane, stacked extrusions, bolt circle, blind holes |
+| `flanged_shaft.json` | Offset work plane, stacked extrusions, bolt circle, through bore, chamfer |
 | `enclosure_base.json` | Shell with a removed face, cut extrude on a second plane |
 | `angle_bracket.json` | Polyline profile, symmetric extrude, slot, mirror, sketch on XZ |
 
@@ -116,12 +116,25 @@ identical bounding box.
 chamfer on circular edges. Its hexagon keeps one degree of freedom — see
 "Known-shaky areas" below.
 
-`enclosure_base.json` builds, adding a shell, an offset work plane and a sketch
-on it. `angle_bracket.json` builds, adding the polyline profile, a symmetric
-extrude, a slot, a mirror and a sketch on XZ.
+`enclosure_base.json` builds, adding a shell with a removed face and a cut
+extrude on a second plane. It contains no work plane, despite an earlier version
+of this page saying so — the only `work_plane` in the repository is in
+`flanged_shaft.json`.
 
-Not yet exercised against Inventor: revolve, sweep, loft, patterns and threads.
-Those live in the remaining example — run it and report what breaks.
+`angle_bracket.json` builds, at 43.1999 cm³: the L-section less two 1.4617 cm³
+slots and two 0.3817 cm³ holes, plus the 0.6867 cm³ its inside-corner fillet
+adds back. That covers the polyline profile, a symmetric extrude, a slot, a
+mirror, a sketch on XZ, blind holes on YZ, and a fillet chosen by concavity.
+
+`flanged_shaft.json` builds, at 93.6305 cm³, adding an offset work plane and a
+sketch on it, stacked extrusions, a bolt circle, a through bore and a chamfer.
+Every figure in both matched a hand calculation to five significant figures —
+the chamfer via Pappus's theorem on the centroid radius, which is how the
+selector picking two edges instead of one was caught.
+
+**All five examples now build end to end.** Not yet exercised against Inventor:
+revolve, sweep, loft, patterns and threads — no shipped recipe reaches them, so
+a sixth example is what would prove them.
 
 Some notes from getting there, which are the sort of thing that costs an
 afternoon:

@@ -325,18 +325,19 @@ pytest                      # 350 tests, no Inventor required
 The recipe layer, expression evaluator, geometry expansion, selectors, tool surface
 and simulator are covered by the test suite and run on any platform.
 
-The COM backend has been driven against **Inventor 2027.1**. `mounting_plate.json`
-builds end to end — parameters, constrained sketch, extrude, fillet by selector,
-holes from a point grid — and exports to STEP, STL and PNG; Inventor's volume for
-that part agreed with the simulator's estimate to six significant figures.
-`hex_standoff.json` adds the polygon entity, a tapped hole and a chamfer, and
-`enclosure_base.json` adds a shell and a work plane.
+**All five examples build end to end against Inventor 2027.1**, and every volume
+matches a hand calculation to five significant figures or better. Between them
+they cover parameters with expressions, constrained sketches on all three origin
+planes and on an offset work plane, extrudes and cuts, revolved-free profiles
+from polylines and slots and bolt circles, blind and through holes, fillets and
+chamfers chosen by selector, mirroring, shells, mass properties, and export to
+STEP, STL and PNG.
 
-Not yet exercised live: revolve, sweep, loft, patterns and threads. Those paths
-are written but unproven, and the remaining examples are the way to find out. See
+Not yet exercised live: revolve, sweep, loft, patterns and threads. No shipped
+recipe reaches them, so a sixth example is what would prove them. See
 [docs/INVENTOR_SETUP.md](docs/INVENTOR_SETUP.md) for what is confirmed, what is
 not, and the Inventor API quirks that cost the most time getting there.
 
 ## Licence
 
-MIT.
+MIT — see [LICENSE](LICENSE).
