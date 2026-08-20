@@ -91,6 +91,13 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   geometry says, and which thread tables `CreateTapInfo` will accept.
 
 ### Fixed
+- **CI had never once passed.** Every run since it was added failed at
+  `pip install -e ".[dev]"`, on all three Pythons and on Windows, because
+  `license = { text = "MIT" }` is rejected outright by setuptools 77 and later
+  when `license-files` is also given -- PEP 639 wants an SPDX string. So the
+  offline suite the workflow exists to run had never been run by it, and nobody
+  had read the logs. Fixed, and verified by installing into a fresh virtual
+  environment exactly as the workflow does before pushing.
 - Holes drilled the wrong way and removed nothing. Inventor's extent enum runs
   opposite to an extrude's for a hole; the side is now chosen from where the
   material is, before the feature is built, because a hole consumes its sketch
