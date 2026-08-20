@@ -228,6 +228,20 @@ def verify(feature: Any, request: Any, resolve: Callable[[str], int]) -> tuple[b
         return None, "; ".join(notes)
 
     if int(actual) != int(wanted):
+        if request.style == "drilled" and not request.tap:
+            # Nothing extra was claimed, and a plain hole that removed material
+            # has already proved itself. What value Inventor reports for one has
+            # never been measured here, so refusing on it would break the holes
+            # that work today to guard a claim nobody made.
+            names = {value: name for name, value in
+                     ((name, _safe(resolve, name)) for name in STYLE_ENUM.values())}
+            got = names.get(int(actual), str(int(actual)))
+            notes.append(
+                f"Inventor reports hole type {got} for a plain drilled hole; the "
+                "hole removed material, so this is a note about the enum and not "
+                "about the part"
+            )
+            return True, "; ".join(notes)
         if tapped and request.style == "drilled":
             # The thread is confirmed and no seat was asked for, so there is
             # nothing left to be wrong -- a tapped hole simply reports a type

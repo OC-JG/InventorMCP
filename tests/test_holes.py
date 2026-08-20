@@ -280,6 +280,27 @@ class TestVerifying:
         assert agreed is False
         assert "counterbore" in why and "kDrilledHole" in why
 
+    def test_a_plain_hole_is_not_refused_over_an_unfamiliar_enum(self):
+        """The holes that work today must not break to guard a claim nobody made.
+
+        A plain drilled hole asserts nothing beyond removing material, which is
+        checked separately. What value Inventor reports for one has never been
+        measured here, so a mismatch is a note.
+        """
+        agreed, why = holes.verify(Feature(hole_type=39177), request(), resolve)
+        assert agreed is True
+        assert "note about the enum and not about the part" in why
+
+    def test_a_counterbore_is_still_refused_over_the_same_enum(self):
+        """Because there the readback is the only evidence the seat exists."""
+        agreed, _ = holes.verify(
+            Feature(hole_type=39177),
+            request(style="counterbore", cbore_diameter=Driven("d", 1.0),
+                    cbore_depth=Driven("z", 0.5)),
+            resolve,
+        )
+        assert agreed is False
+
     def test_an_unreadable_feature_is_not_evidence_either_way(self):
         agreed, why = holes.verify(Feature(), request(), resolve)
         assert agreed is None

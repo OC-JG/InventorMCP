@@ -237,7 +237,10 @@ These are the parts of the COM backend most likely to need adjustment, and why:
   measured here — the extent-direction enum comes *before* the counterbore's own
   dimensions, which is not how it reads — so the backend reads `HoleType` back
   off the finished feature and refuses rather than reporting a counterbore it
-  cannot see. `python scripts/probe_hole_styles.py` settles the order and the enum
+  cannot see. A plain drilled hole is exempt: it claims nothing beyond removing
+  material, which is already checked, and what `HoleType` reads back for one has
+  never been measured here — so the holes that work today cannot start failing
+  over an enum. `python scripts/probe_hole_styles.py` settles the order and the enum
   values in one run, and `examples/cover_plate.json` has a hand-derived volume
   that catches a hole built as the wrong shape.
 - **Edge convexity is decided from the boundary loops**, which is exact: a

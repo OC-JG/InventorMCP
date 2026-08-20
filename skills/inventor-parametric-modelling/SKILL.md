@@ -337,7 +337,10 @@ fastener rather than deriving one.
   `countersink` and `tap` reach Inventor's own hole feature. Because a wrong
   argument order can still build — producing a plain hole that would be reported
   as a counterbore — the server reads the style back off the finished feature and
-  fails rather than reporting a counterbore it cannot see. A tapped hole takes
+  fails rather than reporting a counterbore it cannot see. A *plain* hole is
+  never refused on that ground — it claims nothing beyond removing material,
+  which is checked directly — so the holes that already worked cannot break to
+  guard a claim nobody made. A tapped hole takes
   its drill size from Inventor's thread table, so give `diameter` as the
   *tapping drill* (nominal less the pitch for coarse metric); the server reports
   the size Inventor actually used and says so when the two disagree. None of the
