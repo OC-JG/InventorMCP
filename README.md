@@ -46,7 +46,7 @@ Check it starts before wiring it into anything:
 
 ```powershell
 python -m inventor_mcp --backend mock --help
-pytest                            # 350 tests, no Inventor needed
+pytest                            # the whole suite, no Inventor needed
 ```
 
 Python 3.10+.
@@ -341,7 +341,7 @@ as a real implementation, and why an honest "unknown" beats a heuristic.
 
 ```bash
 pip install -e ".[dev]"
-pytest                      # 350 tests, no Inventor required
+pytest                      # the whole suite, no Inventor required
 ```
 
 ### Status

@@ -1,6 +1,6 @@
 """Everything that can only be checked against a real Inventor, in one run.
 
-The offline half of this project is covered by 482 tests. The live half has been
+The offline half of this project is covered by the test suite. The live half has been
 checked by a human reading printed numbers, which is how three silent geometry
 bugs survived several rounds. This turns that reading into assertions.
 

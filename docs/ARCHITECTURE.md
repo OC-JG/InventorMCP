@@ -146,15 +146,14 @@ it can write anything will often guess instead.
 - **Assemblies.** Parts first. The recipe schema has no `iam` concept and adding one
   properly means constraints between components, which is a second design problem.
 - **Drawings.** Same reasoning.
-- **Parametric counts.** `sides`, `rows`, `count` are plain integers. Inventor can
-  drive a pattern count from a parameter, but plumbing it through would complicate
-  every backend signature for a rarely-used capability.
+- **Sheet metal.** A different feature set with its own rules, and none of it is
+  reachable from the recipe schema.
 - **A real geometry kernel in the mock.** The point of the mock is fast feedback on
   the mistakes that recipes actually make, not an independent CAD system.
 
 ## Testing
 
-350 tests, none of which need Inventor.
+The whole suite runs without Inventor.
 
 The shipped examples are part of the suite: each must parse, pass the static checks,
 build, and produce a solid body, and every declared parameter must be referenced or
