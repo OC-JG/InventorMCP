@@ -163,7 +163,7 @@ class SlotEntity(EntityBase):
 class PolygonEntity(EntityBase):
     type: Literal["polygon"] = "polygon"
     center: Point2D = [0.0, 0.0]
-    sides: int = Field(6, ge=3, le=120)
+    sides: CountSpec = Field(6, description="3 to 120; may be an expression.")
     size: ValueSpec = Field(description="Across-corners or across-flats distance, see `fit`.")
     fit: Literal["circumscribed", "inscribed"] = Field(
         "inscribed",
@@ -183,8 +183,8 @@ class GridEntity(EntityBase):
 
     type: Literal["point_grid"] = "point_grid"
     center: Point2D = [0.0, 0.0]
-    columns: int = Field(2, ge=1, le=200)
-    rows: int = Field(2, ge=1, le=200)
+    columns: CountSpec = Field(2, description="1 to 200; may be an expression.")
+    rows: CountSpec = Field(2, description="1 to 200; may be an expression.")
     x_spacing: ValueSpec = 10.0
     y_spacing: ValueSpec = 10.0
 
@@ -193,7 +193,7 @@ class BoltCircleEntity(EntityBase):
     type: Literal["bolt_circle"] = "bolt_circle"
     center: Point2D = [0.0, 0.0]
     diameter: ValueSpec = Field(description="Pitch circle diameter.")
-    count: int = Field(4, ge=1, le=200)
+    count: CountSpec = Field(4, description="1 to 200; may be an expression.")
     start_angle: float = 0.0
 
 
@@ -309,6 +309,12 @@ class Selector(Base):
 # ---------------------------------------------------------------------------
 
 BooleanOp = Literal["join", "cut", "intersect", "new_body"]
+#: A whole number, which may be written as an expression of parameters so that
+#: "one bolt per 60 mm of pitch circle" is sayable and a count is revisable the
+#: way a length is. Bounds are checked when it is resolved, since a string
+#: cannot be range-checked before its parameters are known.
+CountSpec = Union[int, str]
+
 Direction = Literal["positive", "negative", "symmetric"]
 
 #: Which way a hole is drilled, relative to its sketch plane's own normal --
@@ -456,10 +462,10 @@ class RectangularPatternOp(OpBase):
         default_factory=list, description="Features to pattern. Empty means the previous feature."
     )
     axis1: AxisRef = "x"
-    count1: int = Field(2, ge=1, le=1000)
+    count1: CountSpec = Field(2, description="1 to 1000; may be an expression.")
     spacing1: ValueSpec = 10.0
     axis2: AxisRef | None = None
-    count2: int = Field(1, ge=1, le=1000)
+    count2: CountSpec = Field(1, description="1 to 1000; may be an expression.")
     spacing2: ValueSpec | None = None
     flip1: bool = False
     flip2: bool = False
@@ -469,7 +475,7 @@ class CircularPatternOp(OpBase):
     op: Literal["circular_pattern"] = "circular_pattern"
     features: list[str] = Field(default_factory=list)
     axis: AxisRef = "z"
-    count: int = Field(4, ge=1, le=1000)
+    count: CountSpec = Field(4, description="1 to 1000; may be an expression.")
     angle: ValueSpec = "360 deg"
     fitted: bool = Field(True, description="Spread occurrences evenly over `angle`.")
 

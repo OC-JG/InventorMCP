@@ -322,3 +322,125 @@ class TestUnsignedDimensions:
 
         for source in ("2 - a", "-a + 2", "-a * 2"):
             assert "abs" not in _magnitude(self.resolver().length(source)).expression
+
+
+class TestParametricCounts:
+    """A count should be revisable the way a length is.
+
+    Counts were plain integers, so "one bolt per 60 mm of pitch circle" could
+    not be said and a pattern's count could not be driven by a parameter while
+    its spacing could. Inventor allows an expression there, so the recipe does
+    too -- but 4.5 holes is a mistake rather than something to round.
+    """
+
+    def resolver(self, **parameters):
+        from inventor_mcp.expressions import Dim, Quantity
+        from inventor_mcp.resolve import Resolver
+
+        resolver = Resolver("mm", "deg")
+        for name, value in parameters.items():
+            resolver.declare(name, Quantity(float(value), Dim.UNITLESS))
+        return resolver
+
+    @pytest.mark.parametrize("spec,expected", [
+        (5, 5), ("5", 5), (5.0, 5), ("n", 6), ("n + 2", 8), ("n * 2", 12),
+        ("n / 2", 3), ("n - 5", 1),
+    ])
+    def test_a_whole_number_resolves(self, spec, expected):
+        assert self.resolver(n=6).count(spec) == expected
+
+    def test_a_fraction_is_refused_rather_than_rounded(self):
+        from inventor_mcp.errors import ExpressionError
+
+        with pytest.raises(ExpressionError, match="whole number"):
+            self.resolver(n=5).count("n / 2")
+
+    def test_the_bounds_are_checked_after_resolution(self):
+        """A string cannot be range-checked before its parameters are known."""
+        from inventor_mcp.errors import ExpressionError
+
+        resolver = self.resolver(n=500)
+        with pytest.raises(ExpressionError, match="between 1 and 200"):
+            resolver.count("n", maximum=200)
+        with pytest.raises(ExpressionError, match="between 3 and 120"):
+            self.resolver(n=2).count("n", minimum=3, maximum=120)
+
+    def test_floating_point_slack_is_tolerated(self):
+        """0.1 + 0.2 is not 0.3, and a count derived that way is still whole."""
+        assert self.resolver(n=10).count("n / 10 * 3 * 10 / 3") == 10
+
+
+class TestCountsInARecipe:
+    def build(self, spokes):
+        from inventor_mcp.builder import build_part
+        from inventor_mcp.schema import PartRecipe
+        from inventor_mcp.session import Session
+
+        session = Session(backend_kind="mock")
+        session.ensure_backend().connect()
+        build_part(session, PartRecipe.model_validate({
+            "name": "Counts", "units": "mm",
+            "parameters": [{"name": "spokes", "value": spokes, "unit": "ul"},
+                           {"name": "pcd", "value": 100}],
+            "operations": [
+                {"op": "sketch", "name": "Disc", "plane": "xy", "entities": [
+                    {"type": "circle", "diameter": 120}]},
+                {"op": "extrude", "sketch": "Disc", "distance": 8},
+                {"op": "sketch", "name": "Bolts", "plane": "xy", "entities": [
+                    {"type": "bolt_circle", "diameter": "pcd", "count": "spokes"}]},
+                {"op": "sketch", "name": "Hex", "plane": "xy", "entities": [
+                    {"type": "polygon", "sides": "spokes", "size": 30,
+                     "fit": "circumscribed"}]},
+                {"op": "sketch", "name": "Grid", "plane": "xy", "entities": [
+                    {"type": "point_grid", "columns": "spokes", "rows": 2,
+                     "x_spacing": 10, "y_spacing": 10}]},
+            ]}))
+        return {s.name: s.plan for s in session.backend._doc(session.active).sketches}
+
+    @pytest.mark.parametrize("spokes", [3, 6, 8])
+    def test_a_bolt_circles_count_follows_its_parameter(self, spokes):
+        assert len(self.build(spokes)["Bolts"].hole_centers) == spokes
+
+    @pytest.mark.parametrize("spokes", [3, 6, 8])
+    def test_a_polygons_sides_do_too(self, spokes):
+        from inventor_mcp.plan import PLine
+
+        sides = [p for p in self.build(spokes)["Hex"].primitives
+                 if isinstance(p, PLine) and not p.construction]
+        assert len(sides) == spokes
+
+    @pytest.mark.parametrize("spokes", [3, 6, 8])
+    def test_and_a_point_grids_columns(self, spokes):
+        assert len(self.build(spokes)["Grid"].hole_centers) == spokes * 2
+
+    def test_a_pattern_count_may_be_an_expression(self):
+        from inventor_mcp.builder import rehearse
+        from inventor_mcp.schema import PartRecipe
+
+        report = rehearse(PartRecipe.model_validate({
+            "name": "Patterned", "units": "mm",
+            "parameters": [{"name": "ribs", "value": 4, "unit": "ul"},
+                           {"name": "pitch", "value": 20}],
+            "operations": [
+                {"op": "sketch", "name": "Rib", "plane": "xy", "entities": [
+                    {"type": "rectangle", "center": [0, 0], "width": 5, "height": 40}]},
+                {"op": "extrude", "name": "First", "sketch": "Rib", "distance": 6},
+                {"op": "rectangular_pattern", "features": ["First"], "axis1": "x",
+                 "count1": "ribs + 1", "spacing1": "pitch"},
+            ]}))
+        assert report["ok"], report["findings"]
+        pattern = report["steps"][-1]
+        assert pattern["op"] == "rectangular_pattern"
+
+    def test_a_fractional_count_fails_validation_not_the_build(self):
+        from inventor_mcp.builder import rehearse
+        from inventor_mcp.schema import PartRecipe
+
+        report = rehearse(PartRecipe.model_validate({
+            "name": "Bad", "units": "mm",
+            "parameters": [{"name": "n", "value": 5, "unit": "ul"}],
+            "operations": [
+                {"op": "sketch", "name": "S", "plane": "xy", "entities": [
+                    {"type": "bolt_circle", "diameter": 60, "count": "n / 2"}]}]}))
+        assert report["ok"] is False
+        assert "whole number" in report["findings"][0]["error"]

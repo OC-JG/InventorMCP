@@ -262,11 +262,6 @@ These are the parts of the COM backend most likely to need adjustment, and why:
   If `top`/`bottom` selectors pick the wrong faces, that is where to look.
 - **`FullyConstrained`** is not exposed under that name on 2027.1, so sketches
   report `null` for it rather than true or false.
-- **A pattern's count cannot be a parameter.** `count`, `count1`, `count2`,
-  `sides`, `rows` and `columns` are plain integers in the schema, so "five
-  lightening holes" is a literal and cannot be revised the way a length can.
-  Inventor itself allows an expression there. Widening `ValueSpec` to cover
-  counts is the fix and has no blocker beyond the work.
 - **Polygons keep one degree of freedom.** A regular polygon is built as a
   construction circle, vertices coincident with it, and `n - 1` equal-length
   edges. Inventor refuses the last of those equalities — whether they are

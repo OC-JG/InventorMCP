@@ -32,6 +32,19 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 - CI for the offline half, on Linux and Windows.
 - A `LICENSE` file, which `pyproject.toml` had been claiming for a while.
 
+- Counts are parametric. `count`, `count1`, `count2`, `sides`, `rows` and
+  `columns` accept an expression, so a pattern's count can be driven by a
+  parameter the way its spacing already was. A fractional result is refused
+  rather than rounded.
+- `validate_recipe` rehearses the build in the simulator instead of only
+  checking the schema, and warns about a cut whose profile misses the part or a
+  parameter that drives nothing.
+- Four recipes for the operations no shipped example reached: `belt_pulley`
+  (revolve, circular pattern), `pipe_bend` (sweep), `duct_transition` (loft),
+  `threaded_boss` (thread, rectangular pattern).
+- `skills/.../references/standard-parts.md` — hex nut, washer and standoff
+  templates, with the across-flats trap and the DIN/ISO disagreement recorded.
+
 ### Fixed
 - Holes drilled the wrong way and removed nothing. Inventor's extent enum runs
   opposite to an extrude's for a hole; the side is now chosen from where the
@@ -51,6 +64,13 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 - Errors are sanitised on the way out, so a COM failure no longer ships an
   absolute path — a user name, a project directory, a network share.
 - Disputed enum fallback values refuse rather than guess.
+- Four simulator answers that were wrong rather than approximate: a sketch on a
+  named work plane ignored the plane's offset (the flanged shaft was built 12 mm
+  low), a sweep summed only straight path segments so an arc path had no length,
+  a loft added a mean area as if it were a volume, and a revolve expanded the
+  bounds to a cube so a ring reported as a ball. `plan_bounds` also treated
+  every arc as its whole circle, which matters because the bounding box is what
+  decides whether a cut reaches the part.
 
 ### Known limits
 - Revolve, sweep, loft, patterns and threads are written but unproven: no

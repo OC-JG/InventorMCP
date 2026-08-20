@@ -34,6 +34,12 @@
     {
       "name": "lighten_pcd",
       "value": 54
+    },
+    {
+      "name": "lighten_count",
+      "value": 5,
+      "unit": "ul",
+      "comment": "lightening holes"
     }
   ],
   "operations": [
@@ -132,7 +138,7 @@
         "LightenHole"
       ],
       "axis": "z",
-      "count": 5
+      "count": "lighten_count"
     },
     {
       "op": "sketch",

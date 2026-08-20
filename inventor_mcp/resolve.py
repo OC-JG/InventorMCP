@@ -90,6 +90,31 @@ class Resolver:
     def unitless(self, spec: float | int | str, what: str = "value") -> Resolved:
         return self._resolve(spec, "ul", Dim.UNITLESS, what)
 
+    def count(self, spec: float | int | str, what: str = "count", *,
+              minimum: int = 1, maximum: int = 1000) -> int:
+        """A whole number, which may be written as an expression.
+
+        Counts used to be plain integers, so "one hole per 30 mm of pitch
+        circle" could not be said and a pattern's count could not be revised
+        the way its spacing could. Inventor allows an expression there, so the
+        recipe should too -- but a count of 4.5 holes is a mistake rather than
+        something to round, so a fractional answer is refused.
+        """
+        resolved = self.unitless(spec, what)
+        nearest = round(resolved.value)
+        if abs(resolved.value - nearest) > 1e-9:
+            raise ExpressionError(
+                f"{what} must be a whole number, but {spec!r} is {resolved.value:g}.",
+                hint="Counts cannot be fractional. Use an expression that divides "
+                "exactly, or round it yourself.",
+            )
+        if not minimum <= nearest <= maximum:
+            raise ExpressionError(
+                f"{what} must be between {minimum} and {maximum}, but {spec!r} "
+                f"is {nearest}."
+            )
+        return nearest
+
     def in_unit(self, spec: float | int | str, unit: str, what: str = "value") -> Resolved:
         """Resolve against an explicitly chosen unit (and therefore dimension)."""
         return self._resolve(spec, unit, lookup_unit(unit).dim, what)

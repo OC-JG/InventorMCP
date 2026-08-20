@@ -274,7 +274,8 @@ fastener rather than deriving one.
   against a live Inventor. Treat a success there with suspicion and check the
   `measured` block hard. `examples/belt_pulley.json`, `pipe_bend.json`,
   `duct_transition.json` and `threaded_boss.json` each isolate one of them.
-- **Counts are not parametric.** `count`, `sides`, `rows` and `columns` take a
-  plain integer, not an expression, so a pattern's count cannot be driven by a
-  parameter. Say so rather than implying the whole part is revisable.
+- **Counts are parametric too.** `count`, `count1`, `count2`, `sides`, `rows`
+  and `columns` accept an expression, so `"count": "bolts_per_side * 2"` works
+  and a count is revisable like a length. A fractional result is refused rather
+  than rounded, since 4.5 holes is a mistake.
 - Assemblies, drawings and sheet metal are not supported at all.

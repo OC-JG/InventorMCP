@@ -616,7 +616,7 @@ def _plan_polygon(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: Polygon
     size = resolver.length(spec.size, "polygon size", positive=True)
     center, anchor_x, anchor_y = _anchor(resolver, spec.center)
     rotation = math.radians(spec.rotation)
-    sides = spec.sides
+    sides = resolver.count(spec.sides, "polygon sides", minimum=3, maximum=120)
 
     if spec.fit == "inscribed":
         guide_radius = size.value / 2  # across corners
@@ -686,13 +686,15 @@ def _plan_grid(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: GridEntity
     y_spacing = resolver.length(spec.y_spacing, "grid y_spacing", positive=True)
     center = resolver.point2d(spec.center)
 
-    x0 = center[0] - (spec.columns - 1) * x_spacing.value / 2
-    y0 = center[1] - (spec.rows - 1) * y_spacing.value / 2
+    columns = resolver.count(spec.columns, "grid columns", maximum=200)
+    rows = resolver.count(spec.rows, "grid rows", maximum=200)
+    x0 = center[0] - (columns - 1) * x_spacing.value / 2
+    y0 = center[1] - (rows - 1) * y_spacing.value / 2
 
     grid: list[list[PPoint]] = []
-    for row in range(spec.rows):
+    for row in range(rows):
         row_points = []
-        for column in range(spec.columns):
+        for column in range(columns):
             position = (x0 + column * x_spacing.value, y0 + row * y_spacing.value)
             row_points.append(
                 plan.add(
@@ -706,13 +708,13 @@ def _plan_grid(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: GridEntity
     for row_points in grid:
         for previous, current in zip(row_points, row_points[1:]):
             plan.constrain("horizontal_align", Ref(previous.id), Ref(current.id))
-    for column in range(spec.columns):
-        column_points = [grid[row][column] for row in range(spec.rows)]
+    for column in range(columns):
+        column_points = [grid[row][column] for row in range(rows)]
         for previous, current in zip(column_points, column_points[1:]):
             plan.constrain("vertical_align", Ref(previous.id), Ref(current.id))
 
     if spec.dimension:
-        if spec.columns > 1:
+        if columns > 1:
             plan.dimension(
                 "horizontal",
                 (Ref(grid[0][0].id), Ref(grid[0][1].id)),
@@ -720,7 +722,7 @@ def _plan_grid(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: GridEntity
                 x_spacing.value,
                 text_offset=(0.0, -0.4),
             )
-        if spec.rows > 1:
+        if rows > 1:
             plan.dimension(
                 "vertical",
                 (Ref(grid[0][0].id), Ref(grid[1][0].id)),
@@ -732,8 +734,8 @@ def _plan_grid(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: GridEntity
     # Centring the grid parametrically only works when the centre is the origin;
     # otherwise the corner is located numerically.
     if spec.locate == "origin" and _at_origin(center[0]) and _at_origin(center[1]):
-        half_x = resolver_half(resolver, x_spacing, spec.columns - 1)
-        half_y = resolver_half(resolver, y_spacing, spec.rows - 1)
+        half_x = resolver_half(resolver, x_spacing, columns - 1)
+        half_y = resolver_half(resolver, y_spacing, rows - 1)
         _locate(
             plan,
             resolver,
@@ -763,7 +765,8 @@ def _plan_bolt_circle(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: Bol
     center, anchor_x, anchor_y = _anchor(resolver, spec.center)
     radius = diameter.value / 2
     start = math.radians(spec.start_angle)
-    step = 2 * math.pi / spec.count
+    count = resolver.count(spec.count, "bolt circle count", maximum=200)
+    step = 2 * math.pi / count
 
     guide = plan.add(PCircle(ids.next("cguide"), construction=True, center=center, radius=radius))
     if spec.dimension:
@@ -773,7 +776,7 @@ def _plan_bolt_circle(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: Bol
             entity=Ref(guide.id), x_expression=anchor_x, y_expression=anchor_y)
 
     radials: list[str] = []
-    for index in range(spec.count):
+    for index in range(count):
         angle = start + index * step
         position = (center[0] + radius * math.cos(angle), center[1] + radius * math.sin(angle))
         point = plan.add(
@@ -804,7 +807,7 @@ def _plan_bolt_circle(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: Bol
         anchor = resolver.literal_angle(start)
         plan.dimension("angle", (Ref(reference.id), Ref(radials[0])), anchor.expression, start)
 
-    if spec.count > 1:
+    if count > 1:
         step_expression = resolver.literal_angle(step)
         for previous, current in zip(radials, radials[1:]):
             plan.dimension(

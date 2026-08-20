@@ -322,10 +322,10 @@ def _apply_one(session: Session, context: DocumentContext, op: Operation) -> dic
         request = RectangularPatternRequest(
             features=_pattern_features(context, op.features),
             axis1=resolve_axis(context, op.axis1),
-            count1=op.count1,
+            count1=resolver.count(op.count1, "pattern count", maximum=1000),
             spacing1=_driven(resolver.length(op.spacing1, "pattern spacing", positive=True)),  # type: ignore[arg-type]
             axis2=resolve_axis(context, op.axis2) if op.axis2 else None,
-            count2=op.count2,
+            count2=resolver.count(op.count2, "second pattern count", maximum=1000),
             spacing2=_driven(resolver.length(op.spacing2, "pattern spacing"))
             if op.spacing2 is not None
             else None,
@@ -339,7 +339,7 @@ def _apply_one(session: Session, context: DocumentContext, op: Operation) -> dic
         request = CircularPatternRequest(
             features=_pattern_features(context, op.features),
             axis=resolve_axis(context, op.axis),
-            count=op.count,
+            count=resolver.count(op.count, "pattern count", maximum=1000),
             angle=_driven(resolver.angle(op.angle, "pattern angle")),  # type: ignore[arg-type]
             fitted=op.fitted,
             name=op.name,
