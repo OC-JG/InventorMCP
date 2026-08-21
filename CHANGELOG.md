@@ -91,6 +91,23 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   geometry says, and which thread tables `CreateTapInfo` will accept.
 
 ### Fixed
+- **A hole's properties are on `HoleFeature.Definition`, not on the feature.**
+  So the style read-back returned nothing for every hole, `verify` answered
+  "cannot tell", and a run reported eight verified styles having verified none of
+  them -- with a failure message that said "the style read back correctly"
+  because that string sat beside a check that never ran. Both are fixed: the
+  properties are read from the definition, and the message no longer asserts
+  something it has not established.
+- **The hole-style probe was measuring its own layout.** It put seven cases
+  7.5 mm apart in a 60 mm block, and a 16 mm spotface spans 8 mm either side, so
+  every seat overlapped its neighbours and removed less material than an isolated
+  one -- by amounts that scaled with seat diameter, which is what finally gave it
+  away. The block is 160 mm now and the script refuses to run if the spacing
+  could let two cases meet.
+- **A blind hole's depth is measured to the shoulder, and the drill point goes
+  beyond it.** The expectation had the tip *inside* the depth, so a pointed hole
+  was predicted to remove less than a flat-bottomed one when it removes more.
+  Inventor gives 0.2279 cm^3 where cylinder-plus-cone predicts 0.227884.
 - **Thirty-two of the fifty-one enum values in the fallback table were wrong**,
   measured against Inventor 2027.1. Most were not slightly wrong but from another
   numbering family: `kDrilledHole` is 21505, not 39169. One was the quiet kind of

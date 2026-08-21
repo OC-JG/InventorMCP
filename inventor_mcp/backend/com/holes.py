@@ -65,9 +65,20 @@ EXTRAS: dict[str, tuple[tuple[str, str], ...]] = {
 def thread_type_for(designation: str) -> str:
     """Which thread table a designation like 'M6x1' or '1/4-20' comes from.
 
-    The names are the sheet names in Inventor's own ``Thread.xls``.  Getting one
-    wrong produces an error from Inventor, not a silently untapped hole, which
-    is why guessing here is acceptable and the recipe can override it.
+    The names are the sheet names in Inventor's own ``Thread.xls``. Measured on
+    2027.1 by ``scripts/probe_hole_styles.py``:
+
+    * ``("ANSI Metric M Profile", "M8x1.25", "6H")`` -- accepted
+    * ``("ISO Metric profile", "M8x1.25", "6H")`` -- also accepted
+    * ``("ANSI Unified Screw Threads", "1/4-20 UNC", "2B")`` -- accepted
+    * ``("ANSI Metric M Profile", "M8", "6H")`` -- **refused**: the designation
+      must carry its pitch, so "M8" alone is not a thread Inventor knows
+    * ``NPT``/``BSP`` with ``"1/8"`` and ``"G1/4"`` -- **refused**, so the
+      designation format for those tables is still unknown here
+
+    Getting one wrong produces an error from Inventor rather than a silently
+    untapped hole, which is why a guess is acceptable and the recipe can
+    override it with ``tap_type`` and ``tap_class``.
     """
     text = designation.strip().upper()
     if text.startswith("NPT") or text.endswith("NPT"):
@@ -273,10 +284,25 @@ def verify(feature: Any, request: Any, resolve: Callable[[str], int]) -> tuple[b
 
 
 def _property(feature: Any, name: str) -> Any:
-    try:
-        return getattr(feature, name)
-    except Exception:
-        return None
+    """One property, from the feature or from its definition.
+
+    A hole's parameters live on ``HoleFeature.Definition``, not on the feature:
+    ``feature.HoleType`` simply does not exist. So the first version of this read
+    nothing, returned "cannot tell" for every hole, and the run that reported
+    eight verified styles had verified none of them -- the failure text said
+    "the style read back correctly" because that string was written next to a
+    check that never ran.
+    """
+    for holder in (feature, getattr(feature, "Definition", None)):
+        if holder is None:
+            continue
+        try:
+            value = getattr(holder, name)
+        except Exception:
+            continue
+        if value is not None:
+            return value
+    return None
 
 
 def _safe(resolve: Callable[[str], int], name: str) -> int | None:

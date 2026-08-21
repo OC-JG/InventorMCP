@@ -42,9 +42,19 @@ from inventor_mcp.builder import apply_operation  # noqa: E402
 from inventor_mcp.schema import ExtrudeOp, SketchOp  # noqa: E402
 from inventor_mcp.session import Session  # noqa: E402
 
-#: The block every hole goes through, in mm.
-BLOCK = 60.0
+#: The block every hole goes through, in mm. Big enough that no seat reaches its
+#: neighbour: the first version laid seven cases across 60 mm, which is 7.5 mm
+#: apart, and a 16 mm spotface spans 8 mm either side. Every seat overlapped the
+#: holes beside it and removed less material than an isolated one would, so all
+#: three seat cases read short -- by amounts that scaled with their diameter,
+#: which is what finally gave it away. The probe was measuring its own layout.
+BLOCK = 160.0
 THICK = 12.0
+
+#: Centre-to-centre spacing, and the widest thing any case cuts. Asserted below
+#: rather than trusted, because this is exactly the mistake that cost a live run.
+SPACING = 20.0
+WIDEST = 16.0
 
 #: One case per style, with the volume the geometry says it should remove, in
 #: cm^3. Written out rather than computed in a loop so each number can be read
@@ -70,10 +80,14 @@ CASES = [
         "through_all": False,
         "depth": 6.0,
         "bottom_angle": 118.0,
-        # A 118 degree drill point leaves a cone at the bottom rather than a
-        # flat, so it removes *less* than the cylinder: the tip is shallower.
+        # Inventor measures a blind hole's depth to the *shoulder* -- where the
+        # bore reaches full diameter -- and the drill point goes beyond it. So a
+        # pointed hole removes the flat-bottomed cylinder *plus* the cone, not
+        # less. The first version of this expectation had it the other way round
+        # and read 0.1827 where Inventor gives 0.2279; the measured value agrees
+        # with the cylinder-plus-cone to five figures, which is what settles it.
         "removes": math.pi * (BORE / 20) ** 2 * 0.6
-        - math.pi * (BORE / 20) ** 2 * ((BORE / 20) / math.tan(math.radians(59))) / 3,
+        + math.pi * (BORE / 20) ** 2 * ((BORE / 20) / math.tan(math.radians(59))) / 3,
     },
     {
         "name": "counterbore_through",
@@ -163,6 +177,22 @@ def request_for(case: dict, index: int) -> HoleRequest:
     )
 
 
+def check_the_layout() -> None:
+    """Refuse to run if the cases could interfere with each other.
+
+    A hole that overlaps its neighbour removes less than an isolated one, and the
+    shortfall looks exactly like a wrong argument. Better to fail here than to
+    spend a live run and a morning on it.
+    """
+    span = SPACING * (len(CASES) - 1) + WIDEST
+    if SPACING <= WIDEST:
+        raise SystemExit(f"The cases are {SPACING} mm apart and cut up to "
+                         f"{WIDEST} mm wide: they would overlap.")
+    if span > BLOCK:
+        raise SystemExit(f"{len(CASES)} cases at {SPACING} mm need {span} mm; "
+                         f"the block is {BLOCK} mm.")
+
+
 def volume(session, context) -> float | None:
     """The current volume in cm^3, or None if it cannot be read."""
     try:
@@ -179,7 +209,7 @@ def probe(session, backend, context, case: dict, index: int) -> bool:
         return True
     # Each hole gets its own centre sketch, laid out along X so they do not
     # overlap: a hole that fails is easier to look at than a hole that merged.
-    offset = (index - len(CASES) / 2 + 0.5) * BLOCK / (len(CASES) + 1)
+    offset = (index - len(CASES) / 2 + 0.5) * SPACING
     apply_operation(session, context, SketchOp(
         name=f"Centre{index}", plane="xy",
         entities=[{"type": "point", "position": [offset, 0], "hole_center": True}],
@@ -230,48 +260,43 @@ def probe(session, backend, context, case: dict, index: int) -> bool:
             continue
         print(f"  {name:<22} {_show(name, value)}")
 
-        reported = getattr(feature, "HoleType", None)
-        expected = None
-        try:
-            expected = backend._k(holes.STYLE_ENUM[case["style"]])
-        except Exception:
-            pass
-        print(f"  HoleType {reported}   table says "
-              f"{holes.STYLE_ENUM[case['style']]} = {expected}")
-        if case.get("tap"):
-            print(f"  Tapped   {getattr(feature, 'Tapped', None)}")
-            drilled = _hole_diameter(feature)
-            if drilled is not None:
-                print(f"  drilled  {drilled * 10:.4f} mm   recipe said "
-                      f"{case.get('diameter', BORE)}")
     for note in detail.get("notes") or []:
         print(f"  note     {note}")
     return ok
 
 
-def _show(name: str, value) -> str:
-    """One property, with millimetres and degrees beside Inventor's own units.
+#: Key fragments that say what unit a number is in. Everything internal is
+#: centimetres and radians; every expectation in this script is millimetres and
+#: degrees, so a raw value alone leaves the reader doing the conversion that the
+#: mistake is hiding in. Guessing from the name is better than converting a
+#: volume into millimetres, which the first version cheerfully did.
+LENGTHS = ("diameter", "depth", "distance", "radius", "thickness", "offset")
+ANGLES = ("angle",)
 
-    Everything internal is centimetres and radians, and every number in this
-    script's expectations is millimetres and degrees, so printing only the raw
-    value makes the reader do the conversion that the mistake is hiding in.
-    """
+
+def _show(name: str, value) -> str:
+    """One property, with its own unit beside it where the unit is knowable."""
     if isinstance(value, dict):
         parts = []
         if "expression" in value:
             parts.append(f"{value['expression']!r}")
         if "value" in value:
-            parts.append(f"= {_scaled(value['value'])}")
+            parts.append(f"= {_scaled(name, value['value'])}")
         return "  ".join(parts) or str(value)
-    return _scaled(value)
+    return _scaled(name, value)
 
 
-def _scaled(value) -> str:
+def _scaled(name: str, value) -> str:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return str(value)
     if isinstance(value, int):
         return str(value)
-    return f"{value:.6f}   ({value * 10:.4f} mm / {math.degrees(value):.3f} deg)"
+    lowered = name.lower()
+    if any(part in lowered for part in LENGTHS):
+        return f"{value:.6f} cm   ({value * 10:.4f} mm)"
+    if any(part in lowered for part in ANGLES):
+        return f"{value:.6f} rad  ({math.degrees(value):.3f} deg)"
+    return f"{value:.6f}"
 
 
 def thread_tables(backend, context) -> None:
@@ -350,6 +375,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Inventor {info.version} via the {backend.name} backend")
     print(f"Block {BLOCK:.0f} x {BLOCK:.0f} x {THICK:.0f} mm, bore {BORE} mm")
 
+    check_the_layout()
     context = block(session, backend)
     results: list[tuple[str, bool]] = []
     for index, case in enumerate(CASES):

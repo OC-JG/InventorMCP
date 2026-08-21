@@ -213,11 +213,16 @@ def check_parameter_edit(session: Session, report: Report) -> None:
 def check_hole_styles(session: Session, report: Report) -> None:
     """That a counterbore is a counterbore, which nothing has ever confirmed.
 
-    The hole-method argument order came from another project's field notes, and
-    a wrong order can still build: Inventor coerces what it can, so a plain hole
+    The hole-method argument order came from another project's field notes, and a
+    wrong order can still build: Inventor coerces what it can, so a plain hole
     reported as a counterbore is the failure mode. The backend reads the style
-    back and refuses, so a pass here means Inventor agreed -- and the volume
-    check means it agreed about the shape, not just the label.
+    back off the finished feature and refuses when Inventor disagrees.
+
+    The volume is the check that matters, though, and it is the one that has
+    earned its keep: the read-back spent a whole run returning nothing at all --
+    a hole's properties live on `HoleFeature.Definition`, not on the feature --
+    so eight styles were reported as verified when none of them had been. The
+    volumes were what noticed.
     """
     print("\n--- every hole style builds as the style asked for")
     import probe_hole_styles
@@ -261,8 +266,11 @@ def check_hole_styles(session: Session, report: Report) -> None:
             continue
         report.check(
             agreed, what,
-            f"expected {wanted:.4f}, out by {removed - wanted:+.4f} -- the style "
-            "read back correctly but the shape is wrong" if not agreed else "",
+            f"expected {wanted:.4f}, out by {removed - wanted:+.4f}. Check that "
+            "nothing else in the block is close enough to overlap this hole "
+            "before blaming the arguments -- a seat that meets its neighbour "
+            "removes less than an isolated one, which is what this said last "
+            "time" if not agreed else "",
         )
         for note in (info.detail or {}).get("notes") or []:
             report.note(note)

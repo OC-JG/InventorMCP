@@ -30,6 +30,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--only", nargs="*", default=[],
                         help="Substrings to filter names by, e.g. Dim Surface.")
+    parser.add_argument("--value", nargs="*", default=[], type=int, metavar="N",
+                        help="Name every enum with one of these values. Use it when "
+                             "Inventor hands back a number nothing recognises -- a "
+                             "feature reporting HealthStatus 11778 is only a mystery "
+                             "until you ask what 11778 is called.")
     parser.add_argument("--find", nargs="*", default=[], metavar="SUBSTRING",
                         help="List every enum in the type library whose name "
                              "contains one of these, whether the table knows it or "
@@ -59,10 +64,25 @@ def main(argv: list[str] | None = None) -> int:
               "%LOCALAPPDATA%\\Temp\\gen_py and re-run.")
         return 1
 
+    if args.value:
+        wanted = set(args.value)
+        found = sorted(
+            (value, name) for name, value in vars(constants._module).items()
+            if isinstance(value, int) and value in wanted and not name.startswith("_")
+        )
+        for number in args.value:
+            names = [name for value, name in found if value == number]
+            print(f"{number}: " + (", ".join(names) if names else "no enum has this value"))
+        return 0
+
     if args.find:
+        # Not restricted to names beginning with k: the first version was, and
+        # `--find Health` reported "0 names" on a library that certainly has a
+        # HealthStatusEnum. A search that can only find what it expects is not a
+        # search.
         found = sorted(
             (name, value) for name, value in vars(constants._module).items()
-            if name.startswith("k") and isinstance(value, int)
+            if isinstance(value, int) and not name.startswith("_")
             and any(part.lower() in name.lower() for part in args.find)
         )
         print(f"Every enum matching {args.find} in Inventor's own type library:\n")

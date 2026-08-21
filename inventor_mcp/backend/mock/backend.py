@@ -1326,6 +1326,25 @@ class MockBackend(Backend):
         self._documents[doc_id] = snapshot
         return True
 
+    def describe_feature(self, doc_id: str, name: str) -> dict[str, Any]:
+        """The simulator's own record of a feature, in the same shape.
+
+        It has no COM properties to read, so what comes back is what it stored --
+        enough for a caller to exercise the path without Inventor.
+        """
+        feature = self._doc(doc_id).find_feature(name)
+        described: dict[str, Any] = {
+            "name": feature.name,
+            "kind": feature.kind,
+            "simulated": True,
+        }
+        if feature.volume_delta is not None:
+            described["volume_change_cm3"] = round(feature.volume_delta, 6)
+        for key, value in (feature.detail or {}).items():
+            if isinstance(value, (bool, int, float, str)) or value is None:
+                described[key] = value
+        return described
+
     # -- escape hatch ------------------------------------------------------
     def run_script(self, doc_id: str | None, code: str) -> dict[str, Any]:
         """Run *code* against the simulator's own model.

@@ -8,6 +8,7 @@ wrapper knows the truth, so read it rather than guess.
     python scripts/com_signatures.py                     # the methods this server calls
     python scripts/com_signatures.py HoleFeatures        # everything on one class
     python scripts/com_signatures.py HoleFeatures.AddDrilledByDistanceExtent
+    python scripts/com_signatures.py --search Thread   # every class that mentions it
 """
 
 from __future__ import annotations
@@ -149,9 +150,31 @@ def describe(path: Path, method: str | None) -> None:
             print(f"\n{path.stem}: no methods and no properties in the wrapper")
 
 
+def search(root, needle: str) -> None:
+    """Every generated class whose name mentions *needle*, with its methods.
+
+    For when the method you expected does not exist and you need to know what
+    does. `ThreadFeatures.CreateThreadDefinition` is not on 2027.1, and no amount
+    of asking about it says where a ThreadInfo comes from instead.
+    """
+    hits = sorted(path for path in root.glob("*.py")
+                  if needle.lower() in path.stem.lower())
+    if not hits:
+        print(f"No generated class mentions {needle!r}.")
+        return
+    print(f"{len(hits)} generated class(es) mentioning {needle!r}:\n")
+    for path in hits:
+        print(f"--- {path.stem}")
+        describe(path, None)
+
+
 def main(argv: list[str]) -> int:
     root = generated_root()
     print(f"Type-library cache: {root}")
+    if len(argv) > 2 and argv[1] == "--search":
+        for needle in argv[2:]:
+            search(root, needle)
+        return 0
     targets = argv[1:] or INTERESTING
     for target in targets:
         class_name, _, method = target.partition(".")

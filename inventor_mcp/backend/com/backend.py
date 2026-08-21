@@ -2048,10 +2048,22 @@ class ComBackend(Backend):
             "name": str(getattr(feature, "Name", name)),
             "kind": _feature_kind(feature),
         }
-        for attribute in self._DESCRIBABLE:
-            value = _plain(getattr(feature, attribute, None))
-            if value is not None:
-                described[attribute] = value
+        # The feature *and* its definition: a hole's diameter, seat and bottom
+        # all live on `HoleFeature.Definition`, which is why the first version of
+        # this printed nothing but `Suppressed`.
+        holders = [("", feature)]
+        definition = getattr(feature, "Definition", None)
+        if definition is not None:
+            holders.append(("definition.", definition))
+        for prefix, holder in holders:
+            for attribute in self._DESCRIBABLE:
+                try:
+                    raw = getattr(holder, attribute)
+                except Exception:
+                    continue
+                value = _plain(raw)
+                if value is not None:
+                    described.setdefault(prefix + attribute, value)
         return described
 
     # -- escape hatch ------------------------------------------------------
