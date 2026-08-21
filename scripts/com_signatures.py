@@ -157,15 +157,38 @@ def search(root, needle: str) -> None:
     does. `ThreadFeatures.CreateThreadDefinition` is not on 2027.1, and no amount
     of asking about it says where a ThreadInfo comes from instead.
     """
-    hits = sorted(path for path in root.glob("*.py")
-                  if needle.lower() in path.stem.lower())
-    if not hits:
-        print(f"No generated class mentions {needle!r}.")
-        return
-    print(f"{len(hits)} generated class(es) mentioning {needle!r}:\n")
-    for path in hits:
-        print(f"--- {path.stem}")
-        describe(path, None)
+    lowered = needle.lower()
+    hits = sorted(path for path in root.glob("*.py") if lowered in path.stem.lower())
+    if hits:
+        print(f"{len(hits)} generated class(es) named for {needle!r}:\n")
+        for path in hits:
+            print(f"--- {path.stem}")
+            describe(path, None)
+
+    # makepy writes a module per vtable interface and leaves the dispatch-only
+    # ones in the library module, so a filename search finds only some of them.
+    # Searching the *contents* is what finds where an object comes from:
+    # ThreadFeatures.Add wants a ThreadInfo and nothing named "Thread" creates
+    # one, which is a dead end until you look inside the other files.
+    makers = []
+    for path in sorted(root.glob("*.py")):
+        try:
+            text = path.read_text(errors="ignore")
+        except OSError:  # pragma: no cover - unreadable cache entry
+            continue
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped.startswith("def "):
+                continue
+            name = stripped[4:].split("(", 1)[0]
+            if lowered in name.lower() and (name, path.stem) not in makers:
+                makers.append((name, path.stem))
+    if makers:
+        print(f"\nMethods elsewhere whose name mentions {needle!r}:")
+        for name, owner in makers:
+            print(f"    {owner}.{name}")
+    elif not hits:
+        print(f"Nothing in the type library mentions {needle!r}.")
 
 
 def main(argv: list[str]) -> int:

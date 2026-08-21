@@ -79,6 +79,12 @@ def thread_type_for(designation: str) -> str:
     Getting one wrong produces an error from Inventor rather than a silently
     untapped hole, which is why a guess is acceptable and the recipe can
     override it with ``tap_type`` and ``tap_class``.
+
+    The bore Inventor cuts is the thread's **minor diameter**, not the tapping
+    drill: an M8x1.25 tapped hole measures 6.6469 mm, which is
+    ``D - 1.0825 * P``, where the drill a machinist would reach for is 6.75. So
+    a recipe that gives the tapping drill will be told the two disagree, and it
+    is the recipe that is describing a different thing.
     """
     text = designation.strip().upper()
     if text.startswith("NPT") or text.endswith("NPT"):

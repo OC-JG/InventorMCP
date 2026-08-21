@@ -342,8 +342,10 @@ fastener rather than deriving one.
   which is checked directly — so the holes that already worked cannot break to
   guard a claim nobody made. A tapped hole takes
   its drill size from Inventor's thread table, so give `diameter` as the
-  *tapping drill* (nominal less the pitch for coarse metric); the server reports
-  the size Inventor actually used and says so when the two disagree. **A tap
+  thread's **minor diameter** — `D - 1.0825 x pitch` for ISO metric, so 6.647 mm
+  for M8x1.25 — because that is what Inventor models, and it is narrower than the
+  6.75 mm drill a machinist would use. The server reports the size Inventor
+  actually cut and says so when the two disagree. **A tap
   designation must carry its pitch** -- Inventor 2027.1 accepts `M8x1.25` and
   refuses `M8`. Metric and unified threads are confirmed; NPT and BSP are not,
   and the designation format for those is unknown here. None of the styles has

@@ -230,7 +230,25 @@ These are the parts of the COM backend most likely to need adjustment, and why:
   path may need the whole sketch passed instead.
 - **`shell`** uses `CreateShellDefinition`. Older releases expose a direct
   `ShellFeatures.Add(faces, thickness, direction)` instead.
-- **`thread`** creates a definition from the first selected face only.
+- **`thread`** is broken on 2027.1 and known to be. `ThreadFeatures` has no
+  `CreateThreadDefinition` — the only method on it is
+  `Add(Face, StartEdge, ThreadInfo, ...)`, and nothing in the type library named
+  for threads creates a `ThreadInfo`. Until that is found, use a `hole` with
+  `tap` instead: that route is measured and works.
+- **A tapped hole is cut to the thread's minor diameter**, `D - 1.0825 x pitch`
+  for ISO metric — 6.6469 mm for M8x1.25, measured from the removed volume to
+  four decimal places. That is narrower than the 6.75 mm tapping drill, so a
+  recipe giving the drill size will be told the two disagree.
+- **A blind hole's depth is measured to the shoulder**, and the drill point goes
+  beyond it, so a pointed hole removes the full cylinder *plus* the cone.
+- **A tap designation must carry its pitch.** `M8x1.25` is accepted and `M8` is
+  refused. `ANSI Metric M Profile`, `ISO Metric profile` and
+  `ANSI Unified Screw Threads` all work; `NPT` and `BSP` were refused with the
+  designations tried, so their format is still unknown here.
+- **`HealthStatusEnum` is not in the type library at all** on this release, so a
+  feature's health cannot be translated by name. 11778 is what seven
+  just-built, individually verified features all reported, so it is treated as
+  healthy on that evidence and nothing else.
 - **Hole styles** go through Inventor's own hole methods, one per combination of
   style and extent (`AddCBoreByThroughAllExtent` and its seven siblings). Their
   argument order was taken from another project's field notes rather than

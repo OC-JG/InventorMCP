@@ -90,6 +90,25 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   method called, the enum read back, the volume removed against what the
   geometry says, and which thread tables `CreateTapInfo` will accept.
 
+### Measured on Inventor 2027.1
+- Every hole style now builds to its predicted volume exactly: counterbore
+  0.8120, spotface 0.5774, countersink 0.5611, pointed blind 0.2279, all to four
+  decimal places against geometry worked out by hand. The seat depths that
+  looked wrong were the probe overlapping its own cases.
+- **A tapped hole is cut to the thread's minor diameter**, `D - 1.0825 x pitch`
+  for ISO metric: 6.6469 mm for M8x1.25, from the removed volume to four decimal
+  places. Not the 6.75 mm tapping drill.
+- **A tap designation must carry its pitch**: `M8x1.25` accepted, `M8` refused.
+  Metric and unified tables work; NPT and BSP were refused.
+- **`ThreadFeatures` has no `CreateThreadDefinition`.** Its only method is
+  `Add(Face, StartEdge, ThreadInfo, ...)` and nothing named for threads creates
+  a `ThreadInfo`, so the `thread` operation cannot work yet. Use a `hole` with
+  `tap`, which is measured and does.
+- **There is no `HealthStatusEnum` in the type library**, so a feature's health
+  cannot be translated by name. 11778 is treated as healthy because seven
+  just-built, individually verified features all reported it -- evidence rather
+  than a table entry.
+
 ### Fixed
 - **A hole's properties are on `HoleFeature.Definition`, not on the feature.**
   So the style read-back returned nothing for every hole, `verify` answered

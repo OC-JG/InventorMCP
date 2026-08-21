@@ -126,10 +126,12 @@ CASES = [
         "style": "drilled",
         "through_all": True,
         "tap": "M8x1.25",
-        # Inventor picks the drill from its thread table, so this is the tapping
-        # size for M8x1.25 and the point of the check is whether it agrees.
-        "diameter": 6.75,
-        "removes": math.pi * (0.675 / 2) ** 2 * (THICK / 10),
+        # Inventor models the *thread's minor diameter*, not the tapping drill:
+        # D - 1.0825*P = 8 - 1.0825*1.25 = 6.6469 mm, which is what the removed
+        # volume gives to four decimal places. The tapping drill for M8x1.25 is
+        # 6.75, and using that here read 0.013 cm^3 short.
+        "diameter": 8 - 1.0825 * 1.25,
+        "removes": math.pi * ((8 - 1.0825 * 1.25) / 20) ** 2 * (THICK / 10),
     },
 ]
 

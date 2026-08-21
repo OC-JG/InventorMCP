@@ -115,6 +115,20 @@ EXPORT_EXTENSIONS = {
 #: number nobody can translate is not evidence of anything.
 _HEALTHY_STATUS_NAMES = ("kUpToDateHealth",)
 
+#: Status values seen on features that are demonstrably fine. This is a
+#: measurement, not a table entry: Inventor 2027.1's type library contains no
+#: HealthStatusEnum at all -- `dump_constants.py --find Health` returns nothing
+#: and `--value 11778` names no enum -- so there is no name to ask for on this
+#: release. What there is instead is evidence: seven holes, each just built and
+#: each verified against its own geometry to four decimal places, every one of
+#: them reporting 11778.
+#:
+#: That is enough to stop calling it an error. It is not enough to call it
+#: "up to date" rather than, say, "up to date with a warning", so the value is
+#: listed here as observed rather than translated, and re-checking it on another
+#: release means re-running the probe.
+_OBSERVED_HEALTHY = {11778}
+
 
 #: Sketch planes whose first axis runs opposite to the model axis they are
 #: named after.  Measured on Inventor 2027.1: a profile drawn from 0 to 90 in
@@ -1448,9 +1462,12 @@ class ComBackend(Backend):
                 # would otherwise sit in the recipe looking authoritative.
                 if abs(actual - request.diameter.value) > 5.0e-3:
                     notes.append(
-                        f"the tap drill is {actual * 10:.2f} mm from Inventor's "
-                        f"thread table, not the {request.diameter.value * 10:.2f} mm "
-                        "the recipe gives; the recipe's diameter did not reach the model"
+                        f"Inventor cut {actual * 10:.4f} mm, not the "
+                        f"{request.diameter.value * 10:.4f} mm the recipe gives. It "
+                        "models the thread's minor diameter (D - 1.0825 x pitch for "
+                        "ISO metric), which is narrower than the tapping drill -- so "
+                        "give that if you want the two to agree. Either way the "
+                        "recipe's diameter did not reach the model."
                     )
         if notes:
             detail["notes"] = notes
@@ -2014,12 +2031,15 @@ class ComBackend(Backend):
         and the previous hard-coded pair contained a value from a different enum
         altogether, which reported a correct rebuild as three sick features.
         """
-        values = {0}
+        values = set(_OBSERVED_HEALTHY) | {0}
         for name in _HEALTHY_STATUS_NAMES:
             try:
                 values.add(self._k(name))
             except Exception:
-                return None
+                # No name to ask for on this release, but the observed values
+                # stand on their own evidence. Reporting every feature as sick
+                # because an enum is missing would be the worse answer.
+                continue
         return values
 
     #: Properties worth reading off a feature when asking what Inventor made.
