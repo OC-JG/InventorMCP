@@ -38,7 +38,21 @@ def main(argv: list[str] | None = None) -> int:
                              "a feature's HealthStatus means.")
     args = parser.parse_args(argv)
 
+    # Connect first. `load()` on its own found nothing here, and the message it
+    # printed -- "repair the pywin32 cache" -- sent the reader after a cache that
+    # was perfectly healthy: the acceptance run read fifty-one values from it
+    # minutes earlier. What it actually needed was a live application to ask.
     constants = load()
+    if constants._module is None:
+        from inventor_mcp.session import Session
+
+        try:
+            backend = Session(backend_kind="inventor").ensure_backend()
+            backend.connect(visible=True, create=True)
+        except Exception as exc:
+            print(f"Could not reach Inventor: {exc}")
+            return 1
+        constants = getattr(backend, "unmarshalled", backend)._constants
     if constants._module is None:
         print("The type library could not be read, so there is nothing to compare "
               "the table against.\nRepair the pywin32 cache first: delete "

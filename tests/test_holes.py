@@ -164,12 +164,33 @@ class TestTheArgumentOrder:
         assert call.keywords["SpotFaceDiameter"] == "pad_d"
         assert call.keywords["SpotFaceDepth"] == "pad_deep"
 
-    def test_the_tip_angle_is_last_and_only_when_asked_for(self):
+    def test_a_tip_angle_needs_the_flat_bottom_flag_before_it(self):
+        """The measured signature is `(..., ExtentDirection, FlatBottom, Angle)`.
+
+        Passing the angle alone put "118 deg" into FlatBottom, where it coerced
+        to True and gave the flat bottom it was meant to replace -- a hole that
+        built, reported success, and was the wrong shape.
+        """
         blind = dict(through_all=False, depth=Driven("deep", 0.5))
         flat = holes.plan_call(request(**blind), PLACEMENT, EXTENT, "bolt_d", None)
         assert "BottomTipAngle" not in flat.keywords
+        assert "FlatBottom" not in flat.keywords, "silence means Inventor's default"
+
         pointed = holes.plan_call(request(**blind), PLACEMENT, EXTENT, "bolt_d", "118 deg")
-        assert pointed.positional[-1] == "118 deg"
+        assert pointed.positional[-2:] == (False, "118 deg")
+        assert list(pointed.keywords)[-2:] == ["FlatBottom", "BottomTipAngle"]
+
+    def test_a_counterbore_takes_its_seat_before_the_flat_bottom_flag(self):
+        call = holes.plan_call(
+            request(through_all=False, depth=Driven("plate_t", 0.8),
+                    style="counterbore", cbore_diameter=Driven("cbore_d", 1.0),
+                    cbore_depth=Driven("cbore_deep", 0.55)),
+            PLACEMENT, EXTENT, "bolt_d", "118 deg",
+        )
+        assert call.positional == (
+            PLACEMENT, "bolt_d", "plate_t", EXTENT, "cbore_d", "cbore_deep",
+            False, "118 deg",
+        )
 
     def test_a_through_hole_never_takes_a_tip_angle(self):
         """There is no bottom to point: the argument does not exist there."""
@@ -239,7 +260,7 @@ class TestTheTap:
         assert kwargs["ThreadDesignation"] == "M6x1"
         assert kwargs["Class"] == "6H"
         assert kwargs["RightHanded"] is True
-        assert kwargs["FullThreadDepth"] is True
+        assert kwargs["FullTapDepth"] is True
 
     def test_the_recipe_can_override_the_guess(self):
         features = Recorder()
@@ -250,13 +271,18 @@ class TestTheTap:
         assert kwargs["ThreadType"] == "ISO Metric profile"
         assert kwargs["Class"] == "6G"
         assert kwargs["RightHanded"] is False
-        assert kwargs["FullThreadDepth"] is False
+        assert kwargs["FullTapDepth"] is False
 
     def test_late_binding_gets_the_same_arguments_by_position(self):
+        """Handedness first, the depth flag last: the measured order.
+
+        The first version had the two booleans at opposite ends and passed only
+        because both were True. This pins the order with them differing.
+        """
         features = Recorder(accepts_keywords=False)
-        holes.tap_info(features, request(tap="M6x1"))
+        holes.tap_info(features, request(tap="M6x1", tap_full_depth=False))
         _, args, _ = features.calls[0]
-        assert args == (True, "ANSI Metric M Profile", "M6x1", "6H", True)
+        assert args == (True, "ANSI Metric M Profile", "M6x1", "6H", False)
 
 
 class TestVerifying:

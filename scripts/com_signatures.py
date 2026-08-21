@@ -41,6 +41,8 @@ INTERESTING = [
     "HoleFeatures.AddCSinkByThroughAllExtent",
     "HoleFeatures.CreateTapInfo",
     "HoleFeatures.CreateSketchPlacementDefinition",
+    "PartFeatures.CreatePath",
+    "ThreadFeatures.Add",
     "LoftFeatures.CreateLoftDefinition",
     "LoftFeatures.Add",
     "SweepFeatures.Add",

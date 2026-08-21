@@ -1262,25 +1262,65 @@ class ComBackend(Backend):
         features = document.ComponentDefinition.Features.SweepFeatures
         with self._batch(document), self._translate_errors("Sweep"):
             profile = profile_sketch.Profiles.AddForSolid()
-            path = path_sketch.Profiles.AddForSurface(path_sketch.SketchEntities.Item(1))
+            path, route = self._sweep_path(document, path_sketch)
             feature = features.AddUsingPath(
                 profile, path, self._k(BOOLEAN_OPERATIONS[request.operation])
             )
             if request.name:
                 feature.Name = request.name
-        return _feature_info(feature, "sweep", {"path": request.path_sketch})
+        return _feature_info(feature, "sweep", {"path": request.path_sketch,
+                                                "path_from": route})
+
+    def _sweep_path(self, document: Any, sketch: Any) -> tuple[Any, str]:  # pragma: no cover
+        """A path object for a sweep, by whichever route this release offers.
+
+        ``Features.CreatePath`` is the documented way and follows the geometry
+        connected to the entity it is given, which matters for a path of more
+        than one segment. The older ``Profiles.AddForSurface`` route is kept
+        behind it: it built nothing here -- the sweep failed with a bare
+        "Exception occurred" -- but that is one release, and a fallback that
+        reports which route it took costs nothing.
+        """
+        first = sketch.SketchEntities.Item(1)
+        attempts: list[tuple[str, Any]] = [
+            ("Features.CreatePath",
+             lambda: document.ComponentDefinition.Features.CreatePath(first)),
+            ("Profiles.AddForSurface", lambda: sketch.Profiles.AddForSurface(first)),
+        ]
+        failures = []
+        for route, build in attempts:
+            try:
+                return build(), route
+            except Exception as exc:
+                failures.append(f"{route}: {_com_message(exc)}")
+        raise FeatureError(
+            f"Could not make a path out of sketch {sketch.Name!r}.",
+            hint="Tried " + "; ".join(failures) + ". A sweep path must be a single "
+            "chain of connected curves, and the profile must sit on a plane "
+            "perpendicular to it at one end.",
+        )
 
     def loft(self, doc_id: str, request: LoftRequest) -> FeatureInfo:  # pragma: no cover
         document = self._doc(doc_id)
         app = self._require_app()
         features = document.ComponentDefinition.Features.LoftFeatures
         with self._batch(document), self._translate_errors("Loft"):
-            definition = features.CreateLoftDefinition(
-                app.TransientObjects.CreateObjectCollection(),
-                self._k(BOOLEAN_OPERATIONS[request.operation]),
-            )
+            # The sections go in *before* the definition is made. Creating it
+            # from an empty collection and adding to `definition.Sections`
+            # afterwards is the obvious reading of the API and does not work:
+            # the loft failed with a bare "Exception occurred". The collection is
+            # the definition's input, not a container it hands back.
+            sections = app.TransientObjects.CreateObjectCollection()
             for name in request.sketches:
-                definition.Sections.Add(self._sketch(doc_id, name).Profiles.AddForSolid())
+                sections.Add(self._sketch(doc_id, name).Profiles.AddForSolid())
+            if int(sections.Count) < 2:
+                raise FeatureError(
+                    f"A loft needs at least two sections; {int(sections.Count)} "
+                    "closed profile(s) were found.",
+                    hint="Each sketch named in `sketches` must have one closed loop.",
+                )
+            definition = features.CreateLoftDefinition(
+                sections, self._k(BOOLEAN_OPERATIONS[request.operation]))
             feature = features.Add(definition)
             if request.name:
                 feature.Name = request.name
@@ -1982,6 +2022,38 @@ class ComBackend(Backend):
                 return None
         return values
 
+    #: Properties worth reading off a feature when asking what Inventor made.
+    #: Deliberately a wide net over several feature kinds: a name that is not
+    #: there is skipped, and the cost of asking is one failed lookup.
+    _DESCRIBABLE = (
+        "HoleDiameter", "Depth", "ExtentType", "HoleType", "Tapped", "FlatBottom",
+        "HoleBottomType", "BottomTipAngle", "CounterboreDiameter",
+        "CounterboreDepth", "CountersinkDiameter", "CountersinkAngle",
+        "SpotFaceDiameter", "SpotFaceDepth", "Radius", "Distance", "Thickness",
+        "Angle", "Operation", "Suppressed", "HealthStatus",
+    )
+
+    def describe_feature(self, doc_id: str, name: str) -> dict[str, Any]:  # pragma: no cover
+        """What Inventor says about one feature, as numbers rather than objects.
+
+        Runs on the apartment that owns the objects, which is why it is a backend
+        method rather than something a script does for itself. Reaching into a
+        returned COM object from another thread fails with "the application
+        called an interface that was marshalled for a different thread", and that
+        is exactly how the first attempt to read a counterbore's real depth died.
+        """
+        document = self._doc(doc_id)
+        feature = _find_feature(document.ComponentDefinition.Features, name)
+        described: dict[str, Any] = {
+            "name": str(getattr(feature, "Name", name)),
+            "kind": _feature_kind(feature),
+        }
+        for attribute in self._DESCRIBABLE:
+            value = _plain(getattr(feature, attribute, None))
+            if value is not None:
+                described[attribute] = value
+        return described
+
     # -- escape hatch ------------------------------------------------------
     def run_script(self, doc_id: str | None, code: str) -> dict[str, Any]:  # pragma: no cover
         """Execute *code* against the live API, on the thread that owns it.
@@ -2309,6 +2381,27 @@ def _describe_value(value: Any) -> Any:  # pragma: no cover - Windows only
         if isinstance(attribute, (str, int, float, bool)):
             described[name] = attribute
     return described
+
+
+def _plain(value: Any) -> Any:  # pragma: no cover - Windows only
+    """A COM property as a number, a string or None -- never an object.
+
+    A Parameter comes back as both, because the value says what was built and
+    the expression says what drives it, and a counterbore whose depth reads
+    0.6216 against an expression of "6.6 mm" is a different problem from one
+    whose expression is wrong too.
+    """
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    reading: dict[str, Any] = {}
+    for attribute in ("Value", "Expression"):
+        try:
+            inner = getattr(value, attribute)
+        except Exception:
+            continue
+        if isinstance(inner, (bool, int, float, str)):
+            reading[attribute.lower()] = inner
+    return reading or None
 
 
 def _hole_diameter(feature: Any) -> float | None:  # pragma: no cover - Windows only

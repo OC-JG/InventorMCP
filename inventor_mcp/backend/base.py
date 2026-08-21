@@ -512,6 +512,19 @@ class Backend(ABC):
         """Undo everything since :meth:`begin_transaction`. False if it could not."""
         return False
 
+    def describe_feature(self, doc_id: str, name: str) -> dict[str, Any]:
+        """Every property of one feature that can be read, as plain data.
+
+        Plain data because a live COM object cannot leave the thread that made
+        it: the backend is pinned to one apartment, so a caller that reaches into
+        a returned feature gets "the application called an interface that was
+        marshalled for a different thread". Reading the properties *there* and
+        returning numbers is the only way to ask what Inventor actually built.
+        """
+        raise NotImplementedError(
+            f"The {self.name} backend cannot describe a feature's properties."
+        )
+
     # -- escape hatch ------------------------------------------------------
     def run_script(self, doc_id: str | None, code: str) -> dict[str, Any]:
         """Run Python against the live API, for what the recipe cannot say.

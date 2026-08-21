@@ -211,23 +211,24 @@ def probe(session, backend, context, case: dict, index: int) -> bool:
               f"({drift:+.4f})  {verdict}")
         ok = abs(drift) <= TOLERANCE
 
-    feature = _find(backend, context, case["name"])
-    if feature is not None and backend.name != "mock":
-        from inventor_mcp.backend.com.backend import _hole_diameter
-
-        # What Inventor made, in its own words. The volumes said every seat came
-        # out shallower than asked -- a counterbore 6.22 mm deep where 6.6 was
-        # requested, a spotface 0.6 where 1.0 was -- and no amount of arithmetic
-        # settles which argument landed where. These properties do.
-        for name in (
-            "HoleDiameter", "Depth", "ExtentType", "HoleType", "Tapped",
-            "HoleBottomType", "BottomTipAngle", "CounterboreDiameter",
-            "CounterboreDepth", "CountersinkDiameter", "CountersinkAngle",
-            "SpotFaceDiameter", "SpotFaceDepth", "HoleCenterPoints",
-        ):
-            shown = _read(feature, name)
-            if shown is not None:
-                print(f"  {name:<22} {shown}")
+    # What Inventor made, in its own words. The volumes said every seat came out
+    # shallower than asked -- a counterbore 6.22 mm deep where 6.6 was requested,
+    # a spotface 0.6 where 1.0 was -- and no arithmetic settles which argument
+    # landed where. These properties do.
+    #
+    # Asked of the backend rather than read here: it is pinned to one COM
+    # apartment, and reaching into a feature from this thread fails with "the
+    # application called an interface that was marshalled for a different
+    # thread", which is how the first attempt at this died.
+    try:
+        described = backend.describe_feature(context.doc_id, case["name"])
+    except Exception as exc:
+        described = {}
+        print(f"  (could not describe the feature: {type(exc).__name__}: {exc})")
+    for name, value in described.items():
+        if name in ("name", "kind"):
+            continue
+        print(f"  {name:<22} {_show(name, value)}")
 
         reported = getattr(feature, "HoleType", None)
         expected = None
@@ -248,74 +249,78 @@ def probe(session, backend, context, case: dict, index: int) -> bool:
     return ok
 
 
-def _read(feature, name: str):
-    """One property as text, unwrapping a Parameter into value and expression."""
-    try:
-        value = getattr(feature, name)
-    except Exception:
-        return None
-    if value is None:
-        return None
-    if isinstance(value, (int, float, bool, str)):
-        # Lengths come back in centimetres; show millimetres beside them, since
-        # every number in this script's expectations is in mm.
-        if isinstance(value, float):
-            return f"{value:.6f}  ({value * 10:.4f} mm, or {math.degrees(value):.4f} deg)"
+def _show(name: str, value) -> str:
+    """One property, with millimetres and degrees beside Inventor's own units.
+
+    Everything internal is centimetres and radians, and every number in this
+    script's expectations is millimetres and degrees, so printing only the raw
+    value makes the reader do the conversion that the mistake is hiding in.
+    """
+    if isinstance(value, dict):
+        parts = []
+        if "expression" in value:
+            parts.append(f"{value['expression']!r}")
+        if "value" in value:
+            parts.append(f"= {_scaled(value['value'])}")
+        return "  ".join(parts) or str(value)
+    return _scaled(value)
+
+
+def _scaled(value) -> str:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         return str(value)
-    for attribute in ("Expression", "Value"):
-        try:
-            inner = getattr(value, attribute)
-        except Exception:
-            continue
-        if isinstance(inner, (int, float, str)):
-            other = None
-            try:
-                other = feature and getattr(value, "Value" if attribute == "Expression"
-                                            else "Expression")
-            except Exception:
-                other = None
-            return f"{inner!r}" + (f"  (= {other})" if other is not None else "")
-    try:
-        return f"<{type(value).__name__} Count={value.Count}>"
-    except Exception:
-        return f"<{type(value).__name__}>"
-
-
-def _find(backend, context, name: str):
-    """The raw COM feature, so its properties can be read back directly."""
-    try:
-        features = backend._doc(context.doc_id).ComponentDefinition.Features
-        for index in range(1, int(features.Count) + 1):
-            feature = features.Item(index)
-            if str(feature.Name) == name:
-                return feature
-    except Exception:
-        return None
-    return None
+    if isinstance(value, int):
+        return str(value)
+    return f"{value:.6f}   ({value * 10:.4f} mm / {math.degrees(value):.3f} deg)"
 
 
 def thread_tables(backend, context) -> None:
-    """Which thread tables and designations this installation will accept."""
+    """Which thread tables and designations this installation will accept.
+
+    The whole probe runs on the backend's own COM thread, in one submitted
+    callable. Anything else fails with "the application called an interface that
+    was marshalled for a different thread" -- a live COM object cannot leave the
+    apartment that made it, and `HoleFeatures` is a live COM object.
+    """
     print("\n--- CreateTapInfo")
     if backend.name == "mock":
         print("  skipped: the simulator has no thread table")
         return
-    features = backend._doc(context.doc_id).ComponentDefinition.Features.HoleFeatures
-    for thread_type, designation, thread_class in [
+
+    cases = [
         ("ANSI Metric M Profile", "M8x1.25", "6H"),
         ("ANSI Metric M Profile", "M8", "6H"),
         ("ISO Metric profile", "M8x1.25", "6H"),
         ("ANSI Unified Screw Threads", "1/4-20 UNC", "2B"),
         ("NPT", "1/8", "-"),
         ("BSP", "G1/4", "-"),
-    ]:
-        try:
-            features.CreateTapInfo(True, thread_type, designation, thread_class, True)
-            print(f"  ok      {thread_type!r:32} {designation!r:14} {thread_class!r}")
-        except Exception as exc:
-            message = str(exc).splitlines()[0][:90]
-            print(f"  refused {thread_type!r:32} {designation!r:14} {thread_class!r}"
-                  f"\n            {message}")
+    ]
+
+    def attempt() -> list[tuple[bool, str, str, str, str]]:
+        raw = backend.unmarshalled if hasattr(backend, "unmarshalled") else backend
+        features = raw._doc(context.doc_id).ComponentDefinition.Features.HoleFeatures
+        answers = []
+        for thread_type, designation, thread_class in cases:
+            try:
+                # The measured order: handedness first, the depth flag last.
+                features.CreateTapInfo(True, thread_type, designation, thread_class, True)
+                answers.append((True, thread_type, designation, thread_class, ""))
+            except Exception as exc:
+                answers.append((False, thread_type, designation, thread_class,
+                                str(exc).splitlines()[0][:90]))
+        return answers
+
+    worker = getattr(backend, "marshalling_thread", None)
+    try:
+        answers = worker.call(attempt) if worker is not None else attempt()
+    except Exception as exc:
+        print(f"  could not probe the thread tables: {type(exc).__name__}: {exc}")
+        return
+    for ok, thread_type, designation, thread_class, why in answers:
+        mark = "ok     " if ok else "refused"
+        print(f"  {mark} {thread_type!r:32} {designation!r:14} {thread_class!r}")
+        if why:
+            print(f"            {why}")
 
 
 def main(argv: list[str] | None = None) -> int:

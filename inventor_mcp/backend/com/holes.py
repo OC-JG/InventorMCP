@@ -143,11 +143,18 @@ def plan_call(request: Any, placement: Any, extent: int, diameter_or_tap: Any,
         keywords[name] = driven.expression
         positional.append(driven.expression)
 
-    # Optional, and last in every distance-extent variant.  Omitted rather than
-    # defaulted: passing an angle makes a pointed bottom, and Inventor's own
-    # default is flat, so a recipe that says nothing should get what the dialog
-    # would give it.
+    # A pointed bottom takes *two* arguments, and the first is a boolean.
+    # `AddDrilledByDistanceExtent(..., FlatBottom, BottomTipAngle)`: passing the
+    # angle alone put the string "118 deg" into FlatBottom, where it coerced to
+    # True and produced the flat bottom it was meant to replace. The hole built,
+    # reported success and was the wrong shape -- caught by the volume, which is
+    # 0.0226 cm^3 more than a 118 degree tip leaves.
+    #
+    # Both are omitted when no angle is asked for, so a recipe that says nothing
+    # gets Inventor's own default, which is flat.
     if not through and bottom_angle is not None:
+        keywords["FlatBottom"] = False
+        positional.append(False)
         keywords["BottomTipAngle"] = bottom_angle
         positional.append(bottom_angle)
 
@@ -173,25 +180,29 @@ def invoke(features: Any, call: HoleCall) -> Any:
 
 
 def tap_info(features: Any, request: Any) -> Any:
-    """A ``HoleTapInfo`` for the request's thread, or raise saying why not."""
+    """A ``HoleTapInfo`` for the request's thread, or raise saying why not.
+
+    The measured signature is
+    ``CreateTapInfo(RightHanded, ThreadType, ThreadDesignation, Class,
+    FullTapDepth, [ThreadDepth])`` -- handedness first, and the depth flag
+    called ``FullTapDepth`` rather than ``FullThreadDepth``. The first version
+    of this had the two booleans at opposite ends, which worked only because
+    both happened to be True.
+    """
     designation = request.tap
     thread_type = request.tap_type or thread_type_for(designation)
     thread_class = request.tap_class or thread_class_for(designation)
     keywords = {
-        "FullThreadDepth": bool(request.tap_full_depth),
+        "RightHanded": bool(request.tap_right_handed),
         "ThreadType": thread_type,
         "ThreadDesignation": designation,
         "Class": thread_class,
-        "RightHanded": bool(request.tap_right_handed),
+        "FullTapDepth": bool(request.tap_full_depth),
     }
-    positional = (
-        keywords["FullThreadDepth"], thread_type, designation, thread_class,
-        keywords["RightHanded"],
-    )
     try:
         return features.CreateTapInfo(**keywords)
     except TypeError:
-        return features.CreateTapInfo(*positional)
+        return features.CreateTapInfo(*keywords.values())
 
 
 def verify(feature: Any, request: Any, resolve: Callable[[str], int]) -> tuple[bool | None, str]:
