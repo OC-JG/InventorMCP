@@ -1295,7 +1295,7 @@ class ComBackend(Backend):
         "Exception occurred" -- but that is one release, and a fallback that
         reports which route it took costs nothing.
         """
-        first = sketch.SketchEntities.Item(1)
+        first = _first_curve(sketch)
         attempts: list[tuple[str, Any]] = [
             ("Features.CreatePath",
              lambda: document.ComponentDefinition.Features.CreatePath(first)),
@@ -2479,6 +2479,40 @@ def _call_named(method: Any, arguments: Sequence[tuple[str, Any]]) -> Any:  # pr
     except TypeError:
         return method(*[None if value is DEFAULTED else value
                         for _, value in arguments])
+
+
+#: The sketch collections that hold curves, in the order a path is looked for.
+_CURVES = ("SketchArcs", "SketchLines", "SketchCircles", "SketchEllipses",
+           "SketchSplines", "SketchEquationCurves")
+
+
+def _first_curve(sketch: Any) -> Any:  # pragma: no cover - Windows only
+    """The first real curve in a sketch, skipping its points.
+
+    ``SketchEntities.Item(1)`` is not reliably a curve: it includes sketch
+    points, and this project projects the origin into a sketch whenever a
+    constraint references it, so a path sketch of one arc can easily answer with
+    a point. Handing a point to ``CreatePath`` fails with "Exception occurred"
+    and no further explanation, which is a long way from the cause.
+    """
+    for collection_name in _CURVES:
+        collection = getattr(sketch, collection_name, None)
+        if collection is None:
+            continue
+        try:
+            total = int(collection.Count)
+        except Exception:
+            continue
+        for index in range(1, total + 1):
+            curve = collection.Item(index)
+            if not bool(getattr(curve, "Construction", False)):
+                return curve
+    raise FeatureError(
+        f"Sketch {getattr(sketch, 'Name', '?')!r} has no non-construction curve "
+        "to use as a path.",
+        hint="A sweep path needs real geometry: check that the sketch's entities "
+        "are not all marked construction.",
+    )
 
 
 def _hole_diameter(feature: Any) -> float | None:  # pragma: no cover - Windows only
