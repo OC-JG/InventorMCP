@@ -147,7 +147,7 @@ def check_example(session: Session, path: Path, report: Report, record: bool) ->
         # about the simulator, not about the recipe -- worth printing, not worth
         # failing. It is the one number that shows how good the oracle is.
         report.skip(f"{name}: the simulator says {seen['volume_cm3']:.4f} cm^3",
-                    f"Inventor measured {expected['volume_cm3']:.4f}, "
+                    f"the expectation is {expected['volume_cm3']:.4f}, "
                     f"{drift:+.4f} apart")
         return
     report.check(
@@ -465,15 +465,17 @@ def main(argv: list[str] | None = None) -> int:
     def wanted(name: str) -> bool:
         return not args.only or any(part.lower() in name.lower() for part in args.only)
 
-    if wanted("examples"):
-        for path in sorted((ROOT / "examples").glob("*.json")):
-            if not wanted(path.stem) and args.only:
-                continue
-            try:
-                check_example(session, path, report, args.record)
-            except Exception:
-                report.check(False, f"{path.stem}: the check itself failed")
-                traceback.print_exc(limit=4)
+    # An example is selected either by the group name or by its own -- the first
+    # version required the group, so `--only pipe_bend` matched nothing at all
+    # and reported "0 of 0 checks passed", which reads like success.
+    for path in sorted((ROOT / "examples").glob("*.json")):
+        if not (wanted("examples") or wanted(path.stem)):
+            continue
+        try:
+            check_example(session, path, report, args.record)
+        except Exception:
+            report.check(False, f"{path.stem}: the check itself failed")
+            traceback.print_exc(limit=4)
 
     for name, function in CHECKS.items():
         if function is None or not wanted(name):
@@ -485,6 +487,14 @@ def main(argv: list[str] | None = None) -> int:
             traceback.print_exc(limit=4)
 
     print("\n" + "=" * 70)
+    if not report.checks and not report.skipped:
+        # Nothing ran, which is not the same as nothing failing. Saying "0 of 0
+        # passed" and exiting zero is how a filter typo looks like a clean run.
+        print(f"Nothing matched --only {args.only}. Known names: examples, "
+              + ", ".join(name for name in CHECKS if name != "examples")
+              + ", or any example's file name.")
+        print("=" * 70)
+        return 1
     print(f"{len(report.checks) - len(report.failed)} of {len(report.checks)} checks passed"
           + (f", {len(report.skipped)} skipped" if report.skipped else ""))
     for _, what, detail in report.failed:
