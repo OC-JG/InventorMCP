@@ -110,6 +110,16 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   than a table entry.
 
 ### Fixed
+- **A pattern of a hole needs each occurrence recomputed, not copied.** Measured
+  on 2027.1: a boss patterns with the default compute type and a hole does not,
+  with the boss or alone, until the compute type is `kAdjustToModelCompute`. That
+  is exactly what the two settings mean -- identical compute copies faces, and a
+  blind hole's second occurrence has no material to remove until the boss beneath
+  it has been computed too. The belt pulley's through-holes in a flat disc
+  pattern happily with the default, which is why this was not obvious: identical
+  compute is right when every occurrence really is identical. Both pattern
+  operations now recompute first and fall back, reporting which route built the
+  feature.
 - **The sweep was failing on the wrong thing entirely.** `AddUsingPath` wants a
   `Path` object, and `Features.CreatePath(curve)` is the only thing that makes
   one -- `Profiles.AddForSurface` returns a `Profile`, which the sweep rejects

@@ -235,6 +235,15 @@ These are the parts of the COM backend most likely to need adjustment, and why:
   point. `_first_curve` picks geometry instead.
 - **`shell`** uses `CreateShellDefinition`. Older releases expose a direct
   `ShellFeatures.Add(faces, thickness, direction)` instead.
+- **A pattern of a hole needs `kAdjustToModelCompute`.** Measured: patterning a
+  boss works with the default compute type, and patterning a hole fails outright
+  — with the boss or alone — until each occurrence is recomputed rather than
+  copied. That is what the settings mean: identical compute copies faces, which
+  is valid only where the copy lands on the geometry it came from, and a blind
+  hole's second occurrence has no material to remove until the boss beneath it
+  exists. The pulley's through-holes in a flat disc pattern happily with the
+  default, which is why this took a while to see. Both patterns now recompute
+  first and fall back to the default, reporting which built the feature.
 - **`rectangular_pattern` with a second axis** put the compute type where the
   *spacing* type belongs, which shifted every argument after it and made the
   second axis land in `XDirectionStartPoint`. Named arguments are used now, so

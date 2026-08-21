@@ -19,7 +19,7 @@ import os
 import logging
 from contextlib import contextmanager
 from itertools import count
-from typing import Any, Iterator, Sequence
+from typing import Any, Callable, Iterator, Sequence
 
 from ...errors import (
     BackendUnavailableError,
@@ -1688,7 +1688,7 @@ class ComBackend(Backend):
                 # one, so the second axis landed in XDirectionStartPoint -- which
                 # is how a two-axis pattern failed with a bare "Exception
                 # occurred" and nothing in Inventor's error manager to read.
-                feature = _call_named(features.Add, [
+                feature, compute = _patterned(features.Add, self._k, [
                     ("ParentFeatures", parents),
                     ("XDirectionEntity", axis1),
                     ("NaturalXDirection", not request.flip1),
@@ -1702,15 +1702,21 @@ class ComBackend(Backend):
                     ("NaturalYDirection", not request.flip2),
                     ("YCount", request.count2),
                     ("YSpacing", request.spacing2.expression),
+                    ("YSpacingType", DEFAULTED),
+                    ("YDirectionStartPoint", DEFAULTED),
                 ])
             else:
-                feature = features.Add(
-                    parents, axis1, not request.flip1, request.count1, request.spacing1.expression
-                )
+                feature, compute = _patterned(features.Add, self._k, [
+                    ("ParentFeatures", parents),
+                    ("XDirectionEntity", axis1),
+                    ("NaturalXDirection", not request.flip1),
+                    ("XCount", request.count1),
+                    ("XSpacing", request.spacing1.expression),
+                ])
             if request.name:
                 feature.Name = request.name
         return _feature_info(feature, "rectangular_pattern", {
-            "count1": request.count1, "count2": request.count2
+            "count1": request.count1, "count2": request.count2, "compute": compute,
         })
 
     def circular_pattern(self, doc_id: str,
@@ -1720,12 +1726,18 @@ class ComBackend(Backend):
         axis = self._resolve_axis(doc_id, request.axis)
         features = document.ComponentDefinition.Features.CircularPatternFeatures
         with self._batch(document), self._translate_errors("Circular pattern"):
-            feature = features.Add(
-                parents, axis, True, request.count, request.angle.expression, request.fitted
-            )
+            feature, compute = _patterned(features.Add, self._k, [
+                ("ParentFeatures", parents),
+                ("AxisEntity", axis),
+                ("NaturalAxisDirection", True),
+                ("Count", request.count),
+                ("Angle", request.angle.expression),
+                ("FitWithinAngle", request.fitted),
+            ])
             if request.name:
                 feature.Name = request.name
-        return _feature_info(feature, "circular_pattern", {"count": request.count})
+        return _feature_info(feature, "circular_pattern",
+                             {"count": request.count, "compute": compute})
 
     def mirror(self, doc_id: str, request: MirrorRequest) -> FeatureInfo:  # pragma: no cover
         document = self._doc(doc_id)
@@ -2454,6 +2466,43 @@ def _plain(value: Any) -> Any:  # pragma: no cover - Windows only
 
 #: Marks an argument that should be left to the wrapper's own default.
 DEFAULTED = object()
+
+
+def _patterned(add: Any, resolve: Callable[[str], int],
+               arguments: Sequence[tuple[str, Any]]) -> tuple[Any, str]:  # pragma: no cover
+    """Create a pattern, recomputing each occurrence if copying will not do.
+
+    Measured on 2027.1: patterning a boss works with the default compute type,
+    and patterning a *hole* fails outright -- whether it goes with the boss or
+    alone -- until the compute type is ``kAdjustToModelCompute``. That fits what
+    the two settings mean. Identical compute copies faces, which is valid only
+    where the copy lands on the same geometry it came from; a blind hole's second
+    occurrence has to find material to remove, and there is none until the boss
+    beneath it has been computed too.
+
+    The pulley's through-holes in a flat disc pattern happily with the default,
+    which is why this was not obvious sooner: identical compute is right when
+    every occurrence really is identical.
+
+    So: recompute first, since that is the answer that is correct more often, and
+    fall back to the default if a release ever refuses it. Which one built the
+    feature is reported, because a pattern that needed the slow path is worth
+    knowing about on a large one.
+    """
+    routes = [("adjust to model", "kAdjustToModelCompute"), ("default", None)]
+    failures: list[str] = []
+    for label, enum in routes:
+        try:
+            extra = [] if enum is None else [("ComputeType", resolve(enum))]
+            return _call_named(add, list(arguments) + extra), label
+        except Exception as exc:
+            failures.append(f"{label}: {_com_message(exc)}")
+    raise FeatureError(
+        "The pattern could not be created. Tried " + "; ".join(failures) + ".",
+        hint="A pattern of a hole or a cut needs each occurrence recomputed, and "
+        "each one needs material to act on. Check that every occurrence lands on "
+        "the part -- `scripts/probe_sweep_and_pattern.py` tries the variations.",
+    )
 
 
 def _call_named(method: Any, arguments: Sequence[tuple[str, Any]]) -> Any:  # pragma: no cover
