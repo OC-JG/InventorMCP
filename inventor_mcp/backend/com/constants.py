@@ -39,74 +39,77 @@ FALLBACK: dict[str, int] = {
     "kNegativeExtentDirection": 20994,
     "kSymmetricExtentDirection": 20995,
     # DimensionOrientationEnum
-    "kAlignedDim": 34561,
-    "kHorizontalDim": 34562,
-    "kVerticalDim": 34563,
+    "kAlignedDim": 19203,
+    "kHorizontalDim": 19201,
+    "kVerticalDim": 19202,
     # PartFeatureExtentEnum
     "kDistanceExtent": 20737,
-    "kThroughAllExtent": 20740,
-    "kToNextExtent": 20739,
+    "kThroughAllExtent": 20743,
+    "kToNextExtent": 20740,
     # ShellDirectionEnum
-    "kInsideShellDirection": 41985,
-    "kOutsideShellDirection": 41986,
+    "kInsideShellDirection": 41217,
+    "kOutsideShellDirection": 41218,
     "kBothShellDirection": 41987,
     # PatternComputeTypeEnum
-    "kIdenticalCompute": 107265,
-    "kAdjustToModelCompute": 107266,
-    "kOptimizedCompute": 107267,
+    "kIdenticalCompute": 47361,
+    "kAdjustToModelCompute": 47362,
+    "kOptimizedCompute": 47363,
     # ViewOrientationTypeEnum
-    "kIsoTopRightViewOrientation": 10758,
-    "kFrontViewOrientation": 10753,
-    "kTopViewOrientation": 10755,
-    "kRightViewOrientation": 10757,
-    "kBackViewOrientation": 10754,
+    "kIsoTopRightViewOrientation": 10759,
+    "kFrontViewOrientation": 10764,
+    "kTopViewOrientation": 10754,
+    "kRightViewOrientation": 10755,
+    "kBackViewOrientation": 10756,
     # DisplayModeEnum / RenderStyle
-    "kShadedRendering": 9985,
+    "kShadedRendering": 8708,
     "kHiddenLineRendering": 9986,
-    "kWireframeRendering": 9987,
+    "kWireframeRendering": 8706,
     # SelectionFilterEnum (used for view fitting)
-    "kPartFaceFilter": 8449,
-    "kPartEdgeFilter": 8450,
+    "kPartFaceFilter": 15877,
+    "kPartEdgeFilter": 15873,
     # CurveTypeEnum
-    "kLineSegmentCurve": 5378,
-    "kCircularArcCurve": 5379,
-    "kCircleCurve": 5380,
-    "kEllipseFullCurve": 5381,
-    "kEllipticalArcCurve": 5382,
-    "kBSplineCurve": 5383,
+    "kLineSegmentCurve": 5123,
+    "kCircularArcCurve": 5125,
+    "kCircleCurve": 5124,
+    "kEllipseFullCurve": 5126,
+    "kEllipticalArcCurve": 5127,
+    "kBSplineCurve": 5128,
     # SurfaceTypeEnum
     "kPlaneSurface": 5890,
     "kCylinderSurface": 5891,
-    "kConeSurface": 5892,
-    "kSphereSurface": 5893,
-    "kTorusSurface": 5894,
+    "kConeSurface": 5893,
+    "kSphereSurface": 5896,
+    "kTorusSurface": 5895,
     # HoleTypeEnum / HoleBottomTypeEnum
-    "kDrilledHole": 39169,
-    "kCounterBoreHole": 39170,
-    "kSpotFaceHole": 39171,
-    "kCounterSinkHole": 39172,
+    "kDrilledHole": 21505,
+    "kCounterBoreHole": 21507,
+    "kSpotFaceHole": 21508,
+    "kCounterSinkHole": 21506,
     "kFlatHoleBottom": 39425,
     "kAngleHoleBottom": 39426,
     # WeldBeadReliefShapeEnum placeholder kept out; add values here as needed.
 }
 
-#: Fallback values that another project's field notes contradict, with what
-#: they say instead.  These have never been exercised here: on every machine
-#: this has run on, the type library was readable and won, so the table was
-#: never consulted and never checked.  Where there is positive evidence of a
-#: conflict, guessing is worse than stopping -- a wrong dimension-orientation
-#: enum silently makes an aligned dimension where a horizontal one was meant,
-#: and the part is wrong in a way no error reports.
+#: Fallback values that were once disputed, and are now measured.  Every entry
+#: in :data:`FALLBACK` was checked against Inventor 2027.1's own type library on
+#: 2026-08-21 by ``scripts/dump_constants.py``, and thirty-two of the fifty-one
+#: were wrong -- most of them not slightly wrong but from a different numbering
+#: family altogether: ``kDrilledHole`` is 21505, not 39169.
 #:
-#: Run ``scripts/dump_constants.py`` against a live Inventor to settle them.
-SUSPECT: dict[str, str] = {
-    "kAlignedDim": "19203 per NeonGlay/inventor-mcp's 2026 field notes",
-    "kHorizontalDim": "19201 per NeonGlay/inventor-mcp's 2026 field notes",
-    "kVerticalDim": "19202 per NeonGlay/inventor-mcp's 2026 field notes",
-    "kSphereSurface": "5894 per NeonGlay/inventor-mcp (which gives 5892 and 5893 "
-                      "both as Cone, shifting everything after it)",
-    "kTorusSurface": "5895 per NeonGlay/inventor-mcp, for the same reason",
-}
+#: One of those was the quiet kind of dangerous. The table's
+#: ``kThroughAllExtent`` (20740) is Inventor's real ``kToNextExtent``, so a
+#: through-all extrude would have become a to-next one -- building a part that
+#: is wrong in a way no error reports. It never fired only because the type
+#: library has been readable on every machine this has run on.
+#:
+#: The disputes recorded here before are settled: NeonGlay's field notes were
+#: right about the dimension-orientation values (19201/19202/19203) and about
+#: ``kTorusSurface``, and the sphere is 5896 rather than either guess.
+#:
+#: Nothing is disputed now, so nothing refuses. Re-run
+#: ``scripts/dump_constants.py`` on any release that is not 2027.1: these
+#: numbers are a measurement of one version, not a fact about the API.
+SUSPECT: dict[str, str] = {}
 
 
 class Constants:

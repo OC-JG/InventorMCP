@@ -91,6 +91,27 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   geometry says, and which thread tables `CreateTapInfo` will accept.
 
 ### Fixed
+- **Thirty-two of the fifty-one enum values in the fallback table were wrong**,
+  measured against Inventor 2027.1. Most were not slightly wrong but from another
+  numbering family: `kDrilledHole` is 21505, not 39169. One was the quiet kind of
+  dangerous -- the table's `kThroughAllExtent` (20740) is Inventor's real
+  `kToNextExtent`, so a through-all extrude would have stopped at the next face
+  and built a part nothing reports as wrong. None of it ever fired, because the
+  type library has been readable on every machine this has run on, which is luck
+  rather than design. The disputes recorded against another project's field notes
+  are settled: they were right about the dimension orientations.
+- **A correct rebuild was reported as three features in error.** The
+  "healthy" `HealthStatusEnum` values were hard-coded as `{0, 15873}`, and 15873
+  is `kPartEdgeFilter` -- a number from a different enum. The bracket widened
+  from 90 to 120 mm and gained exactly the 9 cm^3 of base that implies, while the
+  report called it sick. The value is now asked of Inventor by name, and a status
+  that cannot be translated is reported as *uninterpreted* rather than as an
+  error: a number nobody can read is not evidence of anything.
+- The threading check asked a part with no solid body for its mass properties,
+  which Inventor refuses -- so it failed on its own empty document and blamed the
+  marshalling. It builds a block first.
+- `live_acceptance.py` printed a failure's explanation under passing checks too,
+  so "the backend is pinned to one thread" was followed by "it is not".
 - **CI had never once passed.** Every run since it was added failed at
   `pip install -e ".[dev]"`, on all three Pythons and on Windows, because
   `license = { text = "MIT" }` is rejected outright by setuptools 77 and later

@@ -30,6 +30,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--only", nargs="*", default=[],
                         help="Substrings to filter names by, e.g. Dim Surface.")
+    parser.add_argument("--find", nargs="*", default=[], metavar="SUBSTRING",
+                        help="List every enum in the type library whose name "
+                             "contains one of these, whether the table knows it or "
+                             "not. Use it when a value is needed and there is "
+                             "nothing to compare against -- 'Health' settles what "
+                             "a feature's HealthStatus means.")
     args = parser.parse_args(argv)
 
     constants = load()
@@ -38,6 +44,22 @@ def main(argv: list[str] | None = None) -> int:
               "the table against.\nRepair the pywin32 cache first: delete "
               "%LOCALAPPDATA%\\Temp\\gen_py and re-run.")
         return 1
+
+    if args.find:
+        found = sorted(
+            (name, value) for name, value in vars(constants._module).items()
+            if name.startswith("k") and isinstance(value, int)
+            and any(part.lower() in name.lower() for part in args.find)
+        )
+        print(f"Every enum matching {args.find} in Inventor's own type library:\n")
+        for name, value in found:
+            known = FALLBACK.get(name)
+            note = "" if known is None else (
+                "   # the table agrees" if known == value
+                else f"   # THE TABLE SAYS {known}")
+            print(f'    "{name}": {value},{note}')
+        print(f"\n{len(found)} name(s).")
+        return 0
 
     names = sorted(FALLBACK)
     if args.only:

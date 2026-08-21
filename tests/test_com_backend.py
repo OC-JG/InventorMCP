@@ -1293,44 +1293,70 @@ class TestRefusedDimensions:
         assert "if profiles == 0 and profile_loops(plan):" in source
 
 
-class TestDisputedEnumValues:
-    """An unverified fallback must not be used where it is known to be disputed.
+class TestTheMeasuredEnumValues:
+    """The table was measured against Inventor 2027.1 on 2026-08-21.
 
-    The table has never been exercised: on every machine this has run on the
-    type library was readable and won, so it was never consulted and never
-    checked. Two of its regions are contradicted by another project's published
-    2026 field notes -- the dimension orientations and the surface types. A
-    wrong value there is the quiet kind of wrong: an aligned dimension where a
-    horizontal one was meant, with nothing to see but a part that is subtly not
-    the part that was asked for.
+    Thirty-two of its fifty-one entries were wrong, most of them from a
+    different numbering family altogether. Nothing here is disputed any more, so
+    these tests pin what was measured and keep the refusal mechanism alive for
+    the next release that reopens a question.
     """
 
-    def test_the_disputed_names_are_recorded_with_what_disputes_them(self):
-        from inventor_mcp.backend.com.constants import FALLBACK, SUSPECT
+    def test_through_all_is_not_to_next(self):
+        """The one wrong value that would have built a wrong part in silence.
 
-        assert SUSPECT, "the point is to name them, not to carry a silent risk"
-        for name, why in SUSPECT.items():
-            assert name in FALLBACK, f"{name} is disputed but not in the table"
-            assert any(char.isdigit() for char in why), (
-                f"{name}'s note should say what value is claimed instead")
+        The old table's `kThroughAllExtent` was 20740, which is Inventor's real
+        `kToNextExtent`. A through-all extrude would have stopped at the next
+        face, and nothing reports that -- there is no error, just a part that is
+        not the part that was asked for. It never fired because the type library
+        has been readable on every machine this has run on, which is luck rather
+        than design.
+        """
+        from inventor_mcp.backend.com.constants import FALLBACK
 
-    def test_a_disputed_value_refuses_rather_than_guessing(self):
-        from inventor_mcp.backend.com.constants import SUSPECT, Constants
+        assert FALLBACK["kThroughAllExtent"] == 20743
+        assert FALLBACK["kToNextExtent"] == 20740
+        assert FALLBACK["kThroughAllExtent"] != FALLBACK["kToNextExtent"]
+
+    def test_the_hole_styles_are_the_family_inventor_actually_uses(self):
+        """21505-21508, where the table had guessed 39169-39172."""
+        from inventor_mcp.backend.com.constants import FALLBACK
+
+        assert FALLBACK["kDrilledHole"] == 21505
+        assert FALLBACK["kCounterSinkHole"] == 21506
+        assert FALLBACK["kCounterBoreHole"] == 21507
+        assert FALLBACK["kSpotFaceHole"] == 21508
+
+    def test_the_dimension_orientations_are_settled(self):
+        """The field notes that disputed these were right."""
+        from inventor_mcp.backend.com.constants import FALLBACK
+
+        assert FALLBACK["kHorizontalDim"] == 19201
+        assert FALLBACK["kVerticalDim"] == 19202
+        assert FALLBACK["kAlignedDim"] == 19203
+
+    def test_nothing_is_disputed_any_more(self):
+        from inventor_mcp.backend.com.constants import SUSPECT
+
+        assert SUSPECT == {}, (
+            "a disputed value refuses to resolve, so anything listed here must "
+            "genuinely be unsettled -- measure it instead")
+
+    def test_the_refusal_mechanism_still_works(self):
+        """Kept for the next release that contradicts a measurement."""
+        from inventor_mcp.backend.com import constants as module
         from inventor_mcp.errors import BackendUnavailableError
 
-        constants = Constants(None)  # no type library, so the table is all there is
-        for name in SUSPECT:
-            with pytest.raises(BackendUnavailableError, match="disputed"):
-                constants.resolve(name)
-
-    def test_the_refusal_says_how_to_settle_it(self):
-        from inventor_mcp.backend.com.constants import Constants
-        from inventor_mcp.errors import BackendUnavailableError
-
-        with pytest.raises(BackendUnavailableError) as raised:
-            Constants(None).resolve("kHorizontalDim")
-        assert "dump_constants" in (raised.value.hint or "")
-        assert "gen_py" in (raised.value.hint or "")
+        original = dict(module.SUSPECT)
+        module.SUSPECT["kJoinOperation"] = "99 per a future release"
+        try:
+            with pytest.raises(BackendUnavailableError, match="disputed") as raised:
+                module.Constants(None).resolve("kJoinOperation")
+            assert "dump_constants" in (raised.value.hint or "")
+            assert "gen_py" in (raised.value.hint or "")
+        finally:
+            module.SUSPECT.clear()
+            module.SUSPECT.update(original)
 
     def test_an_undisputed_value_still_works_from_the_table(self):
         """Refusing everything would make a broken cache fatal for no reason."""
@@ -1342,11 +1368,11 @@ class TestDisputedEnumValues:
         from inventor_mcp.backend.com.constants import Constants
 
         class Library:
-            kHorizontalDim = 19201
+            kHorizontalDim = 12345  # deliberately not the table's value
 
         constants = Constants(Library())
-        assert constants.resolve("kHorizontalDim") == 19201, (
-            "a measured value beats the table, disputed or not")
+        assert constants.resolve("kHorizontalDim") == 12345, (
+            "what Inventor says beats what the table says, every time")
 
     def test_using_the_table_at_all_warns_once(self, caplog):
         import logging

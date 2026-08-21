@@ -34,7 +34,7 @@ from inventor_mcp.builder import (  # noqa: E402
     build_part,
     measure,
 )
-from inventor_mcp.schema import PartRecipe, SketchOp  # noqa: E402
+from inventor_mcp.schema import ExtrudeOp, PartRecipe, SketchOp  # noqa: E402
 from inventor_mcp.session import Session  # noqa: E402
 
 EXPECTED = ROOT / "examples" / "expected"
@@ -60,7 +60,10 @@ class Report:
     def check(self, ok: bool, what: str, detail: str = "") -> bool:
         self.checks.append((ok, what, detail))
         mark = " ok " if ok else "FAIL"
-        print(f"  [{mark}] {what}" + (f"\n         {detail}" if detail else ""))
+        # The detail explains a failure, so it is printed only when there is one.
+        # Showing it under a pass read as a contradiction: "[ ok ] the backend is
+        # pinned to one thread / it is not".
+        print(f"  [{mark}] {what}" + (f"\n         {detail}" if detail and not ok else ""))
         return ok
 
     def skip(self, what: str, why: str) -> None:
@@ -187,9 +190,14 @@ def check_parameter_edit(session: Session, report: Report) -> None:
     except Exception as exc:
         report.check(False, "base_len could not be changed", str(exc))
         return
-    report.check(not outcome.get("errors"),
-                 "the rebuild left no feature in error",
-                 json.dumps(outcome.get("errors", [])[:3]))
+    if outcome.get("uninterpreted_health"):
+        report.skip("the rebuild left no feature in error",
+                    "Inventor would not say what its health statuses mean: "
+                    + json.dumps(outcome["uninterpreted_health"][:3]))
+    else:
+        report.check(not outcome.get("errors"),
+                     "the rebuild left no feature in error",
+                     json.dumps(outcome.get("errors", [])[:3]))
     after = measure(session, context)
     if before is None or after is None:
         report.check(False, "could not measure across the edit")
@@ -356,6 +364,13 @@ def check_threading(session: Session, report: Report) -> None:
 
     document = backend.new_part("ThreadProbe", units="mm")
     context = session.register(document, "mm", "deg")
+    # A part with no solid body has no mass properties, and Inventor raises
+    # rather than returning zero -- so the first version of this check failed on
+    # its own empty document and blamed the marshalling.
+    apply_operation(session, context, SketchOp(
+        name="Probe", plane="xy",
+        entities=[{"type": "rectangle", "center": [0, 0], "width": 20, "height": 20}]))
+    apply_operation(session, context, ExtrudeOp(name="Block", sketch="Probe", distance=5))
 
     def ask(index: int):
         return backend.mass_properties(context.doc_id).volume, index

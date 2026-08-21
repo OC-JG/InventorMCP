@@ -215,6 +215,20 @@ def probe(session, backend, context, case: dict, index: int) -> bool:
     if feature is not None and backend.name != "mock":
         from inventor_mcp.backend.com.backend import _hole_diameter
 
+        # What Inventor made, in its own words. The volumes said every seat came
+        # out shallower than asked -- a counterbore 6.22 mm deep where 6.6 was
+        # requested, a spotface 0.6 where 1.0 was -- and no amount of arithmetic
+        # settles which argument landed where. These properties do.
+        for name in (
+            "HoleDiameter", "Depth", "ExtentType", "HoleType", "Tapped",
+            "HoleBottomType", "BottomTipAngle", "CounterboreDiameter",
+            "CounterboreDepth", "CountersinkDiameter", "CountersinkAngle",
+            "SpotFaceDiameter", "SpotFaceDepth", "HoleCenterPoints",
+        ):
+            shown = _read(feature, name)
+            if shown is not None:
+                print(f"  {name:<22} {shown}")
+
         reported = getattr(feature, "HoleType", None)
         expected = None
         try:
@@ -232,6 +246,39 @@ def probe(session, backend, context, case: dict, index: int) -> bool:
     for note in detail.get("notes") or []:
         print(f"  note     {note}")
     return ok
+
+
+def _read(feature, name: str):
+    """One property as text, unwrapping a Parameter into value and expression."""
+    try:
+        value = getattr(feature, name)
+    except Exception:
+        return None
+    if value is None:
+        return None
+    if isinstance(value, (int, float, bool, str)):
+        # Lengths come back in centimetres; show millimetres beside them, since
+        # every number in this script's expectations is in mm.
+        if isinstance(value, float):
+            return f"{value:.6f}  ({value * 10:.4f} mm, or {math.degrees(value):.4f} deg)"
+        return str(value)
+    for attribute in ("Expression", "Value"):
+        try:
+            inner = getattr(value, attribute)
+        except Exception:
+            continue
+        if isinstance(inner, (int, float, str)):
+            other = None
+            try:
+                other = feature and getattr(value, "Value" if attribute == "Expression"
+                                            else "Expression")
+            except Exception:
+                other = None
+            return f"{inner!r}" + (f"  (= {other})" if other is not None else "")
+    try:
+        return f"<{type(value).__name__} Count={value.Count}>"
+    except Exception:
+        return f"<{type(value).__name__}>"
 
 
 def _find(backend, context, name: str):

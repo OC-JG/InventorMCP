@@ -103,10 +103,17 @@ EXPORT_EXTENSIONS = {
 }
 
 
-#: ``HealthStatusEnum`` values meaning "up to date, nothing to report".  Any other
-#: value is surfaced verbatim rather than translated, because the numbering is
-#: version-specific and a wrong gloss is worse than none.
-_HEALTHY_STATUSES = {0, 15873}
+#: ``HealthStatusEnum`` values meaning "up to date, nothing to report", used only
+#: when Inventor cannot be asked. This used to be ``{0, 15873}``, and 15873 is
+#: Inventor 2027.1's ``kPartEdgeFilter`` -- a number from another enum entirely.
+#: The result was a correct rebuild reported as three features in error: the
+#: bracket widened from 90 to 120 mm and gained exactly the 9 cm^3 of base the
+#: extra length implies, while the report said it was sick.
+#:
+#: So the value is now asked of the type library by name, and when that cannot be
+#: done the statuses are reported as *uninterpreted* rather than as errors. A
+#: number nobody can translate is not evidence of anything.
+_HEALTHY_STATUS_NAMES = ("kUpToDateHealth",)
 
 
 #: Sketch planes whose first axis runs opposite to the model axis they are
@@ -1929,22 +1936,51 @@ class ComBackend(Backend):
         self._topology.clear()
         with self._translate_errors("Rebuild"):
             document.Rebuild()
-        errors = []
+        healthy = self._healthy_statuses()
+        errors: list[dict[str, Any]] = []
+        uninterpreted: list[dict[str, Any]] = []
         try:
             features = document.ComponentDefinition.Features
             for index in range(1, int(features.Count) + 1):
                 feature = features.Item(index)
                 status = getattr(feature, "HealthStatus", None)
-                if status is None or int(status) in _HEALTHY_STATUSES:
+                if status is None:
                     continue
-                errors.append({
+                entry = {
                     "feature": str(feature.Name),
                     "health_status": int(status),
                     "suppressed": bool(getattr(feature, "Suppressed", False)),
-                })
+                }
+                if healthy is None:
+                    uninterpreted.append(entry)
+                elif int(status) not in healthy:
+                    errors.append(entry)
         except Exception:
             pass
-        return {"rebuilt": True, "errors": errors}
+        report: dict[str, Any] = {"rebuilt": True, "errors": errors}
+        if uninterpreted:
+            report["uninterpreted_health"] = uninterpreted
+            report["note"] = (
+                "Inventor's HealthStatusEnum could not be read, so these statuses "
+                "are reported without a verdict. Judge the rebuild by the geometry: "
+                "a feature that really failed shows up in the volume."
+            )
+        return report
+
+    def _healthy_statuses(self) -> set[int] | None:  # pragma: no cover - Windows only
+        """Status values meaning "fine", or None if Inventor will not say.
+
+        Asked by name rather than tabulated: the numbering is version-specific,
+        and the previous hard-coded pair contained a value from a different enum
+        altogether, which reported a correct rebuild as three sick features.
+        """
+        values = {0}
+        for name in _HEALTHY_STATUS_NAMES:
+            try:
+                values.add(self._k(name))
+            except Exception:
+                return None
+        return values
 
     # -- escape hatch ------------------------------------------------------
     def run_script(self, doc_id: str | None, code: str) -> dict[str, Any]:  # pragma: no cover

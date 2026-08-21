@@ -31,6 +31,20 @@ INTERESTING = [
     "RevolveFeatures.AddByAngle",
     "RevolveFeatures.AddFull",
     "SweepFeatures.AddUsingPath",
+    # Added after the first live acceptance run, which failed on each of these:
+    # the seats all came out shallower than asked, the loft and the sweep raised
+    # a bare "Exception occurred", and ThreadFeatures turned out not to have
+    # CreateThreadDefinition on 2027.1 at all.
+    "HoleFeatures.AddCBoreByThroughAllExtent",
+    "HoleFeatures.AddCBoreByDistanceExtent",
+    "HoleFeatures.AddSpotFaceByThroughAllExtent",
+    "HoleFeatures.AddCSinkByThroughAllExtent",
+    "HoleFeatures.CreateTapInfo",
+    "HoleFeatures.CreateSketchPlacementDefinition",
+    "LoftFeatures.CreateLoftDefinition",
+    "LoftFeatures.Add",
+    "SweepFeatures.Add",
+    "SweepFeatures.CreateSweepDefinition",
     "WorkPlanes.AddByPlaneAndOffset",
     "UserParameters.AddByExpression",
     "UserParameters.AddByValue",
