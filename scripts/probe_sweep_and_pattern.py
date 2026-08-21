@@ -39,13 +39,6 @@ def on_thread(backend, work):
     return worker.call(work) if worker is not None else work()
 
 
-def report(attempts: list[tuple[str, bool, str]]) -> None:
-    for label, ok, detail in attempts:
-        print(f"  {'ok     ' if ok else 'refused'} {label}")
-        if detail:
-            print(f"            {detail}")
-
-
 class Attempts:
     """Try things, print each result as it happens, and never let one stop the rest.
 
@@ -131,7 +124,7 @@ def probe_pattern(session, backend) -> None:
         name="TapHole", sketch="Centre", diameter=10.105625, depth=18, tap="M12x1.75"))
     backend.set_parameter(context.doc_id, "grid_pitch", "45", units="mm")
 
-    def attempt() -> list[tuple[str, bool, str]]:
+    def attempt() -> None:
         inner = raw(backend)
         component = inner._doc(context.doc_id).ComponentDefinition
         features = component.Features
@@ -188,25 +181,30 @@ def probe_pattern(session, backend) -> None:
                 both, axis, True, 2, "45 mm")),
             ("the hole alone", lambda: patterns.Add(
                 just_hole, axis, True, 2, "45 mm")),
+            # A hole has to be *recomputed* at each occurrence rather than copied:
+            # its second instance has to find material to remove. Identical
+            # compute -- the default -- may be what Inventor is refusing.
+            ("boss and hole, adjust-to-model compute", lambda: patterns.Add(
+                ParentFeatures=both, XDirectionEntity=axis, NaturalXDirection=True,
+                XCount=2, XSpacing="45 mm",
+                ComputeType=inner._k("kAdjustToModelCompute"))),
+            ("boss and hole, optimized compute", lambda: patterns.Add(
+                ParentFeatures=both, XDirectionEntity=axis, NaturalXDirection=True,
+                XCount=2, XSpacing="45 mm",
+                ComputeType=inner._k("kOptimizedCompute"))),
+            ("hole alone, adjust-to-model compute", lambda: patterns.Add(
+                ParentFeatures=just_hole, XDirectionEntity=axis,
+                NaturalXDirection=True, XCount=2, XSpacing="45 mm",
+                ComputeType=inner._k("kAdjustToModelCompute"))),
         ]
-        answers = []
+        try_it = Attempts(inner._explain)
         for label, build in cases:
-            try:
-                feature = build()
-            except Exception as exc:
-                answers.append((label, False, inner._explain(exc)))
-                continue
-            answers.append((label, True, f"built {feature.Name}"))
-            try:
-                feature.Delete()
-            except Exception as exc:  # pragma: no cover
-                answers.append((f"{label}: could not undo it", False, str(exc)[:80]))
-        return answers
+            try_it.undo(try_it(label, build))
 
     try:
-        report(on_thread(backend, attempt))
+        on_thread(backend, attempt)
     except Exception:
-        traceback.print_exc(limit=4)
+        traceback.print_exc(limit=6)
     try:
         backend.close_document(context.doc_id, save=False)
     except Exception:

@@ -226,8 +226,13 @@ afternoon:
 
 These are the parts of the COM backend most likely to need adjustment, and why:
 
-- **`sweep`** uses `Profiles.AddForSurface` on the first path entity. A multi-segment
-  path may need the whole sketch passed instead.
+- **`sweep`** is measured now. `AddUsingPath` wants a `Path`, and
+  `Features.CreatePath(curve)` is the only thing that makes one:
+  `Profiles.AddForSurface` returns a `Profile` and the sweep rejects it with
+  "Type mismatch". The curve matters as much as the method — a sketch of "one
+  arc" holds the arc *and three points*, because the origin is projected in
+  whenever a constraint references it, so the first *entity* is very likely a
+  point. `_first_curve` picks geometry instead.
 - **`shell`** uses `CreateShellDefinition`. Older releases expose a direct
   `ShellFeatures.Add(faces, thickness, direction)` instead.
 - **`rectangular_pattern` with a second axis** put the compute type where the

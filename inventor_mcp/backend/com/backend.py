@@ -1286,33 +1286,30 @@ class ComBackend(Backend):
                                                 "path_from": route})
 
     def _sweep_path(self, document: Any, sketch: Any) -> tuple[Any, str]:  # pragma: no cover
-        """A path object for a sweep, by whichever route this release offers.
+        """A ``Path`` object for a sweep, measured rather than guessed.
 
-        ``Features.CreatePath`` is the documented way and follows the geometry
-        connected to the entity it is given, which matters for a path of more
-        than one segment. The older ``Profiles.AddForSurface`` route is kept
-        behind it: it built nothing here -- the sweep failed with a bare
-        "Exception occurred" -- but that is one release, and a fallback that
-        reports which route it took costs nothing.
+        ``AddUsingPath`` wants a ``Path``, and ``Features.CreatePath`` is the only
+        thing that makes one. The obvious-looking alternative,
+        ``Profiles.AddForSurface``, returns a ``Profile`` -- which the sweep
+        rejects with "Type mismatch", measured on 2027.1. It used to be the
+        fallback here and could never have worked, so it is gone: a fallback that
+        is known to be wrong only adds a second confusing error to the first.
+
+        The curve matters too. ``SketchEntities.Item(1)`` is not reliably one --
+        this sketch of "an arc" holds the arc and three points -- so
+        :func:`_first_curve` picks the geometry rather than whatever is first.
         """
         first = _first_curve(sketch)
-        attempts: list[tuple[str, Any]] = [
-            ("Features.CreatePath",
-             lambda: document.ComponentDefinition.Features.CreatePath(first)),
-            ("Profiles.AddForSurface", lambda: sketch.Profiles.AddForSurface(first)),
-        ]
-        failures = []
-        for route, build in attempts:
-            try:
-                return build(), route
-            except Exception as exc:
-                failures.append(f"{route}: {_com_message(exc)}")
-        raise FeatureError(
-            f"Could not make a path out of sketch {sketch.Name!r}.",
-            hint="Tried " + "; ".join(failures) + ". A sweep path must be a single "
-            "chain of connected curves, and the profile must sit on a plane "
-            "perpendicular to it at one end.",
-        )
+        try:
+            return document.ComponentDefinition.Features.CreatePath(first), "CreatePath"
+        except Exception as exc:
+            raise FeatureError(
+                f"Could not make a path out of sketch {sketch.Name!r}: "
+                f"{self._explain(exc)}",
+                hint="A sweep path must be a single chain of connected curves, and "
+                "the profile must sit on a plane perpendicular to it at one end. "
+                "`scripts/probe_sweep_and_pattern.py` tries the alternatives.",
+            ) from exc
 
     def loft(self, doc_id: str, request: LoftRequest) -> FeatureInfo:  # pragma: no cover
         document = self._doc(doc_id)

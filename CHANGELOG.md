@@ -110,6 +110,15 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   than a table entry.
 
 ### Fixed
+- **The sweep was failing on the wrong thing entirely.** `AddUsingPath` wants a
+  `Path` object, and `Features.CreatePath(curve)` is the only thing that makes
+  one -- `Profiles.AddForSurface` returns a `Profile`, which the sweep rejects
+  with "Type mismatch". That route was the fallback here and could never have
+  worked, so it is gone: a fallback known to be wrong only adds a second
+  confusing error to the first. The curve matters as much as the method, because
+  a sketch of "one arc" holds the arc and three points -- the origin is projected
+  in whenever a constraint references it -- so `SketchEntities.Item(1)` had three
+  chances in four of being a point.
 - **A two-axis rectangular pattern put the compute type in the spacing type's
   slot.** The measured signature has `XSpacingType` and `XDirectionStartPoint`
   *between* the two axes, so `kAdjustToModelCompute` at index 5 shifted every
