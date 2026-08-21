@@ -770,6 +770,19 @@ _SUBTRACTIVE = {"hole", "shell"}
 #: means the wrong feature was named.
 _MUST_MOVE = {"mirror", "rectangular_pattern", "circular_pattern"}
 
+#: Operations that cannot work on the Inventor this project has measured, with
+#: what to do instead. A recipe is warned before it is built rather than after,
+#: because the alternative is a live run that fails on something already known.
+_KNOWN_BROKEN = {
+    "thread": (
+        "Inventor 2027.1's ThreadFeatures has no CreateThreadDefinition -- its "
+        "only method is Add(Face, StartEdge, ThreadInfo, ...) and nothing in the "
+        "type library named for threads creates a ThreadInfo. Use a `hole` with "
+        "`tap` instead, which is measured and works: Inventor cuts the thread's "
+        "minor diameter and records the designation on the feature."
+    ),
+}
+
 #: Simulator gaps, so a rehearsal does not report them as recipe faults. A
 #: thread is cosmetic and moves no volume in Inventor either. Patterns and
 #: mirrors used to be here, back when an occurrence's volume was not modelled --
@@ -831,6 +844,13 @@ def rehearse(recipe: PartRecipe) -> dict[str, Any]:
     hollow = False
     for index, op in enumerate(recipe.operations):
         where = f"operation {index} ({op.op}" + (f", {op.name}" if op.name else "") + ")"
+        if op.op in _KNOWN_BROKEN:
+            report["warnings"].append({
+                "where": where,
+                "warning": f"`{op.op}` does not work on the Inventor this was "
+                           "measured against",
+                "why": _KNOWN_BROKEN[op.op],
+            })
         # Where the part was before this operation: a cut has to be judged
         # against what it was aimed at, not against what it left behind.
         was = measure(session, context) or {}

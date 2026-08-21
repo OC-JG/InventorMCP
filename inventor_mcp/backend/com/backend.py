@@ -1681,12 +1681,31 @@ class ComBackend(Backend):
         features = document.ComponentDefinition.Features.RectangularPatternFeatures
         with self._batch(document), self._translate_errors("Rectangular pattern"):
             if request.axis2 is not None and request.count2 > 1 and request.spacing2 is not None:
-                feature = features.Add(
-                    parents, axis1, not request.flip1, request.count1, request.spacing1.expression,
-                    self._k("kAdjustToModelCompute"),
-                    self._resolve_axis(doc_id, request.axis2), not request.flip2,
-                    request.count2, request.spacing2.expression,
-                )
+                # The measured signature is
+                #   Add(ParentFeatures, XDirectionEntity, NaturalXDirection,
+                #       XCount, XSpacing, [XSpacingType], [XDirectionStartPoint],
+                #       [YDirectionEntity], [NaturalYDirection], [YCount],
+                #       [YSpacing], ...)
+                # Slot 5 is the *spacing type*, not the compute type. Putting
+                # kAdjustToModelCompute there shifted every argument after it by
+                # one, so the second axis landed in XDirectionStartPoint -- which
+                # is how a two-axis pattern failed with a bare "Exception
+                # occurred" and nothing in Inventor's error manager to read.
+                feature = _call_named(features.Add, [
+                    ("ParentFeatures", parents),
+                    ("XDirectionEntity", axis1),
+                    ("NaturalXDirection", not request.flip1),
+                    ("XCount", request.count1),
+                    ("XSpacing", request.spacing1.expression),
+                    # These two sit between the axes and have no value this
+                    # project knows; the wrapper's defaults are the right answer.
+                    ("XSpacingType", DEFAULTED),
+                    ("XDirectionStartPoint", DEFAULTED),
+                    ("YDirectionEntity", self._resolve_axis(doc_id, request.axis2)),
+                    ("NaturalYDirection", not request.flip2),
+                    ("YCount", request.count2),
+                    ("YSpacing", request.spacing2.expression),
+                ])
             else:
                 feature = features.Add(
                     parents, axis1, not request.flip1, request.count1, request.spacing1.expression
@@ -2434,6 +2453,32 @@ def _plain(value: Any) -> Any:  # pragma: no cover - Windows only
         if isinstance(inner, (bool, int, float, str)):
             reading[attribute.lower()] = inner
     return reading or None
+
+
+#: Marks an argument that should be left to the wrapper's own default.
+DEFAULTED = object()
+
+
+def _call_named(method: Any, arguments: Sequence[tuple[str, Any]]) -> Any:  # pragma: no cover
+    """Call *method* with arguments in signature order, skipping the defaulted ones.
+
+    Some of Inventor's methods put optional arguments *between* the ones that
+    matter: ``RectangularPatternFeatures.Add`` has XSpacingType and
+    XDirectionStartPoint sitting between the X axis and the Y axis. Positionally
+    there is no way to skip them, and the wrong value there shifts every argument
+    after it -- which is how a two-axis pattern failed with a bare "Exception
+    occurred" and nothing in Inventor's error manager to read.
+
+    Named arguments avoid the question, so they are tried first. The positional
+    fallback puts ``None`` in the gaps, which is what a missing optional VARIANT
+    looks like, and is reached only when the binding refuses keywords.
+    """
+    named = {name: value for name, value in arguments if value is not DEFAULTED}
+    try:
+        return method(**named)
+    except TypeError:
+        return method(*[None if value is DEFAULTED else value
+                        for _, value in arguments])
 
 
 def _hole_diameter(feature: Any) -> float | None:  # pragma: no cover - Windows only

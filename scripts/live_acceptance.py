@@ -97,7 +97,12 @@ def build(session: Session, recipe: PartRecipe):
         try:
             apply_operation(session, context, op)
         except Exception as exc:
-            broken.append(f"op {index} ({op.op}): {exc}")
+            # The hint carries the diagnosis -- which routes were tried and what
+            # each said -- and dropping it left a failure that named itself and
+            # explained nothing.
+            hint = getattr(exc, "hint", None)
+            broken.append(f"op {index} ({op.op}): {exc}"
+                          + (f"\n           hint: {hint}" if hint else ""))
     return context, broken
 
 

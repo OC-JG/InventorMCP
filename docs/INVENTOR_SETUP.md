@@ -230,6 +230,11 @@ These are the parts of the COM backend most likely to need adjustment, and why:
   path may need the whole sketch passed instead.
 - **`shell`** uses `CreateShellDefinition`. Older releases expose a direct
   `ShellFeatures.Add(faces, thickness, direction)` instead.
+- **`rectangular_pattern` with a second axis** put the compute type where the
+  *spacing* type belongs, which shifted every argument after it and made the
+  second axis land in `XDirectionStartPoint`. Named arguments are used now, so
+  the optional slots between the two axes are left to the wrapper's defaults
+  rather than filled with a guess. A single-axis pattern was never affected.
 - **`thread`** is broken on 2027.1 and known to be. `ThreadFeatures` has no
   `CreateThreadDefinition` — the only method on it is
   `Add(Face, StartEdge, ThreadInfo, ...)`, and nothing in the type library named

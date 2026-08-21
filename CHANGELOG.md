@@ -110,6 +110,24 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   than a table entry.
 
 ### Fixed
+- **A two-axis rectangular pattern put the compute type in the spacing type's
+  slot.** The measured signature has `XSpacingType` and `XDirectionStartPoint`
+  *between* the two axes, so `kAdjustToModelCompute` at index 5 shifted every
+  argument after it and the second axis landed in `XDirectionStartPoint`. That
+  was the bare "Exception occurred" with nothing in Inventor's error manager.
+  Optional slots in the middle of a signature are now left to the wrapper's own
+  defaults via named arguments, rather than filled with a guess.
+- `threaded_boss` used the `thread` operation, which cannot work on 2027.1. It
+  now does what it was always describing -- a real tapped hole, cut to the M12
+  minor diameter -- and patterns the boss *and* its hole along the plate, so the
+  result stays one solid. Hand-derived at 70.855424 cm^3 and confirmed to six
+  figures.
+- A recipe using an operation known not to work is warned about by
+  `validate_recipe` before it is built, with the route that does work. The
+  alternative is a live run failing on something already known.
+- A build failure in `live_acceptance.py` dropped the exception's hint, which is
+  where the diagnosis lives -- the sweep reported that it could not make a path
+  and said nothing about the two routes it had tried.
 - **A hole's properties are on `HoleFeature.Definition`, not on the feature.**
   So the style read-back returned nothing for every hole, `verify` answered
   "cannot tell", and a run reported eight verified styles having verified none of
