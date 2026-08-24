@@ -13,6 +13,7 @@ from typing import Any
 
 from .backend import create_backend
 from .backend.base import Backend, DocInfo
+from .dfm.freeze import FreezeGuard
 from .errors import DocumentError, NotConnectedError
 from .plan import SketchPlan
 from .resolve import Resolver
@@ -33,6 +34,10 @@ class DocumentContext:
     last_sketch: str | None = None
     last_feature: str | None = None
     recipe: dict[str, Any] | None = None
+    #: Which parameters are key geometry and may not be changed automatically.
+    #: Built from the recipe once its parameters are declared; ``None`` until
+    #: then, which reads as "nothing is protected here".
+    frozen: FreezeGuard | None = None
     #: What the part measured after the last operation, so the next one can
     #: report what it changed rather than only that it ran.
     last_measurement: dict[str, Any] | None = None

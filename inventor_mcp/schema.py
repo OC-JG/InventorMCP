@@ -12,10 +12,11 @@ precise validation error the model can fix, not be silently ignored.
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, Union
+from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .dfm.roles import ROLE_NAMES as DFM_ROLE_NAMES
 from .units import ANGLE_UNIT_NAMES, LENGTH_UNIT_NAMES
 
 # ``20`` (a number in the recipe's units) or ``"width / 2"`` (an expression).
@@ -56,6 +57,13 @@ class ParameterSpec(Base):
         "use 'ul' for a unitless count and 'deg' for an angle.",
     )
     key: bool = Field(False, description="Mark as a key parameter in Inventor.")
+    frozen: bool = Field(
+        False,
+        description="This value is key geometry: automated changes -- the DFM "
+        "improvement loop above all -- must not touch it. A sealing face, a "
+        "bearing bore, a mating pitch. Anything a frozen value is computed from "
+        "is protected too, since changing that would move it just as surely.",
+    )
 
     @field_validator("name")
     @classmethod
@@ -562,6 +570,49 @@ Operation = Annotated[
 # ---------------------------------------------------------------------------
 
 
+class DfmSpec(Base):
+    """How this part is judged for manufacture, and what may not be changed.
+
+    Wholly optional: a recipe without this block builds exactly as before. With
+    it, the DFM loop can read the model's own parameters instead of asking
+    somebody to retype them, and knows what it is not allowed to move.
+    """
+
+    parameters: dict[str, Name] = Field(
+        default_factory=dict,
+        description="Which parameter plays which role in the manufacturability "
+        "assessment, as {role: parameter}. Roles: " + ", ".join(DFM_ROLE_NAMES)
+        + ". Declaring 'wall' matters most -- the rib, boss and corner guidelines "
+        "are all fractions of the nominal wall.",
+    )
+    frozen: list[str] = Field(
+        default_factory=list,
+        description="Parameters an automated change may not touch, over and above "
+        "those marked frozen individually. A '*' glob is allowed, so 'seal_*' "
+        "protects a family.",
+    )
+    frozen_features: list[str] = Field(
+        default_factory=list,
+        description="Features an automated change may not suppress, delete or edit.",
+    )
+    settings: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Settings for the DFM analyser, using its own names: "
+        "'material' ('abs', 'pp', 'pc', ...), 'surfaceFinish', 'moldType', and the "
+        "'checks' to run. Anything not given here keeps the tool's own default.",
+    )
+
+    @field_validator("parameters")
+    @classmethod
+    def _known_roles(cls, value: dict[str, str]) -> dict[str, str]:
+        unknown = sorted(set(value) - set(DFM_ROLE_NAMES))
+        if unknown:
+            raise ValueError(
+                f"Unknown DFM role(s) {unknown}. Known roles: {list(DFM_ROLE_NAMES)}."
+            )
+        return value
+
+
 class PartRecipe(Base):
     """A complete, replayable description of a parametric part."""
 
@@ -572,6 +623,11 @@ class PartRecipe(Base):
     material: str | None = None
     parameters: list[ParameterSpec] = Field(default_factory=list)
     operations: list[Operation] = Field(default_factory=list)
+    dfm: DfmSpec | None = Field(
+        None,
+        description="Manufacturability: which parameter means what, and which are "
+        "key geometry that must not be changed automatically.",
+    )
 
     @model_validator(mode="after")
     def _unique_parameter_names(self) -> "PartRecipe":
@@ -581,6 +637,31 @@ class PartRecipe(Base):
             if key in seen:
                 raise ValueError(f"Duplicate parameter name {parameter.name!r}.")
             seen.add(key)
+        return self
+
+    @model_validator(mode="after")
+    def _dfm_names_exist(self) -> "PartRecipe":
+        """A role pointing at a parameter that is not there is a typo, and it
+        would otherwise surface much later as "no parameter is declared for
+        'wall'" while the recipe plainly declares one."""
+        if self.dfm is None:
+            return self
+        known = {parameter.name.lower() for parameter in self.parameters}
+        for role, name in self.dfm.parameters.items():
+            if name.lower() not in known:
+                raise ValueError(
+                    f"The DFM role {role!r} points at a parameter {name!r} that this "
+                    f"recipe does not declare."
+                )
+        for pattern in self.dfm.frozen:
+            if "*" in pattern or "?" in pattern:
+                continue
+            if pattern.lower() not in known:
+                raise ValueError(
+                    f"{pattern!r} is listed as frozen but is not a parameter of this "
+                    f"recipe. Use a glob such as 'seal_*' to protect names that do "
+                    f"not exist yet."
+                )
         return self
 
     @model_validator(mode="after")

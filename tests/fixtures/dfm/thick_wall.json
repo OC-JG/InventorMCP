@@ -1,0 +1,1308 @@
+{
+ "tool": "OnlyCat DFM",
+ "session": "HEADLESS",
+ "timestamp": "2026-08-24T00:00:00.000Z",
+ "mode": "single",
+ "score": 60,
+ "grade": "MAJOR REWORK",
+ "scoring": {
+  "deduction": 40,
+  "budget": 100,
+  "critical_findings": 2
+ },
+ "material": "ABS",
+ "input": {
+  "wallThk": 5,
+  "wallMin": 1.2,
+  "wallMax": 3.5,
+  "draftAngle": 3,
+  "ribThk": 2.2,
+  "ribH": 5,
+  "ribRadius": 1.5,
+  "bossOD": 12,
+  "bossWall": 3,
+  "hasUndercut": "0",
+  "material": "abs",
+  "surfaceFinish": "spi-a2",
+  "moldType": "two-piece",
+  "fpc": {
+   "enabled": false,
+   "thickness": 0.2,
+   "cover": 0.5,
+   "anchors": "holes"
+  },
+  "runChecks": {
+   "wall": true,
+   "draft": true,
+   "ribs": true,
+   "undercut": true,
+   "sink": true,
+   "warp": true,
+   "transitions": false,
+   "flow": true,
+   "fpc": true
+  },
+  "mesh": {
+   "bbox": {
+    "min": [
+     0,
+     0,
+     0
+    ],
+    "max": [
+     120,
+     80,
+     40
+    ],
+    "size": [
+     120,
+     80,
+     40
+    ]
+   },
+   "area": 61400,
+   "volume": 153000,
+   "triCount": 24,
+   "diag": 149.66629547095764,
+   "projectedArea": 9600,
+   "triAreas": {
+    "0": 1600,
+    "1": 1600,
+    "2": 1600,
+    "3": 1600,
+    "4": 2400,
+    "5": 2400,
+    "6": 2400,
+    "7": 2400,
+    "8": 4800,
+    "9": 4800,
+    "10": 4800,
+    "11": 4800,
+    "12": 1050,
+    "13": 1050,
+    "14": 1050,
+    "15": 1050,
+    "16": 1650,
+    "17": 1650,
+    "18": 1650,
+    "19": 1650,
+    "20": 3850,
+    "21": 3850,
+    "22": 3850,
+    "23": 3850
+   },
+   "triDraft": {
+    "0": 0,
+    "1": 0,
+    "2": 0,
+    "3": 0,
+    "4": 0,
+    "5": 0,
+    "6": 0,
+    "7": 0,
+    "8": 90,
+    "9": 90,
+    "10": -90,
+    "11": -90,
+    "12": 0,
+    "13": 0,
+    "14": 0,
+    "15": 0,
+    "16": 0,
+    "17": 0,
+    "18": 0,
+    "19": 0,
+    "20": -90,
+    "21": -90,
+    "22": 90,
+    "23": 90
+   },
+   "triFNorm": {
+    "0": 1,
+    "1": 0,
+    "2": 0,
+    "3": 1,
+    "4": 0,
+    "5": 0,
+    "6": -1,
+    "7": 0,
+    "8": 0,
+    "9": -1,
+    "10": 0,
+    "11": 0,
+    "12": 0,
+    "13": 1,
+    "14": 0,
+    "15": 0,
+    "16": 1,
+    "17": 0,
+    "18": 0,
+    "19": -1,
+    "20": 0,
+    "21": 0,
+    "22": -1,
+    "23": 0,
+    "24": 0,
+    "25": 0,
+    "26": 1,
+    "27": 0,
+    "28": 0,
+    "29": 1,
+    "30": 0,
+    "31": 0,
+    "32": -1,
+    "33": 0,
+    "34": 0,
+    "35": -1,
+    "36": -1,
+    "37": 0,
+    "38": 0,
+    "39": -1,
+    "40": 0,
+    "41": 0,
+    "42": 1,
+    "43": 0,
+    "44": 0,
+    "45": 1,
+    "46": 0,
+    "47": 0,
+    "48": 0,
+    "49": -1,
+    "50": 0,
+    "51": 0,
+    "52": -1,
+    "53": 0,
+    "54": 0,
+    "55": 1,
+    "56": 0,
+    "57": 0,
+    "58": 1,
+    "59": 0,
+    "60": 0,
+    "61": 0,
+    "62": -1,
+    "63": 0,
+    "64": 0,
+    "65": -1,
+    "66": 0,
+    "67": 0,
+    "68": 1,
+    "69": 0,
+    "70": 0,
+    "71": 1
+   },
+   "triCentroid": {
+    "0": 120,
+    "1": 53.33333206176758,
+    "2": 13.333333015441895,
+    "3": 120,
+    "4": 26.66666603088379,
+    "5": 26.66666603088379,
+    "6": 0,
+    "7": 26.66666603088379,
+    "8": 26.66666603088379,
+    "9": 0,
+    "10": 53.33333206176758,
+    "11": 13.333333015441895,
+    "12": 40,
+    "13": 80,
+    "14": 26.66666603088379,
+    "15": 80,
+    "16": 80,
+    "17": 13.333333015441895,
+    "18": 80,
+    "19": 0,
+    "20": 13.333333015441895,
+    "21": 40,
+    "22": 0,
+    "23": 26.66666603088379,
+    "24": 80,
+    "25": 26.66666603088379,
+    "26": 40,
+    "27": 40,
+    "28": 53.33333206176758,
+    "29": 40,
+    "30": 40,
+    "31": 53.33333206176758,
+    "32": 0,
+    "33": 80,
+    "34": 26.66666603088379,
+    "35": 0,
+    "36": 115,
+    "37": 28.33333396911621,
+    "38": 25,
+    "39": 115,
+    "40": 51.66666793823242,
+    "41": 15,
+    "42": 5,
+    "43": 51.66666793823242,
+    "44": 15,
+    "45": 5,
+    "46": 28.33333396911621,
+    "47": 25,
+    "48": 78.33333587646484,
+    "49": 75,
+    "50": 15,
+    "51": 41.66666793823242,
+    "52": 75,
+    "53": 25,
+    "54": 41.66666793823242,
+    "55": 5,
+    "56": 25,
+    "57": 78.33333587646484,
+    "58": 5,
+    "59": 15,
+    "60": 41.66666793823242,
+    "61": 51.66666793823242,
+    "62": 35,
+    "63": 78.33333587646484,
+    "64": 28.33333396911621,
+    "65": 35,
+    "66": 78.33333587646484,
+    "67": 28.33333396911621,
+    "68": 5,
+    "69": 41.66666793823242,
+    "70": 51.66666793823242,
+    "71": 5
+   },
+   "triThickness": {
+    "0": 4.9985032081604,
+    "1": 4.9985032081604,
+    "2": 4.9985032081604,
+    "3": 4.9985032081604,
+    "4": 4.9985032081604,
+    "5": 4.9985032081604,
+    "6": 4.9985032081604,
+    "7": 4.9985032081604,
+    "8": 4.9985032081604,
+    "9": 4.9985032081604,
+    "10": 4.9985032081604,
+    "11": 4.9985032081604,
+    "12": 4.9985032081604,
+    "13": 4.9985032081604,
+    "14": 4.9985032081604,
+    "15": 4.9985032081604,
+    "16": 4.9985032081604,
+    "17": 4.9985032081604,
+    "18": 4.9985032081604,
+    "19": 4.9985032081604,
+    "20": 4.9985032081604,
+    "21": 4.9985032081604,
+    "22": 4.9985032081604,
+    "23": 4.9985032081604
+   },
+   "triPullDot": {
+    "0": 0,
+    "1": 0,
+    "2": 0,
+    "3": 0,
+    "4": 0,
+    "5": 0,
+    "6": 0,
+    "7": 0,
+    "8": 1,
+    "9": 1,
+    "10": -1,
+    "11": -1,
+    "12": 0,
+    "13": 0,
+    "14": 0,
+    "15": 0,
+    "16": 0,
+    "17": 0,
+    "18": 0,
+    "19": 0,
+    "20": -1,
+    "21": -1,
+    "22": 1,
+    "23": 1
+   },
+   "triUndercut": {
+    "0": 0,
+    "1": 0,
+    "2": 0,
+    "3": 0,
+    "4": 0,
+    "5": 0,
+    "6": 0,
+    "7": 0,
+    "8": 0,
+    "9": 0,
+    "10": 0,
+    "11": 0,
+    "12": 0,
+    "13": 0,
+    "14": 0,
+    "15": 0,
+    "16": 0,
+    "17": 0,
+    "18": 0,
+    "19": 0,
+    "20": 0,
+    "21": 0,
+    "22": 0,
+    "23": 0
+   },
+   "triSinkRisk": {
+    "0": 0,
+    "1": 0,
+    "2": 0,
+    "3": 0,
+    "4": 0,
+    "5": 0,
+    "6": 0,
+    "7": 0,
+    "8": 0,
+    "9": 0,
+    "10": 0,
+    "11": 0,
+    "12": 0,
+    "13": 0,
+    "14": 0,
+    "15": 0,
+    "16": 0,
+    "17": 0,
+    "18": 0,
+    "19": 0,
+    "20": 0,
+    "21": 0,
+    "22": 0,
+    "23": 0
+   },
+   "triFaceSide": {
+    "0": 0,
+    "1": 0,
+    "2": 0,
+    "3": 0,
+    "4": 0,
+    "5": 0,
+    "6": 0,
+    "7": 0,
+    "8": 0,
+    "9": 0,
+    "10": 0,
+    "11": 0,
+    "12": 1,
+    "13": 1,
+    "14": 1,
+    "15": 1,
+    "16": 1,
+    "17": 1,
+    "18": 1,
+    "19": 1,
+    "20": 0,
+    "21": 0,
+    "22": 0,
+    "23": 0
+   },
+   "sideCount": 16,
+   "sideArea": 26800,
+   "sidePctUnderMin": 100,
+   "sidePctUnderHalf": 100,
+   "outerArea": 16000,
+   "innerArea": 10800,
+   "outerAreaUnderMin": 16000,
+   "innerAreaUnderMin": 10800,
+   "outerPctUnderMin": 100,
+   "innerPctUnderMin": 100,
+   "wallStats": {
+    "n": 24,
+    "mean": 4.9985033370452925,
+    "median": 4.9985033370452925,
+    "sd": 1.0255800994045674e-15,
+    "min": 4.998503337045291,
+    "max": 4.9985033370452925,
+    "p5": 4.998503337045291,
+    "p25": 4.998503337045291,
+    "p75": 4.9985033370452925,
+    "p95": 4.9985033370452925,
+    "cv": 2.0517743617448632e-16,
+    "cvRobust": 2.0046008292491955e-16,
+    "medLo": 4.998503337045291,
+    "medHi": 4.9985033370452925,
+    "medUncertainty": 1.776888720104654e-16
+   },
+   "thicknesses": [
+    4.9985033370452925,
+    4.9985033370452925,
+    4.9985033370452925,
+    4.9985033370452925,
+    4.9985033370452925,
+    4.998503337045291,
+    4.998503337045291,
+    4.9985033370452925,
+    4.9985033370452925,
+    4.9985033370452925,
+    4.998503337045291,
+    4.998503337045291,
+    4.998503337045291,
+    4.998503337045291,
+    4.9985033370452925,
+    4.998503337045292,
+    4.9985033370452925,
+    4.998503337045291,
+    4.9985033370452925,
+    4.9985033370452925,
+    4.9985033370452925,
+    4.998503337045292,
+    4.998503337045292,
+    4.998503337045292
+   ],
+   "sphereStats": {
+    "n": 24,
+    "mean": 4.9985033370452925,
+    "median": 4.9985033370452925,
+    "sd": 1.0255800994045674e-15,
+    "min": 4.998503337045291,
+    "max": 4.9985033370452925,
+    "p5": 4.998503337045291,
+    "p25": 4.998503337045291,
+    "p75": 4.9985033370452925,
+    "p95": 4.9985033370452925,
+    "cv": 2.0517743617448632e-16,
+    "cvRobust": 2.0046008292491955e-16,
+    "medLo": 4.998503337045291,
+    "medHi": 4.9985033370452925,
+    "medUncertainty": 1.776888720104654e-16
+   },
+   "wallMethod": {
+    "rayMedian": 4.9985033370452925,
+    "sphereMedian": 4.9985033370452925,
+    "ratio": 1,
+    "sphereP5": 4.998503337045291,
+    "sphereP95": 4.9985033370452925
+   },
+   "thicknessCoverage": 1,
+   "sinkArea": 0,
+   "sinkAreaModerate": 0,
+   "sinkAreaSevere": 0,
+   "sinkPctModerate": 0,
+   "sinkPctSevere": 0,
+   "slideArea": 0,
+   "lifterArea": 0,
+   "undercutRegions": [],
+   "wallTransitions": [],
+   "flowAnalysis": null,
+   "gateSuggestion": {
+    "candidates": [
+     {
+      "point": [
+       80,
+       80,
+       13.333333015441895
+      ],
+      "triangle": 5,
+      "rayThicknessAtGate": 4.9985032081604,
+      "maxLT": 28.726472590491184,
+      "maxFlow": 143.589365402702,
+      "pctOverLT": 0
+     },
+     {
+      "point": [
+       40,
+       0,
+       26.66666603088379
+      ],
+      "triangle": 7,
+      "rayThicknessAtGate": 4.9985032081604,
+      "maxLT": 28.726472590491184,
+      "maxFlow": 143.589365402702,
+      "pctOverLT": 0
+     },
+     {
+      "point": [
+       120,
+       53.33333206176758,
+       13.333333015441895
+      ],
+      "triangle": 0,
+      "rayThicknessAtGate": 4.9985032081604,
+      "maxLT": 28.726472590491184,
+      "maxFlow": 143.589365402702,
+      "pctOverLT": 0
+     },
+     {
+      "point": [
+       0,
+       26.66666603088379,
+       26.66666603088379
+      ],
+      "triangle": 2,
+      "rayThicknessAtGate": 4.9985032081604,
+      "maxLT": 28.726472590491184,
+      "maxFlow": 143.589365402702,
+      "pctOverLT": 0
+     },
+     {
+      "point": [
+       40,
+       53.33333206176758,
+       40
+      ],
+      "triangle": 9,
+      "rayThicknessAtGate": 4.9985032081604,
+      "maxLT": 31.75335436958267,
+      "maxFlow": 158.71924368621305,
+      "pctOverLT": 0
+     },
+     {
+      "point": [
+       80,
+       26.66666603088379,
+       0
+      ],
+      "triangle": 11,
+      "rayThicknessAtGate": 4.9985032081604,
+      "maxLT": 31.75335436958267,
+      "maxFlow": 158.71924368621305,
+      "pctOverLT": 0
+     },
+     {
+      "point": [
+       40,
+       80,
+       26.66666603088379
+      ],
+      "triangle": 4,
+      "rayThicknessAtGate": 4.9985032081604,
+      "maxLT": 31.75335436958267,
+      "maxFlow": 158.71924368621305,
+      "pctOverLT": 0
+     },
+     {
+      "point": [
+       80,
+       0,
+       13.333333015441895
+      ],
+      "triangle": 6,
+      "rayThicknessAtGate": 4.9985032081604,
+      "maxLT": 31.75335436958267,
+      "maxFlow": 158.71924368621305,
+      "pctOverLT": 0
+     },
+     {
+      "point": [
+       80,
+       26.66666603088379,
+       40
+      ],
+      "triangle": 8,
+      "rayThicknessAtGate": 4.9985032081604,
+      "maxLT": 31.87854877832244,
+      "maxFlow": 159.34502833994253,
+      "pctOverLT": 0
+     },
+     {
+      "point": [
+       120,
+       26.66666603088379,
+       26.66666603088379
+      ],
+      "triangle": 1,
+      "rayThicknessAtGate": 4.9985032081604,
+      "maxLT": 31.87854877832244,
+      "maxFlow": 159.34502833994253,
+      "pctOverLT": 0
+     },
+     {
+      "point": [
+       0,
+       53.33333206176758,
+       13.333333015441895
+      ],
+      "triangle": 3,
+      "rayThicknessAtGate": 4.9985032081604,
+      "maxLT": 31.878548778322447,
+      "maxFlow": 159.34502833994256,
+      "pctOverLT": 0
+     },
+     {
+      "point": [
+       40,
+       53.33333206176758,
+       0
+      ],
+      "triangle": 10,
+      "rayThicknessAtGate": 4.9985032081604,
+      "maxLT": 31.878548778322447,
+      "maxFlow": 159.34502833994256,
+      "pctOverLT": 0
+     }
+    ],
+    "best": {
+     "point": [
+      80,
+      80,
+      13.333333015441895
+     ],
+     "triangle": 5,
+     "rayThicknessAtGate": 4.9985032081604,
+     "maxLT": 28.726472590491184,
+     "maxFlow": 143.589365402702,
+     "pctOverLT": 0
+    },
+    "worst": {
+     "point": [
+      40,
+      53.33333206176758,
+      0
+     ],
+     "triangle": 10,
+     "rayThicknessAtGate": 4.9985032081604,
+     "maxLT": 31.878548778322447,
+     "maxFlow": 159.34502833994256,
+     "pctOverLT": 0
+    },
+    "considered": 12,
+    "eligible": 16
+   },
+   "bvh": {
+    "bounds": {
+     "0": 0,
+     "1": 0,
+     "2": 0,
+     "3": 120,
+     "4": 80,
+     "5": 40,
+     "6": 0,
+     "7": 0,
+     "8": 0,
+     "9": 120,
+     "10": 80,
+     "11": 40,
+     "12": 0,
+     "13": 0,
+     "14": 0,
+     "15": 120,
+     "16": 80,
+     "17": 40,
+     "18": 0,
+     "19": 0,
+     "20": 0,
+     "21": 120,
+     "22": 80,
+     "23": 40,
+     "24": 0,
+     "25": 0,
+     "26": 0,
+     "27": 120,
+     "28": 80,
+     "29": 40,
+     "30": 0,
+     "31": 0,
+     "32": 0,
+     "33": 120,
+     "34": 80,
+     "35": 40,
+     "36": 0,
+     "37": 0,
+     "38": 0,
+     "39": 120,
+     "40": 80,
+     "41": 40
+    },
+    "meta": {
+     "0": 1,
+     "1": 2,
+     "2": 0,
+     "3": 5,
+     "4": 6,
+     "5": 0,
+     "6": 3,
+     "7": 4,
+     "8": 0,
+     "9": 12,
+     "10": 8,
+     "11": 1,
+     "12": 20,
+     "13": 4,
+     "14": 1,
+     "15": 0,
+     "16": 4,
+     "17": 1,
+     "18": 4,
+     "19": 8,
+     "20": 1
+    },
+    "triIdx": {
+     "0": 15,
+     "1": 7,
+     "2": 2,
+     "3": 18,
+     "4": 4,
+     "5": 17,
+     "6": 3,
+     "7": 20,
+     "8": 9,
+     "9": 10,
+     "10": 14,
+     "11": 23,
+     "12": 1,
+     "13": 12,
+     "14": 11,
+     "15": 22,
+     "16": 8,
+     "17": 6,
+     "18": 19,
+     "19": 21,
+     "20": 5,
+     "21": 16,
+     "22": 0,
+     "23": 13
+    },
+    "triCount": 24,
+    "nodeCount": 7
+   },
+   "nominalWall": 4.9985033370452925,
+   "pullDir": [
+    0,
+    0,
+    1
+   ],
+   "pullAxis": "+z",
+   "minDraft": 0.5,
+   "baseMinDraft": 0.5,
+   "finishKey": "spi-a2",
+   "moldType": "two-piece",
+   "material": {
+    "name": "ABS",
+    "shrinkLo": 0.4,
+    "shrinkHi": 0.7,
+    "wallLo": 1.2,
+    "wallHi": 3.5,
+    "draftMin": 0.5,
+    "warpRisk": "low",
+    "flow": "medium",
+    "ltMax": 180,
+    "coolK": 1.7,
+    "stripPct": 0,
+    "meltC": 240,
+    "hdtC": 98,
+    "density": 1.05,
+    "crystalline": false,
+    "optical": false
+   }
+  }
+ },
+ "checks": [
+  {
+   "key": "wall",
+   "name": "Wall thickness",
+   "status": "fail",
+   "detail": "Nominal wall 5.00 mm exceeds ABS max (3.5 mm). Sink, voids and long cycle inevitable. Core out thick sections.",
+   "severity": "critical",
+   "weight": 22,
+   "score_deduction": 22,
+   "metrics": [
+    [
+     "Nominal (median)",
+     "5.00 mm"
+    ],
+    [
+     "Bulk range (p25\u2013p75)",
+     "5.00\u20135.00 mm"
+    ],
+    [
+     "Full range (p5\u2013p95)",
+     "5.00\u20135.00 mm"
+    ],
+    [
+     "Material band",
+     "1.2\u20133.5 mm"
+    ],
+    [
+     "Bulk ratio",
+     "1.00\u00d7"
+    ],
+    [
+     "Measured as",
+     "inscribed sphere"
+    ],
+    [
+     "Samples",
+     "24"
+    ],
+    [
+     "Median 95% CI",
+     "5.00\u20135.00 mm"
+    ],
+    [
+     "Sphere / ray",
+     "5.00 / 5.00 mm"
+    ]
+   ]
+  },
+  {
+   "key": "draft",
+   "name": "Draft angles",
+   "status": "fail",
+   "detail": "Stated draft 3\u00b0 comfortably exceeds the 0.50\u00b0 required. Mesh shows 100% of side-wall area below 0.50\u00b0 draft (either mould half) \u2014 major rework needed.",
+   "severity": "critical",
+   "weight": 18,
+   "score_deduction": 18,
+   "metrics": [
+    [
+     "Manual draft",
+     "3\u00b0"
+    ],
+    [
+     "Material min",
+     "0.5\u00b0"
+    ],
+    [
+     "Required",
+     "0.50\u00b0"
+    ],
+    [
+     "Area <0.50\u00b0",
+     "100.0%"
+    ],
+    [
+     "Area <0.25\u00b0",
+     "100.0%"
+    ]
+   ]
+  },
+  {
+   "key": "ribs",
+   "name": "Ribs & bosses",
+   "status": "ok",
+   "detail": "Rib t/wall ratio 0.44 is in the recommended 0.4\u20130.5\u00d7 band (Malloy \u00a72.4.2).",
+   "severity": "none",
+   "weight": 11,
+   "score_deduction": 0,
+   "metrics": [
+    [
+     "Rib t / wall",
+     "0.44\u00d7"
+    ],
+    [
+     "Rib h / t",
+     "2.27\u00d7"
+    ],
+    [
+     "Base R / wall",
+     "0.30\u00d7"
+    ],
+    [
+     "Boss wall / wall",
+     "0.60\u00d7"
+    ],
+    [
+     "Boss OD / hole",
+     "\u00d812 / \u00d86.0 mm"
+    ],
+    [
+     "Boss wall window",
+     "3.00\u20133.50 mm"
+    ]
+   ]
+  },
+  {
+   "key": "undercut",
+   "name": "Undercuts / parting line",
+   "status": "ok",
+   "detail": "No undercuts declared. Straight-pull tool feasible \u2014 lowest tooling cost.",
+   "severity": "none",
+   "weight": 10,
+   "score_deduction": 0,
+   "metrics": [
+    [
+     "Slide area",
+     "0.0 mm\u00b2"
+    ],
+    [
+     "Lifter area",
+     "0.0 mm\u00b2"
+    ],
+    [
+     "Regions",
+     "0"
+    ]
+   ]
+  },
+  {
+   "key": "sink",
+   "name": "Sink-mark risk",
+   "status": "ok",
+   "detail": "Sink risk is low \u2014 100.0% of surface area has local thickness within safe ratio of nominal wall.",
+   "severity": "none",
+   "weight": 13,
+   "score_deduction": 0,
+   "metrics": [
+    [
+     "Nominal wall",
+     "5.00 mm"
+    ],
+    [
+     "Moderate risk area",
+     "0.0%"
+    ],
+    [
+     "Severe risk area",
+     "0.0%"
+    ]
+   ]
+  },
+  {
+   "key": "flow",
+   "name": "Flow length (L/T)",
+   "status": "info",
+   "detail": "No gate location set, so flow length has not been computed. Nothing is deducted for this \u2014 the check simply has not run. Of 12 candidate positions tried across the part's outer surface, the best is (80.0, 80.0, 13.3), giving a worst-case L/T of 29 against the 180 limit for ABS. Press \"Use best\" to place it, or pick your own.",
+   "severity": "none",
+   "weight": 12,
+   "score_deduction": 0,
+   "metrics": [
+    [
+     "L/T limit",
+     "180"
+    ],
+    [
+     "Max L/T",
+     "\u2014"
+    ],
+    [
+     "Area over limit",
+     "\u2014"
+    ],
+    [
+     "Best candidate L/T",
+     "29"
+    ],
+    [
+     "Best gate",
+     "(80, 80, 13)"
+    ],
+    [
+     "Positions tried",
+     "12"
+    ]
+   ]
+  },
+  {
+   "key": "warp",
+   "name": "Shrinkage & warpage",
+   "status": "ok",
+   "detail": "ABS is dimensionally stable (shrink 0.4\u20130.7%). Low warpage risk under normal conditions.",
+   "severity": "none",
+   "weight": 11,
+   "score_deduction": 0,
+   "metrics": [
+    [
+     "Shrink range",
+     "0.4\u20130.7%"
+    ],
+    [
+     "Typical",
+     "0.55%"
+    ],
+    [
+     "Warp risk",
+     "LOW"
+    ],
+    [
+     "Type",
+     "Amorphous"
+    ],
+    [
+     "Flow",
+     "MEDIUM"
+    ]
+   ]
+  },
+  {
+   "key": "corners",
+   "name": "Corner radii (advisory)",
+   "status": "info",
+   "detail": "Literature guidelines: internal corners \u2265 2.50 mm (0.5\u00d7 wall), external corners \u2265 7.50 mm (1.5\u00d7 wall). Sharp internal corners concentrate stress and require EDM tooling. Sharp external corners impede flow. Verify in CAD before tooling.",
+   "severity": "none",
+   "weight": 0,
+   "score_deduction": 0,
+   "metrics": [
+    [
+     "Wall",
+     "5.00 mm"
+    ],
+    [
+     "Min internal R",
+     "2.50 mm"
+    ],
+    [
+     "Min external R",
+     "7.50 mm"
+    ]
+   ]
+  },
+  {
+   "key": "finish_compat",
+   "name": "Surface finish compatibility",
+   "status": "ok",
+   "detail": "SPI A-2 (high polish #6 diamond) is achievable in ABS.",
+   "severity": "none",
+   "weight": 3,
+   "score_deduction": 0,
+   "metrics": [
+    [
+     "Finish",
+     "SPI A-2 (high polish #6 diamond)"
+    ],
+    [
+     "Material",
+     "ABS"
+    ],
+    [
+     "Result",
+     "ACHIEVABLE"
+    ]
+   ]
+  }
+ ],
+ "mesh_summary": {
+  "tris": 24,
+  "bbox_mm": [
+   120,
+   80,
+   40
+  ],
+  "surface_area_mm2": 61400,
+  "volume_mm3": 153000,
+  "projected_area_mm2": 9600,
+  "pull_direction": [
+   0,
+   0,
+   1
+  ],
+  "pull_axis_label": "+Z",
+  "mould_type": "two-piece",
+  "effective_min_draft_deg": 0.5,
+  "sidewall_area_under_min_draft_pct": 100,
+  "wall_median_mm": 4.9985033370452925,
+  "wall_p25_mm": 4.998503337045291,
+  "wall_p75_mm": 4.9985033370452925,
+  "wall_iqr_ratio": 1.0000000000000004,
+  "wall_cv_raw": 2.0517743617448632e-16,
+  "wall_cv_robust": 2.0046008292491955e-16,
+  "wall_samples": 24,
+  "wall_median_ci95_mm": [
+   4.998503337045291,
+   4.9985033370452925
+  ],
+  "wall_sphere_median_mm": 4.9985033370452925,
+  "wall_sphere_over_ray": 1,
+  "weld": null,
+  "thickness_sample_coverage": 1,
+  "sink_moderate_area_pct": 0,
+  "sink_severe_area_pct": 0,
+  "slide_area_mm2": 0,
+  "lifter_area_mm2": 0,
+  "flow": null,
+  "gate_search": {
+   "positions_tried": 12,
+   "eligible_faces": 16,
+   "best": {
+    "point": [
+     80,
+     80,
+     13.333333015441895
+    ],
+    "max_lt": 28.726472590491184,
+    "max_flow_mm": 143.589365402702,
+    "area_over_limit_pct": 0
+   },
+   "candidates": [
+    {
+     "point": [
+      80,
+      80,
+      13.333333015441895
+     ],
+     "max_lt": 28.726472590491184,
+     "max_flow_mm": 143.589365402702,
+     "area_over_limit_pct": 0
+    },
+    {
+     "point": [
+      40,
+      0,
+      26.66666603088379
+     ],
+     "max_lt": 28.726472590491184,
+     "max_flow_mm": 143.589365402702,
+     "area_over_limit_pct": 0
+    },
+    {
+     "point": [
+      120,
+      53.33333206176758,
+      13.333333015441895
+     ],
+     "max_lt": 28.726472590491184,
+     "max_flow_mm": 143.589365402702,
+     "area_over_limit_pct": 0
+    },
+    {
+     "point": [
+      0,
+      26.66666603088379,
+      26.66666603088379
+     ],
+     "max_lt": 28.726472590491184,
+     "max_flow_mm": 143.589365402702,
+     "area_over_limit_pct": 0
+    },
+    {
+     "point": [
+      40,
+      53.33333206176758,
+      40
+     ],
+     "max_lt": 31.75335436958267,
+     "max_flow_mm": 158.71924368621305,
+     "area_over_limit_pct": 0
+    },
+    {
+     "point": [
+      80,
+      26.66666603088379,
+      0
+     ],
+     "max_lt": 31.75335436958267,
+     "max_flow_mm": 158.71924368621305,
+     "area_over_limit_pct": 0
+    },
+    {
+     "point": [
+      40,
+      80,
+      26.66666603088379
+     ],
+     "max_lt": 31.75335436958267,
+     "max_flow_mm": 158.71924368621305,
+     "area_over_limit_pct": 0
+    },
+    {
+     "point": [
+      80,
+      0,
+      13.333333015441895
+     ],
+     "max_lt": 31.75335436958267,
+     "max_flow_mm": 158.71924368621305,
+     "area_over_limit_pct": 0
+    },
+    {
+     "point": [
+      80,
+      26.66666603088379,
+      40
+     ],
+     "max_lt": 31.87854877832244,
+     "max_flow_mm": 159.34502833994253,
+     "area_over_limit_pct": 0
+    },
+    {
+     "point": [
+      120,
+      26.66666603088379,
+      26.66666603088379
+     ],
+     "max_lt": 31.87854877832244,
+     "max_flow_mm": 159.34502833994253,
+     "area_over_limit_pct": 0
+    },
+    {
+     "point": [
+      0,
+      53.33333206176758,
+      13.333333015441895
+     ],
+     "max_lt": 31.878548778322447,
+     "max_flow_mm": 159.34502833994256,
+     "area_over_limit_pct": 0
+    },
+    {
+     "point": [
+      40,
+      53.33333206176758,
+      0
+     ],
+     "max_lt": 31.878548778322447,
+     "max_flow_mm": 159.34502833994256,
+     "area_over_limit_pct": 0
+    }
+   ]
+  },
+  "wall_transitions": [],
+  "undercut_regions": []
+ },
+ "mesh_health": {
+  "confidence": "high",
+  "analysable": true,
+  "bbox_mm": [
+   120,
+   80,
+   40
+  ],
+  "largest_dimension_mm": 120,
+  "closed": true,
+  "winding_consistent": true,
+  "normals_inverted": false,
+  "enclosed_volume_mm3": 153000,
+  "edges": {
+   "total": 36,
+   "boundary": 0,
+   "non_manifold": 0,
+   "inconsistent_winding": 0
+  },
+  "degenerate_triangles": 0,
+  "scale_suspicion": null,
+  "weld": {
+   "tolerance": 0.0014966629547095765,
+   "exactMerges": 56,
+   "nearMerges": 0,
+   "cellsProbed": 16
+  },
+  "issues": []
+ },
+ "moulding": {
+  "part_volume_cm3": 153,
+  "part_mass_g": 160.65,
+  "runner_allowance_pct": 0,
+  "shot_mass_g": 160.65,
+  "projected_area_cm2": 96,
+  "cavity_pressure_mpa": {
+   "lo": 30,
+   "hi": 45,
+   "basis": "medium flow"
+  },
+  "clamp_force_tonnes": {
+   "lo": 29.367826933764334,
+   "hi": 44.0517404006465
+  },
+  "machine_clamp_tonnes": 80,
+  "assumptions": [
+   "Clamp force is the 30\u201345 MPa cavity pressure typical of a medium-flow material acting over 96.0 cm\u00b2 of projected area. Specify a machine at least 10\u201320% above the top of that range.",
+   "Projected area is measured along the current pull axis. Change the pull direction and this changes with it."
+  ]
+ },
+ "material_limits": {
+  "key": "abs",
+  "name": "ABS",
+  "wall_lo_mm": 1.2,
+  "wall_hi_mm": 3.5,
+  "draft_min_deg": 0.5,
+  "required_draft_deg": 0.5,
+  "lt_max": 180,
+  "shrink_lo_pct": 0.4,
+  "shrink_hi_pct": 0.7,
+  "warp_risk": "low",
+  "density_g_cm3": 1.05
+ },
+ "source": {
+  "by": "inventor-mcp headless bridge",
+  "stl": "thick.stl",
+  "pull_axis": "+z",
+  "gate": null
+ }
+}

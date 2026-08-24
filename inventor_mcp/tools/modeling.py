@@ -246,11 +246,22 @@ def register(server: Any, session: Session) -> None:
         ],
         document: Annotated[str | None, Field(description="Target part; defaults to the active one.")] = None,
         rebuild: Annotated[bool, Field(description="Rebuild the model after applying the changes.")] = True,
+        override_frozen: Annotated[bool, Field(
+            description="Change a parameter marked as key geometry anyway. Refused "
+                        "without this, including for anything a protected value is "
+                        "computed from. Say it deliberately.")] = False,
     ) -> dict[str, Any]:
         parsed = _PARAMETERS.validate_python(parameters)
         context = session.context(document)
-        applied = [apply_parameter(session, context, spec) for spec in parsed]
+        applied = [
+            apply_parameter(session, context, spec, override_frozen=override_frozen)
+            for spec in parsed
+        ]
         result: dict[str, Any] = {"document": context.doc_id, "parameters": applied}
+        if override_frozen and context.frozen is not None:
+            touched = [spec.name for spec in parsed if context.frozen.check(spec.name)]
+            if touched:
+                result["overrode_key_geometry"] = touched
         if rebuild:
             result["rebuild"] = session.backend.rebuild(context.doc_id)
             try:

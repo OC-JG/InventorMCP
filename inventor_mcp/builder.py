@@ -31,6 +31,7 @@ from .backend.base import (
     WorkPlaneRequest,
 )
 from .errors import FeatureError, ParameterError, RecipeError
+from .dfm.freeze import guard_for_recipe
 from .expressions import RESERVED_NAMES
 from .geometry import plan_sketch
 from .plan import PLine
@@ -125,7 +126,18 @@ def resolve_parameter(resolver: Resolver, spec: ParameterSpec, unit: str) -> Res
     return resolver.in_unit(spec.value, unit, spec.name)
 
 
-def apply_parameter(session: Session, context: DocumentContext, spec: ParameterSpec) -> dict[str, Any]:
+def apply_parameter(session: Session, context: DocumentContext, spec: ParameterSpec,
+                    *, override_frozen: bool = False) -> dict[str, Any]:
+    """Declare or change one parameter.
+
+    The freeze is enforced here rather than in the DFM loop that motivated it. A
+    guarantee that only holds inside one loop is not a guarantee: the next thing
+    to edit a parameter -- a tool call, a script, a later feature -- would walk
+    straight through it, and the report would still say the key geometry had been
+    protected. Overriding is allowed and has to be asked for by name.
+    """
+    if not override_frozen and context.frozen is not None:
+        context.frozen.refuse(spec.name)
     if spec.name in RESERVED_NAMES:
         raise ParameterError(
             f"{spec.name!r} is reserved (it is a function or constant in expressions).",
@@ -522,6 +534,10 @@ def build_part(
             if stop_on_error:
                 results["stopped_at"] = f"parameter {spec.name}"
                 return finish()
+
+    # Only now: declaring a frozen parameter is what puts it there, so a guard
+    # installed before this loop would refuse the very statement that froze it.
+    context.frozen = guard_for_recipe(context.recipe)
 
     if recipe.material:
         try:

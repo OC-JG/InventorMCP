@@ -27,7 +27,7 @@ from itertools import count
 from typing import Any, Iterable, Sequence
 
 from ...errors import DocumentError, FeatureError, ParameterError, SelectionError, SketchError
-from ...expressions import UnitContext, evaluate
+from ...expressions import UnitContext, evaluate, referenced_parameters
 from ...geometry import (
     clip_to_box,
     inset_area,
@@ -37,7 +37,6 @@ from ...geometry import (
     polygon_centroid,
     profile_loops,
 )
-from ...expressions import referenced_parameters
 from ...plan import PArc, PCircle, PEllipse, PLine, PPoint, SketchPlan
 from ...units import Dim, Quantity, from_internal, lookup_unit
 from ..base import (
@@ -424,8 +423,64 @@ class MockBackend(Backend):
         )
         document.parameters[name] = info
         document.modified = True
+        self._reevaluate(document)
         self._record("set_parameter", name=name, expression=expression)
-        return info
+        return document.parameters[name]
+
+    def _reevaluate(self, document: "_Document") -> None:
+        """Recompute every parameter that reads another one.
+
+        A parametric model's whole point is that moving a driver moves what
+        depends on it. This used to evaluate an expression once, at the moment it
+        was set, and keep the number -- so ``rib_t = wall_t * 0.45`` stayed where
+        it started for ever after the wall moved, and the simulator disagreed
+        with Inventor about every dependent parameter in the document. Which
+        matters most exactly where it is least visible: the DFM loop writes its
+        ratio fixes as expressions *so that* they follow the wall, and a
+        simulator that does not follow them would have been rehearsing a model
+        nobody was going to get.
+
+        Resolved by repeated passes rather than a topological sort: one pass
+        settles one level of the chain, so as many passes as there are
+        parameters covers any depth, and a circular reference simply stops
+        changing instead of recursing. Inventor refuses circular references
+        anyway.
+        """
+        for _ in range(len(document.parameters) + 1):
+            moved = False
+            for info in list(document.parameters.values()):
+                if not isinstance(info.expression, str):
+                    continue
+                try:
+                    reads = referenced_parameters(info.expression)
+                except Exception:
+                    continue
+                if not reads:
+                    continue
+                known = {
+                    other.name: Quantity(
+                        other.value * lookup_unit(other.units).factor,
+                        lookup_unit(other.units).dim,
+                    )
+                    for other in document.parameters.values()
+                    if other.name != info.name
+                }
+                try:
+                    result = evaluate(
+                        info.expression, known,
+                        UnitContext(document.units, document.angle_units),
+                    )
+                except Exception:
+                    # A parameter whose driver has been deleted, or a unit that
+                    # no longer works out. Left at its last good value; the
+                    # rebuild is where that gets reported.
+                    continue
+                value = round(from_internal(result.value, info.units), 9)
+                if value != info.value:
+                    info.value = value
+                    moved = True
+            if not moved:
+                break
 
     def list_parameters(self, doc_id: str, *, include_model: bool = False) -> list[ParamInfo]:
         document = self._doc(doc_id)
