@@ -143,6 +143,19 @@ def probe_import(session, backend, step: str) -> None:
             f"ApplicationAddIns.ItemById({STEP_TRANSLATOR})",
             lambda: app.ApplicationAddIns.ItemById(STEP_TRANSLATOR))
         if addin is not None:
+            # A makepy cache types this as a plain ApplicationAddIn, which has
+            # no Open and no HasOpenOptions -- measured. Cast to the interface
+            # that does, falling back to dynamic dispatch.
+            def concrete(addin=addin):
+                import win32com.client
+                try:
+                    return win32com.client.CastTo(addin, "TranslatorAddIn")
+                except Exception:
+                    return win32com.client.dynamic.Dispatch(addin._oleobj_)
+            cast = try_it("cast the add-in to TranslatorAddIn", concrete)
+            if cast is not None:
+                addin = cast
+        if addin is not None:
             try_it("the add-in reports itself activated",
                    lambda: bool(addin.Activated) or addin.Activate() or True)
             transients = app.TransientObjects
@@ -189,6 +202,21 @@ def report_contents(route: str, document) -> None:
     success.
     """
     print(f"            --- what {route} produced:")
+    # Through dynamic dispatch: a makepy cache hands back the generic Document
+    # interface, which declares no ComponentDefinition, and this printed
+    # "no ComponentDefinition" for a document that had one.
+    try:
+        import win32com.client
+        document = win32com.client.dynamic.Dispatch(document._oleobj_)
+    except Exception:
+        pass
+    try:
+        kind = int(document.DocumentType)
+        print(f"                DocumentType = {kind}"
+              + ("  (an ASSEMBLY -- a multi-body file did not arrive as one part)"
+                 if kind == 12291 else ""))
+    except Exception:
+        pass
     try:
         component = document.ComponentDefinition
     except Exception as exc:
@@ -290,7 +318,13 @@ def probe_properties(session, backend) -> None:
             # Does any of it survive a save and reopen? That is the only
             # question that matters for carrying a declaration with a file, and
             # it cannot be answered without writing one.
-            scratch = Path(app.FileManager.WorkspacePath or ".") / "dfm-probe.ipt"
+            # Not FileManager.WorkspacePath: 2027.1's FileManager has no such
+            # member, and the probe died here on the round-trip question it
+            # existed to answer.
+            import tempfile
+            scratch = Path(tempfile.gettempdir()) / "dfm-probe.ipt"
+            if scratch.exists():
+                scratch.unlink()
             saved = try_it(f"SaveAs({scratch})",
                            lambda: document.SaveAs(str(scratch), False) or True)
             if saved:

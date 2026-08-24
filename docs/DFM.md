@@ -68,13 +68,28 @@ entry frozen because the screw and the connector decide those, not the moulding.
 The analysis runs headlessly through the DFM tool's own modules. No browser is
 involved, and nothing here re-implements a rule.
 
+The analyser ships with this repository as the `dfm/` git submodule, pinned to
+the version the drift tests ran against:
+
 ```bash
-git clone https://github.com/OC-JG/DFM.git
-export INVENTOR_MCP_DFM_ROOT=/path/to/DFM     # or DFM_ROOT
+git clone --recurse-submodules https://github.com/OC-JG/InventorMCP
+# or, in an existing clone:
+git submodule update --init dfm
 ```
 
-A `dfm` directory alongside this repository is found without being told. Node 18
-or newer is needed; no `npm install` is.
+Nothing to configure: the submodule is found first, then a `dfm` checkout
+alongside this repository, and `INVENTOR_MCP_DFM_ROOT` (or `DFM_ROOT`, or the
+`dfm_root` argument) overrides both — for pointing a run at a newer analyser
+before moving the pin. Updating the pin is deliberate:
+
+```bash
+git -C dfm pull && git add dfm && git commit   # and run pytest: the drift
+                                               # tests check the targets against
+                                               # the new rules before you commit
+```
+
+Node 18 or newer is needed; no `npm install` is. The same checkout is the
+browser tool — open `dfm/dfm-tool.html`.
 
 `dfm_capabilities` reports where the analyser was found, or says precisely what
 is missing.

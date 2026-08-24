@@ -221,6 +221,31 @@ def _specialise(document: Any) -> Any:  # pragma: no cover - Windows only
         return document
 
 
+def _dynamic(value: Any) -> Any:  # pragma: no cover - Windows only
+    """*value* through dynamic dispatch, so every member resolves by name.
+
+    "Late binding by default" turns out to be a default pywin32 quietly
+    overrides: once a makepy cache exists for the type library -- and running
+    anything early-bound once creates it -- plain ``Dispatch`` hands back the
+    generated wrappers forever after. Those take interface declarations
+    literally, so ``Features.Item()`` is a generic ``PartFeature`` with no
+    ``Thickness``, no ``TaperAngle`` and no ``Definition``, and a property read
+    through it reports nothing.
+
+    Measured on the machine this serves: ``describe_feature`` on a live shell
+    returned only ``HealthStatus`` and ``Suppressed``, so role discovery --
+    which reads the shell's thickness expression for evidence -- found no roles
+    at all and fell back to offering names. Through dynamic dispatch the same
+    reads work regardless of what the cache holds.
+    """
+    if win32com is None:
+        return value
+    try:
+        return win32com.client.dynamic.Dispatch(value._oleobj_)
+    except Exception:
+        return value
+
+
 def _supports_construction(primitive: Any) -> bool:
     """Whether Inventor lets this entity be marked as construction geometry.
 
@@ -590,7 +615,7 @@ class ComBackend(Backend):
         def by_opening() -> Any:
             return _specialise(app.Documents.Open(path, True))
 
-        def by_imported_component() -> Any:
+        def by_imported_component() -> Any:  # noqa: D401 - closure
             holder = app.Documents.Add(
                 self._k("kPartDocumentObject"),
                 app.FileManager.GetTemplateFile(self._k("kPartDocumentObject")),
@@ -613,6 +638,13 @@ class ComBackend(Backend):
 
         def by_translator() -> Any:
             addin = app.ApplicationAddIns.ItemById(self._STEP_TRANSLATOR)
+            # The add-in comes back as a generic ApplicationAddIn under a makepy
+            # cache, which has no Open and no HasOpenOptions -- measured, and
+            # exactly the trap _specialise exists for on documents.
+            try:
+                addin = win32com.client.CastTo(addin, "TranslatorAddIn")
+            except Exception:
+                addin = _dynamic(addin)
             if not bool(getattr(addin, "Activated", False)):
                 addin.Activate()
             transients = app.TransientObjects
@@ -629,9 +661,15 @@ class ComBackend(Backend):
 
         document = None
         route = None
+        # ImportedComponents first, and the order is measured rather than
+        # guessed. Documents.Open on a multi-body STEP produced an *assembly*,
+        # and -- worse for a tool that promises not to touch what it was handed
+        # -- it wrote a folder of translated .iam/.ipt files onto disk next to
+        # the source. ImportedComponents put the same file into one fresh part
+        # document and left the drive alone.
         for label, attempt in (
-            ("Documents.Open", by_opening),
             ("ImportedComponents", by_imported_component),
+            ("Documents.Open", by_opening),
             ("the STEP translator add-in", by_translator),
         ):
             try:
@@ -669,6 +707,13 @@ class ComBackend(Backend):
             "rejected": tried,
             **self._what_arrived(info.id),
         }
+        if route == "Documents.Open":
+            info.detail["wrote_files"] = (
+                "This route makes Inventor translate the file onto disk: expect "
+                "a folder of .iam/.ipt files next to the source. Measured on "
+                "2027.1; the ImportedComponents route, which avoids it, was "
+                "refused first -- see `rejected`."
+            )
         return info
 
     def _what_arrived(self, doc_id: str) -> dict[str, Any]:  # pragma: no cover - Windows only
@@ -2475,13 +2520,18 @@ class ComBackend(Backend):
             "name": str(getattr(feature, "Name", name)),
             "kind": _feature_kind(feature, self._constants),
         }
+        # Through dynamic dispatch, because `Features.Item()` under a makepy
+        # cache is a generic `PartFeature` that declares neither `Thickness`
+        # nor `Definition` -- measured: a live shell described as nothing but
+        # HealthStatus and Suppressed, and discovery starved. See `_dynamic`.
+        feature = _dynamic(feature)
         # The feature *and* its definition: a hole's diameter, seat and bottom
         # all live on `HoleFeature.Definition`, which is why the first version of
         # this printed nothing but `Suppressed`.
         holders = [("", feature)]
         definition = getattr(feature, "Definition", None)
         if definition is not None:
-            holders.append(("definition.", definition))
+            holders.append(("definition.", _dynamic(definition)))
         for prefix, holder in holders:
             for attribute in self._DESCRIBABLE:
                 try:
@@ -2757,7 +2807,9 @@ _FEATURE_TYPES: dict[str, str] = {
     "kRectangularPatternFeatureObject": "rectangular_pattern",
     "kCircularPatternFeatureObject": "circular_pattern",
     "kMirrorFeatureObject": "mirror",
-    "kDraftFeatureObject": "draft",
+    # Measured: 2027.1's type library has no kDraftFeatureObject -- the face
+    # draft feature's enum is this one.
+    "kFaceDraftFeatureObject": "draft",
     "kSplitFeatureObject": "split",
     "kCoilFeatureObject": "coil",
     "kEmbossFeatureObject": "emboss",

@@ -35,21 +35,32 @@ installed**; everything else (writing recipes, validating them, the test suite) 
 anywhere.
 
 ```powershell
-git clone https://github.com/OC-JG/InventorMCP
+git clone --recurse-submodules https://github.com/OC-JG/InventorMCP
 cd InventorMCP
-py -m venv .venv
-.venv\Scripts\activate
-pip install -e ".[inventor]"     # on macOS/Linux: pip install -e .
+powershell -ExecutionPolicy Bypass -File scripts\install.ps1
 ```
 
-Check it starts before wiring it into anything:
+The script makes the venv, installs the package, pulls the DFM analyser submodule
+if the clone skipped it, checks for Node, and registers the server with Claude
+Code when the `claude` CLI is on PATH — printing the command to run yourself when
+it is not. Safe to re-run.
+
+The [DFM analyser](https://github.com/OC-JG/DFM) rides along as the `dfm/`
+submodule, pinned to the version this repository's tests ran against — one clone
+is the whole tool, and the same checkout is the browser tool: open
+`dfm\dfm-tool.html`. Node 18+ is the analyser's one dependency (no `npm
+install`); without it, everything except the DFM tools still works and
+`dfm_capabilities` says exactly what is missing.
+
+By hand, the script's steps are:
 
 ```powershell
-python -m inventor_mcp --backend mock --help
-pytest                            # the whole suite, no Inventor needed
+git submodule update --init dfm
+py -m venv .venv
+.venv\Scripts\activate
+pip install -e .
+claude mcp add inventor -- .venv\Scripts\python.exe -m inventor_mcp
 ```
-
-Python 3.10+.
 
 ## Add it to Claude
 

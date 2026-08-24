@@ -80,10 +80,13 @@ def find_dfm_root(explicit: str | None = None) -> Path:
             return path
 
     here = Path(__file__).resolve().parents[2]
-    for sibling in (here.parent / "dfm", here.parent / "DFM", here / "dfm"):
-        tried.append(str(sibling))
-        if _looks_like_dfm(sibling):
-            return sibling
+    # The repository's own submodule first: it is pinned to the version the
+    # drift tests ran against, where a sibling checkout is whatever somebody
+    # last pulled. An explicit path or environment variable still overrides.
+    for candidate in (here / "dfm", here.parent / "dfm", here.parent / "DFM"):
+        tried.append(str(candidate))
+        if _looks_like_dfm(candidate):
+            return candidate
 
     raise DfmUnavailable(
         "The DFM tool is not where this could find it, so the analysis cannot run.",
