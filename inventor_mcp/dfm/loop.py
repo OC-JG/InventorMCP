@@ -315,7 +315,15 @@ def improve(
                 declaration.frozen_features.append(name)
     guard = guard_for(declaration)
 
-    room = Path(workspace) if workspace else Path.cwd() / ".dfm"
+    # A directory of its own per run, or two runs overwrite each other's
+    # round-N files -- and the "before" of a comparison is then routinely the
+    # file the "after" run just replaced, so compare_manufacture compares a
+    # part with itself and reports that the fix did nothing.
+    from datetime import datetime, timezone
+
+    moment = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
+    base = Path(workspace) if workspace else Path.cwd() / ".dfm"
+    room = base / f"{context.name}-{moment}"
     room.mkdir(parents=True, exist_ok=True)
 
     result = LoopResult(frozen=guard.as_dict(), settings=dict(dfm_settings),

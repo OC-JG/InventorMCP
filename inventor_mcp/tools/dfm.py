@@ -50,10 +50,41 @@ def _roles_table() -> dict[str, str]:
     return {role: what for role, (_, what) in sorted(ROLES.items())}
 
 
+def _fold_session_freeze(context: Any, declaration: Any) -> None:
+    """Widen *declaration* by what the session already protects.
+
+    The loop does this for itself; the previews have to do it too, or
+    `check_manufacture` promises a change that `improve_for_manufacture` then
+    refuses -- a preview that contradicts the act it previews.
+    """
+    if context.frozen is None:
+        return
+    for name in context.frozen.as_dict()["declared"]:
+        if name not in declaration.frozen:
+            declaration.frozen.append(name)
+    for name in context.frozen.features:
+        if name not in declaration.frozen_features:
+            declaration.frozen_features.append(name)
+
+
 def _workspace(where: str | None) -> Path:
     room = Path(where) if where else Path.cwd() / ".dfm"
     room.mkdir(parents=True, exist_ok=True)
     return room
+
+
+def _stamped(stem: str, suffix: str) -> str:
+    """A file name no other run will use.
+
+    Every run used to write the same names into the shared ./.dfm workspace, so
+    the "before" report of a comparison was routinely overwritten by the run
+    producing the "after" -- and compare_manufacture then compared a part with
+    itself and reported nothing moved, which reads as "the fix did nothing".
+    """
+    from datetime import datetime, timezone
+
+    moment = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
+    return f"{stem}-{moment}.{suffix}"
 
 
 def register(server: Any, session: Session) -> None:
@@ -131,13 +162,15 @@ def register(server: Any, session: Session) -> None:
             session, context, path=opened.get("path_on_disk"), roles=roles,
             freeze=freeze or (), settings=settings, infer=infer_roles,
         )
+        _fold_session_freeze(context, declaration)
         values, expressions = current_parameters(session, context)
         guard_ = guard_for(declaration, expressions)
 
         report, values, expressions, mesh, written = measure(
             session, context, roles=declaration.roles,
             settings=declaration.settings, workspace=_workspace(workspace),
-            label="check", dfm_root=dfm_root, pull_axis=pull_axis,
+            label=_stamped(f"{context.name}-check", "").rstrip("."),
+            dfm_root=dfm_root, pull_axis=pull_axis,
         )
         proposal = propose(report, declaration.roles, guard_, values, expressions)
         out: dict[str, Any] = {
@@ -153,7 +186,8 @@ def register(server: Any, session: Session) -> None:
         if opened:
             out["file"] = {k: v for k, v in opened.items()
                            if k in ("opened", "working_copy", "original_untouched",
-                                    "parametric", "what_that_means", "detail")}
+                                    "parametric", "what_that_means", "detail",
+                                    "note_on_document")}
         if discovered is not None and discovered.suggestions:
             out["unmapped_roles_look_like"] = discovered.as_dict().get("suggestions")
         return out
@@ -170,26 +204,41 @@ def register(server: Any, session: Session) -> None:
         """
         room = _workspace(workspace)
         source = Path(path).resolve()
-        written = room / f"{source.stem}.json"
-        report = analyse_stl(source, dict(settings or {}), dfm_root=dfm_root,
+        written = room / _stamped(f"{source.stem}", "json")
+
+        # The declaration first, when a part is named, because it is an INPUT to
+        # the analysis and not only to the proposal: the rib and boss checks are
+        # judged on declared numbers, and analysing with the tool's defaults
+        # while the result claims the part's declaration was used would judge a
+        # different part from the one reported.
+        declared = dict(settings or {})
+        context = None
+        declaration = None
+        if document is not None:
+            context = session.context(document)
+            declaration, _ = resolve(session, context, roles=roles,
+                                     freeze=freeze or (), settings=settings,
+                                     infer=infer_roles)
+            _fold_session_freeze(context, declaration)
+            values, expressions = current_parameters(session, context)
+            declared = settings_from_roles(declaration.roles, values,
+                                           {**declaration.settings,
+                                            **(settings or {})})
+
+        report = analyse_stl(source, declared, dfm_root=dfm_root,
                             pull_axis=pull_axis, save_report_to=written)
         out: dict[str, Any] = {
             "mesh": str(source), **report.summary(),
             "checks": [c.as_dict() for c in report.checks],
             "report": str(written),
         }
-        if document is None:
+        if context is None:
             out["note"] = (
                 "A mesh has no parameters, so nothing is proposed. To get the "
                 "parameter changes these findings imply, name the part this mesh "
                 "came from with document=..., or open it and call without a path."
             )
             return out
-        context = session.context(document)
-        declaration, _ = resolve(session, context, roles=roles,
-                                 freeze=freeze or (), settings=settings,
-                                 infer=infer_roles)
-        values, expressions = current_parameters(session, context)
         guard_ = guard_for(declaration, expressions)
         out["document"] = context.doc_id
         out["would_change"] = propose(
@@ -197,7 +246,8 @@ def register(server: Any, session: Session) -> None:
         out["read_the_part_as"] = declaration.describe()
         out["key_geometry"] = guard_.as_dict()
         out["note"] = (f"Taken as a mesh of {context.name}, because that is what "
-                       f"document={document!r} names.")
+                       f"document={document!r} names; the analysis was run with "
+                       f"that part's declared numbers.")
         return out
 
     @server.tool(
@@ -277,19 +327,34 @@ def register(server: Any, session: Session) -> None:
         out: dict[str, Any] = {"document": context.doc_id, **result.as_dict()}
         if opened:
             out["file"] = {k: v for k, v in opened.items()
-                           if k in ("opened", "working_copy", "original_untouched")}
+                           if k in ("opened", "working_copy", "original_untouched",
+                                    "note_on_document")}
 
-        # What was used is written back beside the copy, so the next run on this
-        # version starts from the same reading rather than inferring it again --
-        # and so a person can see and correct it.
-        where = opened.get("path_on_disk")
-        if where and result.used is not None:
-            out["remembered"] = remember(session, context, result.used, path=where)
+        # One rule governs both writes below: this run owns what it created --
+        # the working copy it made -- and nothing else. Not the file named in
+        # `path` without a copy, and not the file an already-open document came
+        # from: `open_part` then `improve_for_manufacture()` with no arguments
+        # used to save straight over the original, because the guard looked
+        # only at the path given to THIS call.
+        mine = opened.get("working_copy")
+        lives_at = opened.get("path_on_disk") or session.backend.document_path(
+            context.doc_id)
 
-        # Saving over the file somebody named is a different act from saving the
-        # copy this made, and it must not happen by default. `save=None` means
-        # "save what is mine to save": a working copy, yes; the original, only if
-        # asked in so many words.
+        # What was used is written back beside the copy, so the next run on
+        # this version starts from the same reading -- and only beside the
+        # copy. Rewriting the sidecar of a file this run declined to write is
+        # still rewriting a reviewed file. And only what somebody *stated*: a
+        # discovered role stays an inference until a person confirms it, and
+        # storing it would bring it back next run as "the part itself".
+        if mine:
+            stated_only, _ = resolve(
+                session, context, path=mine, roles=roles, freeze=freeze or (),
+                freeze_features=freeze_features or (),
+                settings={"material": material} if material else None,
+                infer=False,
+            )
+            out["remembered"] = remember(session, context, stated_only, path=mine)
+
         # The question anybody asks on the second pass is "is it better than it
         # was", and the loop has both records already. Asked of the DFM tool's own
         # comparison rather than diffed here: it knows which direction is better
@@ -304,33 +369,33 @@ def register(server: Any, session: Session) -> None:
                 out["what_moved"] = None
                 out["comparison_failed"] = str(exc)[:200]
 
-        working_on_the_original = bool(path) and not opened.get("working_copy")
-        should_save = save if save is not None else not working_on_the_original
-        if should_save and working_on_the_original and save is not True:
-            should_save = False
+        should_save = save if save is not None else bool(mine)
         if should_save:
             try:
                 out["saved"] = session.backend.save_document(context.doc_id).as_dict()
-                if where:
+                if lives_at:
                     try:
-                        out["versions"] = [str(p) for p in versions_of(where)]
+                        out["versions"] = [str(p) for p in versions_of(lives_at)]
                     except OSError:
                         pass  # a listing is a nicety; the save already happened
-                if working_on_the_original:
+                if not mine and lives_at:
                     out["overwrote"] = (
-                        f"{opened['opened']} was saved over, because save=true was "
-                        f"asked for with working_copy=false."
+                        f"{lives_at} was saved over, because save=true was asked "
+                        f"for on a document that is not a working copy this call "
+                        f"made."
                     )
             except Exception as exc:
                 out["saved"] = None
                 out["save_failed"] = str(exc)[:200]
-        elif working_on_the_original:
+        elif save is None and not mine:
             out["not_saved"] = (
-                f"The model in Inventor has been changed but {opened['opened']} has "
-                f"not been written. working_copy=false was asked for, so there is no "
-                f"copy to save into, and saving over the file you named is not "
-                f"something this does unless told to. Pass save=true to write it, or "
-                f"`save_part(path=...)` to put it somewhere else."
+                "The model in Inventor has been changed and nothing has been "
+                "written to disk: this call made no working copy, and saving over "
+                + (f"{lives_at}" if lives_at else "the open document")
+                + " is not something it does unless told to. Pass save=true to "
+                "write it, or `save_part(path=...)` to put it somewhere else -- "
+                "or hand the file to this tool with path=... next time and get a "
+                "versioned copy for free."
             )
         return out
 
@@ -467,16 +532,24 @@ def register(server: Any, session: Session) -> None:
 
         out: dict[str, Any] = {"report": os.path.abspath(path), **report.summary(),
                               "checks": [c.as_dict() for c in report.checks]}
-        try:
+        if document is not None:
+            # Named and not found is a mistake to correct, not a state to note:
+            # "No part is open" against an explicit handle hides the typo.
             context = session.context(document)
-        except Exception:
-            # No model open. The findings are still worth reading; what cannot be
-            # said is which parameter answers which, so it is not guessed at.
-            out["note"] = ("No part is open, so this is the findings alone. Open the "
-                           "part and call again to see which parameters would change.")
-            return out
+        else:
+            try:
+                context = session.context(None)
+            except Exception:
+                # No model open. The findings are still worth reading; what
+                # cannot be said is which parameter answers which, so it is not
+                # guessed at.
+                out["note"] = ("No part is open, so this is the findings alone. "
+                               "Open the part and call again to see which "
+                               "parameters would change.")
+                return out
 
         declaration, _ = resolve(session, context, roles=roles, freeze=freeze or ())
+        _fold_session_freeze(context, declaration)
         values, expressions = current_parameters(session, context)
         guard_ = guard_for(declaration, expressions)
         out["document"] = context.doc_id

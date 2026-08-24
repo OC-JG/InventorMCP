@@ -747,3 +747,71 @@ class TestTwoMoreClobbersAndAContract:
         out = call(server, "improve_for_manufacture",
                    path=str(files / "bracket.ipt"), document=other["document"])
         assert "not used" in out["file"]["note_on_document"]
+
+
+class TestToolContractFindings:
+    """The tool-contract lens: results that quietly described a different act."""
+
+    def test_improve_with_no_path_does_not_save_over_the_opened_file(
+            self, server, session, files, monkeypatch):
+        """open_part(path=...) then improve_for_manufacture() with no arguments
+        used to save straight over the original: the guard looked only at the
+        path given to THIS call, and the document's own origin was invisible."""
+        saved: list = []
+        monkeypatch.setattr(
+            type(session.backend), "save_document",
+            lambda self, doc_id, path=None: saved.append(path or "in place"),
+            raising=False,
+        )
+        call(server, "open_part", path=str(files / "bracket.ipt"))
+        out = call(server, "improve_for_manufacture")
+        assert out["ok"] is False, "the mock part has nothing to drive"
+        assert saved == []
+
+    def test_the_preview_honours_the_session_freeze(self, server):
+        """check_manufacture promising a change improve then refuses is a
+        preview that contradicts the act it previews."""
+        call(server, "new_part", name="Housing")
+        call(server, "set_parameters", parameters=[{"name": "wall_t", "value": 2.5}],
+             rebuild=False)
+        call(server, "protect_geometry", parameters=["wall_t"])
+        out = call(server, "read_dfm_report",
+                   path="tests/fixtures/dfm/many_findings.json",
+                   roles={"wall": "wall_t"})
+        assert "wall_t" not in {
+            c["parameter"] for c in out["would_change"]["changes"]}
+        held = [d for d in out["would_change"]["not_acted_on"]
+                if d["not_acted_on"] == "frozen"]
+        assert held
+
+    def test_an_unknown_document_handle_is_an_error_not_a_note(self, server):
+        call(server, "new_part", name="Housing")
+        out = call(server, "read_dfm_report",
+                   path="tests/fixtures/dfm/clean.json", document="typo")
+        assert out["ok"] is False
+        assert "typo" in out["message"]
+
+    def test_two_checks_do_not_overwrite_each_others_reports(self, server,
+                                                             session, tmp_path,
+                                                             monkeypatch):
+        """The 'before' of a comparison was routinely the file the 'after' run
+        had just replaced, so comparing reported that the fix did nothing."""
+        import pathlib
+
+        monkeypatch.setattr(
+            type(session.backend), "export",
+            lambda self, doc_id, request: (
+                pathlib.Path(request.path).write_bytes(b"") or
+                {"written": True, "path": request.path}),
+            raising=False,
+        )
+        call(server, "new_part", name="Housing")
+        first = call(server, "check_manufacture", workspace=str(tmp_path),
+                     dfm_root="/nowhere")   # fails at analysis, after naming files
+        second = call(server, "check_manufacture", workspace=str(tmp_path),
+                      dfm_root="/nowhere")
+        assert first["ok"] is False and second["ok"] is False
+        # Both failed at the analyser, AFTER exporting their mesh -- and each
+        # run's mesh has a name of its own, which is the point.
+        stems = {p.name for p in tmp_path.iterdir()}
+        assert len(stems) == 2, stems
