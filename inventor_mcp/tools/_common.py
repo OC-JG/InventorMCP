@@ -184,14 +184,42 @@ def open_source(session: Any, path: str, *, working_copy: bool = False,
 
         declaration, _ = resolve_declaration(session, context, path=source,
                                              infer=False)
-        if declaration.frozen or declaration.frozen_features:
-            from ..dfm.sources import build_guard
+        # Getting here means the stored declaration READS -- which has two
+        # consequences the first version missed, both found by reproducing them:
+        #
+        # * a session freeze added with `protect_geometry` lives only on the
+        #   context, and REPLACING the guard from the declaration dropped it --
+        #   the operation no source may perform. Widen instead.
+        # * the '*' guard installed when a declaration could NOT be read is
+        #   protection standing in for knowledge. Now that the declaration
+        #   reads, the knowledge is here, and the sentinel must clear -- carried
+        #   forward, it froze the part for the whole session even after the
+        #   sidecar was fixed, with the refusal relabelled to hide the cause.
+        from ..dfm.freeze import UNPROTECTABLE_PREFIX
+        from ..dfm.sources import build_guard
 
+        if context.frozen is not None:
+            for held, reason in context.frozen.declared_reasons():
+                if reason.startswith(UNPROTECTABLE_PREFIX):
+                    continue
+                if held not in declaration.frozen:
+                    declaration.frozen.append(held)
+            for held in context.frozen.features:
+                if held not in declaration.frozen_features:
+                    declaration.frozen_features.append(held)
+
+        if declaration.frozen or declaration.frozen_features:
             context.frozen, pin_notes = build_guard(session, context, declaration)
             out["key_geometry"] = context.frozen.as_dict()
             if pin_notes:
                 out["key_geometry"]["notes"] = (
                     out["key_geometry"].get("notes") or []) + pin_notes
+        elif context.frozen is not None and context.frozen.unprotectable:
+            context.frozen = None
+            out["note_on_protection"] = (
+                "The declaration that could not be read before reads cleanly now "
+                "and freezes nothing, so the everything-frozen guard is lifted."
+            )
     except Exception as exc:
         # A declaration exists and cannot be read, which means what it protects
         # cannot be known -- and the one wrong answer is "nothing". So until it
@@ -202,11 +230,14 @@ def open_source(session: Any, path: str, *, working_copy: bool = False,
         from ..dfm.freeze import FreezeGuard
 
         out["declaration_problem"] = str(exc)[:300]
+        from ..dfm.freeze import UNPROTECTABLE_PREFIX
+
         context.frozen = FreezeGuard(
             ["*"],
-            reason=("unprotectable: the declaration stored for this part could "
-                    "not be read, so what it froze is unknown -- fix or delete "
-                    "it (see declaration_problem in the open_part result)"),
+            reason=(UNPROTECTABLE_PREFIX + " the declaration stored for this "
+                    "part could not be read, so what it froze is unknown -- fix "
+                    "or delete it and open the part again (see "
+                    "declaration_problem in the open_part result)"),
         )
         out["key_geometry"] = context.frozen.as_dict()
         out["every_parameter_is_frozen_because"] = (

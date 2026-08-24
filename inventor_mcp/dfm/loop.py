@@ -307,7 +307,14 @@ def improve(
     # refusal as a broken rebuild -- an abort where a quieter "not acted on,
     # frozen" was the truth.
     if context.frozen is not None:
-        for name in context.frozen.as_dict()["declared"]:
+        from .freeze import UNPROTECTABLE_PREFIX
+
+        for name, reason in context.frozen.declared_reasons():
+            if reason.startswith(UNPROTECTABLE_PREFIX):
+                # Protection standing in for a declaration nobody could read.
+                # It is not a statement, and copying it forward relabelled it
+                # as one -- freezing the part forever with the cause hidden.
+                continue
             if name not in declaration.frozen:
                 declaration.frozen.append(name)
         for name in context.frozen.features:

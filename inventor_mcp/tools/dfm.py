@@ -472,7 +472,10 @@ def register(server: Any, session: Session) -> None:
         # added a moment ago with `protect_geometry` lives only on the context,
         # and building the new guard from the declaration alone dropped it: the
         # one operation no source is allowed to perform, done here by accident.
-        held = (list(context.frozen.as_dict()["declared"])
+        from ..dfm.freeze import UNPROTECTABLE_PREFIX
+
+        held = ([name for name, reason in context.frozen.declared_reasons()
+                 if not reason.startswith(UNPROTECTABLE_PREFIX)]
                 if context.frozen is not None else [])
         held_features = (list(context.frozen.features)
                          if context.frozen is not None else [])

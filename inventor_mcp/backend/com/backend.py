@@ -486,7 +486,11 @@ class ComBackend(Backend):
         # reopening a protected part produced an unprotected handle to the same
         # geometry. Matched by file name, because wrapper identity is useless
         # under late binding -- each call returns a fresh wrapper.
-        opened = os.path.normcase(os.path.abspath(path))
+        # realpath as well as normcase: an 8.3 short name, a junction or a
+        # subst'd drive letter is the same file, and Inventor reports the long
+        # canonical form -- matching the alias against it minted a second
+        # handle for a document that was already open.
+        opened = os.path.normcase(os.path.realpath(path))
         for known_id, known in self._documents.items():
             try:
                 held = os.path.normcase(str(known.FullFileName))
@@ -594,7 +598,7 @@ class ComBackend(Backend):
         # same hole open_document had, still open for translated files, and
         # matched by the SOURCE path this time: a part made by
         # ImportedComponents is unsaved, so it has no FullFileName to match.
-        source = os.path.normcase(os.path.abspath(path))
+        source = os.path.normcase(os.path.realpath(path))
         remembered = getattr(self, "_imported_from", {})
         known_id = remembered.get(source)
         document = None
@@ -1079,11 +1083,17 @@ class ComBackend(Backend):
 
     def close_document(self, doc_id: str, *, save: bool = False) -> None:  # pragma: no cover
         document = self._doc(doc_id)
-        if save:
-            document.Save()
-        document.Close(not save)
-        self._documents.pop(doc_id, None)
-        self._sketches.pop(doc_id, None)
+        try:
+            if save:
+                document.Save()
+            document.Close(not save)
+        finally:
+            # Evicted even when Close raises: a document already closed in
+            # Inventor's own UI dies on the Close call, and popping only after
+            # success left the dead handle registered forever -- unevictable,
+            # because the eviction was the very call that failed.
+            self._documents.pop(doc_id, None)
+            self._sketches.pop(doc_id, None)
 
     def set_material(self, doc_id: str, material: str,
                      appearance: str | None = None) -> DocInfo:  # pragma: no cover

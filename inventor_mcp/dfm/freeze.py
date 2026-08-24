@@ -44,6 +44,14 @@ class FrozenGeometryError(InventorMCPError):
     code = "frozen_geometry"
 
 
+#: The reason-prefix marking a freeze that exists because a declaration could
+#: not be READ -- protection standing in for knowledge, not knowledge. It has
+#: different lifecycle rules from a real freeze: it clears the moment the
+#: declaration reads cleanly, and no widening operation may copy it forward as
+#: though somebody had declared it.
+UNPROTECTABLE_PREFIX = "unprotectable:"
+
+
 @dataclass(frozen=True)
 class FrozenParameter:
     """Why one parameter is protected."""
@@ -208,6 +216,21 @@ class FreezeGuard:
 
     def feature_frozen(self, name: str) -> bool:
         return any(fnmatch.fnmatch(name.lower(), f.lower()) for f in self._features)
+
+    def declared_reasons(self) -> list[tuple[str, str]]:
+        """Every declared pattern with why it is there, for callers that widen.
+
+        Widening from ``as_dict()["declared"]`` alone lost the reasons, and one
+        reason changes everything: the unprotectable sentinel must never be
+        copied forward as though somebody had declared it.
+        """
+        return list(self._patterns)
+
+    @property
+    def unprotectable(self) -> bool:
+        """Whether this guard is standing in for a declaration nobody could read."""
+        return any(reason.startswith(UNPROTECTABLE_PREFIX)
+                   for _, reason in self._patterns)
 
     @property
     def empty(self) -> bool:

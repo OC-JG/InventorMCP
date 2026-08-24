@@ -996,3 +996,73 @@ class TestPromotingAPartWithoutParameters:
         out = call(server, "promote_parameters", promotions=[
             {"feature": "Cavity", "property": "thickness", "name": "shell_wall"}])
         assert out["promoted"][0]["parameter"] == "shell_wall"
+
+
+class TestTheUnprotectableGuardLifecycle:
+    """Protection standing in for a declaration nobody could read has different
+    lifecycle rules from a real freeze: it clears the moment the declaration
+    reads cleanly, and no widening may copy it forward as though somebody had
+    declared it. Both traps were reproduced before being fixed: the part stayed
+    frozen for the whole session after the sidecar was fixed, with the refusal
+    relabelled to 'declared as key geometry' -- the cause hidden."""
+
+    def _corrupt(self, tmp_path):
+        from inventor_mcp.dfm.declaration import sidecar_for
+
+        part = tmp_path / "bracket.ipt"
+        part.write_bytes(b"")
+        sidecar_for(part).write_text('{"frozen": "bore_d"}', encoding="utf-8")
+        return part
+
+    def test_fixing_the_sidecar_and_reopening_lifts_the_freeze(self, server, tmp_path):
+        from inventor_mcp.dfm.declaration import sidecar_for
+
+        part = self._corrupt(tmp_path)
+        call(server, "open_part", path=str(part))
+        sidecar_for(part).write_text('{"frozen": ["bore_d"]}', encoding="utf-8")
+        reopened = call(server, "open_part", path=str(part))
+        assert reopened["key_geometry"]["declared"] == ["bore_d"], (
+            "the real freeze arrives, the sentinel goes")
+        out = call(server, "set_parameters",
+                   parameters=[{"name": "anything", "value": 1}], rebuild=False)
+        assert out["ok"], "only bore_d is frozen now"
+
+    def test_deleting_the_sidecar_and_reopening_lifts_it_too(self, server, tmp_path):
+        from inventor_mcp.dfm.declaration import sidecar_for
+
+        part = self._corrupt(tmp_path)
+        call(server, "open_part", path=str(part))
+        sidecar_for(part).unlink()
+        reopened = call(server, "open_part", path=str(part))
+        assert "lifted" in reopened.get("note_on_protection", "")
+        out = call(server, "set_parameters",
+                   parameters=[{"name": "anything", "value": 1}], rebuild=False)
+        assert out["ok"]
+
+    def test_declare_dfm_does_not_launder_the_sentinel(self, server, tmp_path):
+        """declare_dfm widens from the session guard, and the sentinel must not
+        come along -- relabelled 'declared as key geometry', it froze the part
+        forever with the cause hidden."""
+        from inventor_mcp.dfm.declaration import sidecar_for
+
+        part = self._corrupt(tmp_path)
+        call(server, "open_part", path=str(part))
+        sidecar_for(part).write_text('{"frozen": ["bore_d"]}', encoding="utf-8")
+        out = call(server, "declare_dfm", frozen=["seal_face"])
+        assert "*" not in out["key_geometry"]["declared"]
+
+    def test_reopening_keeps_a_session_freeze(self, server, tmp_path):
+        """The file's declaration freezes something, so the reopen rebuilds the
+        guard -- and rebuilding REPLACED it, dropping what protect_geometry had
+        added in the meantime. Widened now."""
+        from inventor_mcp.dfm.declaration import Declaration, write_sidecar
+
+        part = tmp_path / "flange.ipt"
+        part.write_bytes(b"")
+        write_sidecar(part, Declaration(frozen=["wall_t"]))
+        call(server, "open_part", path=str(part))
+        call(server, "protect_geometry", parameters=["seal_face"])
+        call(server, "open_part", path=str(part))   # e.g. via a later check(path=...)
+        out = call(server, "set_parameters",
+                   parameters=[{"name": "seal_face", "value": 9}], rebuild=False)
+        assert out["ok"] is False and out["error"] == "frozen_geometry"
