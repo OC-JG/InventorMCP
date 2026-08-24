@@ -379,6 +379,13 @@ class MockBackend(Backend):
         volume here would be inventing the one number the whole analysis rests
         on.
         """
+        for document in self._documents.values():
+            if document.path == path:
+                self._active = document.id
+                self._record("import_geometry", path=path, already_open=True)
+                out = self._doc_info(document)
+                out.detail = {"imported": True, "already_open": True}
+                return out
         stem = name or path.replace("\\", "/").rsplit("/", 1)[-1].rsplit(".", 1)[0]
         info = self.new_part(stem)
         document = self._doc(info.id)

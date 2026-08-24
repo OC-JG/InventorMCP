@@ -469,8 +469,8 @@ class ComBackend(Backend):
                 continue
             if held and held == opened:
                 self._documents[known_id] = document
-                length, angle, _ = self._document_units(document)
-                return DocInfo(
+                length, angle, read = self._document_units(document)
+                info = DocInfo(
                     id=known_id,
                     name=str(document.DisplayName),
                     path=str(document.FullFileName) or None,
@@ -479,6 +479,15 @@ class ComBackend(Backend):
                     angle_units=angle,
                     active=True,
                 )
+                if not read:
+                    # The same caveat a first open carries. The shortcut dropped
+                    # it, so a reopen reported millimetres as though they had
+                    # been measured rather than assumed.
+                    info.detail = {"units_note": (
+                        "This part would not say what units it is in, so it is "
+                        "being treated as millimetres and degrees."
+                    )}
+                return info
         # Asked rather than assumed. This used to register every opened document
         # as millimetres and degrees, which is right for most parts and 25.4
         # times wrong for an inch-authored one -- and wrong in the direction
@@ -555,6 +564,27 @@ class ComBackend(Backend):
         if not os.path.exists(path):
             raise DocumentError(f"No such file: {path}")
         kind = self.IMPORT_EXTENSIONS.get(os.path.splitext(path)[1].lower())
+
+        # A file already imported comes back as the document it became -- the
+        # same hole open_document had, still open for translated files, and
+        # matched by the SOURCE path this time: a part made by
+        # ImportedComponents is unsaved, so it has no FullFileName to match.
+        source = os.path.normcase(os.path.abspath(path))
+        remembered = getattr(self, "_imported_from", {})
+        known_id = remembered.get(source)
+        if known_id is not None and known_id in self._documents:
+            document = self._documents[known_id]
+            length, angle, _ = self._document_units(document)
+            info = DocInfo(
+                id=known_id, name=str(document.DisplayName),
+                path=str(document.FullFileName) or None,
+                kind=_document_kind(document), units=length, angle_units=angle,
+                active=True,
+            )
+            info.detail = {"imported": True, "already_open": True,
+                           "from": source}
+            return info
+
         tried: list[str] = []
 
         def by_opening() -> Any:
@@ -630,6 +660,8 @@ class ComBackend(Backend):
 
         length, angle, _ = self._document_units(document)
         info = self._register(document, length, angle)
+        remembered[source] = info.id
+        self._imported_from = remembered
         info.detail = {
             "imported": True,
             "format": kind or "an unrecognised extension",

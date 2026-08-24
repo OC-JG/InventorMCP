@@ -815,3 +815,13 @@ class TestToolContractFindings:
         # run's mesh has a name of its own, which is the point.
         stems = {p.name for p in tmp_path.iterdir()}
         assert len(stems) == 2, stems
+
+
+class TestImportingTheSameFileTwice:
+    def test_it_comes_back_as_the_document_it_became(self, server, files):
+        """The same hole open_document had, left open for translated files: a
+        second import of the same STEP minted a second context with no history."""
+        first = call(server, "open_part", path=str(files / "bracket.stp"))
+        second = call(server, "open_part", path=str(files / "bracket.stp"))
+        assert second["document"] == first["document"]
+        assert second["detail"]["already_open"] is True
