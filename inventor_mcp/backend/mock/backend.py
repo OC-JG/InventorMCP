@@ -406,6 +406,48 @@ class MockBackend(Backend):
         }
         return out
 
+    def promote_parameter(self, doc_id: str, feature: str, prop: str,
+                          name: str) -> dict[str, Any]:
+        document = self._doc(doc_id)
+        found = document.find_feature(feature)
+        held = None
+        key = None
+        for candidate, value in (found.detail or {}).items():
+            if candidate.lower().replace("_", "") != prop.lower().replace("_", ""):
+                continue
+            key = candidate
+            held = value
+            break
+        if key is None:
+            raise FeatureError(
+                f"The feature {feature!r} has no property {prop!r} to promote.",
+                hint=f"It carries: {', '.join(sorted(found.detail or {}))}.",
+            )
+        currently = (held.get("expression") if isinstance(held, dict) else held)
+        if not isinstance(currently, str) or not currently.strip():
+            raise FeatureError(
+                f"{feature}.{key} has no expression to promote."
+            )
+        if any(p.name.lower() == name.lower() for p in document.parameters.values()):
+            raise ParameterError(
+                f"A parameter named {name!r} already exists.",
+                hint="Promote to a different name, or reference the existing one.",
+            )
+        info = self.set_parameter(doc_id, name, currently)
+        if isinstance(held, dict):
+            held["expression"] = name
+        else:
+            found.detail[key] = {"expression": name}
+        document.modified = True
+        self._record("promote_parameter", feature=feature, prop=key, name=name)
+        return {
+            "parameter": name,
+            "value": info.value,
+            "units": info.units,
+            "was": currently,
+            "now_drives": f"{feature}.{key}",
+        }
+
     def feature_dependencies(self, doc_id: str, name: str) -> dict[str, Any] | None:
         document = self._doc(doc_id)
         feature = document.find_feature(name)

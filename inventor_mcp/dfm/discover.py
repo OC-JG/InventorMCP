@@ -100,6 +100,14 @@ SUGGESTS: dict[str, tuple[str, ...]] = {
 }
 
 
+#: The name a promoted role's new parameter gets, unless the caller names it.
+PROMOTED_NAMES = {
+    "wall": "wall_t", "draft": "draft_a", "rib_thickness": "rib_t",
+    "rib_height": "rib_h", "rib_fillet": "rib_r",
+    "boss_od": "boss_d", "boss_wall": "boss_w",
+}
+
+
 @dataclass
 class Discovery:
     """What could be worked out, what could not, and why."""
@@ -109,6 +117,13 @@ class Discovery:
     ambiguous: dict[str, list[tuple[str, str]]] = field(default_factory=dict)
     #: role -> parameter, from spelling alone. Never applied.
     suggestions: dict[str, str] = field(default_factory=dict)
+    #: Places a role demonstrably lives that no named parameter drives: a
+    #: shell whose thickness is the literal "2.5 mm", or a bare model
+    #: parameter. The evidence is as strong as a mapping -- the shell still
+    #: reads it -- but there is nothing to drive until the value is promoted
+    #: to a named parameter. Each entry carries everything `promote_parameters`
+    #: needs to do that.
+    promotable: list[dict[str, str]] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
@@ -122,6 +137,15 @@ class Discovery:
             out["suggestions"] = dict(sorted(self.suggestions.items()))
             out["to_accept_the_suggestions"] = {
                 "roles": dict(sorted(self.suggestions.items())),
+            }
+        if self.promotable:
+            out["promotable"] = list(self.promotable)
+            out["to_promote"] = {
+                "promotions": [
+                    {"feature": entry["feature"], "property": entry["property"],
+                     "name": entry["suggested_name"]}
+                    for entry in self.promotable
+                ],
             }
         out["notes"] = list(self.notes) + list(self.declaration.notes)
         return out
@@ -223,6 +247,7 @@ def discover(
     known = {name.lower(): name for name in parameters}
     facts = [normalise(entry) for entry in features]
     found: dict[str, list[tuple[str, str]]] = {}
+    promotable: list[dict[str, str]] = []
     #: role -> parameter matched on a property whose feature kind was unreadable.
     #: The same standing as a likely name: offered, never applied.
     offered: dict[str, str] = {}
@@ -263,8 +288,23 @@ def discover(
             if held is None:
                 continue
             because = wording.format(feature=fact.name or "(unnamed)")
-            for referenced in _parameters_in(held[1], known):
-                _record(found, role, referenced, because)
+            referenced = _parameters_in(held[1], known)
+            for parameter in referenced:
+                _record(found, role, parameter, because)
+            if not referenced:
+                # The role demonstrably lives here -- the feature reads this
+                # property -- and nothing named drives it: a literal, or a bare
+                # model parameter. That is not a mapping and it is not nothing:
+                # it is the exact spot a promotion turns into one.
+                promotable.append({
+                    "role": role,
+                    "feature": fact.name or "(unnamed)",
+                    "property": held[0],
+                    "currently": held[1],
+                    "suggested_name": PROMOTED_NAMES.get(role, role),
+                    "why": f"{because}, but {held[1]!r} names no user parameter "
+                           f"-- promote it to drive this feature",
+                })
 
     # The parameter table's own view, where there is one. A parameter Inventor
     # says is consumed by a shell is the wall whether or not the shell's own
@@ -332,8 +372,16 @@ def discover(
             "with no ribs -- so declare them or switch that check off."
         )
 
+    if promotable:
+        notes.append(
+            "Some roles demonstrably live in this part and nothing named drives "
+            "them -- a literal or a bare model dimension. `promote_parameters` "
+            "turns each into a named parameter at its current value, in place: "
+            "no geometry is re-authored, and the part becomes drivable."
+        )
+
     return Discovery(declaration=declaration, ambiguous=ambiguous,
-                     suggestions=suggestions, notes=notes)
+                     suggestions=suggestions, promotable=promotable, notes=notes)
 
 
 def _parameters_in(expression: str, known: Mapping[str, str]) -> list[str]:

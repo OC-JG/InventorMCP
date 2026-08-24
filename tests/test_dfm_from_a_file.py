@@ -905,3 +905,94 @@ class TestFreezingAFeatureFreezesItsShape:
         out = call(server, "protect_geometry", features=["Bosses"])
         notes = " ".join(out["key_geometry"]["pinned_by_features"])
         assert "NOT from being reshaped" in notes
+
+
+class TestPromotingAPartWithoutParameters:
+    """An .ipt built without parameters is not parameterless: every dimension is
+    a model parameter with a value, and what is missing is names. Promotion
+    creates the name at the current value and rewires the property to it -- no
+    geometry re-authored, the part identical afterwards, and now drivable."""
+
+    def _undriven(self, server):
+        call(server, "new_part", name="Handed")
+        call(server, "apply_operations", operations=[
+            {"op": "sketch", "name": "S", "plane": "xy",
+             "entities": [{"type": "rectangle", "center": [0, 0],
+                           "width": 60, "height": 40}]},
+            {"op": "extrude", "name": "Block", "sketch": "S", "distance": 30,
+             "taper": "1.5 deg"},
+            {"op": "shell", "name": "Cavity",
+             "faces": {"kind": "face", "filter": "top"},
+             "thickness": 2.5, "direction": "inside"},
+        ])
+
+    def test_discovery_reports_where_the_roles_live_undriven(self, server):
+        self._undriven(server)
+        found = call(server, "discover_dfm_roles")
+        promotable = found["from_the_part"]["promotable"]
+        assert {e["role"] for e in promotable} == {"wall", "draft"}
+        assert all("names no user parameter" in e["why"] for e in promotable)
+
+    def test_and_hands_over_a_paste_ready_plan(self, server):
+        self._undriven(server)
+        found = call(server, "discover_dfm_roles")
+        plan = found["from_the_part"]["to_promote"]["promotions"]
+        assert {"feature": "Cavity", "property": "thickness",
+                "name": "wall_t"} in plan
+
+    def test_promoting_creates_the_parameter_at_the_current_value(self, server):
+        self._undriven(server)
+        out = call(server, "promote_parameters")
+        wall = next(p for p in out["promoted"] if p["parameter"] == "wall_t")
+        assert wall["was"] == "2.5 mm"
+        assert wall["value"] == 2.5 and wall["units"] == "mm"
+        assert wall["now_drives"] == "Cavity.thickness"
+
+    def test_the_part_is_then_drivable_and_discovery_maps_it(self, server):
+        self._undriven(server)
+        call(server, "promote_parameters")
+        found = call(server, "discover_dfm_roles")
+        assert found["from_the_part"]["roles"]["wall"]["parameter"] == "wall_t"
+        moved = call(server, "set_parameters",
+                     parameters=[{"name": "wall_t", "value": 3}])
+        assert moved["ok"]
+
+    def test_promoting_for_a_role_declares_it(self, server):
+        """Promoting for a role IS stating it -- unlike discovery's inferences,
+        this one was asked for by name."""
+        self._undriven(server)
+        out = call(server, "promote_parameters")
+        assert out["roles_declared"] == {"wall": "wall_t", "draft": "draft_a"}
+        assert out["declared"]["in_the_part"] is True
+
+    def test_a_part_with_nothing_promotable_says_so(self, server):
+        call(server, "new_part", name="Driven")
+        call(server, "set_parameters", parameters=[{"name": "wall_t", "value": 2.5}],
+             rebuild=False)
+        call(server, "apply_operations", operations=[
+            {"op": "sketch", "name": "S", "plane": "xy",
+             "entities": [{"type": "rectangle", "center": [0, 0],
+                           "width": 60, "height": 40}]},
+            {"op": "extrude", "name": "Block", "sketch": "S", "distance": 30},
+            {"op": "shell", "name": "Cavity",
+             "faces": {"kind": "face", "filter": "top"},
+             "thickness": "wall_t", "direction": "inside"},
+        ])
+        out = call(server, "promote_parameters")
+        assert out["promoted"] == []
+        assert "nothing promotable" in out["note"]
+
+    def test_a_name_that_already_exists_is_refused_not_overwritten(self, server):
+        self._undriven(server)
+        call(server, "set_parameters", parameters=[{"name": "wall_t", "value": 9}],
+             rebuild=False)
+        out = call(server, "promote_parameters", promotions=[
+            {"feature": "Cavity", "property": "thickness", "name": "wall_t"}])
+        assert out["promoted"] == []
+        assert "already exists" in out["failed"][0]["error"]
+
+    def test_an_explicit_promotion_names_its_own_parameter(self, server):
+        self._undriven(server)
+        out = call(server, "promote_parameters", promotions=[
+            {"feature": "Cavity", "property": "thickness", "name": "shell_wall"}])
+        assert out["promoted"][0]["parameter"] == "shell_wall"

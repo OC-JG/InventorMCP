@@ -332,6 +332,7 @@ See [docs/DFM.md](docs/DFM.md).
 | `check_manufacture` | Measure manufacturability, and say what would change |
 | `improve_for_manufacture` | Change it, rebuild, measure again — a closed loop |
 | `discover_dfm_roles` | Work out which parameter means what, from the part itself |
+| `promote_parameters` | Name a parameterless part's dimensions in place, so the loop can drive it |
 | `declare_dfm` | Say which parameter means what, and remember it in the part |
 | `read_dfm_report` | Read a report exported from the DFM tool in a browser |
 | `protect_geometry` | Declare key geometry that must not be changed |

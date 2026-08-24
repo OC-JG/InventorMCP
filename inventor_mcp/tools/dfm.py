@@ -514,6 +514,111 @@ def register(server: Any, session: Session) -> None:
         return out
 
     @server.tool(
+        description="Make a part drivable by giving its dimensions named parameters, in "
+        "place. An .ipt built without parameters is not parameterless -- every dimension "
+        "is a model parameter with a value; what is missing is names. Each promotion "
+        "creates a user parameter at the property's current value and rewires the property "
+        "to reference it: no geometry is re-authored, the part is identical afterwards, "
+        "and the DFM loop can then drive it. Run `discover_dfm_roles` first -- its "
+        "`to_promote` block is exactly this tool's input.",
+    )
+    @guard
+    def promote_parameters(
+        promotions: Annotated[list[dict[str, str]] | None, Field(
+            description="Each is {feature, property, name}: which feature's driven "
+                        "property gets which new parameter. Omit to promote everything "
+                        "discovery found promotable, under its suggested names.")] = None,
+        path: Annotated[str | None, Field(
+            description="An .ipt to promote. Worked on as the next version of the file, "
+                        "so the original is untouched. Omit for the part already open.")] = None,
+        document: Annotated[str | None, Field(description="Target part.")] = None,
+        working_copy: Annotated[bool, Field(
+            description="Work on the next version of the file rather than the file "
+                        "itself. On by default: this changes the document.")] = True,
+        save: Annotated[bool | None, Field(
+            description="Save when done. Unset saves a working copy this call made and "
+                        "never the file you named; true saves regardless.")] = None,
+        declare: Annotated[bool, Field(
+            description="Also declare the roles the promotions serve, and remember the "
+                        "declaration in the part -- promoting for a role is stating it.")] = True,
+    ) -> dict[str, Any]:
+        context, opened = _subject(path, document, working_copy=working_copy)
+
+        wanted = promotions
+        found = None
+        if wanted is None:
+            found = discover_for(session, context)
+            wanted = [
+                {"feature": entry["feature"], "property": entry["property"],
+                 "name": entry["suggested_name"], "role": entry["role"]}
+                for entry in found.promotable
+            ]
+            if not wanted:
+                return {
+                    "document": context.doc_id,
+                    "promoted": [],
+                    "note": ("Discovery found nothing promotable: every role it can "
+                             "see is either already driven by a named parameter, or "
+                             "not evidenced in this part at all. "
+                             "`discover_dfm_roles` shows which is which."),
+                    **({"file": opened} if opened else {}),
+                }
+
+        promoted: list[dict[str, Any]] = []
+        failed: list[dict[str, Any]] = []
+        for entry in wanted:
+            try:
+                outcome = session.backend.promote_parameter(
+                    context.doc_id, entry["feature"], entry["property"],
+                    entry["name"],
+                )
+                if entry.get("role"):
+                    outcome["role"] = entry["role"]
+                promoted.append(outcome)
+            except Exception as exc:
+                failed.append({**entry, "error": str(exc)[:200]})
+        session.sync_parameters(context.doc_id)
+
+        out: dict[str, Any] = {
+            "document": context.doc_id,
+            "promoted": promoted,
+            "identical_geometry": ("each promotion holds the property's current "
+                                   "value, so the part is the same shape it was"),
+        }
+        if failed:
+            out["failed"] = failed
+        if opened:
+            out["file"] = {k: v for k, v in opened.items()
+                           if k in ("opened", "working_copy", "original_untouched",
+                                    "note_on_document")}
+
+        if declare and promoted:
+            roles = {entry["role"]: entry["parameter"]
+                     for entry in promoted if entry.get("role")}
+            if roles:
+                declaration, _ = resolve(session, context,
+                                         path=opened.get("path_on_disk"),
+                                         roles=roles, infer=False)
+                out["declared"] = remember(session, context, declaration,
+                                           path=opened.get("path_on_disk"))
+                out["roles_declared"] = roles
+
+        mine = opened.get("working_copy")
+        should_save = save if save is not None else bool(mine)
+        if should_save:
+            try:
+                out["saved"] = session.backend.save_document(context.doc_id).as_dict()
+            except Exception as exc:
+                out["saved"] = None
+                out["save_failed"] = str(exc)[:200]
+        elif save is None and (path or document):
+            out["not_saved"] = (
+                "The promotions are in the open document and nothing has been "
+                "written to disk. Pass save=true, or `save_part`."
+            )
+        return out
+
+    @server.tool(
         description="Read a DFM report exported from the tool in a browser and say what it "
         "implies about the model: which findings are parameter changes, which are frozen, and "
         "which need a person. Needs no Inventor connection and re-runs nothing.",

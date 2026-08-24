@@ -543,6 +543,25 @@ class Backend(ABC):
         """
         return None
 
+    def promote_parameter(self, doc_id: str, feature: str, prop: str,
+                          name: str) -> dict[str, Any]:
+        """Give one driven property a named parameter, in place.
+
+        An .ipt "without parameters" is not parameterless -- every dimension in
+        it is a model parameter with a value; what is missing is names. So
+        nothing is re-authored: a user parameter is created at the property's
+        current value, and the property's expression is rewritten to reference
+        it. The feature tree, the sketches and the constraints stay exactly as
+        they are, and the part becomes drivable.
+
+        Value-preserving by construction: the geometry after the promotion is
+        the geometry before it, which is what makes this safe to do to a part
+        somebody handed over.
+        """
+        raise NotImplementedError(
+            f"The {self.name} backend cannot promote a dimension to a parameter."
+        )
+
     def feature_dependencies(self, doc_id: str, name: str) -> dict[str, Any] | None:
         """The user parameters that drive one feature, or ``None`` for "cannot say".
 

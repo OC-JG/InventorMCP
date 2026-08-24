@@ -794,6 +794,48 @@ class ComBackend(Backend):
         "YCount", "Count", "Spacing",
     )
 
+    def promote_parameter(self, doc_id: str, feature: str, prop: str,
+                          name: str) -> dict[str, Any]:  # pragma: no cover - Windows only
+        document = self._doc(doc_id)
+        held = _dynamic(_find_feature(document.ComponentDefinition.Features, feature))
+        target = None
+        read_from = None
+        for holder in (held, getattr(held, "Definition", None)):
+            if holder is None:
+                continue
+            holder = _dynamic(holder)
+            for candidate in self._DRIVING:
+                if candidate.lower().replace("_", "") != prop.lower().replace("_", ""):
+                    continue
+                try:
+                    value = getattr(holder, candidate)
+                except Exception:
+                    continue
+                if value is not None and hasattr(value, "Expression"):
+                    target = value
+                    read_from = candidate
+                    break
+            if target is not None:
+                break
+        if target is None:
+            raise FeatureError(
+                f"The feature {feature!r} has no drivable property {prop!r}.",
+                hint="describe_feature lists what it carries.",
+            )
+        currently = str(target.Expression)
+        # The new parameter holds exactly what the property held -- a literal
+        # keeps its unit, a model-parameter reference keeps its reference -- so
+        # the geometry after the promotion is the geometry before it.
+        info = self.set_parameter(doc_id, name, currently)
+        target.Expression = name
+        return {
+            "parameter": name,
+            "value": info.value,
+            "units": info.units,
+            "was": currently,
+            "now_drives": f"{feature}.{read_from}",
+        }
+
     def feature_dependencies(self, doc_id: str, name: str) -> dict[str, Any] | None:  # pragma: no cover - Windows only
         document = self._doc(doc_id)
         feature = _dynamic(

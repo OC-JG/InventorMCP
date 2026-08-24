@@ -230,6 +230,37 @@ parameter was the wall would rediscover it, and might discover something else.
 declare_dfm(roles={"rib_thickness": "rib_t"}, frozen=["bore_d"], material="abs")
 ```
 
+## A part built without parameters
+
+An .ipt with an empty parameter table is not parameterless — every dimension in
+it is already a model parameter with a value. What is missing is *names*, and
+names can be added in place:
+
+```
+open_part(path="handed_over.ipt", working_copy=True)
+discover_dfm_roles()          # reports where the roles live undriven, under `promotable`
+promote_parameters()          # names each one at its current value
+improve_for_manufacture()     # and now the loop can drive it
+```
+
+`promote_parameters` re-authors nothing: it creates a user parameter holding the
+property's exact current expression (`wall_t = 2.5 mm`) and rewires the property
+to reference it, so the part is the identical shape afterwards — which is what
+makes this safe to do to a part somebody handed over. It promotes what discovery
+found by default, or exactly what you name:
+
+```
+promote_parameters(promotions=[{"feature": "Cavity", "property": "thickness", "name": "shell_wall"}])
+```
+
+Promoting for a role also declares it — unlike discovery's inferences, this one
+was asked for by name.
+
+What it cannot reach yet: a dimension living only in a sketch (rib positions,
+hole spacings) is promotable in Inventor by hand but not through this tool —
+feature-level properties (a shell's thickness, an extrude's distance and taper,
+a hole's diameter and seat) are what it drives today.
+
 ## Key geometry
 
 An improvement loop is a machine for changing dimensions until a number stops
