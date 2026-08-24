@@ -588,7 +588,8 @@ class ComBackend(Backend):
                      "which route this release accepts.",
             )
 
-        info = self._register(document, "mm", "deg")
+        length, angle, _ = self._document_units(document)
+        info = self._register(document, length, angle)
         info.detail = {
             "imported": True,
             "format": kind or "an unrecognised extension",
@@ -661,11 +662,18 @@ class ComBackend(Backend):
 
     def read_declaration(self, doc_id: str) -> dict[str, Any] | None:  # pragma: no cover - Windows only
         document = self._doc(doc_id)
+        # Found, never created: `_property_set` adds the set when it is missing,
+        # which is right for a write and wrong here -- a read that modifies the
+        # document marks it dirty, and a dirty flag on a part nobody edited is a
+        # save prompt nobody can explain.
+        properties = self._find_property_set(document)
+        if properties is None:
+            return None
         pieces: list[str] = []
         for index in range(1, 100):
             name = self._DECLARATION if index == 1 else f"{self._DECLARATION}_{index}"
             try:
-                value = self._property_set(document).Item(name).Value
+                value = properties.Item(name).Value
             except Exception:
                 break
             if value is None:
@@ -706,15 +714,26 @@ class ComBackend(Backend):
             except Exception:
                 break
 
-    def _property_set(self, document: Any) -> Any:  # pragma: no cover - Windows only
-        """The user-defined property set, made if this part has not got one."""
+    def _find_property_set(self, document: Any) -> Any | None:  # pragma: no cover - Windows only
+        """The user-defined property set, or ``None`` -- never made here."""
         sets = document.PropertySets
         for key in (self._USER_PROPERTIES, "Inventor User Defined Properties"):
             try:
                 return sets.Item(key)
             except Exception:
                 continue
-        return sets.Add("Inventor User Defined Properties")
+        return None
+
+    def _property_set(self, document: Any) -> Any:  # pragma: no cover - Windows only
+        """The user-defined property set, made if this part has not got one.
+
+        For writes only. A read uses :meth:`_find_property_set`, because a read
+        that creates the set modifies the document.
+        """
+        found = self._find_property_set(document)
+        if found is not None:
+            return found
+        return document.PropertySets.Add("Inventor User Defined Properties")
 
     def list_documents(self) -> list[DocInfo]:  # pragma: no cover - Windows only
         app = self._require_app()
