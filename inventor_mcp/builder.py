@@ -537,7 +537,13 @@ def build_part(
 
     # Only now: declaring a frozen parameter is what puts it there, so a guard
     # installed before this loop would refuse the very statement that froze it.
-    context.frozen = guard_for_recipe(context.recipe)
+    # And widened, never replaced: extending an open document with a second
+    # recipe must not drop a freeze somebody added in the meantime with
+    # `protect_geometry` -- no source may remove protection, this one included.
+    held = (list(context.frozen.as_dict()["declared"]),
+            list(context.frozen.features)) if context.frozen is not None else ([], [])
+    context.frozen = guard_for_recipe(context.recipe, extra=held[0],
+                                      extra_features=held[1])
 
     if recipe.material:
         try:

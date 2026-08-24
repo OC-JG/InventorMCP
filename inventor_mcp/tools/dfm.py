@@ -60,10 +60,23 @@ def register(server: Any, session: Session) -> None:
 
     def _subject(path: str | None, document: str | None, *,
                  working_copy: bool) -> tuple[Any, dict[str, Any]]:
-        """The document to work on, opening a file first if one was given."""
+        """The document to work on, opening a file first if one was given.
+
+        A path wins over a document handle, and saying so beats resolving it
+        silently: a caller who names both is holding two different parts in
+        mind, and quietly acting on one of them leaves the report reading as
+        though it were about the other.
+        """
         if path is None:
             return session.context(document), {}
         opened = open_source(session, path, working_copy=working_copy)
+        if document is not None and document != opened["document"]:
+            opened["note_on_document"] = (
+                f"Both a path and document={document!r} were given; the file "
+                f"was opened and acted on ({opened['document']}), and the "
+                f"document handle was not used. Call again without a path to "
+                f"act on {document!r}."
+            )
         return session.context(opened["document"]), opened
 
     @server.tool(

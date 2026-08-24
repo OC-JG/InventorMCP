@@ -713,3 +713,37 @@ class TestFreezeIntegrityFindings:
         assert "broke the rebuild" not in outcome.stopped_because
         held = [d for d in outcome.outstanding if d.reason == "frozen"]
         assert held and any("draft_a" in d.why for d in held)
+
+
+class TestTwoMoreClobbersAndAContract:
+    def test_extending_a_document_with_a_second_recipe_keeps_the_session_freeze(
+            self, server):
+        """The same clobber declare_dfm had: build_part replaced context.frozen
+        wholesale, so rebuilding into an open document dropped a freeze added a
+        moment earlier with protect_geometry."""
+        recipe = {
+            "name": "Housing", "units": "mm",
+            "parameters": [{"name": "wall_t", "value": 2.5},
+                           {"name": "bore_d", "value": 8}],
+            "operations": [
+                {"op": "sketch", "name": "S", "plane": "xy",
+                 "entities": [{"type": "rectangle", "center": [0, 0],
+                               "width": 40, "height": 30}]},
+                {"op": "extrude", "name": "E", "sketch": "S", "distance": 20},
+            ],
+        }
+        built = call(server, "build_part_from_recipe", recipe=recipe)
+        call(server, "protect_geometry", parameters=["bore_d"])
+        call(server, "build_part_from_recipe", recipe=recipe,
+             document=built["document"])
+        out = call(server, "set_parameters",
+                   parameters=[{"name": "bore_d", "value": 9}], rebuild=False)
+        assert out["ok"] is False and out["error"] == "frozen_geometry"
+
+    def test_naming_both_a_path_and_a_document_is_called_out(self, server, files):
+        """A caller holding two parts in mind must not get a report that quietly
+        describes one of them."""
+        other = call(server, "new_part", name="Other")
+        out = call(server, "improve_for_manufacture",
+                   path=str(files / "bracket.ipt"), document=other["document"])
+        assert "not used" in out["file"]["note_on_document"]
