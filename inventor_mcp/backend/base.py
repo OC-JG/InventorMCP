@@ -64,6 +64,10 @@ class DocInfo(Info):
     angle_units: str = "deg"
     active: bool = False
     modified: bool = False
+    #: Anything worth saying about how this document came to be -- which import
+    #: route worked, what arrived in it. Absent unless there is something to say,
+    #: so every existing result is unchanged.
+    detail: dict[str, Any] | None = None
 
 
 @dataclass
@@ -511,6 +515,36 @@ class Backend(ABC):
     def abort_transaction(self, handle: str) -> bool:
         """Undo everything since :meth:`begin_transaction`. False if it could not."""
         return False
+
+    def import_geometry(self, path: str, *, name: str | None = None) -> DocInfo:
+        """Read a translated format -- STEP, IGES, SAT -- into a new part.
+
+        What arrives is a solid body and, in general, no features and no
+        parameters: a translated file carries geometry and not the history that
+        made it. That matters more here than it looks, because the DFM loop
+        drives parameters, so a part imported this way can be measured and
+        cannot be improved. The caller is expected to say so rather than run a
+        loop that reports "nothing is left that a parameter change answers" and
+        sounds like success.
+        """
+        raise NotImplementedError(
+            f"The {self.name} backend cannot import translated geometry."
+        )
+
+    def read_declaration(self, doc_id: str) -> dict[str, Any] | None:
+        """The DFM declaration kept inside the document, if there is one.
+
+        Optional. A backend that cannot store one returns ``None``, which reads
+        as "nobody asked this part" rather than "this part says nothing is
+        frozen" -- a distinction that decides whether a freeze is honoured.
+        """
+        return None
+
+    def write_declaration(self, doc_id: str, declaration: dict[str, Any]) -> None:
+        """Keep the DFM declaration inside the document, so it travels with it."""
+        raise NotImplementedError(
+            f"The {self.name} backend cannot store a declaration in the document."
+        )
 
     def describe_feature(self, doc_id: str, name: str) -> dict[str, Any]:
         """Every property of one feature that can be read, as plain data.

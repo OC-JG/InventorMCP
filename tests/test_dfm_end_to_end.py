@@ -21,6 +21,8 @@ a checkout of the analyser.
 
 from __future__ import annotations
 
+import asyncio
+import copy
 import shutil
 import subprocess
 from pathlib import Path
@@ -178,3 +180,182 @@ class TestKeyGeometryUnderARealRun:
                 workspace=str(tmp_path / "frozen2"))
         values, _ = current_parameters(session, part)
         assert values["draft_a"] > 0.2, "one refusal must not stop the rest"
+
+
+# ---------------------------------------------------------------------------
+# The same thing, but starting from a file
+# ---------------------------------------------------------------------------
+
+
+class TestHandedAFile:
+    """The path a person actually takes: here is a part, look at it.
+
+    ``open_document`` is stood in for, because the simulator opens an .ipt as an
+    empty part and what needs exercising is everything downstream of a file
+    arriving with parameters in it. Everything else is real -- the copy is a real
+    copy on disk, the mesh is regenerated from the parameters the loop sets, and
+    the analysis is the DFM tool's own.
+    """
+
+    #: What a handed-over part looks like: parameters and features, and nothing
+    #: saying what any of them mean. No `dfm` block, because a file that was not
+    #: built here has no recipe -- so every role has to come from the part's own
+    #: features or not at all. The shell reads the wall; the extrude's taper
+    #: reads the draft.
+    HANDED = {
+        "name": "Handed", "units": "mm",
+        "parameters": [
+            {"name": "wall_t", "value": 0.6},
+            {"name": "draft_a", "value": 0.2, "unit": "deg"},
+            {"name": "rib_t", "value": "wall_t * 0.45"},
+            {"name": "rib_h", "value": "rib_t * 2.5"},
+            {"name": "rib_r", "value": "wall_t * 0.3"},
+            {"name": "boss_w", "value": "wall_t * 0.6"},
+            {"name": "boss_d", "value": "wall_t * 2.4"},
+        ],
+        "operations": [
+            {"op": "sketch", "name": "Outline", "plane": "xy",
+             "entities": [{"type": "rectangle", "center": [0, 0],
+                           "width": 40, "height": 40}]},
+            {"op": "extrude", "name": "Block", "sketch": "Outline",
+             "distance": 30, "taper": "draft_a"},
+            {"op": "shell", "name": "Cavity",
+             "faces": {"kind": "face", "filter": "top"},
+             "thickness": "wall_t", "direction": "inside"},
+        ],
+    }
+
+    @pytest.fixture
+    def handed_over(self, session, analyser, monkeypatch, tmp_path):
+        part = tmp_path / "frustum.ipt"
+        part.write_bytes(b"pretend this is a part")
+
+        def open_document(path):
+            result = build_part(session, PartRecipe.model_validate(self.HANDED),
+                                against_rehearsal=False)
+            assert result["ok"], result["errors"]
+            context = session.context()
+            document = session.backend._doc(context.doc_id)
+            document.path = path
+            return session.backend._doc_info(document)
+
+        monkeypatch.setattr(session.backend, "open_document", open_document)
+        monkeypatch.chdir(tmp_path)
+        return part
+
+    def _export_from_parameters(self, session, context, analyser, monkeypatch):
+        def export(doc_id, request):
+            values, _ = current_parameters(session, context)
+            finished = subprocess.run(
+                ["node", str(SHAPES), str(analyser), request.path, "hollowFrustum",
+                 "20", "30", f"{values['draft_a']:g}", f"{values['wall_t']:g}"],
+                capture_output=True, text=True, timeout=120,
+            )
+            assert finished.returncode == 0, finished.stderr
+            return {"written": True, "path": request.path}
+        monkeypatch.setattr(session.backend, "export", export)
+
+    @pytest.fixture
+    def improved(self, session, handed_over, analyser, monkeypatch, tmp_path):
+        from inventor_mcp.tools._common import open_source
+
+        opened = open_source(session, str(handed_over), working_copy=True)
+        context = session.context(opened["document"])
+        self._export_from_parameters(session, context, analyser, monkeypatch)
+        outcome = improve(session, context, rounds=4,
+                          workspace=str(tmp_path / "dfm"),
+                          path=opened["path_on_disk"])
+        return opened, context, outcome
+
+    def test_it_works_on_the_next_version(self, improved, handed_over):
+        opened, _, _ = improved
+        assert Path(opened["working_copy"]).name == "frustum_v2.ipt"
+
+    def test_and_leaves_the_original_alone(self, improved, handed_over):
+        assert handed_over.read_bytes() == b"pretend this is a part"
+
+    def test_the_loop_still_converges(self, improved):
+        _, _, outcome = improved
+        assert outcome.finished_at > outcome.started_at, outcome.stopped_because
+
+    def test_the_roles_were_worked_out_from_the_part(self, improved):
+        """No recipe was read: the part arrived as a file. Its shell named the
+        wall and its taper named the draft."""
+        _, _, outcome = improved
+        roles = outcome.declaration["roles"]
+        assert roles["wall"]["parameter"] == "wall_t"
+        assert roles["draft"]["parameter"] == "draft_a"
+
+    def test_and_the_result_says_where_that_reading_came_from(self, improved):
+        """Nobody declared anything, so it has to say "discovered" -- and carry
+        the evidence, because everything the loop did rests on it."""
+        _, _, outcome = improved
+        wall = outcome.declaration["roles"]["wall"]
+        assert wall["from"] == "discovered"
+        assert "Cavity" in wall["evidence"]
+
+    def test_the_settings_default_where_nothing_declared_them(self, improved):
+        """A handed-over part names no material, so the analyser's own default
+        stands rather than one invented here."""
+        _, _, outcome = improved
+        assert "material" not in outcome.settings
+
+    def test_the_declaration_is_left_beside_the_copy(self, improved, session):
+        """So the next run on this version starts from the same reading rather
+        than inferring it again -- and a person can see and correct it."""
+        opened, context, _ = improved
+        from inventor_mcp.dfm.sources import remember
+        from inventor_mcp.dfm.declaration import Declaration, read_sidecar
+
+        remember(session, context, Declaration(roles={"wall": "wall_t"}),
+                 path=opened["path_on_disk"])
+        carried = read_sidecar(opened["path_on_disk"])
+        assert carried is not None and carried.roles["wall"] == "wall_t"
+
+
+class TestHandedAMesh:
+    """An .stl needs no CAD at all, and that shortcut has to actually work."""
+
+    @pytest.fixture
+    def mesh(self, analyser, tmp_path):
+        out = tmp_path / "thin.stl"
+        finished = subprocess.run(
+            ["node", str(SHAPES), str(analyser), str(out),
+             "hollowFrustum", "20", "30", "0.2", "0.6"],
+            capture_output=True, text=True, timeout=120,
+        )
+        assert finished.returncode == 0, finished.stderr
+        return out
+
+    def test_it_is_analysed_without_inventor(self, server, mesh, tmp_path):
+        out = asyncio.run(server.call_tool("check_manufacture", {
+            "path": str(mesh), "workspace": str(tmp_path / "dfm"),
+        })).structured_content
+        assert out["ok"], out
+        assert out["score"] is not None
+        assert "wall" in out["findings"]
+
+    def test_and_nothing_is_proposed_because_a_mesh_has_no_parameters(
+            self, server, mesh, tmp_path):
+        out = asyncio.run(server.call_tool("check_manufacture", {
+            "path": str(mesh), "workspace": str(tmp_path / "dfm"),
+        })).structured_content
+        assert "would_change" not in out
+        assert "no parameters" in out["note"]
+
+    def test_with_a_part_named_it_does_propose(self, server, mesh, tmp_path):
+        """Naming a document says 'this mesh came from that part'. Guessing that
+        an open part and a handed-over mesh are the same thing is the assumption
+        that would edit the wrong model."""
+        built = asyncio.run(server.call_tool("build_part_from_recipe", {
+            "recipe": copy.deepcopy(RECIPE),
+        })).structured_content
+        assert built["ok"], built.get("errors")
+        out = asyncio.run(server.call_tool("check_manufacture", {
+            "path": str(mesh), "document": built["document"],
+            "workspace": str(tmp_path / "dfm"),
+        })).structured_content
+        assert out["ok"], out
+        changed = {c["parameter"] for c in out["would_change"]["changes"]}
+        assert "wall_t" in changed
+        assert built["document"] in out["note"]

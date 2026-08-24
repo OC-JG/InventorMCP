@@ -218,6 +218,53 @@ def inventor_symbol(unit: str) -> str:
     return lookup_unit(unit).symbol
 
 
+#: Inventor's own spelling of a unit, back to the short name this project uses.
+#: Built from the unit table rather than written out, so a unit added there is
+#: readable here for free, and the shortest alias wins -- "mm" rather than
+#: "millimetre", which is what the rest of this project calls it.
+def _preference(alias: str, symbol: str) -> tuple[int, int, str]:
+    """How good a name *alias* is for the unit Inventor spells *symbol*.
+
+    A name a caller may actually pass wins; then the one that matches Inventor's
+    own spelling; then the shortest. Ordering by length alone chose `"` for the
+    inch, which is a unit nobody can type into a tool argument.
+    """
+    canonical = alias in LENGTH_UNIT_NAMES or alias in ANGLE_UNIT_NAMES
+    return (0 if canonical else 1, 0 if alias == symbol else 1, alias)
+
+
+_FROM_INVENTOR: dict[str, str] = {}
+for _alias, _info in _UNITS.items():
+    if _info.dim not in (Dim.LENGTH, Dim.ANGLE):
+        continue
+    _key = _info.symbol.lower()
+    _held = _FROM_INVENTOR.get(_key)
+    if _held is None or _preference(_alias, _key) < _preference(_held, _key):
+        _FROM_INVENTOR[_key] = _alias
+
+
+def unit_from_inventor(symbol: str) -> str | None:
+    """Our short name for the unit Inventor calls *symbol*, or ``None``.
+
+    ``None`` rather than a default, because a caller reading a document's units
+    needs to tell "this part is in millimetres" from "this part would not say".
+    Treating the second as the first is how an inch-authored part gets driven a
+    twenty-fifth of the size it should be.
+    """
+    if not symbol:
+        return None
+    cleaned = str(symbol).strip().lower()
+    found = _FROM_INVENTOR.get(cleaned)
+    if found is not None:
+        return found
+    # Inventor spells some of them out. Resolve the spelling to a unit, then take
+    # that unit's short name, so "Millimeter" comes back as "mm".
+    known = _UNITS.get(cleaned)
+    if known is not None and known.dim in (Dim.LENGTH, Dim.ANGLE):
+        return _FROM_INVENTOR.get(known.symbol.lower(), cleaned)
+    return None
+
+
 def default_unit_for(dim: Dim, length_unit: str = "mm", angle_unit: str = "deg") -> str:
     if dim is Dim.LENGTH:
         return length_unit

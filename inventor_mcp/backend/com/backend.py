@@ -14,9 +14,10 @@ Two conventions run through the whole file:
 
 from __future__ import annotations
 
+import json
+import logging
 import math
 import os
-import logging
 from contextlib import contextmanager
 from itertools import count
 from typing import Any, Callable, Iterator, Sequence
@@ -35,7 +36,7 @@ from ...errors import (
 from ...expressions import referenced_parameters
 from ...geometry import profile_loops
 from ...plan import PArc, PCircle, PEllipse, PLine, PPoint, PointRef, Ref, SketchPlan
-from ...units import from_internal, inventor_symbol
+from ...units import from_internal, inventor_symbol, unit_from_inventor
 from ..base import (
     AppInfo,
     AxisSpec,
@@ -450,7 +451,270 @@ class ComBackend(Backend):
             raise DocumentError(f"No such file: {path}")
         with self._translate_errors("Opening the document", DocumentError):
             document = _specialise(app.Documents.Open(path, True))
-        return self._register(document, "mm", "deg")
+        # Asked rather than assumed. This used to register every opened document
+        # as millimetres and degrees, which is right for most parts and 25.4
+        # times wrong for an inch-authored one -- and wrong in the direction
+        # where a bare number in a later edit builds something a fortieth of the
+        # size it should be.
+        length, angle, read = self._document_units(document)
+        info = self._register(document, length, angle)
+        if not read:
+            info.detail = dict(info.detail or {}, units_note=(
+                "This part would not say what units it is in, so it is being "
+                "treated as millimetres and degrees. Values sent from here always "
+                "carry their own unit, so expressions are safe either way; a bare "
+                "number in a later edit is what to be careful of."
+            ))
+        return info
+
+    def _document_units(self, document: Any) -> tuple[str, str, bool]:  # pragma: no cover
+        """What units this document is actually in, and whether it said."""
+        length, angle = "mm", "deg"
+        read = False
+        try:
+            measure = document.UnitsOfMeasure
+            found = unit_from_inventor(measure.GetStringFromType(measure.LengthUnits))
+            turned = unit_from_inventor(measure.GetStringFromType(measure.AngleUnits))
+        except Exception:
+            return length, angle, read
+        if found is not None:
+            length, read = found, True
+        if turned is not None:
+            angle, read = turned, True
+        return length, angle, read
+
+    #: Extensions Inventor reads through a translator rather than opening as its
+    #: own file. A translated file carries geometry and not the history that made
+    #: it, so what arrives has a solid body and no parameters.
+    IMPORT_EXTENSIONS = {
+        ".stp": "STEP", ".step": "STEP", ".igs": "IGES", ".iges": "IGES",
+        ".sat": "ACIS", ".sab": "ACIS", ".x_t": "Parasolid", ".x_b": "Parasolid",
+        ".jt": "JT", ".stpz": "STEP",
+    }
+
+    #: Inventor's STEP translator add-in, for the route that needs naming it.
+    _STEP_TRANSLATOR = "{90AF7F40-0C01-11D5-8E83-0010B541CD80}"
+
+    def import_geometry(self, path: str, *, name: str | None = None) -> DocInfo:  # pragma: no cover - Windows only
+        """Read a translated file into a part, by whichever route this release takes.
+
+        Three are tried, cheapest first, and the one that worked is reported
+        rather than assumed -- the same discipline the pattern and sweep features
+        needed, for the same reason: several routes are documented, they are not
+        all present in every release, and a wrong guess here fails in a way that
+        looks like the file being bad.
+
+        1. ``Documents.Open``. Inventor's own file dialog accepts a .stp, and
+           where this works it is the whole job. It can also produce an
+           *assembly* from a multi-body STEP, which is reported rather than
+           quietly analysed as though it were one part.
+        2. ``ImportedComponents``, the associative route added in 2017. Needs a
+           part to import into, so one is made -- and thrown away again if the
+           import does not take, rather than left behind empty.
+        3. The STEP translator add-in, which is how this was done before
+           ``ImportedComponents`` existed.
+
+        See ``scripts/probe_import_and_properties.py``, which is how to find out
+        what this machine actually does before trusting any of it.
+        """
+        app = self._require_app()
+        if not os.path.exists(path):
+            raise DocumentError(f"No such file: {path}")
+        kind = self.IMPORT_EXTENSIONS.get(os.path.splitext(path)[1].lower())
+        tried: list[str] = []
+
+        def by_opening() -> Any:
+            return _specialise(app.Documents.Open(path, True))
+
+        def by_imported_component() -> Any:
+            holder = app.Documents.Add(
+                self._k("kPartDocumentObject"),
+                app.FileManager.GetTemplateFile(self._k("kPartDocumentObject")),
+                True,
+            )
+            try:
+                components = (holder.ComponentDefinition
+                              .ReferenceComponents.ImportedComponents)
+                definition = components.CreateDefinition(path)
+                components.Add(definition)
+            except Exception:
+                # An empty part left open is worse than the failure itself: the
+                # next call finds it as the active document and builds into it.
+                try:
+                    holder.Close(True)
+                except Exception:
+                    pass
+                raise
+            return _specialise(holder)
+
+        def by_translator() -> Any:
+            addin = app.ApplicationAddIns.ItemById(self._STEP_TRANSLATOR)
+            if not bool(getattr(addin, "Activated", False)):
+                addin.Activate()
+            transients = app.TransientObjects
+            medium = transients.CreateDataMedium()
+            medium.FileName = path
+            context = transients.CreateTranslationContext()
+            context.Type = self._k("kFileBrowseIOMechanism")
+            options = transients.CreateNameValueMap()
+            try:
+                addin.HasOpenOptions(medium, context, options)
+            except Exception:
+                pass
+            return _specialise(addin.Open(medium, context, options))
+
+        document = None
+        route = None
+        for label, attempt in (
+            ("Documents.Open", by_opening),
+            ("ImportedComponents", by_imported_component),
+            ("the STEP translator add-in", by_translator),
+        ):
+            try:
+                document = attempt()
+            except Exception as exc:
+                tried.append(f"{label}: {self._explain(exc)}")
+                continue
+            if document is not None:
+                route = label
+                break
+
+        if document is None:
+            raise DocumentError(
+                f"Inventor would not import {os.path.basename(path)}"
+                + (f" as {kind}." if kind else "."),
+                hint="Tried " + "; ".join(tried) + ". Run "
+                     "scripts/probe_import_and_properties.py --step <file> to see "
+                     "which route this release accepts.",
+            )
+
+        info = self._register(document, "mm", "deg")
+        info.detail = {
+            "imported": True,
+            "format": kind or "an unrecognised extension",
+            "route": route,
+            "rejected": tried,
+            **self._what_arrived(info.id),
+        }
+        return info
+
+    def _what_arrived(self, doc_id: str) -> dict[str, Any]:  # pragma: no cover - Windows only
+        """What is actually in the imported document.
+
+        Measured rather than assumed, and it decides what can be done next: the
+        DFM loop drives parameters, so a count of zero is the whole answer about
+        whether it can improve this part or only measure it.
+        """
+        out: dict[str, Any] = {}
+        try:
+            document = self._doc(doc_id)
+        except Exception:
+            return out
+        out["document_kind"] = _document_kind(document)
+        if out["document_kind"] != "part":
+            out["note"] = (
+                f"This came in as {out['document_kind']} rather than a part, which "
+                f"a multi-body file will do. The analysis needs one part."
+            )
+            return out
+        try:
+            component = document.ComponentDefinition
+        except Exception:
+            return out
+        for label, path in (("bodies", "SurfaceBodies"),
+                            ("features", "Features"),
+                            ("parameters", "Parameters.UserParameters")):
+            target = component
+            try:
+                for step in path.split("."):
+                    target = getattr(target, step)
+                out[label] = int(target.Count)
+            except Exception:
+                out[label] = None
+        if out.get("parameters") == 0:
+            out["parametric"] = False
+            out["note"] = (
+                "Translated geometry, so there are no parameters to drive: this "
+                "part can be measured for manufacturability and cannot be "
+                "improved by the loop. Rebuild it as a recipe, or add the "
+                "features you want to be able to change."
+            )
+        else:
+            out["parametric"] = True
+        return out
+
+    # -- the declaration kept inside the document -------------------------
+
+    #: The user-defined property set -- the one whose contents show under Custom
+    #: in the iProperties dialog. Visible on purpose: somebody opening the part
+    #: in Inventor should be able to see that something has been recorded about
+    #: it, and what.
+    _USER_PROPERTIES = "{D5CDD505-2E9C-101B-9397-08002B2CF9AE}"
+
+    #: The property name the declaration is stored under, plus a numbered suffix
+    #: when it does not fit in one. Several of Inventor's string properties stop
+    #: at 255 characters and a role map with a freeze list goes past that easily,
+    #: so it is written in pieces rather than truncated -- a truncated freeze list
+    #: is protection silently removed.
+    _DECLARATION = "InventorMCP_DFM"
+    _CHUNK = 200
+
+    def read_declaration(self, doc_id: str) -> dict[str, Any] | None:  # pragma: no cover - Windows only
+        document = self._doc(doc_id)
+        pieces: list[str] = []
+        for index in range(1, 100):
+            name = self._DECLARATION if index == 1 else f"{self._DECLARATION}_{index}"
+            try:
+                value = self._property_set(document).Item(name).Value
+            except Exception:
+                break
+            if value is None:
+                break
+            pieces.append(str(value))
+        if not pieces:
+            return None
+        text = "".join(pieces)
+        try:
+            loaded = json.loads(text)
+        except ValueError:
+            # Something is there and it is not what this wrote. Saying so beats
+            # both crashing and pretending the part declares nothing.
+            return {"notes": [
+                f"The {self._DECLARATION} property of this part holds "
+                f"{len(text)} characters that are not the declaration this "
+                f"writes. Left alone."
+            ]}
+        return loaded if isinstance(loaded, dict) else None
+
+    def write_declaration(self, doc_id: str, declaration: dict[str, Any]) -> None:  # pragma: no cover - Windows only
+        document = self._doc(doc_id)
+        text = json.dumps(declaration, separators=(",", ":"))
+        chunks = [text[at:at + self._CHUNK] for at in range(0, len(text), self._CHUNK)] or [""]
+        properties = self._property_set(document)
+        for index, chunk in enumerate(chunks, start=1):
+            name = self._DECLARATION if index == 1 else f"{self._DECLARATION}_{index}"
+            try:
+                properties.Item(name).Value = chunk
+            except Exception:
+                properties.Add(chunk, name)
+        # A shorter declaration than last time leaves stale tail pieces, and
+        # those would be read straight back and make the JSON unparseable.
+        for index in range(len(chunks) + 1, len(chunks) + 20):
+            name = f"{self._DECLARATION}_{index}"
+            try:
+                properties.Item(name).Delete()
+            except Exception:
+                break
+
+    def _property_set(self, document: Any) -> Any:  # pragma: no cover - Windows only
+        """The user-defined property set, made if this part has not got one."""
+        sets = document.PropertySets
+        for key in (self._USER_PROPERTIES, "Inventor User Defined Properties"):
+            try:
+                return sets.Item(key)
+            except Exception:
+                continue
+        return sets.Add("Inventor User Defined Properties")
 
     def list_documents(self) -> list[DocInfo]:  # pragma: no cover - Windows only
         app = self._require_app()
@@ -1795,7 +2059,7 @@ class ComBackend(Backend):
                 FeatureInfo(
                     id=f"feat:{feature.Name}",
                     name=str(feature.Name),
-                    kind=_feature_kind(feature),
+                    kind=_feature_kind(feature, self._constants),
                     suppressed=bool(feature.Suppressed),
                 )
             )
@@ -1806,7 +2070,7 @@ class ComBackend(Backend):
         feature = _find_feature(document.ComponentDefinition.Features, name)
         feature.Suppressed = suppressed
         document.Update()
-        return FeatureInfo(id=f"feat:{name}", name=name, kind=_feature_kind(feature),
+        return FeatureInfo(id=f"feat:{name}", name=name, kind=_feature_kind(feature, self._constants),
                            suppressed=suppressed)
 
     def delete_feature(self, doc_id: str, name: str) -> None:  # pragma: no cover
@@ -1818,7 +2082,8 @@ class ComBackend(Backend):
         document = self._doc(doc_id)
         feature = _find_feature(document.ComponentDefinition.Features, name)
         feature.Name = new_name
-        return FeatureInfo(id=f"feat:{new_name}", name=new_name, kind=_feature_kind(feature))
+        return FeatureInfo(id=f"feat:{new_name}", name=new_name,
+                           kind=_feature_kind(feature, self._constants))
 
     def select(self, doc_id: str, selector: ResolvedSelector) -> list[TopoInfo]:  # pragma: no cover
         document = self._doc(doc_id)
@@ -2079,6 +2344,10 @@ class ComBackend(Backend):
         "CounterboreDepth", "CountersinkDiameter", "CountersinkAngle",
         "SpotFaceDiameter", "SpotFaceDepth", "Radius", "Distance", "Thickness",
         "Angle", "Operation", "Suppressed", "HealthStatus",
+        # The draft. A built extrude's taper is the only thing on the feature
+        # that names the parameter driving it, which is what role discovery on a
+        # part nobody described has to read.
+        "TaperAngle", "Taper",
     )
 
     def describe_feature(self, doc_id: str, name: str) -> dict[str, Any]:  # pragma: no cover
@@ -2094,7 +2363,7 @@ class ComBackend(Backend):
         feature = _find_feature(document.ComponentDefinition.Features, name)
         described: dict[str, Any] = {
             "name": str(getattr(feature, "Name", name)),
-            "kind": _feature_kind(feature),
+            "kind": _feature_kind(feature, self._constants),
         }
         # The feature *and* its definition: a hole's diameter, seat and bottom
         # all live on `HoleFeature.Definition`, which is why the first version of
@@ -2357,8 +2626,66 @@ def _document_kind(document: Any) -> str:  # pragma: no cover - Windows only
     return mapping.get(int(document.DocumentType), "unknown")
 
 
-def _feature_kind(feature: Any) -> str:  # pragma: no cover - Windows only
-    return str(type(feature).__name__).replace("Feature", "").lower() or "feature"
+#: ``ObjectTypeEnum`` names for the feature kinds worth naming, and the short
+#: name this project uses for each. Asked of the type library by name rather than
+#: held as numbers, because the numbers move between releases -- 32 of the 51
+#: entries in the fallback table turned out to be wrong when they were finally
+#: measured, and one of them silently turned a through-all extrude into a
+#: to-next.
+_FEATURE_TYPES: dict[str, str] = {
+    "kExtrudeFeatureObject": "extrude",
+    "kRevolveFeatureObject": "revolve",
+    "kSweepFeatureObject": "sweep",
+    "kLoftFeatureObject": "loft",
+    "kHoleFeatureObject": "hole",
+    "kFilletFeatureObject": "fillet",
+    "kChamferFeatureObject": "chamfer",
+    "kShellFeatureObject": "shell",
+    "kThickenFeatureObject": "thicken",
+    "kRibFeatureObject": "rib",
+    "kThreadFeatureObject": "thread",
+    "kRectangularPatternFeatureObject": "rectangular_pattern",
+    "kCircularPatternFeatureObject": "circular_pattern",
+    "kMirrorFeatureObject": "mirror",
+    "kDraftFeatureObject": "draft",
+    "kSplitFeatureObject": "split",
+    "kCoilFeatureObject": "coil",
+    "kEmbossFeatureObject": "emboss",
+    "kDeleteFaceFeatureObject": "delete_face",
+    "kNonParametricBaseFeatureObject": "base",
+}
+
+
+def _feature_kind(feature: Any, constants: Any | None = None) -> str:  # pragma: no cover - Windows only
+    """What kind of feature this is, asked of Inventor.
+
+    This used to read ``type(feature).__name__``, which works under early
+    binding and returns ``CDispatch`` under late -- and late is this project's
+    default. So every feature on a live part reported its kind as the name of a
+    pywin32 wrapper class, and anything reasoning about kinds was reasoning about
+    nothing. ``Object.Type`` is a documented property of every Inventor object
+    and says what the thing actually is.
+
+    Falls back to the Python type name, and then to ``"unknown"``. Not to a
+    guess: a kind nobody can read is worth saying so about, because the caller
+    that cares is deciding whether a feature's thickness is a wall or a rib.
+    """
+    if constants is not None:
+        try:
+            actual = int(feature.Type)
+        except Exception:
+            actual = None
+        if actual is not None:
+            for name, short in _FEATURE_TYPES.items():
+                try:
+                    if constants.resolve(name) == actual:
+                        return short
+                except Exception:
+                    continue
+    typename = str(type(feature).__name__)
+    if typename and typename not in ("CDispatch", "DispatchBaseClass", "Dispatch"):
+        return typename.replace("Feature", "").lower() or "unknown"
+    return "unknown"
 
 
 #: Constraint kinds Inventor infers on its own while geometry is created.

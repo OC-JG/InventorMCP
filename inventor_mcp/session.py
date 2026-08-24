@@ -106,6 +106,25 @@ class Session:
 
     # -- documents ---------------------------------------------------------
     def register(self, info: DocInfo, units: str, angle_units: str) -> DocumentContext:
+        """Take note of a document, keeping anything already known about it.
+
+        Re-registering happens more than it looks: opening a file that is already
+        open, re-reading one after a save, handing a path to a tool for a part
+        that is on screen. Replacing the context outright was silently throwing
+        away the recipe, the sketch plans, the feature names and -- worst -- the
+        freeze guard protecting the part's key geometry, so a second open turned
+        a protected part into an unprotected one and said nothing.
+        """
+        existing = self.contexts.get(info.id)
+        if existing is not None:
+            existing.name = info.name
+            existing.units = units
+            existing.angle_units = angle_units
+            existing.resolver.length_unit = units
+            existing.resolver.angle_unit = angle_units
+            self.active = info.id
+            return existing
+
         context = DocumentContext(
             doc_id=info.id,
             name=info.name,

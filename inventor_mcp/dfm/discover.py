@@ -127,6 +127,39 @@ class Discovery:
         return out
 
 
+def facts_from(session: Any, doc_id: str) -> list[dict[str, Any]]:
+    """Everything a backend can say about each of a part's features.
+
+    Two sources, combined because neither is complete on its own. ``list_features``
+    carries what this project recorded when it built the feature, which is
+    everything on a part built here and nothing on one that was opened.
+    ``describe_feature`` asks Inventor, which is the only source for a part
+    nobody described -- and it reports a driven property as both its value and
+    the expression driving it, which is the expression this needs.
+
+    A feature that cannot be described contributes what ``list_features`` knows
+    and no more. Failing the whole discovery because one feature would not answer
+    would throw away the evidence from all the others.
+    """
+    facts: list[dict[str, Any]] = []
+    for info in session.backend.list_features(doc_id):
+        entry: dict[str, Any] = {"name": info.name, "kind": info.kind}
+        entry.update(getattr(info, "detail", None) or {})
+        try:
+            described = session.backend.describe_feature(doc_id, info.name)
+        except Exception:
+            described = None
+        if isinstance(described, Mapping):
+            for key, value in described.items():
+                if key in ("name", "kind"):
+                    continue
+                entry.setdefault(key, value)
+            if described.get("kind") and entry["kind"] in ("", "unknown", "feature"):
+                entry["kind"] = described["kind"]
+        facts.append(entry)
+    return facts
+
+
 def normalise(description: Mapping[str, Any]) -> FeatureFacts:
     """One feature's facts, out of whatever shape the backend reported.
 
@@ -146,14 +179,31 @@ def normalise(description: Mapping[str, Any]) -> FeatureFacts:
     for key, value in description.items():
         if key in ("name", "feature", "kind", "type", "feature_type"):
             continue
+        # `describe_feature` reports a feature's own properties and its
+        # definition's under one flat mapping, the latter prefixed. The prefix is
+        # about where the property was read from, not what it means.
+        held = str(key).rsplit(".", 1)[-1]
         if isinstance(value, str):
-            expressions[str(key)] = value
+            if value.strip():
+                expressions.setdefault(held, value)
         elif isinstance(value, Mapping):
-            # describe_feature nests a feature's own properties and its
-            # definition's under separate keys.
-            for inner, held in value.items():
-                if isinstance(held, str):
-                    expressions.setdefault(str(inner), held)
+            # A dimensioned property comes back as what it measures *and* what
+            # drives it: {"value": 0.25, "expression": "wall"}. The expression is
+            # the evidence; the value is the same number under another name.
+            # Reading the inner key here rather than the outer one is a bug this
+            # had: every driven property landed under "expression" and the
+            # feature appeared to hold one property called that.
+            driven = value.get("expression")
+            if isinstance(driven, str) and driven.strip():
+                expressions.setdefault(held, driven)
+                continue
+            for inner, nested in value.items():
+                if isinstance(nested, str) and nested.strip():
+                    expressions.setdefault(str(inner).rsplit(".", 1)[-1], nested)
+                elif isinstance(nested, Mapping):
+                    deeper = nested.get("expression")
+                    if isinstance(deeper, str) and deeper.strip():
+                        expressions.setdefault(str(inner).rsplit(".", 1)[-1], deeper)
     return FeatureFacts(name=name, kind=kind, expressions=expressions)
 
 
@@ -175,15 +225,32 @@ def discover(
     found: dict[str, list[tuple[str, str]]] = {}
 
     for fact in facts:
+        unreadable = fact.kind.lower() in ("", "unknown", "feature")
         for kind, properties, role, wording in EVIDENCE:
-            if kind not in fact.kind.lower():
+            if not unreadable and kind not in fact.kind.lower():
                 continue
             held = fact.expression(*properties)
             if held is None:
                 continue
+            if unreadable:
+                # The property is there and what kind of feature holds it could
+                # not be read. Worth using and worth flagging: Inventor's rib
+                # feature has a thickness too, so this could be a rib's rather
+                # than a wall's. Two features holding the same property with
+                # different parameters then comes out ambiguous, which is the
+                # right answer and falls out of the rule below.
+                #
+                # Phrased without naming a kind, because naming one would be
+                # asserting the thing that could not be read -- and with several
+                # rules matching the same property, it would assert two.
+                because = (f"the feature {fact.name or '(unnamed)'} takes its "
+                           f"{held[0].lower()} from it, though what kind of feature "
+                           f"it is could not be read, so this rests on the property "
+                           f"alone")
+            else:
+                because = wording.format(feature=fact.name or "(unnamed)")
             for referenced in _parameters_in(held[1], known):
-                _record(found, role, referenced,
-                        wording.format(feature=fact.name or "(unnamed)"))
+                _record(found, role, referenced, because)
 
     # The parameter table's own view, where there is one. A parameter Inventor
     # says is consumed by a shell is the wall whether or not the shell's own

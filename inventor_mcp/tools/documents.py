@@ -9,7 +9,7 @@ from pydantic import Field
 from ..backend import create_backend
 from ..session import Session
 from ..units import ANGLE_UNIT_NAMES, LENGTH_UNIT_NAMES
-from ._common import guard
+from ._common import guard, open_source
 
 
 def register(server: Any, session: Session) -> None:
@@ -94,15 +94,23 @@ def register(server: Any, session: Session) -> None:
     @server.tool()
     @guard
     def open_part(
-        path: Annotated[str, Field(description="Absolute path to an .ipt file.")],
+        path: Annotated[str, Field(
+            description="Absolute path to a part. An .ipt opens directly; a STEP, "
+                        "IGES, SAT or Parasolid file is imported as a solid body.")],
+        working_copy: Annotated[bool, Field(
+            description="Open the next version of the file instead of the file "
+                        "itself -- bracket.ipt becomes bracket_v2.ipt -- so the "
+                        "original cannot be changed. Do this before anything that "
+                        "will edit the part.")] = False,
     ) -> dict[str, Any]:
-        """Open an existing part so its parameters can be inspected and driven."""
-        backend = session.ensure_backend()
-        info = backend.open_document(path)
-        context = session.register(info, info.units, info.angle_units)
-        session.sync_parameters(context.doc_id)
-        return {"document": info.id, **info.as_dict(),
-                "parameters": sorted(context.resolver.known())}
+        """Open an existing part so its parameters can be inspected and driven.
+
+        Takes an Inventor part or a translated file. A translated file carries
+        geometry and not the history that made it, so what arrives has a solid
+        body and no parameters: it can be measured and it cannot be driven. That
+        is reported rather than left to be discovered.
+        """
+        return open_source(session, path, working_copy=working_copy)
 
     @server.tool()
     @guard

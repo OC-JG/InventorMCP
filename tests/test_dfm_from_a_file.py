@@ -1,0 +1,422 @@
+"""Handing over a file, rather than building the part here.
+
+This is the path a person actually takes: they have a part, they want it looked
+at. Everything the loop needs -- which parameter is the wall, what may not be
+touched -- has to come from the part itself or be asked for, because there is no
+recipe to read.
+
+Three things are being tested. That the right thing happens per format: an .ipt
+opens, a STEP file imports and says it cannot be driven, a mesh is refused with
+somewhere better to go. That the original file is never written. And that what
+was worked out about a part is still there next time.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import copy
+import json
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from inventor_mcp.builder import apply_operation, build_part
+from inventor_mcp.dfm.declaration import read_sidecar, sidecar_for
+from inventor_mcp.dfm.sources import discover_for, resolve
+from inventor_mcp.schema import ExtrudeOp, PartRecipe, ShellOp, SketchOp
+from inventor_mcp.versioning import versions_of
+
+SHAPES = Path(__file__).parent / "dfm_shapes.mjs"
+
+
+def call(server, tool, /, **arguments):
+    """Positional-only, so a tool argument called `name` is not shadowed."""
+    return asyncio.run(server.call_tool(tool, arguments)).structured_content
+
+
+@pytest.fixture
+def files(tmp_path):
+    """A part, a STEP file and a mesh, all of them just bytes on disk."""
+    for name in ("bracket.ipt", "bracket.stp", "bracket.stl", "bracket.igs"):
+        (tmp_path / name).write_bytes(b"not really CAD, and does not need to be")
+    return tmp_path
+
+
+# ---------------------------------------------------------------------------
+# What happens per format
+# ---------------------------------------------------------------------------
+
+
+class TestOpeningWhatWasHandedOver:
+    def test_a_part_opens(self, server, files):
+        out = call(server, "open_part", path=str(files / "bracket.ipt"))
+        assert out["ok"] and out["document"]
+
+    def test_a_step_file_is_imported(self, server, files):
+        out = call(server, "open_part", path=str(files / "bracket.stp"))
+        assert out["ok"] and out["detail"]["imported"] is True
+
+    def test_and_says_it_cannot_be_driven(self, server, files):
+        """Translated geometry carries no history, so there are no parameters.
+        Saying so beats a loop that reports nothing to do and sounds like success."""
+        out = call(server, "open_part", path=str(files / "bracket.stp"))
+        assert out["parametric"] is False
+        assert "no user parameters" in out["what_that_means"]
+
+    def test_iges_too(self, server, files):
+        out = call(server, "open_part", path=str(files / "bracket.igs"))
+        assert out["ok"] and out["detail"]["imported"] is True
+
+    def test_a_mesh_is_refused_with_somewhere_better(self, server, files):
+        out = call(server, "open_part", path=str(files / "bracket.stl"))
+        assert out["ok"] is False
+        assert "check_manufacture" in out["hint"]
+
+    def test_a_missing_file_says_so(self, server, files):
+        out = call(server, "open_part", path=str(files / "nope.ipt"))
+        assert out["ok"] is False
+        assert "no file at" in out["message"]
+
+    def test_a_relative_path_is_made_absolute(self, server, files, monkeypatch):
+        monkeypatch.chdir(files)
+        out = call(server, "open_part", path="bracket.ipt")
+        assert out["opened"] == str(files / "bracket.ipt")
+
+
+class TestTheWorkingCopy:
+    def test_it_opens_the_next_version(self, server, files):
+        out = call(server, "open_part", path=str(files / "bracket.ipt"),
+                   working_copy=True)
+        assert Path(out["working_copy"]).name == "bracket_v2.ipt"
+
+    def test_which_exists(self, server, files):
+        call(server, "open_part", path=str(files / "bracket.ipt"), working_copy=True)
+        assert (files / "bracket_v2.ipt").is_file()
+
+    def test_and_the_original_is_untouched(self, server, files):
+        before = (files / "bracket.ipt").read_bytes()
+        call(server, "open_part", path=str(files / "bracket.ipt"), working_copy=True)
+        assert (files / "bracket.ipt").read_bytes() == before
+
+    def test_the_result_says_which_file_is_which(self, server, files):
+        out = call(server, "open_part", path=str(files / "bracket.ipt"),
+                   working_copy=True)
+        assert out["original_untouched"] == str(files / "bracket.ipt")
+        assert out["working_copy"] != out["original_untouched"]
+
+    def test_a_second_run_does_not_reuse_the_name(self, server, files):
+        first = call(server, "open_part", path=str(files / "bracket.ipt"),
+                     working_copy=True)["working_copy"]
+        second = call(server, "open_part", path=str(files / "bracket.ipt"),
+                      working_copy=True)["working_copy"]
+        assert first != second
+
+    def test_a_translated_file_needs_none_and_says_why(self, server, files):
+        out = call(server, "open_part", path=str(files / "bracket.stp"),
+                   working_copy=True)
+        assert "working_copy" not in out
+        assert "read and never written" in out["note"]
+
+
+# ---------------------------------------------------------------------------
+# Working out what the part means
+# ---------------------------------------------------------------------------
+
+
+def shelled_part(session, *, wall="2.5", draft="1.5"):
+    """A part with a shell and a drafted extrude, and no recipe behind it.
+
+    Built through the operations rather than from a recipe on purpose: this is
+    the shape of a part somebody hands over, where the only thing that knows
+    which parameter is the wall is the shell that reads it.
+    """
+    backend = session.ensure_backend()
+    info = backend.new_part("Handed", units="mm")
+    context = session.register(info, "mm", "deg")
+    backend.set_parameter(context.doc_id, "wall_t", wall, units="mm")
+    backend.set_parameter(context.doc_id, "draft_a", draft, units="deg")
+    backend.set_parameter(context.doc_id, "rib_t", "1.1", units="mm")
+    session.sync_parameters(context.doc_id)
+    apply_operation(session, context, SketchOp(
+        name="Outline", plane="xy",
+        entities=[{"type": "rectangle", "center": [0, 0], "width": 60, "height": 40}]))
+    apply_operation(session, context, ExtrudeOp(
+        name="Block", sketch="Outline", distance=30, taper="draft_a"))
+    apply_operation(session, context, ShellOp(
+        name="Cavity", faces={"kind": "face", "filter": "top"},
+        thickness="wall_t", direction="inside"))
+    return context
+
+
+class TestDiscoveryOnAPartNobodyDescribed:
+    def test_the_shell_names_the_wall(self, session):
+        found = discover_for(session, shelled_part(session))
+        assert found.declaration.roles["wall"] == "wall_t"
+
+    def test_the_taper_names_the_draft(self, session):
+        found = discover_for(session, shelled_part(session))
+        assert found.declaration.roles["draft"] == "draft_a"
+
+    def test_with_the_evidence_recorded(self, session):
+        found = discover_for(session, shelled_part(session))
+        assert "Cavity" in found.declaration.evidence["wall"]
+        assert "Block" in found.declaration.evidence["draft"]
+
+    def test_and_marked_as_inferred_rather_than_stated(self, session):
+        declaration, _ = resolve(session, shelled_part(session))
+        assert declaration.origin["wall"] == "discovered"
+
+    def test_a_rib_is_only_suggested(self, session):
+        """Nothing reads rib_t, so its role rests on its name -- offered, not used."""
+        found = discover_for(session, shelled_part(session))
+        assert found.suggestions.get("rib_thickness") == "rib_t"
+        assert "rib_thickness" not in found.declaration.roles
+
+    def test_what_is_stated_beats_what_is_inferred(self, session):
+        context = shelled_part(session)
+        declaration, _ = resolve(session, context, roles={"wall": "rib_t"})
+        assert declaration.roles["wall"] == "rib_t"
+
+    def test_and_the_disagreement_is_reported(self, session):
+        """The recipe or the caller wins either way. Somebody should still know
+        the part's only shell reads a different parameter."""
+        context = shelled_part(session)
+        declaration, _ = resolve(session, context, roles={"wall": "rib_t"})
+        assert any("wall_t" in note for note in declaration.notes)
+
+    def test_turning_inference_off_leaves_it_unmapped(self, session):
+        declaration, found = resolve(session, shelled_part(session), infer=False)
+        assert "wall" not in declaration.roles
+        assert found is None
+
+
+class TestDiscoveryThroughTheTool:
+    def test_it_reports_what_the_part_says(self, server, session):
+        # Built through the server so the tool and the model share a session.
+        call(server, "new_part", name="Handed")
+        out = call(server, "set_parameters", parameters=[
+            {"name": "wall_t", "value": 2.5}], rebuild=False)
+        assert out["ok"]
+        out = call(server, "apply_operations", operations=[
+            {"op": "sketch", "name": "Outline", "plane": "xy",
+             "entities": [{"type": "rectangle", "center": [0, 0],
+                           "width": 60, "height": 40}]},
+            {"op": "extrude", "name": "Block", "sketch": "Outline", "distance": 30},
+            {"op": "shell", "name": "Cavity",
+             "faces": {"kind": "face", "filter": "top"},
+             "thickness": "wall_t", "direction": "inside"},
+        ])
+        assert out["ok"], out
+        found = call(server, "discover_dfm_roles")
+        assert found["from_the_part"]["roles"]["wall"]["parameter"] == "wall_t"
+        assert "Cavity" in found["from_the_part"]["roles"]["wall"]["evidence"]
+
+    def test_and_lists_the_roles_it_knows(self, server):
+        call(server, "new_part", name="Empty")
+        found = call(server, "discover_dfm_roles")
+        assert "wall" in found["roles"]
+
+
+# ---------------------------------------------------------------------------
+# Remembering it
+# ---------------------------------------------------------------------------
+
+
+class TestRememberingTheDeclaration:
+    def test_declaring_writes_it_into_the_part(self, server):
+        call(server, "new_part", name="Housing")
+        call(server, "set_parameters",
+             parameters=[{"name": "wall_t", "value": 2.5},
+                         {"name": "bore_d", "value": 8}], rebuild=False)
+        out = call(server, "declare_dfm", roles={"wall": "wall_t"},
+                   frozen=["bore_d"], material="abs")
+        assert out["ok"]
+        assert out["remembered"]["in_the_part"] is True
+
+    def test_and_it_reads_back(self, server, session):
+        call(server, "new_part", name="Housing")
+        call(server, "set_parameters", parameters=[{"name": "wall_t", "value": 2.5}],
+             rebuild=False)
+        call(server, "declare_dfm", roles={"wall": "wall_t"}, frozen=["wall_t"])
+        found = call(server, "discover_dfm_roles")
+        assert found["what_would_be_used"]["roles"]["wall"]["from"] == "the part itself"
+
+    def test_a_declared_freeze_is_enforced_immediately(self, server):
+        """Not only inside the next loop. A guarantee that waits for a loop is
+        one anything else walks through."""
+        call(server, "new_part", name="Housing")
+        call(server, "set_parameters", parameters=[{"name": "bore_d", "value": 8}],
+             rebuild=False)
+        call(server, "declare_dfm", frozen=["bore_d"])
+        out = call(server, "set_parameters",
+                   parameters=[{"name": "bore_d", "value": 9}], rebuild=False)
+        assert out["ok"] is False and out["error"] == "frozen_geometry"
+
+    def test_a_name_that_is_not_a_parameter_is_flagged(self, server):
+        call(server, "new_part", name="Housing")
+        call(server, "set_parameters", parameters=[{"name": "wall_t", "value": 2.5}],
+             rebuild=False)
+        out = call(server, "declare_dfm", roles={"wall": "wal_t"})
+        assert out["not_a_parameter_of_this_part"] == ["wal_t"]
+        assert "wall_t" in out["note"]
+
+    def test_the_sidecar_survives_the_document(self, session, tmp_path):
+        """The part is closed and the file reopened, which in the simulator is a
+        different document entirely. What was worked out is still there."""
+        from inventor_mcp.dfm.declaration import Declaration
+        from inventor_mcp.dfm.sources import remember
+
+        part = tmp_path / "bracket.ipt"
+        part.write_bytes(b"")
+        context = shelled_part(session)
+        session.backend.save_document(context.doc_id, str(part))
+        remember(session, context,
+                 Declaration(roles={"wall": "wall_t"}, frozen=["bore_d"]))
+
+        assert sidecar_for(part).is_file()
+        again = session.backend.open_document(str(part))
+        second = session.register(again, "mm", "deg")
+        declaration, _ = resolve(session, second, path=part)
+        assert declaration.roles["wall"] == "wall_t"
+        assert "bore_d" in declaration.frozen
+        assert declaration.origin["wall"] == "a sidecar file"
+
+    def test_and_travels_to_the_working_copy(self, server, session, tmp_path):
+        """A versioned copy that had forgotten which parameter is the wall would
+        rediscover it, and might discover something else."""
+        from inventor_mcp.dfm.declaration import Declaration, write_sidecar
+
+        part = tmp_path / "bracket.ipt"
+        part.write_bytes(b"")
+        write_sidecar(part, Declaration(roles={"wall": "wall_t"}, frozen=["bore_d"]))
+        out = call(server, "open_part", path=str(part), working_copy=True)
+        copy_path = Path(out["working_copy"])
+        assert sidecar_for(copy_path).is_file()
+        carried = read_sidecar(copy_path)
+        assert carried.roles == {"wall": "wall_t"}
+        assert carried.frozen == ["bore_d"]
+
+
+# ---------------------------------------------------------------------------
+# What the loop does with a file
+# ---------------------------------------------------------------------------
+
+
+class TestImprovingAFile:
+    def test_a_part_with_no_parameters_is_refused_helpfully(self, server, files):
+        """The simulator opens an .ipt as an empty part, which is exactly the
+        shape of the real problem: imported geometry with nothing to drive."""
+        out = call(server, "improve_for_manufacture", path=str(files / "bracket.ipt"))
+        assert out["ok"] is False
+        assert out["error"] == "nothing_to_drive"
+        assert "recipe" in out["hint"]
+
+    def test_it_says_which_file_it_looked_at(self, server, files):
+        out = call(server, "improve_for_manufacture", path=str(files / "bracket.ipt"))
+        assert out["file"]["opened"] == str(files / "bracket.ipt")
+
+    def test_a_step_file_is_refused_the_same_way(self, server, files):
+        out = call(server, "improve_for_manufacture", path=str(files / "bracket.stp"))
+        assert out["ok"] is False and out["error"] == "nothing_to_drive"
+
+    def test_the_refusal_still_leaves_the_part_open_to_be_measured(self, server, files):
+        call(server, "improve_for_manufacture", path=str(files / "bracket.stp"))
+        status = call(server, "session_status")
+        assert status["documents"]
+
+
+class TestCapabilities:
+    def test_it_says_which_formats_it_takes(self, server):
+        out = call(server, "dfm_capabilities")
+        assert ".ipt" in out["accepts"]
+        assert ".stp" in out["accepts"]["translated"]
+        assert ".stl" in out["accepts"]
+
+    def test_and_that_only_a_parametric_part_can_be_improved(self, server):
+        out = call(server, "dfm_capabilities")
+        assert "measurable, not improvable" in out["accepts"]["translated_note"]
+
+    def test_and_how_a_role_gets_settled(self, server):
+        out = call(server, "dfm_capabilities")
+        order = out["how_roles_are_settled"]
+        assert order[0].startswith("what you say")
+        assert "evidence, never a name" in order[-1]
+
+
+class TestReopeningWhatIsAlreadyOpen:
+    """Re-registering a document must keep what the session learned about it.
+
+    Handing a path to a tool for a part that is already on screen used to replace
+    its context outright, silently dropping the recipe, the sketch plans and --
+    worst -- the freeze guard protecting its key geometry. A second open turned a
+    protected part into an unprotected one and said nothing about it.
+    """
+
+    def test_the_recipe_survives(self, session, tmp_path):
+        from inventor_mcp.schema import PartRecipe
+
+        recipe = PartRecipe.model_validate({
+            "name": "Housing", "units": "mm",
+            "parameters": [{"name": "wall_t", "value": 2.5}],
+            "operations": [
+                {"op": "sketch", "name": "S", "plane": "xy",
+                 "entities": [{"type": "rectangle", "center": [0, 0],
+                               "width": 40, "height": 30}]},
+                {"op": "extrude", "name": "E", "sketch": "S", "distance": 20},
+            ],
+            "dfm": {"parameters": {"wall": "wall_t"}, "frozen": ["wall_t"]},
+        })
+        build_part(session, recipe)
+        context = session.context()
+        info = session.backend.list_documents()[0]
+        again = session.register(info, "mm", "deg")
+        assert again is context
+        assert again.recipe is not None
+        assert again.recipe["dfm"]["parameters"] == {"wall": "wall_t"}
+
+    def test_and_so_does_the_freeze(self, session):
+        from inventor_mcp.dfm.freeze import FrozenGeometryError
+        from inventor_mcp.schema import ParameterSpec, PartRecipe
+
+        build_part(session, PartRecipe.model_validate({
+            "name": "Housing", "units": "mm",
+            "parameters": [{"name": "bore_d", "value": 8, "frozen": True}],
+            "operations": [
+                {"op": "sketch", "name": "S", "plane": "xy",
+                 "entities": [{"type": "circle", "center": [0, 0],
+                               "diameter": "bore_d"}]},
+                {"op": "extrude", "name": "E", "sketch": "S", "distance": 20},
+            ],
+        }))
+        info = session.backend.list_documents()[0]
+        again = session.register(info, "mm", "deg")
+        assert again.frozen is not None
+        with pytest.raises(FrozenGeometryError):
+            apply_operation  # keep the import honest
+            from inventor_mcp.builder import apply_parameter
+            apply_parameter(session, again, ParameterSpec(name="bore_d", value=9))
+
+    def test_the_units_are_refreshed(self, session):
+        from inventor_mcp.schema import PartRecipe
+
+        build_part(session, PartRecipe.model_validate({
+            "name": "Housing", "units": "mm",
+            "parameters": [{"name": "w", "value": 2}],
+            "operations": [
+                {"op": "sketch", "name": "S", "plane": "xy",
+                 "entities": [{"type": "circle", "center": [0, 0], "diameter": 10}]},
+                {"op": "extrude", "name": "E", "sketch": "S", "distance": "w"},
+            ],
+        }))
+        info = session.backend.list_documents()[0]
+        again = session.register(info, "in", "rad")
+        assert again.units == "in" and again.angle_units == "rad"
+        assert again.resolver.length_unit == "in"
+
+    def test_a_different_document_gets_its_own_context(self, session):
+        first = session.backend.new_part("First")
+        second = session.backend.new_part("Second")
+        assert session.register(first, "mm", "deg") is not session.register(
+            second, "mm", "deg")

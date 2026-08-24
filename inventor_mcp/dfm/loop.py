@@ -42,7 +42,8 @@ from ..builder import apply_parameter
 from ..schema import ParameterSpec
 from ..session import DocumentContext, Session
 from ..units import ANGLE_UNIT_NAMES, LENGTH_UNIT_NAMES, convert
-from .freeze import FreezeGuard, guard_for_recipe
+from .declaration import Declaration, from_recipe, given, merge
+from .freeze import FreezeGuard
 from .remedy import Change, Deferred, Proposal, propose
 from .report import DfmReport
 from .roles import ROLES
@@ -112,6 +113,10 @@ class LoopResult:
     grade_at_start: str | None = None
     grade_at_end: str | None = None
     frozen: dict[str, Any] = field(default_factory=dict)
+    #: Which parameter was taken to mean what, and where that came from. On a
+    #: part nobody described, this is the most important thing in the result:
+    #: everything the loop did rests on it being right.
+    declaration: dict[str, Any] = field(default_factory=dict)
     outstanding: tuple[Deferred, ...] = ()
     notes: tuple[str, ...] = ()
     settings: dict[str, Any] = field(default_factory=dict)
@@ -133,6 +138,7 @@ class LoopResult:
             "grade": {"start": self.grade_at_start, "end": self.grade_at_end},
             "stopped_because": self.stopped_because,
             "rounds": [round_.as_dict() for round_ in self.rounds],
+            "read_the_part_as": self.declaration,
             "key_geometry": self.frozen,
             "needs_a_person": [d.as_dict() for d in self.outstanding],
             "notes": list(self.notes),
@@ -168,6 +174,13 @@ def current_parameters(session: Session, context: DocumentContext
     return values, expressions
 
 
+def guard_for(declaration: Declaration,
+              expressions: Mapping[str, str] | None = None) -> FreezeGuard:
+    """The guard a declaration asks for, resolved against a parameter table."""
+    guard = FreezeGuard(declaration.frozen, features=declaration.frozen_features)
+    return guard.with_expressions(expressions) if expressions else guard
+
+
 def plan_from_recipe(
     recipe: Mapping[str, Any] | None,
     *,
@@ -182,27 +195,23 @@ def plan_from_recipe(
     are added to the protected set and extra roles fill gaps, but nothing passed
     at the call can take a freeze *off* -- that means editing the recipe, which
     is a reviewable act rather than a flag in the moment.
+
+    A thin path through :mod:`inventor_mcp.dfm.declaration` rather than its own
+    merge: this used to implement the same precedence separately, and two
+    implementations of a rule about which freeze wins is one too many.
     """
-    block = (recipe or {}).get("dfm") if isinstance(recipe, dict) else None
-    block = block if isinstance(block, dict) else {}
-
-    mapped: dict[str, str] = dict(block.get("parameters") or {})
-    mapped.update(roles or {})
-    unknown = sorted(set(mapped) - set(ROLES))
-    if unknown:
-        raise ValueError(f"Unknown DFM role(s) {unknown}. Known: {sorted(ROLES)}.")
-
-    guard = guard_for_recipe(recipe, extra=freeze, extra_features=freeze_features)
-
-    combined: dict[str, Any] = dict(block.get("settings") or {})
-    for key, value in (settings or {}).items():
-        if key == "checks" and isinstance(value, dict):
-            merged = dict(combined.get("checks") or {})
-            merged.update(value)
-            combined["checks"] = merged
-        else:
-            combined[key] = value
-    return mapped, guard, combined
+    declaration = merge(
+        from_recipe(recipe),
+        given(roles=roles, frozen=freeze, frozen_features=freeze_features,
+              settings=settings),
+    )
+    expressions = {
+        str(spec.get("name")): str(spec.get("value"))
+        for spec in ((recipe or {}).get("parameters") or ())
+        if isinstance(spec, Mapping) and spec.get("name")
+    }
+    return (dict(declaration.roles), guard_for(declaration, expressions),
+            dict(declaration.settings))
 
 
 # ---------------------------------------------------------------------------
@@ -264,6 +273,9 @@ def improve(
     include_functional: bool = True,
     pull_axis: str = "+z",
     gate: Sequence[float] | None = None,
+    declaration: Declaration | None = None,
+    path: str | os.PathLike[str] | None = None,
+    infer: bool = True,
 ) -> LoopResult:
     """Improve the part's manufacturability, one measured round at a time.
 
@@ -273,14 +285,24 @@ def improve(
     not a loop; freezing the dimensions that matter is the intended way to hold
     it back, and it is enforced rather than advised.
     """
-    mapped, guard, dfm_settings = plan_from_recipe(
-        context.recipe, roles=roles, freeze=freeze,
-        freeze_features=freeze_features, settings=settings,
-    )
+    from .sources import resolve as resolve_declaration
+
+    if declaration is None:
+        declaration, discovered = resolve_declaration(
+            session, context, path=path, roles=roles, freeze=freeze,
+            freeze_features=freeze_features, settings=settings, infer=infer,
+        )
+    else:
+        declaration, discovered = declaration, None
+    mapped = dict(declaration.roles)
+    dfm_settings = dict(declaration.settings)
+    guard = guard_for(declaration)
+
     room = Path(workspace) if workspace else Path.cwd() / ".dfm"
     room.mkdir(parents=True, exist_ok=True)
 
-    result = LoopResult(frozen=guard.as_dict(), settings=dict(dfm_settings))
+    result = LoopResult(frozen=guard.as_dict(), settings=dict(dfm_settings),
+                        declaration=declaration.describe())
     notes: list[str] = []
 
     report, values, expressions, _, report_path = measure(

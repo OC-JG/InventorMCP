@@ -4,12 +4,26 @@ from __future__ import annotations
 
 import functools
 import logging
+import os
 from typing import Any, Callable, TypeVar
 
 from pydantic import ValidationError
 
-from ..errors import InventorMCPError
+from ..errors import DocumentError, InventorMCPError
 from ..units import Dim, Quantity, from_internal
+from ..versioning import working_copy as make_working_copy
+
+#: Extensions Inventor reads through a translator rather than opening as its own
+#: file. A translated file carries geometry and not the history that made it, so
+#: what arrives has a solid body and no parameters.
+IMPORT_EXTENSIONS = frozenset({
+    ".stp", ".step", ".stpz", ".igs", ".iges", ".sat", ".sab",
+    ".x_t", ".x_b", ".jt",
+})
+
+#: Meshes. Inventor will read one, and for manufacturability there is no reason
+#: to: the analysis wants a mesh and that is already what this is.
+MESH_EXTENSIONS = frozenset({".stl", ".obj", ".3mf", ".ply"})
 
 logger = logging.getLogger("inventor_mcp")
 
@@ -86,3 +100,79 @@ def display_box(box: tuple[float, ...] | None, unit: str) -> dict[str, Any] | No
 
 def quantity_dict(value: float, dim: Dim, unit: str) -> dict[str, Any]:
     return {"value": round(Quantity(value, dim).as_display(unit), 6), "units": unit}
+
+
+# ---------------------------------------------------------------------------
+# Opening whatever was handed over
+# ---------------------------------------------------------------------------
+
+
+def open_source(session: Any, path: str, *, working_copy: bool = False,
+                ) -> dict[str, Any]:
+    """Open a part file the right way for what it is, and say what arrived.
+
+    One implementation, because three tools need it and the decisions are not
+    obvious: an .ipt opens, a translated file imports, a mesh is refused with
+    somewhere better to go, and a working copy is made *before* anything opens
+    the original so that nothing can write to it.
+
+    What is reported is measured rather than assumed. Whether the part can be
+    driven is a count of its user parameters, not an inference from its
+    extension -- an .ipt somebody built by importing a STEP file and never
+    parameterised has exactly the same problem as the STEP file.
+    """
+    backend = session.ensure_backend()
+    source = os.path.abspath(path)
+    suffix = os.path.splitext(source)[1].lower()
+    out: dict[str, Any] = {"opened": source}
+
+    if suffix in MESH_EXTENSIONS:
+        raise DocumentError(
+            f"A {suffix} file is a mesh, not a part: there is nothing in it to "
+            f"drive, and Inventor is not needed to read it.",
+            hint="For manufacturability, pass it straight to "
+                 "`check_manufacture(path=...)`, which analyses a mesh without "
+                 "opening Inventor at all.",
+        )
+
+    if not os.path.isfile(source):
+        raise DocumentError(
+            f"There is no file at {source}.",
+            hint="Give an absolute path. A relative one is resolved against the "
+                 "server's working directory, which is rarely where you think.",
+        )
+
+    if suffix in IMPORT_EXTENSIONS:
+        if working_copy:
+            out["note"] = ("A translated file is read and never written, so it "
+                           "needs no working copy. Imported directly.")
+        info = backend.import_geometry(source)
+    else:
+        if working_copy:
+            copy = make_working_copy(source)
+            out["working_copy"] = str(copy)
+            out["original_untouched"] = source
+            source = str(copy)
+        info = backend.open_document(source)
+
+    context = session.register(info, info.units, info.angle_units)
+    session.sync_parameters(context.doc_id)
+    parameters = sorted(context.resolver.known())
+    out.update({
+        "document": info.id,
+        **info.as_dict(),
+        "parameters": parameters,
+        "features": [f.name for f in backend.list_features(context.doc_id)],
+        "path_on_disk": source,
+    })
+    if not parameters:
+        out["parametric"] = False
+        out["what_that_means"] = (
+            "This part has no user parameters, so there is nothing for a revision "
+            "or a DFM loop to change. `check_manufacture` still measures it; "
+            "`improve_for_manufacture` will have nothing to act on. Add the "
+            "parameters you want to be able to drive, or rebuild it from a recipe."
+        )
+    else:
+        out["parametric"] = True
+    return out

@@ -234,6 +234,10 @@ class _Document:
     name: str
     units: str = "mm"
     angle_units: str = "deg"
+    #: The DFM declaration kept in the document, as Inventor keeps one in a
+    #: custom property. ``None`` means nobody has asked this part, which is not
+    #: the same as this part saying nothing is frozen.
+    declaration: dict[str, Any] | None = None
     path: str | None = None
     material: str | None = None
     modified: bool = False
@@ -353,6 +357,47 @@ class MockBackend(Backend):
         document.path = path
         self._record("open_document", path=path)
         return self._doc_info(document)
+
+    def import_geometry(self, path: str, *, name: str | None = None) -> DocInfo:
+        """Stand in for reading a STEP file, without pretending to have read one.
+
+        The simulator has no translator and no way to invent the geometry a real
+        STEP file carries, so what it produces is a part with the shape of an
+        import -- one base feature, no parameters, no volume -- and says as much.
+        That is enough to exercise everything around the import: that the loop
+        notices there is nothing to drive, that the declaration is resolved, that
+        the right thing is reported. It is not enough to measure, and claiming a
+        volume here would be inventing the one number the whole analysis rests
+        on.
+        """
+        stem = name or path.replace("\\", "/").rsplit("/", 1)[-1].rsplit(".", 1)[0]
+        info = self.new_part(stem)
+        document = self._doc(info.id)
+        document.path = path
+        document.features.append(_Feature(
+            id=self._next("feat"), name="Imported", kind="base",
+            detail={"from": path,
+                    "note": "the simulator cannot read translated geometry"},
+        ))
+        self._record("import_geometry", path=path)
+        out = self._doc_info(document)
+        out.detail = {
+            "imported": True,
+            "parametric": False,
+            "route": "the simulator, which has no translator",
+            "bodies": 0,
+            "note": "No geometry was read. Connect to Inventor to import a real file.",
+        }
+        return out
+
+    def read_declaration(self, doc_id: str) -> dict[str, Any] | None:
+        return self._doc(doc_id).declaration
+
+    def write_declaration(self, doc_id: str, declaration: dict[str, Any]) -> None:
+        document = self._doc(doc_id)
+        document.declaration = dict(declaration)
+        document.modified = True
+        self._record("write_declaration", keys=sorted(declaration))
 
     def list_documents(self) -> list[DocInfo]:
         return [self._doc_info(document) for document in self._documents.values()]
@@ -593,6 +638,10 @@ class MockBackend(Backend):
                 "operation": request.operation,
                 "extent": request.extent,
                 "distance": request.distance.as_dict() if request.distance else None,
+                # Recorded because it is the only thing on a built feature that
+                # says which parameter drives the draft, and role discovery on a
+                # part nobody described reads exactly that.
+                "taper": request.taper.as_dict() if request.taper else None,
                 "profiles": len(loops),
                 "profile_area_cm2": round(area, 6),
             },
