@@ -97,9 +97,16 @@ class Declaration:
             raise DeclarationError("A DFM declaration should be a JSON object.")
 
         roles = data.get("parameters")
-        if not isinstance(roles, Mapping):
-            roles = data.get("roles") if isinstance(data.get("roles"), Mapping) else {}
-        roles = {str(k): str(v) for k, v in roles.items()}
+        if roles is None:
+            roles = data.get("roles")
+        if roles is not None and not isinstance(roles, Mapping):
+            raise DeclarationError(
+                f"`parameters` should map roles to parameter names, not be "
+                f"{type(roles).__name__}. Refusing to read it as 'no roles': "
+                f"somebody wrote it, and every check would silently fall back "
+                f"to the analyser's defaults."
+            )
+        roles = {str(k): str(v) for k, v in (roles or {}).items()}
 
         frozen = data.get("frozen")
         features = data.get("frozen_features")

@@ -417,6 +417,10 @@ class ComBackend(Backend):
             id=doc_id,
             name=str(document.DisplayName),
             path=str(document.FullFileName) or None,
+            # Asked, because it is not always a part: a multi-body STEP can open
+            # as an assembly, and calling that "part" in the same result whose
+            # detail says "assembly" is a contradiction somebody has to notice.
+            kind=_document_kind(document),
             units=units,
             angle_units=angle_units,
             active=True,

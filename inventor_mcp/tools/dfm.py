@@ -351,7 +351,9 @@ def register(server: Any, session: Session) -> None:
     @server.tool(
         description="Say which parameter plays which role in the manufacturability "
         "assessment, and which dimensions are key geometry -- then remember it, in the part "
-        "and beside it, so the next run and every later version starts from the same reading.",
+        "and beside it, so the next run and every later version starts from the same reading. "
+        "What goes into the part is in the open document until it is saved; the sidecar is on "
+        "disk immediately.",
     )
     @guard
     def declare_dfm(

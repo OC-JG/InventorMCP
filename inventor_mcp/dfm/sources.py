@@ -147,6 +147,10 @@ def remember(session: Any, context: Any, declaration: Declaration,
         try:
             writer(context.doc_id, declaration.as_dict(for_storage=True))
             out["in_the_part"] = True
+            # Into the open document, which is not the same as onto the disk: a
+            # property written and never saved dies with the session, and the
+            # tool used to say "survives being closed" either way.
+            out["on_disk_when"] = "the document is next saved"
         except Exception as exc:
             out["in_the_part"] = False
             out["why_not"] = str(exc)[:200]
