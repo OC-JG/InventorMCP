@@ -1,4 +1,0 @@
-{
-  "volume_cm3": 187.3289,
-  "checked": "RECORDED from Inventor 2027.1, not derived. A loft's cross-section does not interpolate linearly in area, so its volume is not the mean section times the span and there is no hand calculation to check this against. The simulator's 186.4602 is 0.47% below it, which is the error in that assumption rather than a fault in either. Treat this as a regression baseline only."
-}

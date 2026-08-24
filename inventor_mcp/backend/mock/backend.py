@@ -934,14 +934,32 @@ class MockBackend(Backend):
         # even agree.
         offsets = [sketch.offset for sketch in sketches]
         span = abs(max(offsets) - min(offsets))
+        estimate = (sum(areas) / max(len(areas), 1)) * span
         was = document.volume
-        document.volume += (sum(areas) / max(len(areas), 1)) * span
+        # The estimate is the same either way; which SIGN it carries is the
+        # operation. This used to add a cut loft's volume -- a duct's cut bore
+        # came out as 154 cm^3 of extra material, and the "hollow" duct was
+        # heavier than the solid one.
+        if request.operation == "cut":
+            if was <= 0:
+                raise FeatureError("Nothing to cut: the part has no solid body yet.")
+            document.volume = max(was - estimate, 0.0)
+        elif request.operation == "intersect":
+            document.volume = min(was, estimate)
+        else:
+            document.volume += estimate
         moved = document.volume - was
-        if span:
+        if request.operation == "cut" and moved == 0:
+            raise FeatureError(
+                "The loft cut removed nothing.",
+                hint="Its sections may not overlap the existing body.",
+            )
+        if span and request.operation != "cut":
             self._expand_for_loft(document, sketches)
         name = self._feature_name(document, request.name, "loft")
         feature = _Feature(self._next("feat"), name, "loft", volume_delta=moved,
-                           detail={"sections": [s.name for s in sketches]})
+                           detail={"sections": [s.name for s in sketches],
+                                   "operation": request.operation})
         document.features.append(feature)
         return _feature_info(feature)
 

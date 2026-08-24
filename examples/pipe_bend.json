@@ -1,11 +1,22 @@
 {
   "name": "PipeBend",
+  "description": "A 90-degree pipe bend with a real wall: the swept profile is an annulus, so the bore is open end to end. Volume is analytic (Pappus): pi*(od^2-id^2)/4 * (pi*bend_r/2).",
   "units": "mm",
-  "material": "Steel",
+  "material": "Stainless Steel",
   "parameters": [
     {
       "name": "tube_od",
       "value": 20
+    },
+    {
+      "name": "wall",
+      "value": 2,
+      "comment": "pipe wall thickness"
+    },
+    {
+      "name": "tube_id",
+      "value": "tube_od - 2 * wall",
+      "comment": "bore, driven by the wall"
     },
     {
       "name": "bend_r",
@@ -43,6 +54,14 @@
             0
           ],
           "diameter": "tube_od"
+        },
+        {
+          "type": "circle",
+          "center": [
+            "bend_r",
+            0
+          ],
+          "diameter": "tube_id"
         }
       ]
     },
@@ -52,5 +71,20 @@
       "profile_sketch": "Profile",
       "path_sketch": "Path"
     }
-  ]
+  ],
+  "dfm": {
+    "parameters": {
+      "wall": "wall"
+    },
+    "frozen": [
+      "tube_id",
+      "bend_r"
+    ],
+    "settings": {
+      "material": "pp",
+      "checks": {
+        "ribs": false
+      }
+    }
+  }
 }
