@@ -420,3 +420,33 @@ class TestReopeningWhatIsAlreadyOpen:
         second = session.backend.new_part("Second")
         assert session.register(first, "mm", "deg") is not session.register(
             second, "mm", "deg")
+
+
+class TestNotWritingOverSomebodysPart:
+    """Saving over the file somebody named is a different act from saving the
+    copy this made, and it must not happen by default."""
+
+    def test_working_on_the_original_does_not_save_it(self, server, session, files,
+                                                      monkeypatch):
+        saved: list[str] = []
+        monkeypatch.setattr(
+            type(session.backend), "save_document",
+            lambda self, doc_id, path=None: saved.append(path or "in place"),
+            raising=False,
+        )
+        out = call(server, "improve_for_manufacture",
+                   path=str(files / "bracket.ipt"), working_copy=False)
+        # The mock part has no parameters, so it refuses before the loop -- and
+        # that is exactly the path where a stray save would be worst.
+        assert out["ok"] is False
+        assert saved == []
+
+    def test_the_refusal_points_at_the_orphaned_copy(self, server, files):
+        out = call(server, "improve_for_manufacture",
+                   path=str(files / "bracket.ipt"), working_copy=True)
+        assert out["ok"] is False
+        assert out["file"]["working_copy"] in out["hint"]
+
+    def test_and_says_the_document_is_still_open_to_be_measured(self, server, files):
+        out = call(server, "improve_for_manufacture", path=str(files / "bracket.stp"))
+        assert "still open" in out["hint"]

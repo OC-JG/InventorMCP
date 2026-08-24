@@ -62,6 +62,13 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   offered with the call that would accept it and nothing acts on it. Two shells
   reading two different parameters map nothing: that is not a wall, it is two
   walls and a question.
+- **Comparing versions.** `compare_manufacture(before=..., after=...)` says what
+  moved between two runs, and `improve_for_manufacture` does it for its own first
+  and last round under `what_moved`. Through the DFM tool's own `compareRuns`
+  rather than a diff written here, because it knows which direction is better for
+  each measurement and it raises a caveat where a score moved for a reason other
+  than the part -- a material change, a different set of checks, or two records
+  with the same triangle count.
 - **A declaration that stays with the part**, in a custom iProperty inside it
   and a `bracket.dfm.json` beside it, so the next run starts from the same
   reading and a versioned copy does not arrive having forgotten which parameter

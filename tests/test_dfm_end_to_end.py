@@ -32,7 +32,7 @@ import pytest
 from inventor_mcp.backend.base import ExportRequest
 from inventor_mcp.builder import build_part
 from inventor_mcp.dfm.loop import current_parameters, improve
-from inventor_mcp.dfm.runner import DfmUnavailable, find_dfm_root
+from inventor_mcp.dfm.runner import DfmUnavailable, compare_reports, find_dfm_root
 from inventor_mcp.schema import PartRecipe
 
 SHAPES = Path(__file__).parent / "dfm_shapes.mjs"
@@ -359,3 +359,56 @@ class TestHandedAMesh:
         changed = {c["parameter"] for c in out["would_change"]["changes"]}
         assert "wall_t" in changed
         assert built["document"] in out["note"]
+
+
+class TestComparingVersions:
+    """What moved between two runs -- the question a versioned part exists for.
+
+    Asked of the DFM tool's own `compareRuns`, so the direction each measurement
+    should move in, and the caveats about a score that moved for a reason other
+    than the part, come from the tool rather than from a diff written here.
+    """
+
+    FIXTURES = Path(__file__).parent / "fixtures" / "dfm"
+
+    def test_it_says_what_moved(self, server, analyser):
+        out = asyncio.run(server.call_tool("compare_manufacture", {
+            "before": str(self.FIXTURES / "many_findings.json"),
+            "after": str(self.FIXTURES / "clean.json"),
+        })).structured_content
+        assert out["ok"]
+        assert out["score"]["delta"] == 51
+        assert "PRODUCTION READY" in out["headline"]
+
+    def test_and_which_checks_cleared(self, server, analyser):
+        out = asyncio.run(server.call_tool("compare_manufacture", {
+            "before": str(self.FIXTURES / "many_findings.json"),
+            "after": str(self.FIXTURES / "clean.json"),
+        })).structured_content
+        improved = {c["key"] for c in out["checks"] if c["change"] == "improved"}
+        assert {"wall", "draft", "ribs"} <= improved
+
+    def test_it_raises_its_own_caveats(self, server, analyser):
+        """A material change makes score movement something other than a change
+        in the part, and the tool says so rather than letting it read as progress."""
+        out = asyncio.run(server.call_tool("compare_manufacture", {
+            "before": str(self.FIXTURES / "thick_wall.json"),
+            "after": str(self.FIXTURES / "clean.json"),
+        })).structured_content
+        assert isinstance(out["caveats"], list)
+
+    def test_a_missing_report_says_which_one(self, server, analyser, tmp_path):
+        out = asyncio.run(server.call_tool("compare_manufacture", {
+            "before": str(tmp_path / "nope.json"),
+            "after": str(self.FIXTURES / "clean.json"),
+        })).structured_content
+        assert out["ok"] is False
+        assert "before report" in out["message"]
+
+    def test_the_loop_compares_its_own_first_and_last_round(self, session, part,
+                                                            tmp_path):
+        outcome = improve(session, part, rounds=4, workspace=str(tmp_path / "dfm"))
+        assert len(outcome.rounds) > 1, outcome.stopped_because
+        moved = compare_reports(outcome.rounds[0].report, outcome.rounds[-1].report)
+        assert moved["score"]["delta"] == pytest.approx(
+            outcome.finished_at - outcome.started_at)

@@ -16,6 +16,7 @@
  * Usage:
  *   node headless.mjs --stl part.stl [--settings s.json] [--out report.json]
  *                     [--dfm-root DIR] [--gate x,y,z] [--pull-axis +z]
+ *   node headless.mjs --before old.json --after new.json [--out diff.json]
  *
  * The DFM checkout is found from --dfm-root, then $DFM_ROOT, then
  * $INVENTOR_MCP_DFM_ROOT. Settings default to the tool's own DEFAULT_SETTINGS,
@@ -54,7 +55,12 @@ function parseArgs(argv) {
 }
 
 const args = parseArgs(process.argv.slice(2));
-if (!args.stl) fail('--stl is required');
+const comparing = Boolean(args.before || args.after);
+if (comparing) {
+  if (!args.before || !args.after) fail('comparing needs both --before and --after');
+} else if (!args.stl) {
+  fail('--stl is required (or --before and --after to compare two reports)');
+}
 
 const root = args['dfm-root'] || process.env.DFM_ROOT || process.env.INVENTOR_MCP_DFM_ROOT;
 if (!root) {
@@ -67,6 +73,29 @@ if (!existsSync(path.join(root, 'src', 'rules', 'engine.js'))) {
 
 /* Dynamic import, because the location is only known at run time. */
 const mod = async (rel) => import(pathToFileURL(path.join(root, rel)).href);
+
+/*
+ * Comparing two runs is the tool's own `compareRuns`, not a diff written here.
+ * It knows which way is better for each measurement, and it declines to mislead:
+ * a score that moved because the material changed, or because a different set of
+ * checks ran, comes back with that stated above the diff. A hand-rolled
+ * comparison would report the five points and not the reason.
+ */
+if (comparing) {
+  const { compareRuns } = await mod('src/rules/compare.js');
+  const read = (where) => JSON.parse(readFileSync(where, 'utf8'));
+  const diff = compareRuns(read(args.before), read(args.after));
+  if (diff === null) fail('One of those records could not be read as a DFM report.');
+  diff.source = {
+    by: 'inventor-mcp headless bridge',
+    before: path.resolve(args.before),
+    after: path.resolve(args.after),
+  };
+  const rendered = JSON.stringify(diff, null, 2);
+  if (args.out) writeFileSync(args.out, rendered);
+  else process.stdout.write(rendered);
+  process.exit(0);
+}
 
 const { parseSTL } = await mod('src/geometry/stl.js');
 const { validateGeometry } = await mod('src/geometry/validate.js');

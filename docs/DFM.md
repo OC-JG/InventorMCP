@@ -346,6 +346,25 @@ part, and changing a part on the strength of one is changing it for no reason.
 
 ---
 
+## Comparing versions
+
+The question on the second pass is not "is this manufacturable" but "is it better
+than it was", and a versioned part is what makes that answerable:
+
+```
+compare_manufacture(before="bracket.json", after="bracket_v3.json")
+```
+
+`improve_for_manufacture` does it for you between its first and last round, under
+`what_moved`.
+
+Both go through the DFM tool's own `compareRuns` rather than a diff written here,
+and the reason is the caveats. It knows which direction is better for each
+measurement, and it refuses to let a score movement read as progress when it was
+not: changing the material, changing the mode, or running a different set of
+checks each raise a caveat above the diff, and two records with the same triangle
+count are flagged as possibly the same geometry twice.
+
 ## The one duplication, and how it is contained
 
 The DFM tool states its thresholds as literals inside its rules — "the 0.8×

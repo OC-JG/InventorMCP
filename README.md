@@ -324,6 +324,7 @@ See [docs/DFM.md](docs/DFM.md).
 | `declare_dfm` | Say which parameter means what, and remember it in the part |
 | `read_dfm_report` | Read a report exported from the DFM tool in a browser |
 | `protect_geometry` | Declare key geometry that must not be changed |
+| `compare_manufacture` | What moved between two runs — the question a versioned part answers |
 | `dfm_capabilities` | The roles, the formats, and what needs a person |
 
 Two prompts are published as well: `model_this_part` and `revise_part`.

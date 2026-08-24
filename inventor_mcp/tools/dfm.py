@@ -37,7 +37,9 @@ from ..dfm.declaration import Declaration, given
 from ..dfm.loop import current_parameters, guard_for, improve, measure
 from ..dfm.remedy import ROLES, propose
 from ..dfm.report import read_report
-from ..dfm.runner import analyse_stl, find_dfm_root, settings_from_roles
+from ..dfm.runner import (
+    analyse_stl, compare_reports, find_dfm_root, settings_from_roles,
+)
 from ..dfm.sources import discover_for, remember, resolve
 from ..session import Session
 from ..versioning import versions_of
@@ -220,8 +222,11 @@ def register(server: Any, session: Session) -> None:
             description="Work on the next version of the file rather than the file "
                         "itself. On by default and worth leaving on: this changes the "
                         "model.")] = True,
-        save: Annotated[bool, Field(
-            description="Save the working copy when the loop finishes.")] = True,
+        save: Annotated[bool | None, Field(
+            description="Save when the loop finishes. Left unset it saves a working "
+                        "copy and does NOT save over the file you named -- writing "
+                        "over somebody's part is something to ask for, not something "
+                        "to default to. Pass true to save over it anyway.")] = None,
         infer_roles: Annotated[bool, Field(
             description="Work out unmapped roles from the part's own features. "
                         "Evidence only; never from a parameter's name.")] = True,
@@ -239,9 +244,12 @@ def register(server: Any, session: Session) -> None:
                 "message": (f"{opened['opened']} has no user parameters, so there is "
                             f"nothing for the loop to change."),
                 "hint": ("Measure it with `check_manufacture` -- every finding still "
-                         "applies. To be able to improve it, the part needs "
-                         "parameters: build it from a recipe, or add the dimensions "
-                         "you want to be able to drive."),
+                         "applies, and the document is still open. To be able to "
+                         "improve it, the part needs parameters: build it from a "
+                         "recipe, or add the dimensions you want to be able to drive."
+                         + (f" A working copy was made at {opened['working_copy']} "
+                            f"before this was known; delete it if you do not want it."
+                            if opened.get("working_copy") else "")),
                 "file": opened,
             }
 
@@ -262,26 +270,52 @@ def register(server: Any, session: Session) -> None:
         # version starts from the same reading rather than inferring it again --
         # and so a person can see and correct it.
         where = opened.get("path_on_disk")
-        if where:
-            declaration = Declaration.from_dict(
-                {"parameters": result.declaration.get("roles") and
-                 {role: entry["parameter"]
-                  for role, entry in result.declaration["roles"].items()},
-                 "frozen": result.frozen.get("declared") or [],
-                 "frozen_features": result.frozen.get("features") or [],
-                 "settings": result.settings},
-                source="this run",
-            )
-            out["remembered"] = remember(session, context, declaration, path=where)
+        if where and result.used is not None:
+            out["remembered"] = remember(session, context, result.used, path=where)
 
-        if save:
+        # Saving over the file somebody named is a different act from saving the
+        # copy this made, and it must not happen by default. `save=None` means
+        # "save what is mine to save": a working copy, yes; the original, only if
+        # asked in so many words.
+        # The question anybody asks on the second pass is "is it better than it
+        # was", and the loop has both records already. Asked of the DFM tool's own
+        # comparison rather than diffed here: it knows which direction is better
+        # for each measurement, and it raises a caveat where a score moved for a
+        # reason other than the part.
+        first, last = result.rounds[0], result.rounds[-1]
+        if len(result.rounds) > 1 and first.report and last.report:
+            try:
+                out["what_moved"] = compare_reports(
+                    first.report, last.report, dfm_root=dfm_root)
+            except Exception as exc:
+                out["what_moved"] = None
+                out["comparison_failed"] = str(exc)[:200]
+
+        working_on_the_original = bool(path) and not opened.get("working_copy")
+        should_save = save if save is not None else not working_on_the_original
+        if should_save and working_on_the_original and save is not True:
+            should_save = False
+        if should_save:
             try:
                 out["saved"] = session.backend.save_document(context.doc_id).as_dict()
                 if where:
                     out["versions"] = [str(p) for p in versions_of(where)]
+                if working_on_the_original:
+                    out["overwrote"] = (
+                        f"{opened['opened']} was saved over, because save=true was "
+                        f"asked for with working_copy=false."
+                    )
             except Exception as exc:
                 out["saved"] = None
                 out["save_failed"] = str(exc)[:200]
+        elif working_on_the_original:
+            out["not_saved"] = (
+                f"The model in Inventor has been changed but {opened['opened']} has "
+                f"not been written. working_copy=false was asked for, so there is no "
+                f"copy to save into, and saving over the file you named is not "
+                f"something this does unless told to. Pass save=true to write it, or "
+                f"`save_part(path=...)` to put it somewhere else."
+            )
         return out
 
     @server.tool(
@@ -469,6 +503,30 @@ def register(server: Any, session: Session) -> None:
             )
             out["remembered"] = remember(session, context, declaration)
         return out
+
+    @server.tool(
+        description="Compare two manufacturability runs and say what moved: the score, the "
+        "grade, which checks changed band, and which measurements shifted and in which "
+        "direction. This is the question worth asking of a versioned part -- bracket.ipt "
+        "against bracket_v3.ipt. It declines to mislead: a score that moved because the "
+        "material or the set of checks changed comes back with that said above the diff.",
+    )
+    @guard
+    def compare_manufacture(
+        before: Annotated[str, Field(
+            description="The earlier report: a JSON file from `check_manufacture`, from a "
+                        "round of `improve_for_manufacture`, or exported from the DFM "
+                        "tool in a browser.")],
+        after: Annotated[str, Field(description="The later report.")],
+        dfm_root: Annotated[str | None, Field(description="A checkout of the DFM tool.")] = None,
+        save_to: Annotated[str | None, Field(
+            description="Where to write the comparison. Omit to return it only.")] = None,
+    ) -> dict[str, Any]:
+        return {
+            "before": os.path.abspath(before),
+            "after": os.path.abspath(after),
+            **compare_reports(before, after, dfm_root=dfm_root, save_to=save_to),
+        }
 
     @server.tool(
         description="What the DFM integration can and cannot do: the parameter roles, where the "

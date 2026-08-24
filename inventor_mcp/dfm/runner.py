@@ -135,6 +135,62 @@ def settings_from_roles(
     return settings
 
 
+def compare_reports(
+    before: str | os.PathLike[str],
+    after: str | os.PathLike[str],
+    *,
+    dfm_root: str | None = None,
+    save_to: str | os.PathLike[str] | None = None,
+) -> dict[str, Any]:
+    """What moved between two runs, as the DFM tool itself reads it.
+
+    Its own ``compareRuns`` rather than a diff written here, for the reason its
+    comments give: it knows which direction is better for each measurement, and
+    it declines to mislead. A score that rose because the material changed, or
+    because a different set of checks ran, comes back with that stated above the
+    diff. A comparison written here would report the five points and not the
+    reason for them.
+
+    This is what makes a versioned copy worth having: ``bracket.ipt`` against
+    ``bracket_v3.ipt`` is the question somebody actually asks on the second pass.
+    """
+    root = find_dfm_root(dfm_root)
+    node = _node()
+    for label, where in (("before", before), ("after", after)):
+        if not Path(where).is_file():
+            raise DfmFailed(
+                f"There is no {label} report at {where}.",
+                hint="Both are JSON records: either exported from the DFM tool, or "
+                     "written by `check_manufacture` and each round of "
+                     "`improve_for_manufacture`.",
+            )
+
+    with tempfile.TemporaryDirectory(prefix="inventor-mcp-dfm-") as scratch:
+        output = Path(save_to) if save_to else Path(scratch) / "comparison.json"
+        command = [
+            node, str(BRIDGE),
+            "--before", str(Path(before).resolve()),
+            "--after", str(Path(after).resolve()),
+            "--out", str(output),
+            "--dfm-root", str(root),
+        ]
+        try:
+            finished = subprocess.run(command, capture_output=True, text=True,
+                                      timeout=TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            raise DfmFailed("Comparing the two reports did not finish.") from None
+        if finished.returncode != 0:
+            detail = (finished.stderr or finished.stdout or "").strip().splitlines()
+            raise DfmFailed(
+                "The comparison failed: " + (detail[-1] if detail else "no output."),
+                hint=f"Ran: {' '.join(command[1:])}",
+            )
+        try:
+            return json.loads(output.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise DfmFailed(f"The comparison wrote nothing readable: {exc}") from exc
+
+
 def analyse_stl(
     stl: str | os.PathLike[str],
     settings: Mapping[str, Any] | None = None,

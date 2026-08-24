@@ -27,7 +27,10 @@ from .sources import remember, resolve
 from .report import Check, DfmReport, MaterialLimits, read_report
 from .freeze import FreezeGuard, FrozenParameter
 from .remedy import Change, Proposal, propose
-from .runner import DfmUnavailable, analyse_stl, find_dfm_root, settings_from_roles
+from .runner import (
+    DfmUnavailable, analyse_stl, compare_reports, find_dfm_root,
+    settings_from_roles,
+)
 
 __all__ = [
     "Change",
@@ -41,6 +44,7 @@ __all__ = [
     "MaterialLimits",
     "Proposal",
     "analyse_stl",
+    "compare_reports",
     "discover",
     "facts_from",
     "merge",

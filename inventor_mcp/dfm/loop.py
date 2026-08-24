@@ -117,6 +117,11 @@ class LoopResult:
     #: part nobody described, this is the most important thing in the result:
     #: everything the loop did rests on it being right.
     declaration: dict[str, Any] = field(default_factory=dict)
+    #: The same thing as the object, for a caller that wants to write it back.
+    #: Kept beside the rendered form rather than reconstructed from it: rebuilding
+    #: a declaration by reading its own report back is a shape that drifts, and
+    #: what drifts here is which parameter somebody's next run calls the wall.
+    used: Declaration | None = field(default=None, repr=False)
     outstanding: tuple[Deferred, ...] = ()
     notes: tuple[str, ...] = ()
     settings: dict[str, Any] = field(default_factory=dict)
@@ -302,7 +307,7 @@ def improve(
     room.mkdir(parents=True, exist_ok=True)
 
     result = LoopResult(frozen=guard.as_dict(), settings=dict(dfm_settings),
-                        declaration=declaration.describe())
+                        declaration=declaration.describe(), used=declaration)
     notes: list[str] = []
 
     report, values, expressions, _, report_path = measure(
