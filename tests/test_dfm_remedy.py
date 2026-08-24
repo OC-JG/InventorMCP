@@ -34,8 +34,12 @@ def load(name: str) -> dict:
     return json.loads((FIXTURES / f"{name}.json").read_text(encoding="utf-8"))
 
 
-def plan(name: str = "many_findings", *, roles=None, frozen=(), values=None, **kw):
-    report = read_report(load(name))
+def plan(name: str = "many_findings", *, roles=None, frozen=(), values=None,
+         declared=None, **kw):
+    data = load(name)
+    if declared:
+        data["input"].update(declared)
+    report = read_report(data)
     values = dict(VALUES if values is None else values)
     expressions = {k: f"{v:g}" for k, v in values.items()}
     guard = FreezeGuard(frozen, expressions=expressions)
@@ -154,7 +158,7 @@ class TestRibsAndBosses:
         four problems. Fixing only the worst leaves the rest to reappear."""
         proposal = plan()
         assert {c.parameter for c in proposal.changes} >= {
-            "rib_t", "rib_r", "boss_w", "boss_d"}
+            "rib_t", "rib_r", "rib_h", "boss_w"}
 
     def test_a_ratio_is_written_as_an_expression_not_a_number(self):
         """So the relationship survives the next wall change."""
@@ -200,31 +204,75 @@ class TestRibsAndBosses:
 
 
 class TestTheBossBind:
-    """Two guidelines that cannot both hold, which is where a naive loop spins.
+    """Three limits on a boss wall, and the arithmetic between them.
 
-    Retention wants a boss wall of at least a quarter of the outside diameter;
-    the sink limit caps it at 0.7 of the nominal wall. Above OD = 2.8x wall no
-    value satisfies both, and nudging the boss wall back and forth will never
-    find one.
+    Retention wants at least a quarter of the outside diameter; the sink limit
+    caps it at 0.7 of the nominal wall; under 0.5 of the wall it cracks. Aiming
+    at 0.6 satisfies retention only while the diameter is no more than 2.4x the
+    wall, because a quarter of 2.4 is 0.6. Past 2.8x, a quarter of the diameter
+    is above the sink cap and no boss wall works at all.
     """
 
-    def test_the_diameter_is_what_moves(self):
-        change = change_for(plan(), "boss_d")
-        assert change is not None and change.expression == "wall_t * 2.4"
-
-    def test_and_the_pair_it_proposes_satisfies_every_guideline(self):
+    def test_thickening_the_wall_can_dissolve_the_bind_by_itself(self):
+        """Ø6 is too wide for a 2 mm wall and comfortable on a 2.82 mm one. Since
+        this pass is already thickening the wall, narrowing the boss as well
+        would change what the part does for nothing."""
         proposal = plan()
+        assert change_for(proposal, "boss_d") is None
         wall = change_for(proposal, "wall_t").target
+        boss_wall = change_for(proposal, "boss_w").target
+        assert boss_wall >= 6.0 / 4 - 1e-9, "screw retention"
+        assert 0.5 * wall - 1e-9 <= boss_wall <= 0.7 * wall + 1e-9
+
+    def test_a_bind_that_survives_the_wall_moves_the_diameter(self):
+        """With the wall frozen there is nothing else to give."""
+        proposal = plan(frozen=["wall_t"])
+        change = change_for(proposal, "boss_d")
+        assert change is not None
+        assert change.expression == "wall_t * 2.4"
+        assert change.functional, "a narrower screw boss changes what the part does"
+
+    def test_and_that_pair_satisfies_every_guideline(self):
+        proposal = plan(frozen=["wall_t"])
+        wall = 2.0        # frozen
         od = change_for(proposal, "boss_d").target
         boss_wall = change_for(proposal, "boss_w").target
         assert boss_wall >= od / 4 - 1e-9, "screw retention"
         assert boss_wall <= 0.7 * wall + 1e-9, "the sink limit"
         assert boss_wall >= 0.5 * wall - 1e-9, "cracking around an insert"
 
-    def test_freezing_the_diameter_still_adjusts_the_wall(self):
-        proposal = plan(frozen=["boss_d"])
+    def test_with_both_frozen_there_is_nothing_to_propose_and_it_says_so(self):
+        """Ø6 on a 2 mm wall: retention wants 1.50 mm and sink caps at 1.40 mm.
+
+        No boss wall satisfies both, so proposing 0.6x -- which is what this used
+        to do -- would be a change that reported success and left the check
+        failing.
+        """
+        proposal = plan(frozen=["wall_t", "boss_d"])
+        assert change_for(proposal, "boss_w") is None
+        held = deferral_for(proposal, "ribs", "decision")
+        assert held is not None and "no boss wall that works" in held.why
+
+    def test_between_the_two_lines_the_diameter_stays_and_the_wall_thickens_to_meet_it(self):
+        """2.4x < OD <= 2.8x with the wall frozen: a boss wall at exactly a
+        quarter of the diameter clears retention and stays under the sink cap, so
+        the boss keeps its size."""
+        proposal = plan(frozen=["wall_t"],
+                        declared={"bossOD": 5.2, "bossWall": 0.6},
+                        values=dict(VALUES, boss_d=5.2))
+        assert change_for(proposal, "boss_d") is None, "no need to narrow it"
+        change = change_for(proposal, "boss_w")
+        assert change is not None
+        assert change.fraction == pytest.approx(0.65), "5.2 / 4 / 2.0"
+        assert change.target >= 5.2 / 4 - 1e-9
+        assert change.target <= 0.7 * 2.0 + 1e-9
+
+    def test_a_boss_already_in_its_window_is_left_alone(self):
+        proposal = plan(frozen=["wall_t"],
+                        declared={"bossOD": 4.0, "bossWall": 1.2},
+                        values=dict(VALUES, boss_d=4.0, boss_w=1.2))
+        assert change_for(proposal, "boss_w") is None
         assert change_for(proposal, "boss_d") is None
-        assert change_for(proposal, "boss_w") is not None
 
 
 class TestWhatItWillNotTouch:
@@ -312,3 +360,27 @@ class TestGuards:
                            values, expressions)
         assert change_for(proposal, "rib_t") is None
         assert any("already" in note for note in proposal.notes)
+
+
+class TestJudgedOnADefault:
+    """A check reading a value no role supplies is judging the analyser's own
+    default, not this part -- which can report a rib too thick on a part that has
+    no ribs. That has to be said, not fixed."""
+
+    def test_with_no_rib_or_boss_role_the_finding_is_not_acted_on(self):
+        held = deferral_for(plan(roles={"wall": "wall_t"}), "ribs", "unmapped")
+        assert held is not None
+        assert "no ribs" in held.why
+
+    def test_a_partly_mapped_check_says_which_figures_were_defaults(self):
+        roles = {"wall": "wall_t", "boss_od": "boss_d", "boss_wall": "boss_w"}
+        proposal = plan(roles=roles)
+        assert any("rib_thickness" in note for note in proposal.notes)
+
+    def test_and_still_fixes_the_ones_it_does_have(self):
+        roles = {"wall": "wall_t", "boss_od": "boss_d", "boss_wall": "boss_w"}
+        assert change_for(plan(roles=roles), "boss_w") is not None
+
+    def test_a_fully_mapped_check_gets_no_such_note(self):
+        proposal = plan()
+        assert not any("default" in note for note in proposal.notes)

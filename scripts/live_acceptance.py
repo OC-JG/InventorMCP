@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 import traceback
 from concurrent.futures import ThreadPoolExecutor
@@ -428,9 +429,123 @@ def check_constants(session: Session, report: Report) -> None:
                     "inventor_mcp/backend/com/constants.py.")
 
 
+def check_dfm(session: Session, report: Report) -> None:
+    """The DFM loop, end to end, on the housing that was built to exercise it.
+
+    This is the only check here that needs something outside Inventor: a checkout
+    of the DFM analyser and Node. Both are skipped clearly rather than silently
+    when absent -- a check that passes because it did not run is worse than no
+    check.
+
+    What is being verified is the loop's central claim, which is not "the score
+    went up" but "the findings it acted on are gone when measured again". So the
+    assertions are about what the second measurement says, and about the part
+    still being the part: the frozen pilot hole for the M3 screw has to come out
+    the same size it went in.
+    """
+    from inventor_mcp.dfm.loop import current_parameters, improve
+    from inventor_mcp.dfm.runner import DfmUnavailable, find_dfm_root
+
+    if session.backend.name == "mock":
+        report.skip("dfm: the loop",
+                    "the simulator does not write CAD files, and the analyser needs "
+                    "a mesh -- run with --backend inventor")
+        return
+    try:
+        root = find_dfm_root()
+    except DfmUnavailable as exc:
+        report.skip("dfm: the analyser", f"{exc.message} {exc.hint or ''}")
+        return
+    if shutil.which("node") is None:
+        report.skip("dfm: node", "Node is not installed, and the analyser is JavaScript")
+        return
+    report.note(f"DFM analyser at {root}")
+
+    recipe = PartRecipe.model_validate(
+        json.loads((ROOT / "examples" / "moulded_housing.json").read_text(encoding="utf-8"))
+    )
+    built = build_part(session, recipe, against_rehearsal=False)
+    if not report.check(bool(built.get("ok")), "dfm: the housing builds",
+                        str(built.get("errors"))[:200]):
+        return
+    context = session.context()
+
+    before, _ = current_parameters(session, context)
+    workspace = ROOT / ".dfm"
+    result = improve(session, context, rounds=3, workspace=str(workspace))
+
+    first, last = result.rounds[0], result.rounds[-1]
+    report.note(f"dfm: {first.score} {first.grade} -> {last.score} {last.grade}"
+                f" over {len(result.rounds) - 1} round(s); stopped because "
+                f"{result.stopped_because}")
+    for entry in result.rounds[1:]:
+        for change in entry.applied:
+            report.note(f"  round {entry.number}: {change.parameter} "
+                        f"{change.was} -> {change.expression}  ({change.check})")
+        if entry.cleared:
+            report.note(f"  round {entry.number}: cleared {', '.join(entry.cleared)}")
+        if entry.persisted:
+            report.note(f"  round {entry.number}: still reported "
+                        f"{', '.join(entry.persisted)}")
+
+    report.check(first.score is not None, "dfm: the analyser produced a score",
+                 str(first.score))
+
+    # The housing is deliberately wrong in ways a parameter answers: the boss
+    # wall is 0.9x the nominal wall, and a rib is 0.72x it.
+    report.check("ribs" in first.findings, "dfm: the ribs check finds the boss wall",
+                 f"findings were {first.findings}")
+
+    acted = [c for entry in result.rounds[1:] for c in entry.applied]
+    report.check(bool(acted), "dfm: it changed at least one parameter",
+                 result.stopped_because)
+
+    cleared = {key for entry in result.rounds[1:] for key in entry.cleared}
+    answered = {c.check for c in acted}
+    report.check(
+        not answered or bool(cleared & answered),
+        "dfm: a finding it acted on actually cleared when measured again",
+        f"acted on {sorted(answered)}, cleared {sorted(cleared)}",
+    )
+
+    after, _ = current_parameters(session, context)
+    report.check(
+        after.get("boss_hole_d") == before.get("boss_hole_d"),
+        "dfm: the frozen M3 pilot hole is untouched",
+        f"{before.get('boss_hole_d')} -> {after.get('boss_hole_d')}",
+    )
+    report.check(
+        after.get("cable_w") == before.get("cable_w"),
+        "dfm: the frozen cable entry is untouched",
+        f"{before.get('cable_w')} -> {after.get('cable_w')}",
+    )
+    report.check(
+        (last.score or 0) >= (first.score or 0),
+        "dfm: the part is not left worse than it started",
+        f"{first.score} -> {last.score}",
+    )
+
+    # The boss diameter is derived from the boss wall, so fixing the wall has to
+    # have resized the boss with it. A boss that did not move is an expression
+    # that was overwritten somewhere.
+    if after.get("boss_wall") != before.get("boss_wall"):
+        report.check(
+            after.get("boss_d") != before.get("boss_d"),
+            "dfm: the derived boss diameter followed its wall",
+            f"boss_wall {before.get('boss_wall')} -> {after.get('boss_wall')}, "
+            f"boss_d {before.get('boss_d')} -> {after.get('boss_d')}",
+        )
+
+    outstanding = [d for d in result.outstanding if d.reason in ("decision", "unverifiable")]
+    if outstanding:
+        report.note("dfm: left for a person -- "
+                    + "; ".join(f"{d.check} ({d.reason})" for d in outstanding))
+
+
 CHECKS = {
     "examples": None,  # handled specially: one per recipe
     "parameter-edit": check_parameter_edit,
+    "dfm": check_dfm,
     "hole-styles": check_hole_styles,
     "rollback": check_rollback,
     "threading": check_threading,

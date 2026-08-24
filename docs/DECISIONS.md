@@ -117,6 +117,83 @@ and it is absent unless the machine's owner turns it on, because a tool that is
 not registered cannot be talked into being used, which a tool that is present
 and refusing can.
 
+## A DFM fix is closed by a measurement, not by having been made
+
+The manufacturability loop changes a parameter, rebuilds, exports, and runs the
+analyser again. Nothing else would do. A change that was applied is not a finding
+that was answered, and the difference between the two is invisible in the moment:
+the report says the same thing either way. So every round records which findings
+actually went, which stayed, and which appeared — and a round whose change was
+made while its finding stayed is called out by name rather than being spent three
+more times.
+
+The corollary is that a finding the analyser cannot measure is a finding the loop
+will not touch. Corner radii are the case: the tool advises on them because an
+STL carries no B-rep topology to measure them from, so a fillet change could
+never be confirmed. A loop that cannot see the result of its own change is
+guessing, and this one refuses to.
+
+## Ratio fixes are written as expressions, not numbers
+
+A rib that should be 45% of the wall becomes `wall_t * 0.45`, never `0.9 mm`.
+
+The finding would close either way, today. Written as a number it closes until
+someone edits the wall, at which point the check breaks again and nobody
+connects the two events. Written as a ratio it is a property of the model, and
+the next wall change carries the ribs with it.
+
+Which makes this the one place an automated pass leaves a model *more*
+parametric than it found it. That is worth protecting: it is the opposite of what
+an optimiser usually does, and the tempting simplification — just set the number,
+it is what the check reads — undoes it.
+
+It also means the ordering matters. A rib ratio judged against the wall the part
+has today can be wrong about the part the same pass is about to make: a Ø5.2 mm
+boss is too wide for a 2 mm wall and comfortable on a 2.8 mm one. So every
+decision downstream of the wall is taken against the wall that is coming.
+
+## Key geometry is enforced where parameters change, and follows the expressions
+
+Two things about the freeze that both look like over-engineering and are not.
+
+**It lives in `apply_parameter`, not in the loop that motivated it.** A guarantee
+implemented inside one loop ends the moment anything else edits a parameter — a
+tool call, a script, a later feature — and the report would still say the key
+geometry had been protected. So `set_parameters` refuses too, and getting through
+requires saying `override_frozen=True`.
+
+**Depending on a frozen value is the same as changing it.** Freeze `seal_face` at
+`plate_t - gasket_crush` and nothing will touch `seal_face` — while `plate_t`
+sits there, unlisted, moving the sealing face for anyone who edits it. So the
+protection follows the expressions transitively, and the refusal names the chain
+rather than just saying no. The reverse is deliberately not true: a parameter
+that *reads* a frozen value is free to move, because reading is not changing.
+
+Resolved against the model's live expressions rather than the recipe's. The
+recipe is a snapshot from build time, and this loop rewrites literals into
+expressions as it goes — a guard resolved against the snapshot would work out the
+dependencies from a table that had since moved, and report a freeze it had not
+enforced.
+
+## A duplicated threshold is contained by a test, not by care
+
+The DFM tool states its thresholds as literals inside its rules and does not
+export them, so the *targets* this project aims at — 45% of the wall, a tenth
+above the material floor — are its own reading of bands stated elsewhere. That is
+a duplication, and duplications drift.
+
+The answer is not to be careful. It is that `tests/test_dfm_targets.py` puts
+every target through the real engine and requires the check to come back clean,
+with negative controls proving each margin is still needed. If a threshold moves,
+that file fails and names the check. And in the meantime the loop re-measures, so
+a target that has gone stale shows up as a proposal that did not work rather than
+as a part quietly changed for nothing.
+
+Where the numbers *can* travel, they do: material wall bands and required draft
+angles come across from the tool's own table as numbers, because the alternative
+was parsing them out of display strings like `"1.2–3.5 mm"` — which breaks
+silently the day someone changes a dash.
+
 ## Documentation that has drifted is worse than none
 
 Because it is believed. So the Skill's factual claims are pinned by tests: that

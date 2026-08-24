@@ -1,0 +1,107 @@
+{
+  "name": "MouldedHousing",
+  "description": "A drafted, shelled housing with two floor ribs and four screw bosses. Built to be judged for injection moulding: every figure the DFM analyser reads is a named parameter, and the ones the screws and the connector decide are frozen.",
+  "units": "mm",
+  "material": "ABS Plastic",
+  "parameters": [
+    { "name": "box_w", "value": 100 },
+    { "name": "box_d", "value": 70 },
+    { "name": "box_h", "value": 30 },
+    { "name": "wall", "value": 2.5, "comment": "nominal wall -- everything else is a fraction of this" },
+    { "name": "draft_a", "value": 1.5, "unit": "deg", "comment": "drafts the outer walls; ABS on a polished tool wants 0.5 plus the texture allowance" },
+    { "name": "corner_r", "value": 6 },
+    { "name": "rib_t", "value": 1.8, "comment": "0.72x the wall -- inside the structural band, above the cosmetic one" },
+    { "name": "rib_h", "value": 12 },
+    { "name": "rib_r", "value": 0.4, "comment": "fillet at the rib root" },
+    { "name": "boss_hole_d", "value": 2.5, "comment": "M3 self-tapping pilot. The screw decides this, not the moulding: frozen." },
+    { "name": "boss_wall", "value": 2.25, "comment": "0.9x the wall, which will sink at the boss base" },
+    { "name": "boss_d", "value": "boss_hole_d + 2 * boss_wall", "comment": "follows the boss wall, so fixing the wall resizes the boss" },
+    { "name": "boss_inset", "value": "corner_r + boss_d / 2" },
+    { "name": "boss_h", "value": "box_h - wall - 4", "comment": "stands on the floor, stopping below the rim" },
+    { "name": "cable_w", "value": 12, "comment": "the connector decides this: frozen" },
+    { "name": "cable_h", "value": 6, "comment": "and this" }
+  ],
+  "operations": [
+    {
+      "op": "sketch",
+      "name": "Outline",
+      "plane": "xy",
+      "entities": [
+        { "type": "rectangle", "center": [0, 0], "width": "box_w", "height": "box_d" }
+      ]
+    },
+    { "op": "extrude", "name": "Block", "sketch": "Outline", "distance": "box_h", "taper": "draft_a" },
+    { "op": "fillet", "name": "Corners", "edges": { "filter": "vertical" }, "radius": "corner_r" },
+    {
+      "op": "shell",
+      "name": "Cavity",
+      "faces": { "kind": "face", "filter": "top" },
+      "thickness": "wall",
+      "direction": "inside"
+    },
+    {
+      "op": "sketch",
+      "name": "RibLines",
+      "plane": "xy",
+      "offset": "wall",
+      "entities": [
+        { "type": "rectangle", "center": [0, "box_d / 4"], "width": "box_w - 4 * wall", "height": "rib_t" },
+        { "type": "rectangle", "center": [0, "-box_d / 4"], "width": "box_w - 4 * wall", "height": "rib_t" }
+      ]
+    },
+    { "op": "extrude", "name": "Ribs", "sketch": "RibLines", "distance": "rib_h" },
+    { "op": "fillet", "name": "RibRoots", "edges": { "feature": "Ribs", "filter": "horizontal" }, "radius": "rib_r" },
+    {
+      "op": "sketch",
+      "name": "BossPads",
+      "plane": "xy",
+      "offset": "wall",
+      "entities": [
+        { "type": "circle", "center": ["(box_w - 2 * boss_inset) / 2", "(box_d - 2 * boss_inset) / 2"], "diameter": "boss_d" },
+        { "type": "circle", "center": ["(box_w - 2 * boss_inset) / 2", "-(box_d - 2 * boss_inset) / 2"], "diameter": "boss_d" },
+        { "type": "circle", "center": ["-(box_w - 2 * boss_inset) / 2", "(box_d - 2 * boss_inset) / 2"], "diameter": "boss_d" },
+        { "type": "circle", "center": ["-(box_w - 2 * boss_inset) / 2", "-(box_d - 2 * boss_inset) / 2"], "diameter": "boss_d" }
+      ]
+    },
+    { "op": "extrude", "name": "Bosses", "sketch": "BossPads", "distance": "boss_h" },
+    {
+      "op": "sketch",
+      "name": "BossCentres",
+      "plane": "xy",
+      "offset": "wall",
+      "entities": [
+        { "type": "point", "position": ["(box_w - 2 * boss_inset) / 2", "(box_d - 2 * boss_inset) / 2"] },
+        { "type": "point", "position": ["(box_w - 2 * boss_inset) / 2", "-(box_d - 2 * boss_inset) / 2"] },
+        { "type": "point", "position": ["-(box_w - 2 * boss_inset) / 2", "(box_d - 2 * boss_inset) / 2"] },
+        { "type": "point", "position": ["-(box_w - 2 * boss_inset) / 2", "-(box_d - 2 * boss_inset) / 2"] }
+      ]
+    },
+    { "op": "hole", "name": "BossHoles", "sketch": "BossCentres", "diameter": "boss_hole_d", "depth": "boss_h - 1" },
+    {
+      "op": "sketch",
+      "name": "CableEntry",
+      "plane": "yz",
+      "entities": [
+        { "type": "rectangle", "center": [0, "wall + cable_h / 2"], "width": "cable_w", "height": "cable_h" }
+      ]
+    },
+    { "op": "extrude", "name": "CableCut", "sketch": "CableEntry", "extent": "all", "direction": "symmetric", "operation": "cut" }
+  ],
+  "dfm": {
+    "parameters": {
+      "wall": "wall",
+      "draft": "draft_a",
+      "rib_thickness": "rib_t",
+      "rib_height": "rib_h",
+      "rib_fillet": "rib_r",
+      "boss_od": "boss_d",
+      "boss_wall": "boss_wall"
+    },
+    "frozen": ["boss_hole_d", "cable_w", "cable_h"],
+    "settings": {
+      "material": "abs",
+      "surfaceFinish": "spi-b1",
+      "moldType": "two-piece"
+    }
+  }
+}

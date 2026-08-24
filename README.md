@@ -253,6 +253,41 @@ inventor-mcp --backend mock
 
 ---
 
+## Manufacturability
+
+If you have the [OnlyCat DFM tool](https://github.com/OC-JG/DFM) checked out,
+this server can measure how manufacturable a part is by injection moulding,
+enact the parts of that verdict which really are parameter changes, rebuild, and
+ask the tool again.
+
+```
+build_part_from_recipe(recipe=...)
+improve_for_manufacture(rounds=3)
+```
+
+Each round reports which findings actually cleared, because a change that was
+applied is not the same as a finding that was answered. Ratio fixes come out as
+expressions — a rib becomes `wall_t * 0.45`, not `0.9 mm` — so the relationship
+survives the next wall change instead of quietly re-breaking the check.
+
+Dimensions the design depends on can be declared as key geometry and are then
+refused, including anything a protected value is computed from:
+
+```jsonc
+{ "name": "seal_face", "value": "plate_t - gasket_crush", "frozen": true }
+```
+
+That protects `plate_t` as well — editing it would move the sealing face just as
+surely, and it would not have appeared in any frozen list.
+
+Findings no parameter answers — an undercut, a sink, a corner radius a mesh
+cannot even be measured for — come back with the tool's own wording and a reason
+for not touching them.
+
+See [docs/DFM.md](docs/DFM.md).
+
+---
+
 ## Tools
 
 | Tool | What it is for |
@@ -272,6 +307,11 @@ inventor-mcp --backend mock
 | `measure_part` | Bounding box, volume, area, mass, centre of mass |
 | `export_model` | STEP, STL, IGES, SAT, DWG, DXF, OBJ, 3MF |
 | `capture_view` | Render a PNG |
+| `check_manufacture` | Measure manufacturability, and say what would change |
+| `improve_for_manufacture` | Change it, rebuild, measure again — a closed loop |
+| `read_dfm_report` | Read a report exported from the DFM tool in a browser |
+| `protect_geometry` | Declare key geometry that must not be changed |
+| `dfm_capabilities` | The roles, and what needs a person rather than a parameter |
 
 Two prompts are published as well: `model_this_part` and `revise_part`.
 
@@ -327,15 +367,18 @@ inventor_mcp/
     base.py        the contract both backends satisfy
     com/           live Inventor over COM (Windows)
     mock/          in-memory simulator
+  dfm/             manufacturability: read a DFM report, act on it, refuse to
   tools/           the MCP tool surface
   server.py        assembly: tools, resources, prompts, CLI
 ```
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for why it is split that way,
 [docs/INVENTOR_SETUP.md](docs/INVENTOR_SETUP.md) for the Windows/COM specifics,
-and [docs/DECISIONS.md](docs/DECISIONS.md) for the choices that surprise
-people — why a failed build is left where it stopped, why the simulator counts
-as a real implementation, and why an honest "unknown" beats a heuristic.
+[docs/DFM.md](docs/DFM.md) for the manufacturability loop and how key geometry
+is protected, and [docs/DECISIONS.md](docs/DECISIONS.md) for the choices that
+surprise people — why a failed build is left where it stopped, why the
+simulator counts as a real implementation, and why an honest "unknown" beats a
+heuristic.
 
 ## Development
 

@@ -192,6 +192,16 @@ class _Context:
     guard: FreezeGuard
     values: dict[str, float]
     expressions: dict[str, str]
+    #: The nominal wall this pass is about to set, once the wall rule has run.
+    #:
+    #: The rib and boss guidelines are all fractions of the declared wall, and
+    #: the declared wall is a parameter this same pass may be changing -- so a
+    #: decision taken against the wall the part has today can be wrong about the
+    #: part it is about to become. A Ø5.2 mm boss is too wide for a 2 mm wall and
+    #: comfortable on a 2.8 mm one; deciding on the 2 mm figure narrowed a boss
+    #: that did not need narrowing, and narrowing a screw boss changes what the
+    #: part does.
+    wall_after: float | None = None
 
     def parameter(self, role: str) -> str | None:
         return self.roles.get(role)
@@ -209,6 +219,12 @@ class _Context:
     def wall_expression(self) -> str | None:
         """The wall parameter's name, for writing a ratio against it."""
         return self.roles.get("wall")
+
+    def wall_for_ratios(self) -> float | None:
+        """The wall the ratios should be judged against: the one coming, if any."""
+        if self.wall_after is not None:
+            return self.wall_after
+        return self.report.declared_number("wallThk")
 
 
 Rule = Callable[[_Context], list[Change | Deferred]]
@@ -503,6 +519,16 @@ def _ratio_change(context: _Context, check: Check, role: str, against: str,
     )
 
 
+#: Which roles supply the numbers each check judges on. A check reading a value
+#: no role supplies is judging the analyser's own default, not this part.
+JUDGED_ON: dict[str, tuple[str, ...]] = {
+    "wall": ("wall",),
+    "draft": ("draft",),
+    "ribs": ("wall", "rib_thickness", "rib_height", "rib_fillet",
+             "boss_od", "boss_wall"),
+}
+
+
 @_rule
 def _ribs_and_bosses(context: _Context) -> list[Change | Deferred]:
     """The five ratios the ribs check tests, each fixed independently.
@@ -517,13 +543,31 @@ def _ribs_and_bosses(context: _Context) -> list[Change | Deferred]:
     if check is None or not check.costs_points:
         return []
 
-    wall = report.declared_number("wallThk")
+    wall = context.wall_for_ratios()
     if not wall:
         return [Deferred(
             check="ribs", reason="decision", severity=check.severity,
             finding=check.detail,
             why="Every ratio this check tests is against the nominal wall, and the "
                 "record does not carry one.",
+        )]
+
+    # Every figure this check tests is a declared one. With none of them coming
+    # from the model, the finding is about the analyser's own defaults held
+    # against the model's wall -- which can report a rib too thick on a part
+    # with no ribs at all. Saying that beats proposing a fix for it.
+    supplied = [role for role in JUDGED_ON["ribs"]
+                if role != "wall" and context.parameter(role)]
+    if not supplied:
+        return [Deferred(
+            check="ribs", reason="unmapped", severity=check.severity,
+            finding=check.detail,
+            why="No parameter is declared for any rib or boss role, so every figure "
+                "this check tested is the analyser's own default rather than "
+                "something this model supplied -- which can report a rib too thick "
+                "on a part with no ribs. Declare the roles that apply, or switch "
+                "the 'ribs' check off in the recipe's dfm.settings for a part that "
+                "has neither.",
         )]
 
     out: list[Change | Deferred] = []
@@ -573,18 +617,28 @@ def _ribs_and_bosses(context: _Context) -> list[Change | Deferred]:
 
 
 def _bosses(context: _Context, check: Check, wall: float) -> list[Change | Deferred]:
-    """Boss wall, and the bind it can be caught in.
+    """Boss wall, and the bind two guidelines can put it in.
 
-    Two guidelines pull against each other: retention around the screw wants a
-    boss wall of at least a quarter of the outside diameter, and the sink limit
-    caps it at 0.7 of the nominal wall. Above an outside diameter of 2.8x the
-    wall there is no value that satisfies both, and no amount of adjusting the
-    boss wall will find one -- which is exactly the loop that a naive optimiser
-    runs forever, nudging one number back and forth.
+    Three limits, and the arithmetic between them decides what moves:
 
-    So the diameter is what moves. At 2.4x the wall, a quarter of it is 0.6x --
-    which is the boss wall being aimed at anyway, so both hold at once with the
-    sink cap still 0.1x clear above.
+    * retention around the screw wants a boss wall of at least a quarter of the
+      outside diameter -- the convention being an outside diameter about twice
+      the hole it carries;
+    * the sink limit caps it at 0.7 of the nominal wall;
+    * below 0.5 of the nominal wall it cracks around an insert.
+
+    Aiming at 0.6 of the wall sits between the last two, and satisfies the first
+    only while the diameter is no more than 2.4x the wall -- because a quarter of
+    2.4 is 0.6. Above that the diameter is what has to move, and adjusting the
+    boss wall cannot find a value however long a loop spends trying: past 2.8x
+    the wall, a quarter of the diameter is above the sink cap and *no* boss wall
+    satisfies both.
+
+    So the diameter comes down only when it must. An earlier version tested the
+    bind as "a quarter of the diameter above the sink cap", which is the 2.8x
+    line, and so left every boss between 2.4x and 2.8x with a boss wall of 0.6x
+    that still failed retention -- a fix that reported success and changed
+    nothing that mattered.
     """
     report = context.report
     od = report.declared_number("bossOD")
@@ -594,38 +648,81 @@ def _bosses(context: _Context, check: Check, wall: float) -> list[Change | Defer
 
     hole = od - 2 * boss_wall
     if hole <= 0:
-        # A solid post. The screw guideline does not apply and the tool says so.
+        # A solid post. The screw guideline does not apply, and the tool says so.
         return []
 
     screw_minimum = od / 4
     sink_maximum = 0.7 * wall
+    crack_minimum = 0.5 * wall
     ratio = boss_wall / wall
-    conflict = screw_minimum > sink_maximum + 1e-9
-    out_of_band = ratio > 0.7 or ratio < 0.5 or boss_wall < screw_minimum - 1e-9
-    if not (conflict or out_of_band):
+    if (screw_minimum - 1e-9 <= boss_wall <= sink_maximum + 1e-9
+            and boss_wall >= crack_minimum - 1e-9):
         return []
 
+    fault = _boss_fault(ratio, boss_wall, screw_minimum)
+    floor = max(screw_minimum, crack_minimum)
+    impossible = floor > sink_maximum + 1e-9
+
+    if not impossible:
+        # There is a boss wall that works, so the boss keeps its size. Aim at
+        # 0.6x the wall, or at a quarter of the diameter where that is more --
+        # which is the thinnest wall that still holds a screw. Narrowing the boss
+        # here would change what the part does to buy nothing.
+        fraction = round(max(BOSS_WALL_OF_WALL, floor / wall), 4)
+        note = ("" if fraction == BOSS_WALL_OF_WALL else
+                f", which is a quarter of the Ø{od:g} mm diameter and the thinnest "
+                f"that still holds a screw in it")
+        return [_ratio_change(
+            context, check, "boss_wall", "wall", fraction, functional=False,
+            why=(f"A boss wall {ratio:.2f}x the nominal wall is {fault}. "
+                 f"{fraction:g}x is inside the 0.5-0.7x window{note}."),
+        )]
+
+    # Nothing works: a quarter of the diameter is above the sink cap, so no boss
+    # wall satisfies retention and sink together and adjusting it cannot find
+    # one however long a loop spends trying. The diameter is what has to move.
     out: list[Change | Deferred] = []
-    if conflict:
+    smaller = _ratio_change(
+        context, check, "boss_od", "wall", BOSS_OD_OF_WALL, functional=True,
+        why=(f"A boss {od:g} mm across wants at least {screw_minimum:.2f} mm of "
+             f"wall around its Ø{hole:.1f} mm hole, and the sink limit on a "
+             f"{wall:g} mm wall caps the boss wall at {sink_maximum:.2f} mm -- so "
+             f"no boss wall satisfies both, and adjusting it cannot find one. At "
+             f"{BOSS_OD_OF_WALL:g}x the wall the two meet exactly. This narrows a "
+             f"screw boss to Ø{BOSS_OD_OF_WALL * wall:.1f} mm around a "
+             f"Ø{BOSS_OD_OF_WALL * wall - 2 * BOSS_WALL_OF_WALL * wall:.1f} mm "
+             f"hole -- check what goes into it. Coring the base or gusseting into "
+             f"the side wall is the other answer, and it keeps the diameter."),
+    )
+    out.append(smaller)
+    if isinstance(smaller, Change):
         out.append(_ratio_change(
-            context, check, "boss_od", "wall", BOSS_OD_OF_WALL, functional=True,
-            why=(f"A boss {od:g} mm across cannot satisfy both guidelines on a "
-                 f"{wall:g} mm wall: retention wants at least {screw_minimum:.2f} mm "
-                 f"of boss wall and the sink limit caps it at {sink_maximum:.2f} mm. "
-                 f"Bringing the boss to {BOSS_OD_OF_WALL:g}x the wall makes the two "
-                 f"meet. This narrows a screw boss, so check what goes into it -- "
-                 f"coring the base or gusseting into the side wall is the other "
-                 f"answer, and it keeps the diameter."),
+            context, check, "boss_wall", "wall", BOSS_WALL_OF_WALL, functional=False,
+            why=(f"A boss wall {ratio:.2f}x the nominal wall is {fault}. With the "
+                 f"boss at {BOSS_OD_OF_WALL:g}x the wall, {BOSS_WALL_OF_WALL:g}x "
+                 f"satisfies retention and the sink limit together."),
         ))
-    out.append(_ratio_change(
-        context, check, "boss_wall", "wall", BOSS_WALL_OF_WALL, functional=False,
-        why=(f"A boss wall {ratio:.2f}x the nominal wall is "
-             + ("thick enough to show as sink at the base" if ratio > 0.7
-                else "thin enough to crack around an insert" if ratio < 0.5
-                else f"under the {screw_minimum:.2f} mm its diameter wants")
-             + f". {BOSS_WALL_OF_WALL:g}x sits inside the 0.5-0.7x window."),
+        return out
+
+    out.append(Deferred(
+        check=check.key, reason="decision", role="boss_wall",
+        severity=check.severity, finding=check.detail,
+        why=(f"There is no boss wall that works on a Ø{od:g} mm boss with a "
+             f"{wall:g} mm wall: retention wants at least {screw_minimum:.2f} mm "
+             f"and the sink limit caps it at {sink_maximum:.2f} mm. The diameter "
+             f"is what has to change, and it cannot here. Thickening the wall "
+             f"would also resolve it. Otherwise core the boss base, or carry the "
+             f"load on gussets into the side wall instead of thickening it."),
     ))
     return out
+
+
+def _boss_fault(ratio: float, boss_wall: float, screw_minimum: float) -> str:
+    if ratio > 0.7:
+        return "thick enough to show as sink at the base"
+    if ratio < 0.5:
+        return "thin enough to crack around an insert"
+    return f"under the {screw_minimum:.2f} mm its diameter wants"
 
 
 # ---------------------------------------------------------------------------
@@ -741,6 +838,10 @@ def propose(
     for rule in _RULES:
         for outcome in rule(context):
             (changes if isinstance(outcome, Change) else deferred).append(outcome)
+            # Rules run in order, and everything after the wall rule needs to
+            # know what the wall is becoming rather than what it is.
+            if isinstance(outcome, Change) and outcome.role == "wall":
+                context.wall_after = outcome.target
 
     # One parameter, one change. Two rules wanting the same parameter is not
     # expected, but the second would silently overwrite the first at apply time
@@ -779,6 +880,18 @@ def propose(
             "No wall thickness was measured, so every ratio the ribs check tests was "
             "judged against the declared figure alone."
         )
+    for key, needed in JUDGED_ON.items():
+        check = report.check(key)
+        if check is None:
+            continue
+        missing = [role for role in needed if role not in context.roles]
+        if missing and len(missing) < len(needed):
+            notes.append(
+                f"The {key!r} check judged {', '.join(sorted(missing))} on the "
+                f"analyser's default rather than on this model: no parameter is "
+                f"declared for those roles."
+            )
+
     if "wall" not in context.roles:
         notes.append(
             "No parameter is declared for the 'wall' role. The nominal wall is what "

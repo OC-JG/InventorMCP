@@ -316,6 +316,61 @@ Then check `measure_part`: the span that should have grown should have grown. If
 nothing moved, the geometry was never driven by that parameter — go back and look
 at the sketch's `driven by` list.
 
+## Making a part manufacturable
+
+If the DFM analyser is available — check with `dfm_capabilities` — a part can be
+measured for injection moulding and improved in a closed loop:
+
+```
+check_manufacture()                 # measure; changes nothing
+improve_for_manufacture(rounds=3)   # change, rebuild, measure again
+```
+
+Four things to get right before running it.
+
+**Declare the roles.** Several of the analyser's checks are judged on declared
+numbers rather than measured ones — the rib ratios are all fractions of the
+*declared* wall — and the model knows those exactly. Put the map in the recipe:
+
+```jsonc
+"dfm": {
+  "parameters": { "wall": "wall", "rib_thickness": "rib_t", "boss_wall": "boss_wall" },
+  "settings": { "material": "abs" }
+}
+```
+
+Nothing is guessed from a spelling. An unmapped role comes back as a finding
+nobody can act on, named — which is the honest answer, but it is a wasted round.
+`wall` is worth more than all the others together.
+
+**Freeze the dimensions the design depends on** before running the loop, not
+after. It is a machine for changing dimensions until a number stops rising, and
+a sealing face, a bearing bore or a pilot hole for a self-tapping screw are all
+things it can legitimately change to raise a score, and must not.
+
+```jsonc
+{ "name": "boss_hole_d", "value": 2.5, "frozen": true, "comment": "M3 self-tapper" }
+```
+
+Anything a frozen value is computed from is protected too, so freeze the
+*driving* dimension rather than a derived one — and be aware that freezing a
+derived parameter locks everything under it. Freezing `boss_d` where
+`boss_d = boss_hole_d + 2 * boss_wall` stops the boss wall moving at all.
+
+**Read `did_not_clear`, not `score`.** A change that was applied is not a
+finding that was answered. Each round reports which findings actually went; a
+finding still listed after a change aimed at it is the thing to look at.
+
+**Expect some findings to stay.** Undercuts, sink, warpage and corner radii are
+not parameter changes, and the loop says so rather than attempting them — a
+corner radius cannot be measured from a mesh at all, so a change to one could
+never be verified. Those come back under `needs_a_person`, with the analyser's
+own wording. Report them; do not try to work around them by moving other
+dimensions until the score rises.
+
+If the user already has the tool open in a browser, `read_dfm_report(path=...)`
+reads their exported JSON and says what it implies — no Node, no re-analysis.
+
 ## Standard parts
 
 `references/standard-parts.md` holds parametric templates for hex nuts, washers

@@ -5,6 +5,71 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 ## Unreleased
 
 ### Added
+- **A closed manufacturability loop.** The OnlyCat DFM tool measures a mesh and
+  says what is wrong with the part for injection moulding; this takes that
+  verdict, enacts the parts of it that really are parameter changes, rebuilds,
+  and asks the tool again. Five tools: `check_manufacture`,
+  `improve_for_manufacture`, `read_dfm_report`, `protect_geometry`,
+  `dfm_capabilities`. See `docs/DFM.md`.
+
+  A finding is closed by a measurement rather than by an assertion, so every
+  round records which findings actually cleared, which stayed and which
+  appeared. A round whose change went in while its finding stayed is called out
+  rather than spent three more times.
+
+  The analyser runs headlessly through its own modules, not a browser: its
+  analysis is pure -- `analyseMesh` and `runDFM` take every input as an argument
+  and touch no DOM, which is what lets the tool run them in a worker -- so
+  `inventor_mcp/dfm/headless.mjs` calls the same functions the page calls.
+  Verified rather than assumed: on the tool's own `hollowFrustum(20, 30, 3, 2)`
+  fixture with clean inputs the bridge returns 100 out of a budget of 100, which
+  is what its `test/unit.mjs` asserts for that part.
+
+  Ratio fixes come out as expressions: a rib becomes `wall_t * 0.45`, not
+  `0.9 mm`, so the relationship survives the next wall change instead of quietly
+  re-breaking the check. Which makes the ordering matter -- a Ø5.2 mm boss is too
+  wide for a 2 mm wall and comfortable on a 2.8 mm one -- so every decision
+  downstream of the wall is taken against the wall the same pass is setting.
+
+  Findings no parameter answers are reported, not attempted: an undercut is a
+  tooling decision, a sink is cored out, and a corner radius cannot be measured
+  from a mesh at all, so a change to one could never be verified.
+- **Key geometry**, which is the other half of that: `frozen: true` on a
+  parameter, a `dfm.frozen` list that accepts globs, `frozen_features`, and
+  `protect_geometry`. Enforced in `apply_parameter` rather than in the loop --
+  a guarantee that holds only inside one loop ends the moment anything else
+  edits a parameter, and the report would still say the geometry was protected.
+  `set_parameters` therefore refuses too, and `override_frozen=True` is how you
+  say otherwise.
+
+  Depending on a frozen value counts as changing it. Freeze `seal_face` at
+  `plate_t - gasket_crush` and `plate_t` is protected as well, transitively,
+  with the refusal naming the chain -- otherwise the freeze holds on paper while
+  anyone editing `plate_t` moves the sealing face. The reverse is deliberately
+  not true: a parameter that reads a frozen value may move, because reading is
+  not changing.
+- `examples/moulded_housing.json` -- a drafted, shelled housing with floor ribs
+  and screw bosses, deliberately wrong in two ways a parameter answers, with the
+  M3 pilot hole and the cable entry frozen because the screw and the connector
+  decide those rather than the moulding.
+- `tests/test_dfm_targets.py` -- the drift alarm for the one duplication in the
+  integration. The DFM tool states its thresholds as literals inside its rules
+  and does not export them, so the targets aimed at here are this project's own
+  reading of those bands. Every one is put through the real engine and required
+  to come back clean, with negative controls proving each margin is still needed:
+  the material floor alone still fails, the required draft alone still fails, and
+  adjusting only the boss wall still cannot satisfy both boss guidelines.
+- A `dfm` check in `scripts/live_acceptance.py`, which runs the whole loop on the
+  housing and asserts the frozen pilot hole comes out the size it went in.
+
+### Fixed
+- **The simulator evaluated an expression once, when it was set, and kept the
+  number.** `rib_t = wall_t * 0.45` stayed where it started for ever after the
+  wall moved, so the simulator disagreed with Inventor about every dependent
+  parameter in a document -- and it matters most exactly where it is least
+  visible, since the DFM loop writes its ratio fixes as expressions *so that*
+  they follow the wall. Dependents are now recomputed on every parameter change.
+
 - Every non-sketch operation returns a `measured` block — volume, its change,
   face and edge counts, and the bounding span when it moves — so the model can
   tell that its last step did nothing. Inventor reports success for operations

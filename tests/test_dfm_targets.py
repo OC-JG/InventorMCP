@@ -63,12 +63,33 @@ def proposal():
                    VALUES, expressions)
 
 
-def target_for(proposal, parameter: float) -> float:
+def target_for(proposal, parameter: str) -> float:
     for change in proposal.changes:
         if change.parameter == parameter:
             assert change.target is not None, f"{parameter} has no numeric target"
             return change.target
     raise AssertionError(f"nothing proposed for {parameter}")
+
+
+#: Which declared DFM setting each parameter in the fixture supplies.
+SUPPLIES = {"wall_t": "wallThk", "rib_t": "ribThk", "rib_h": "ribH",
+            "rib_r": "ribRadius", "boss_d": "bossOD", "boss_w": "bossWall"}
+
+
+def declared_after(proposal) -> dict:
+    """The declared inputs the model would supply once the proposal is applied.
+
+    Built from what was actually proposed rather than from a fixed list, because
+    a rule declining to change something is a legitimate answer -- the boss
+    diameter stays put whenever thickening the wall resolves the bind on its own,
+    and a test that insisted on a boss change would be asserting the old bug.
+    """
+    after = {setting: VALUES[name] for name, setting in SUPPLIES.items()}
+    for change in proposal.changes:
+        setting = SUPPLIES.get(change.parameter)
+        if setting and change.target is not None:
+            after[setting] = change.target
+    return after
 
 
 def shape(analyser: Path, out: Path, name: str, *args: float) -> Path:
@@ -161,16 +182,22 @@ class TestTheRibAndBossTargets:
     def test_every_proposed_ratio_clears_the_ribs_check(self, analyser, tmp_path, proposal):
         stl = shape(analyser, tmp_path / "any.stl", "hollowFrustum", 20, 30, 3, 2)
         report = analyse_stl(stl, {
-            "material": "abs",
-            "wallThk": target_for(proposal, "wall_t"),
-            "ribThk": target_for(proposal, "rib_t"),
-            "ribH": target_for(proposal, "rib_h"),
-            "ribRadius": target_for(proposal, "rib_r"),
-            "bossOD": target_for(proposal, "boss_d"),
-            "bossWall": target_for(proposal, "boss_w"),
-            **only("ribs"),
+            "material": "abs", **declared_after(proposal), **only("ribs"),
         })
         assert deduction(report, "ribs") == 0, report.check("ribs").detail
+
+    def test_the_boss_keeps_its_size_when_the_wall_alone_resolves_it(
+            self, analyser, tmp_path, proposal):
+        """A Ø6 boss is too wide for a 2 mm wall and comfortable on the 2.82 mm
+        one this pass is already setting, so narrowing it would change function
+        for nothing. Asserted against the live rules, not just the intent."""
+        assert "boss_d" not in {c.parameter for c in proposal.changes}
+        stl = shape(analyser, tmp_path / "kept.stl", "hollowFrustum", 20, 30, 3, 2)
+        report = analyse_stl(stl, {
+            "material": "abs", **declared_after(proposal), **only("ribs"),
+        })
+        assert report.declared_number("bossOD") == 6.0
+        assert deduction(report, "ribs") == 0
 
     def test_and_the_values_it_started_from_did_not(self, analyser, tmp_path):
         stl = shape(analyser, tmp_path / "any2.stl", "hollowFrustum", 20, 30, 3, 2)

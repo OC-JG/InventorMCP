@@ -21,6 +21,14 @@ Workflow:
 5. `set_parameters` -- change a driving dimension and the model updates. This is the
    point of the whole thing: iterate on parameters, not on geometry.
 6. `export_model` / `capture_view` -- STEP/STL/IGES out, or a PNG to look at.
+7. `check_manufacture` / `improve_for_manufacture` -- for a moulded part, measure how
+   manufacturable it is by injection moulding and improve it in a closed loop: change
+   a parameter, rebuild, measure again. `dfm_capabilities` says whether the analyser
+   is available. Freeze the dimensions the design depends on FIRST -- a sealing face,
+   a bearing bore, a pilot hole for a self-tapping screw -- with `frozen: true` on the
+   parameter or `protect_geometry`. The loop is a machine for changing dimensions
+   until a number stops rising, and every one of those is a legitimate way to raise a
+   DFM score and a broken part.
 
 Working from a 2D drawing? Read it into a `reading` first (`drawing_reading_schema`),
 write a recipe whose parameters are its dimensions, then `check_against_drawing`.
