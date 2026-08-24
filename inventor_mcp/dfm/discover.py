@@ -223,32 +223,46 @@ def discover(
     known = {name.lower(): name for name in parameters}
     facts = [normalise(entry) for entry in features]
     found: dict[str, list[tuple[str, str]]] = {}
+    #: role -> parameter matched on a property whose feature kind was unreadable.
+    #: The same standing as a likely name: offered, never applied.
+    offered: dict[str, str] = {}
+    kind_notes: set[str] = set()
 
     for fact in facts:
         unreadable = fact.kind.lower() in ("", "unknown", "feature")
         for kind, properties, role, wording in EVIDENCE:
-            if not unreadable and kind not in fact.kind.lower():
+            if unreadable:
+                # The property is there and what kind of feature holds it could
+                # not be read -- and the kind is half the evidence. Inventor's
+                # rib feature has a thickness too, so "something has a thickness
+                # driven by rib_t" maps the wall to a rib on any part whose only
+                # thickness-carrying feature is a rib. The first version of this
+                # used the property anyway, counting on two candidates coming
+                # out ambiguous; one candidate sailed straight through, and one
+                # candidate that is a rib is exactly the wrong-parameter mapping
+                # this module exists to prevent. So an unreadable kind demotes
+                # the match to an offer, the same standing as a likely name.
+                held = fact.expression(*properties)
+                if held is None:
+                    continue
+                for referenced in _parameters_in(held[1], known):
+                    offered.setdefault(role, referenced)
+                    kind_notes.add(
+                        f"{fact.name or '(unnamed)'} takes its {held[0].lower()} "
+                        f"from {referenced}, but what kind of feature it is could "
+                        f"not be read -- a rib has a thickness too -- so this is "
+                        f"offered rather than used. Confirm it with "
+                        f"roles={{{role!r}: {referenced!r}}}, and run "
+                        f"scripts/probe_import_and_properties.py --only discovery "
+                        f"to find out why the kind is unreadable."
+                    )
+                continue
+            if kind not in fact.kind.lower():
                 continue
             held = fact.expression(*properties)
             if held is None:
                 continue
-            if unreadable:
-                # The property is there and what kind of feature holds it could
-                # not be read. Worth using and worth flagging: Inventor's rib
-                # feature has a thickness too, so this could be a rib's rather
-                # than a wall's. Two features holding the same property with
-                # different parameters then comes out ambiguous, which is the
-                # right answer and falls out of the rule below.
-                #
-                # Phrased without naming a kind, because naming one would be
-                # asserting the thing that could not be read -- and with several
-                # rules matching the same property, it would assert two.
-                because = (f"the feature {fact.name or '(unnamed)'} takes its "
-                           f"{held[0].lower()} from it, though what kind of feature "
-                           f"it is could not be read, so this rests on the property "
-                           f"alone")
-            else:
-                because = wording.format(feature=fact.name or "(unnamed)")
+            because = wording.format(feature=fact.name or "(unnamed)")
             for referenced in _parameters_in(held[1], known):
                 _record(found, role, referenced, because)
 
@@ -292,6 +306,10 @@ def discover(
         [role for role in ROLES if role not in declaration.roles and role not in ambiguous],
         known,
     )
+    for role, parameter in offered.items():
+        if role not in declaration.roles and role not in ambiguous:
+            suggestions.setdefault(role, parameter)
+    notes.extend(sorted(kind_notes))
     if suggestions:
         notes.append(
             "The rest were matched by name alone, which is not evidence, so they "

@@ -390,6 +390,9 @@ class MockBackend(Backend):
         }
         return out
 
+    def document_path(self, doc_id: str) -> str | None:
+        return self._doc(doc_id).path
+
     def read_declaration(self, doc_id: str) -> dict[str, Any] | None:
         return self._doc(doc_id).declaration
 

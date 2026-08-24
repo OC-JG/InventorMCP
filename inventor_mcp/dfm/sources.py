@@ -92,14 +92,20 @@ def discover_for(session: Any, context: Any) -> Discovery:
 
 
 def _document_path(session: Any, context: Any) -> Path | None:
-    """Where the open document lives, if it lives anywhere yet."""
+    """Where the open document lives, if it lives anywhere yet.
+
+    Asked of the document itself. The first version matched ``context.doc_id``
+    against ``list_documents``, and on the COM backend that listing identifies
+    documents by Python wrapper identity -- late binding hands back a fresh
+    wrapper per call, so the match never matched, the sidecar beside the part
+    was never found, and the freezes in it were silently dropped for any call
+    that did not pass the path explicitly.
+    """
     try:
-        for info in session.backend.list_documents():
-            if info.id == context.doc_id and info.path:
-                return Path(info.path)
+        where = session.backend.document_path(context.doc_id)
     except Exception:
         return None
-    return None
+    return Path(where) if where else None
 
 
 def _from_document(session: Any, context: Any) -> Declaration | None:
@@ -113,10 +119,11 @@ def _from_document(session: Any, context: Any) -> Declaration | None:
     reader = getattr(session.backend, "read_declaration", None)
     if reader is None:
         return None
-    try:
-        stored = reader(context.doc_id)
-    except Exception:
-        return None
+    # Deliberately not caught: a reader that *raises* found something and could
+    # not read it, which is a different fact from finding nothing -- and the
+    # difference is whatever the unreadable declaration froze. Swallowing it
+    # here read a corrupted freeze list as "nothing is protected".
+    stored = reader(context.doc_id)
     if not stored:
         return None
     return Declaration.from_dict(stored, source="the part itself")

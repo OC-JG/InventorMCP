@@ -398,7 +398,11 @@ def improve(
             break
 
         # Apply, remembering what each was, so the round can be undone whole.
-        undo: list[tuple[str, str]] = []
+        # `None` for "was", not "" -- a parameter this round *created* has no
+        # prior expression, and putting it "back" means deleting it. The first
+        # version skipped empty entries on undo, so a created parameter kept
+        # its new value through a revert and the reverted part was then saved.
+        undo: list[tuple[str, str | None]] = []
         failed: list[dict[str, Any]] = []
         for change in wanted:
             try:
@@ -406,7 +410,7 @@ def improve(
                     name=change.parameter, value=change.expression,
                     comment=f"DFM round {number}: {change.check}",
                 ))
-                undo.append((change.parameter, expressions.get(change.parameter, "")))
+                undo.append((change.parameter, expressions.get(change.parameter)))
                 applied_before.add((change.parameter.lower(), change.expression))
             except Exception as exc:
                 failed.append({"parameter": change.parameter, "error": str(exc)})
@@ -531,21 +535,25 @@ def _rebuild_unhappy(rebuild: Mapping[str, Any] | None) -> bool:
 
 
 def _undo(session: Session, context: DocumentContext,
-          undo: Sequence[tuple[str, str]]) -> None:
+          undo: Sequence[tuple[str, str | None]]) -> None:
     """Put parameters back, in reverse, overriding the freeze.
 
     The override is right here and nowhere else: these are values this loop set
     a moment ago, and restoring one is undoing its own change rather than
     touching key geometry. Refusing here would leave a part the loop had already
     decided was worse than the one it started with.
+
+    A ``None`` for what a parameter was means it was not there: this round
+    created it, and putting it back means deleting it.
     """
     for name, expression in reversed(list(undo)):
-        if not expression:
-            continue
         try:
-            apply_parameter(session, context,
-                            ParameterSpec(name=name, value=expression),
-                            override_frozen=True)
+            if expression is None:
+                session.backend.delete_parameter(context.doc_id, name)
+            else:
+                apply_parameter(session, context,
+                                ParameterSpec(name=name, value=expression),
+                                override_frozen=True)
         except Exception:
             # Reported by the round's own `reverted` note; there is nothing
             # better to do here than continue putting the rest back.

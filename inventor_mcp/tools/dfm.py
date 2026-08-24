@@ -299,7 +299,10 @@ def register(server: Any, session: Session) -> None:
             try:
                 out["saved"] = session.backend.save_document(context.doc_id).as_dict()
                 if where:
-                    out["versions"] = [str(p) for p in versions_of(where)]
+                    try:
+                        out["versions"] = [str(p) for p in versions_of(where)]
+                    except OSError:
+                        pass  # a listing is a nicety; the save already happened
                 if working_on_the_original:
                     out["overwrote"] = (
                         f"{opened['opened']} was saved over, because save=true was "
@@ -383,7 +386,21 @@ def register(server: Any, session: Session) -> None:
                                  freeze=frozen or (),
                                  freeze_features=frozen_features or (),
                                  settings=combined, infer=True)
-        # The guard has to hold from now on, not only inside the next loop.
+        # The guard has to hold from now on, not only inside the next loop --
+        # and it widens what is already held rather than replacing it. A freeze
+        # added a moment ago with `protect_geometry` lives only on the context,
+        # and building the new guard from the declaration alone dropped it: the
+        # one operation no source is allowed to perform, done here by accident.
+        held = (list(context.frozen.as_dict()["declared"])
+                if context.frozen is not None else [])
+        held_features = (list(context.frozen.features)
+                         if context.frozen is not None else [])
+        for name in held:
+            if name not in declaration.frozen:
+                declaration.frozen.append(name)
+        for name in held_features:
+            if name not in declaration.frozen_features:
+                declaration.frozen_features.append(name)
         context.frozen = guard_for(declaration, expressions)
 
         out: dict[str, Any] = {
@@ -497,11 +514,18 @@ def register(server: Any, session: Session) -> None:
                 "sealing faces, bearing bores, mating pitches, stack heights."
             )
         if remember_it:
-            declaration = Declaration(
-                frozen=list(guard_.as_dict()["declared"]),
-                frozen_features=list(guard_.features),
-            )
-            out["remembered"] = remember(session, context, declaration)
+            # Merged onto what the part already declares, because `remember`
+            # replaces the stored declaration whole: writing only the freeze
+            # would erase the roles and the material somebody declared earlier,
+            # and the next run would be back to inferring them.
+            stored, _ = resolve(session, context, infer=False)
+            for name in guard_.as_dict()["declared"]:
+                if name not in stored.frozen:
+                    stored.frozen.append(name)
+            for name in guard_.features:
+                if name not in stored.frozen_features:
+                    stored.frozen_features.append(name)
+            out["remembered"] = remember(session, context, stored)
         return out
 
     @server.tool(

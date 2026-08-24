@@ -505,3 +505,83 @@ class TestAFreezeThatArrivesWithTheFile:
         opened = call(server, "open_part", path=str(part))
         assert opened["ok"]
         assert "could not be read" in opened["declaration_problem"]
+
+
+class TestReviewFindings:
+    """Behaviours pinned after an adversarial review of the file-driven work.
+
+    Each of these was a real defect: the test names the harm, not the code.
+    """
+
+    def test_declare_dfm_widens_the_guard_rather_than_replacing_it(self, server):
+        """A freeze added with protect_geometry lives only on the context, and
+        rebuilding the guard from the declaration alone dropped it -- the one
+        operation no source is allowed to perform, done by accident."""
+        call(server, "new_part", name="Housing")
+        call(server, "set_parameters", parameters=[
+            {"name": "bore_d", "value": 8}, {"name": "wall_t", "value": 2.5}],
+            rebuild=False)
+        call(server, "protect_geometry", parameters=["bore_d"])
+        call(server, "declare_dfm", roles={"wall": "wall_t"}, frozen=["wall_t"])
+        out = call(server, "set_parameters",
+                   parameters=[{"name": "bore_d", "value": 9}], rebuild=False)
+        assert out["ok"] is False and out["error"] == "frozen_geometry"
+
+    def test_protect_geometry_remember_keeps_the_stored_roles(self, server, session):
+        """`remember` replaces the stored declaration whole, so writing only the
+        freeze erased the roles and material somebody declared earlier."""
+        call(server, "new_part", name="Housing")
+        call(server, "set_parameters", parameters=[
+            {"name": "wall_t", "value": 2.5}, {"name": "bore_d", "value": 8}],
+            rebuild=False)
+        call(server, "declare_dfm", roles={"wall": "wall_t"}, material="abs")
+        call(server, "protect_geometry", parameters=["bore_d"], remember_it=True)
+        found = call(server, "discover_dfm_roles")
+        used = found["what_would_be_used"]
+        assert used["roles"]["wall"]["parameter"] == "wall_t", "roles survived"
+        assert used["settings"].get("material") == "abs", "settings survived"
+        assert "bore_d" in used["frozen"], "and the new freeze is there"
+
+    def test_a_failed_open_removes_the_copy_it_made(self, server, session,
+                                                    files, monkeypatch):
+        """A copy made for an open that then fails held nothing the original
+        does not, and leaving it orphans a version nobody was told about --
+        which the next run then counts past."""
+        def refuse(path):
+            raise RuntimeError("this document is corrupt")
+        monkeypatch.setattr(type(session.backend), "open_document",
+                            lambda self, path: refuse(path), raising=False)
+        out = call(server, "open_part", path=str(files / "bracket.ipt"),
+                   working_copy=True)
+        assert out["ok"] is False
+        assert not (files / "bracket_v2.ipt").exists()
+
+    def test_reverting_a_round_deletes_a_parameter_it_created(self, session):
+        """A created parameter has no prior expression, and 'putting it back'
+        means deleting it -- skipping it kept the new value through a revert,
+        and the reverted part was then saved."""
+        from inventor_mcp.dfm.loop import _undo
+
+        backend = session.ensure_backend()
+        info = backend.new_part("P")
+        context = session.register(info, "mm", "deg")
+        backend.set_parameter(context.doc_id, "brand_new", "9", units="mm")
+        _undo(session, context, [("brand_new", None)])
+        names = [p.name for p in backend.list_parameters(context.doc_id)]
+        assert "brand_new" not in names
+
+    def test_the_sidecar_is_found_from_the_documents_own_path(self, session, tmp_path):
+        """Without passing the path in: the document knows where it lives, and
+        matching ids against list_documents never matched on the COM backend."""
+        from inventor_mcp.dfm.declaration import Declaration, write_sidecar
+        from inventor_mcp.dfm.sources import resolve
+
+        part = tmp_path / "bracket.ipt"
+        backend = session.ensure_backend()
+        info = backend.new_part("bracket")
+        context = session.register(info, "mm", "deg")
+        backend.save_document(context.doc_id, str(part))
+        part.write_bytes(b"")
+        write_sidecar(part, Declaration(frozen=["bore_d"]))
+        declaration, _ = resolve(session, context)   # no path argument
+        assert "bore_d" in declaration.frozen

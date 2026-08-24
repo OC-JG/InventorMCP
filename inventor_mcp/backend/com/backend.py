@@ -468,20 +468,26 @@ class ComBackend(Backend):
         return info
 
     def _document_units(self, document: Any) -> tuple[str, str, bool]:  # pragma: no cover
-        """What units this document is actually in, and whether it said."""
+        """What units this document is actually in, and whether it said.
+
+        "Said" means *both* answered. One flag shared between the two let an
+        angle that read fine vouch for a length that did not, and the unreadable
+        length is the one that matters -- it is what a bare number in a later
+        edit gets multiplied by.
+        """
         length, angle = "mm", "deg"
-        read = False
+        found = turned = None
         try:
             measure = document.UnitsOfMeasure
             found = unit_from_inventor(measure.GetStringFromType(measure.LengthUnits))
             turned = unit_from_inventor(measure.GetStringFromType(measure.AngleUnits))
         except Exception:
-            return length, angle, read
+            return length, angle, False
         if found is not None:
-            length, read = found, True
+            length = found
         if turned is not None:
-            angle, read = turned, True
-        return length, angle, read
+            angle = turned
+        return length, angle, found is not None and turned is not None
 
     #: Extensions Inventor reads through a translator rather than opening as its
     #: own file. A translated file carries geometry and not the history that made
@@ -575,9 +581,15 @@ class ComBackend(Backend):
             except Exception as exc:
                 tried.append(f"{label}: {self._explain(exc)}")
                 continue
-            if document is not None:
-                route = label
-                break
+            if document is None:
+                # Returning nothing without raising is a real outcome -- the
+                # translator's Open hands its document back through an
+                # out-parameter on some releases -- and a route that vanished
+                # from the report would look like it was never tried.
+                tried.append(f"{label}: returned nothing")
+                continue
+            route = label
+            break
 
         if document is None:
             raise DocumentError(
@@ -640,6 +652,11 @@ class ComBackend(Backend):
                 "improved by the loop. Rebuild it as a recipe, or add the "
                 "features you want to be able to change."
             )
+        elif out.get("parameters") is None:
+            # Could not be counted, which is not the same as counted and found.
+            out["parametric"] = None
+            out["note"] = ("The parameter count could not be read, so whether "
+                           "this part can be driven is unknown here.")
         else:
             out["parametric"] = True
         return out
@@ -659,6 +676,14 @@ class ComBackend(Backend):
     #: is protection silently removed.
     _DECLARATION = "InventorMCP_DFM"
     _CHUNK = 200
+
+    def document_path(self, doc_id: str) -> str | None:  # pragma: no cover - Windows only
+        document = self._doc(doc_id)
+        try:
+            path = str(document.FullFileName)
+        except Exception:
+            return None
+        return path or None
 
     def read_declaration(self, doc_id: str) -> dict[str, Any] | None:  # pragma: no cover - Windows only
         document = self._doc(doc_id)
@@ -685,13 +710,19 @@ class ComBackend(Backend):
         try:
             loaded = json.loads(text)
         except ValueError:
-            # Something is there and it is not what this wrote. Saying so beats
-            # both crashing and pretending the part declares nothing.
-            return {"notes": [
+            # Something is there and it is not what this wrote. The first
+            # version returned a notes-only dict here, which downstream read as
+            # a declaration with nothing frozen -- the one wrong default, since
+            # somebody put that property there and it may be exactly the freeze
+            # list that has been corrupted. Refusing is the honest answer.
+            raise DocumentError(
                 f"The {self._DECLARATION} property of this part holds "
-                f"{len(text)} characters that are not the declaration this "
-                f"writes. Left alone."
-            ]}
+                f"{len(text)} characters that are not a declaration this "
+                f"project wrote, so what the part protects cannot be read.",
+                hint="Look at the property in iProperties > Custom. Fix it, or "
+                     "delete it and declare again with `declare_dfm` -- running "
+                     "as though it were absent would ignore whatever it froze.",
+            )
         return loaded if isinstance(loaded, dict) else None
 
     def write_declaration(self, doc_id: str, declaration: dict[str, Any]) -> None:  # pragma: no cover - Windows only

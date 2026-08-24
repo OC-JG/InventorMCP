@@ -215,3 +215,40 @@ class TestNormalising:
         for _kind, _properties, role, wording in EVIDENCE:
             assert role in ROLES
             assert "{feature}" in wording, "the evidence has to say what it read"
+
+
+class TestAnUnreadableKindIsNotEvidence:
+    """The kind is half the evidence: a rib has a thickness too.
+
+    The first version used a property from a kind-less feature anyway, counting
+    on two candidates coming out ambiguous. One candidate sailed straight
+    through -- and one candidate that happens to be a rib maps the wall to the
+    rib, which is the wrong-parameter mapping this module exists to prevent. So
+    an unreadable kind demotes the match to an offer, the same standing as a
+    likely name.
+    """
+
+    def test_a_kindless_thickness_is_offered_not_mapped(self):
+        found = discover([{"name": "C", "type": "unknown",
+                           "thickness": {"expression": "rib_t"}}], ["rib_t"])
+        assert "wall" not in found.declaration.roles
+        assert found.suggestions.get("wall") == "rib_t"
+
+    def test_with_a_note_naming_the_probe(self):
+        found = discover([{"name": "C", "type": "unknown",
+                           "thickness": {"expression": "wall_t"}}], ["wall_t"])
+        assert any("could not be read" in note for note in found.notes)
+        assert any("probe" in note for note in found.notes)
+
+    def test_a_readable_shell_is_still_mapped(self):
+        found = discover([{"name": "C", "type": "shell",
+                           "thickness": {"expression": "wall_t"}}], ["wall_t"])
+        assert found.declaration.roles.get("wall") == "wall_t"
+
+    def test_a_real_mapping_beats_a_kindless_offer(self):
+        found = discover([
+            {"name": "Cavity", "type": "shell", "thickness": "wall_t"},
+            {"name": "Mystery", "type": "unknown", "thickness": "rib_t"},
+        ], ["wall_t", "rib_t"])
+        assert found.declaration.roles["wall"] == "wall_t"
+        assert "wall" not in found.suggestions, "the offer must not shadow real evidence"

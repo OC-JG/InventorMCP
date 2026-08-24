@@ -531,6 +531,18 @@ class Backend(ABC):
             f"The {self.name} backend cannot import translated geometry."
         )
 
+    def document_path(self, doc_id: str) -> str | None:
+        """Where this document lives on disk, or ``None`` if nowhere yet.
+
+        Asked of the document itself rather than matched out of
+        ``list_documents``: on the COM backend that listing identifies documents
+        by Python wrapper identity, and late binding hands back a fresh wrapper
+        per call, so an id-to-id match over it never matches anything -- which
+        silently lost the sidecar (and the freezes in it) for any part whose
+        path was not passed in explicitly.
+        """
+        return None
+
     def read_declaration(self, doc_id: str) -> dict[str, Any] | None:
         """The DFM declaration kept inside the document, if there is one.
 

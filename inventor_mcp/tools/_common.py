@@ -5,6 +5,7 @@ from __future__ import annotations
 import functools
 import logging
 import os
+from pathlib import Path
 from typing import Any, Callable, TypeVar
 
 from pydantic import ValidationError
@@ -153,7 +154,21 @@ def open_source(session: Any, path: str, *, working_copy: bool = False,
             out["working_copy"] = str(copy)
             out["original_untouched"] = source
             source = str(copy)
-        info = backend.open_document(source)
+            try:
+                info = backend.open_document(source)
+            except Exception:
+                # The copy was made for this open and holds nothing that the
+                # original does not, so a failed open removes it rather than
+                # leaving an orphan version on the drive that nobody was told
+                # about -- which the next run would then count past.
+                import contextlib
+                from ..dfm.declaration import sidecar_for as _sidecar
+                for leftover in (Path(source), _sidecar(source)):
+                    with contextlib.suppress(OSError):
+                        leftover.unlink(missing_ok=True)
+                raise
+        else:
+            info = backend.open_document(source)
 
     context = session.register(info, info.units, info.angle_units)
     session.sync_parameters(context.doc_id)
