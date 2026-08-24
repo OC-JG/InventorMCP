@@ -450,3 +450,58 @@ class TestNotWritingOverSomebodysPart:
     def test_and_says_the_document_is_still_open_to_be_measured(self, server, files):
         out = call(server, "improve_for_manufacture", path=str(files / "bracket.stp"))
         assert "still open" in out["hint"]
+
+
+class TestAFreezeThatArrivesWithTheFile:
+    """Protection declared beside a part holds from the moment it is opened.
+
+    The freeze is enforced where parameters change. Without installing it at
+    open, a sidecar saying bore_d is key geometry would hold inside the DFM loop
+    -- which resolves the declaration for itself -- and be walked straight
+    through by the next `set_parameters`, with every report still saying the
+    freeze was honoured.
+    """
+
+    def _part_with_sidecar(self, tmp_path):
+        from inventor_mcp.dfm.declaration import Declaration, write_sidecar
+
+        part = tmp_path / "bracket.ipt"
+        part.write_bytes(b"")
+        write_sidecar(part, Declaration(frozen=["bore_d"]))
+        return part
+
+    def test_set_parameters_is_refused(self, server, tmp_path):
+        part = self._part_with_sidecar(tmp_path)
+        opened = call(server, "open_part", path=str(part))
+        assert opened["ok"]
+        assert "bore_d" in opened["key_geometry"]["declared"]
+        out = call(server, "set_parameters",
+                   parameters=[{"name": "bore_d", "value": 9}], rebuild=False)
+        assert out["ok"] is False
+        assert out["error"] == "frozen_geometry"
+
+    def test_the_override_still_exists(self, server, tmp_path):
+        part = self._part_with_sidecar(tmp_path)
+        call(server, "open_part", path=str(part))
+        out = call(server, "set_parameters",
+                   parameters=[{"name": "bore_d", "value": 9}],
+                   rebuild=False, override_frozen=True)
+        assert out["ok"]
+
+    def test_a_part_with_no_declaration_installs_nothing(self, server, tmp_path):
+        part = tmp_path / "plain.ipt"
+        part.write_bytes(b"")
+        opened = call(server, "open_part", path=str(part))
+        assert "key_geometry" not in opened
+
+    def test_an_unreadable_sidecar_is_reported_not_dropped(self, server, tmp_path):
+        """Somebody wrote it on purpose. Running as though it were absent would
+        ignore whatever it protects."""
+        from inventor_mcp.dfm.declaration import sidecar_for
+
+        part = tmp_path / "bracket.ipt"
+        part.write_bytes(b"")
+        sidecar_for(part).write_text("{ not json", encoding="utf-8")
+        opened = call(server, "open_part", path=str(part))
+        assert opened["ok"]
+        assert "could not be read" in opened["declaration_problem"]

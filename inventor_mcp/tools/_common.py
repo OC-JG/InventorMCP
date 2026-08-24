@@ -157,6 +157,33 @@ def open_source(session: Any, path: str, *, working_copy: bool = False,
 
     context = session.register(info, info.units, info.angle_units)
     session.sync_parameters(context.doc_id)
+
+    # The freeze is enforced where parameters change, and that has to include a
+    # part whose protection arrived with the file. Without this, a sidecar or an
+    # embedded declaration saying bore_d is key geometry would hold inside the
+    # DFM loop -- which resolves it for itself -- and be walked straight through
+    # by the next `set_parameters`, with every report still saying the freeze
+    # was honoured.
+    try:
+        from ..dfm.loop import guard_for
+        from ..dfm.sources import resolve as resolve_declaration
+
+        declaration, _ = resolve_declaration(session, context, path=source,
+                                             infer=False)
+        if declaration.frozen or declaration.frozen_features:
+            expressions = {
+                p.name: p.expression
+                for p in backend.list_parameters(context.doc_id)
+            }
+            context.frozen = guard_for(declaration, expressions)
+            out["key_geometry"] = context.frozen.as_dict()
+    except Exception as exc:
+        # A declaration that cannot be read must not be silently dropped as "no
+        # protection" -- that is the one wrong default. It is reported, and the
+        # DFM tools, which resolve for themselves, will raise the same problem
+        # louder.
+        out["declaration_problem"] = str(exc)[:200]
+
     parameters = sorted(context.resolver.known())
     out.update({
         "document": info.id,
