@@ -44,6 +44,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Mapping, Sequence
 
+from ..expressions import referenced_parameters
 from .freeze import FreezeGuard, FrozenParameter
 from .roles import ROLES
 from .report import Check, DfmReport
@@ -661,13 +662,19 @@ def _bosses(context: _Context, check: Check, wall: float) -> list[Change | Defer
 
     fault = _boss_fault(ratio, boss_wall, screw_minimum)
     floor = max(screw_minimum, crack_minimum)
-    impossible = floor > sink_maximum + 1e-9
+
+    # Never target the cap itself. The sink limit is 0.7x and a boss wall AT
+    # 0.7x is a finding -- "marginal, sink possible on Class-A surfaces" --
+    # measured on the live rules after a loop landed exactly there and the
+    # finding it had acted on never cleared. The same lesson the wall floor
+    # taught: a limit is where a finding starts, not a place to sit.
+    ceiling = (sink_maximum + BOSS_WALL_OF_WALL * wall) / 2
+    impossible = floor > ceiling + 1e-9
 
     if not impossible:
-        # There is a boss wall that works, so the boss keeps its size. Aim at
-        # 0.6x the wall, or at a quarter of the diameter where that is more --
-        # which is the thinnest wall that still holds a screw. Narrowing the boss
-        # here would change what the part does to buy nothing.
+        # There is a boss wall that works with margin, so the boss keeps its
+        # size. Aim at 0.6x the wall, or at a quarter of the diameter where
+        # that is more -- the thinnest wall that still holds a screw.
         fraction = round(max(BOSS_WALL_OF_WALL, floor / wall), 4)
         note = ("" if fraction == BOSS_WALL_OF_WALL else
                 f", which is a quarter of the Ø{od:g} mm diameter and the thinnest "
@@ -677,6 +684,34 @@ def _bosses(context: _Context, check: Check, wall: float) -> list[Change | Defer
             why=(f"A boss wall {ratio:.2f}x the nominal wall is {fault}. "
                  f"{fraction:g}x is inside the 0.5-0.7x window{note}."),
         )]
+
+    # The bind -- except when the diameter FOLLOWS the boss wall, which the
+    # expressions can say. A boss declared as `boss_d = hole + 2 * boss_wall`
+    # shrinks with its wall, so the screw minimum computed from today's
+    # diameter is stale the moment the wall moves: thinning the wall alone
+    # resolves it, and the next round's measurement confirms or corrects.
+    # Overwriting the derived diameter instead would break the very
+    # relationship that makes the boss follow its wall.
+    od_parameter = context.parameter("boss_od")
+    wall_parameter = context.parameter("boss_wall")
+    if od_parameter and wall_parameter:
+        expression = context.expressions.get(od_parameter, "")
+        try:
+            derived = wall_parameter.lower() in {
+                name.lower() for name in referenced_parameters(expression)}
+        except Exception:
+            derived = False
+        if derived:
+            return [_ratio_change(
+                context, check, "boss_wall", "wall", BOSS_WALL_OF_WALL,
+                functional=False,
+                why=(f"A boss wall {ratio:.2f}x the nominal wall is {fault}. "
+                     f"{od_parameter} is written as {expression!r}, so the "
+                     f"diameter follows the wall down and the retention minimum "
+                     f"computed from today's Ø{od:g} mm is stale the moment it "
+                     f"moves. {BOSS_WALL_OF_WALL:g}x is the target; the next "
+                     f"measurement arbitrates."),
+            )]
 
     # Nothing works: a quarter of the diameter is above the sink cap, so no boss
     # wall satisfies retention and sink together and adjusting it cannot find

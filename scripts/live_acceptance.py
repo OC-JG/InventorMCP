@@ -622,8 +622,11 @@ def check_from_a_file(session: Session, report: Report) -> None:
     except Exception as exc:
         report.check(False, "file: making a working copy", str(exc)[:160])
         return
-    report.check(copy.name == "handed_over_v2.ipt",
-                 "file: the copy is the next version", copy.name)
+    # The NEXT version, not a fixed name: leftovers from an earlier run mean
+    # v3 or v9, and refusing to reuse a name is the tool working, not failing.
+    import re as _re
+    report.check(bool(_re.fullmatch(r"handed_over_v\d+\.ipt", copy.name)),
+                 "file: the copy is a fresh next version", copy.name)
     report.check(read_sidecar(copy) is not None,
                  "file: the declaration travels with the copy",
                  f"looked beside {copy}")

@@ -384,3 +384,53 @@ class TestJudgedOnADefault:
     def test_a_fully_mapped_check_gets_no_such_note(self):
         proposal = plan()
         assert not any("default" in note for note in proposal.notes)
+
+
+class TestTheBossCapIsNotATarget:
+    """Measured live: a boss wall at exactly 0.7x the wall is 'marginal -- sink
+    possible on Class-A surfaces', a minor finding. The first live loop landed
+    exactly there and the finding it had acted on never cleared. A limit is
+    where a finding starts, not a place to sit -- the wall floor taught the
+    same lesson."""
+
+    def test_a_floor_near_the_cap_is_treated_as_the_bind(self):
+        """Static diameter, screw minimum at 0.68x: inside the cap but with no
+        margin. Proposing 0.68x would sit marginal forever; the diameter moves."""
+        proposal = plan(frozen=["wall_t"],
+                        declared={"bossOD": 5.44, "bossWall": 1.0},
+                        values=dict(VALUES, boss_d=5.44, boss_w=1.0))
+        assert change_for(proposal, "boss_d") is not None
+        boss = change_for(proposal, "boss_w")
+        assert boss is not None and boss.fraction == 0.6
+
+    def test_a_derived_diameter_is_never_overwritten(self):
+        """The housing's own shape: boss_d = boss_hole_d + 2 * boss_wall, so the
+        retention minimum computed from today's diameter is stale the moment the
+        wall moves. Thinning the wall alone resolves it, the diameter follows,
+        and the next measurement arbitrates -- overwriting the derived diameter
+        would break the very relationship that makes the boss follow its wall."""
+        values = dict(VALUES, wall_t=2.5, boss_w=2.25, boss_d=7.0)
+        expressions = {k: f"{v:g}" for k, v in values.items()}
+        expressions["boss_d"] = "boss_hole_d + 2 * boss_w"
+        values["boss_hole_d"] = 2.5
+        expressions["boss_hole_d"] = "2.5"
+        import json
+        from inventor_mcp.dfm.freeze import FreezeGuard
+        from inventor_mcp.dfm.report import read_report
+        from inventor_mcp.dfm.remedy import propose
+        data = load("many_findings")
+        data["input"].update({"wallThk": 2.5, "bossOD": 7.0, "bossWall": 2.25,
+                              "ribThk": 1.125, "ribH": 2.8125, "ribRadius": 0.75})
+        for check in data["checks"]:
+            if check["key"] != "ribs":
+                check["score_deduction"] = 0
+                check["severity"] = "none"
+                check["status"] = "ok"
+        data["mesh_summary"]["wall_sphere_median_mm"] = 2.5
+        data["mesh_summary"]["wall_median_mm"] = 2.5
+        proposal = propose(read_report(data), ROLE_MAP,
+                           FreezeGuard(expressions=expressions), values, expressions)
+        assert change_for(proposal, "boss_d") is None
+        boss = change_for(proposal, "boss_w")
+        assert boss is not None and boss.expression == "wall_t * 0.6"
+        assert "stale" in boss.why

@@ -238,3 +238,27 @@ class TestSettingsAreCheckedNotIgnored:
         stl = shape(analyser, tmp_path / "any5.stl", "hollowFrustum", 20, 30, 3, 2)
         with pytest.raises(Exception, match="[Uu]nknown material"):
             analyse_stl(stl, {"material": "unobtainium"})
+
+
+class TestTheSinkCapIsAFindingNotATarget:
+    """The negative control for the boss-cap margin: a boss wall at exactly the
+    0.7x sink cap must still deduct on the live rules -- if it ever stops, the
+    margin in `_bosses` has become unnecessary and should be simplified away."""
+
+    def test_exactly_on_the_cap_is_marginal(self, analyser, tmp_path):
+        stl = shape(analyser, tmp_path / "cap.stl", "hollowFrustum", 20, 30, 3, 2.5)
+        report = analyse_stl(stl, {
+            "material": "abs", "wallThk": 2.5, "ribThk": 1.125, "ribH": 2.8125,
+            "ribRadius": 0.75, "bossOD": 7.0, "bossWall": 1.75, **only("ribs"),
+        })
+        assert deduction(report, "ribs") > 0, (
+            "0.7x reads clean now -- remove the cap margin from _bosses")
+
+    def test_and_the_followed_diameter_value_is_clean(self, analyser, tmp_path):
+        """What the derived-bind branch produces once the diameter follows."""
+        stl = shape(analyser, tmp_path / "flw.stl", "hollowFrustum", 20, 30, 3, 2.5)
+        report = analyse_stl(stl, {
+            "material": "abs", "wallThk": 2.5, "ribThk": 1.125, "ribH": 2.8125,
+            "ribRadius": 0.75, "bossOD": 5.5, "bossWall": 1.5, **only("ribs"),
+        })
+        assert deduction(report, "ribs") == 0, report.check("ribs").detail
