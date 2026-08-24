@@ -180,15 +180,18 @@ def open_source(session: Any, path: str, *, working_copy: bool = False,
     # by the next `set_parameters`, with every report still saying the freeze
     # was honoured.
     try:
-        from ..dfm.loop import guard_for
         from ..dfm.sources import resolve as resolve_declaration
 
         declaration, _ = resolve_declaration(session, context, path=source,
                                              infer=False)
         if declaration.frozen or declaration.frozen_features:
-            context.frozen = guard_for(
-                declaration, guard_expressions(session, context.doc_id))
+            from ..dfm.sources import build_guard
+
+            context.frozen, pin_notes = build_guard(session, context, declaration)
             out["key_geometry"] = context.frozen.as_dict()
+            if pin_notes:
+                out["key_geometry"]["notes"] = (
+                    out["key_geometry"].get("notes") or []) + pin_notes
     except Exception as exc:
         # A declaration exists and cannot be read, which means what it protects
         # cannot be known -- and the one wrong answer is "nothing". So until it
@@ -234,16 +237,7 @@ def open_source(session: Any, path: str, *, working_copy: bool = False,
 
 
 def guard_expressions(session: Any, doc_id: str) -> dict[str, str]:
-    """Every parameter's expression, model parameters included, for a guard.
+    """Kept as a re-export; the one implementation lives with the guard logic."""
+    from ..dfm.sources import guard_expressions as _shared
 
-    The freeze closure follows what a frozen expression reads, and a frozen
-    ``seal_face = d0 * 2`` reads a model parameter -- which ``set_parameter``
-    can write, because Inventor resolves the name in the whole collection. A
-    closure built from the user table alone was blind to that, so editing d0
-    moved the frozen face with every report saying the freeze held.
-    """
-    try:
-        listed = session.backend.list_parameters(doc_id, include_model=True)
-    except TypeError:
-        listed = session.backend.list_parameters(doc_id)
-    return {info.name: info.expression for info in listed}
+    return _shared(session, doc_id)

@@ -543,6 +543,19 @@ class Backend(ABC):
         """
         return None
 
+    def feature_dependencies(self, doc_id: str, name: str) -> dict[str, Any] | None:
+        """The user parameters that drive one feature, or ``None`` for "cannot say".
+
+        Freezing a feature is a promise that its geometry stays put, and the
+        loop changes geometry by changing parameters -- so the promise is kept
+        by pinning every parameter that reaches the feature: its own driven
+        properties, and the dimensions of the sketches it consumes. ``None``
+        means this backend cannot trace that, which the caller must report
+        loudly: a feature "frozen" without its parameters pinned is protected
+        from deletion and not from being reshaped.
+        """
+        return None
+
     def read_declaration(self, doc_id: str) -> dict[str, Any] | None:
         """The DFM declaration kept inside the document, if there is one.
 

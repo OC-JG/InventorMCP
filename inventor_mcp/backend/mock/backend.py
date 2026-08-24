@@ -406,6 +406,58 @@ class MockBackend(Backend):
         }
         return out
 
+    def feature_dependencies(self, doc_id: str, name: str) -> dict[str, Any] | None:
+        document = self._doc(doc_id)
+        feature = document.find_feature(name)
+        via: dict[str, set[str]] = {}
+
+        def note(parameter: str, where: str) -> None:
+            via.setdefault(parameter, set()).add(where)
+
+        def harvest(value: Any, where: str) -> None:
+            """Every expression in a detail tree, wherever it is nested."""
+            if isinstance(value, str):
+                try:
+                    for read in referenced_parameters(value):
+                        if any(p.name.lower() == read.lower()
+                               for p in document.parameters.values()):
+                            note(read, where)
+                except Exception:
+                    pass
+            elif isinstance(value, dict):
+                inner = value.get("expression")
+                if isinstance(inner, str):
+                    harvest(inner, where)
+                else:
+                    for held in value.values():
+                        harvest(held, where)
+            elif isinstance(value, (list, tuple)):
+                for held in value:
+                    harvest(held, where)
+
+        for key, value in (feature.detail or {}).items():
+            if key in ("sketch", "sections", "profiles", "edge_ids"):
+                continue
+            harvest(value, f"its {key}")
+
+        # The sketches it consumes: named in the detail, or marked as consumed.
+        named = {feature.detail.get("sketch")} if feature.detail else set()
+        for key in ("sections", "profile_sketch", "path_sketch"):
+            held = (feature.detail or {}).get(key)
+            named.update(held if isinstance(held, (list, tuple)) else [held])
+        for sketch in document.sketches:
+            if sketch.name in named or sketch.consumed_by == name:
+                for dimension in sketch.plan.dimensions:
+                    harvest(dimension.expression, f"a dimension of its sketch {sketch.name}")
+                if sketch.plan.offset_expression:
+                    harvest(sketch.plan.offset_expression,
+                            f"the offset of its sketch {sketch.name}")
+
+        return {
+            "parameters": sorted(via, key=str.lower),
+            "via": {parameter: sorted(where) for parameter, where in via.items()},
+        }
+
     def document_path(self, doc_id: str) -> str | None:
         return self._doc(doc_id).path
 

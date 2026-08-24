@@ -648,6 +648,22 @@ def check_from_a_file(session: Session, report: Report) -> None:
     report.check(resolved.roles.get("wall") == "wall",
                  "file: the reopened part still knows what its wall is",
                  f"{resolved.roles} from {resolved.origin}")
+
+    # Freezing a feature pins its parameters, traced on the live model. The
+    # housing's Bosses are driven by boss_h directly and boss_inset through
+    # their sketch, so both have to come back pinned.
+    traced = session.backend.feature_dependencies(reopened.doc_id, "Bosses")
+    if traced is None:
+        report.check(False, "file: the backend traces a feature's parameters",
+                     "feature_dependencies returned None on the live backend")
+    else:
+        report.note(f"file: Bosses is driven by {traced['parameters']}")
+        report.check("boss_h" in traced["parameters"],
+                     "file: a frozen feature pins its own driven property",
+                     str(traced["parameters"]))
+        report.check("boss_inset" in traced["parameters"],
+                     "file: and the dimensions of the sketch it consumes",
+                     str(traced["parameters"]))
     report.check("boss_hole_d" in resolved.frozen,
                  "file: and what it may not change",
                  f"frozen {resolved.frozen}")

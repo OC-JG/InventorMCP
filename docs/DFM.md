@@ -272,6 +272,36 @@ The reverse is deliberately not true. A parameter that *reads* a frozen value �
 Taking something out means editing the recipe, which is reviewable, rather than
 passing a flag in the moment.
 
+### Freezing a feature freezes its shape
+
+`frozen_features` names features from the tree, and it means more than "do not
+delete": a frozen feature is a promise that its *geometry* stays put, and
+geometry is changed by changing parameters. So each frozen feature pins every
+parameter that can reach it — its own driven properties (an extrude's distance,
+a shell's thickness) and the dimensions of the sketches it consumes — traced
+from the model, closed transitively by the guard, and reported:
+
+```
+protect_geometry(features=["Bosses"])
+   → pinned: boss_d, boss_h, boss_inset, box_d, box_w, wall
+```
+
+That last entry is the honest consequence to watch for: a parameter shared
+between a frozen feature and everything else — `wall` driving both the shell
+and the ribs — is pinned all the same, because changing it would reshape the
+frozen feature. The refusal names the feature, and the choice is yours:
+unfreeze it, or decouple the parameter.
+
+So "here is an .ipt, keep these features, improve the rest" is exactly:
+
+```
+improve_for_manufacture(path="bracket.ipt", freeze_features=["Bosses", "Gasket_Groove"])
+```
+
+A backend that cannot trace a feature's parameters says so in the result — the
+feature is then protected from deletion and **not** from being reshaped, and
+the difference is stated rather than hidden.
+
 Note that `frozen` and Inventor's own `key` flag are different things: `key`
 marks a parameter as prominent in Inventor's parameter table, `frozen` stops
 automated changes.

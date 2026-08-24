@@ -313,7 +313,9 @@ def improve(
         for name in context.frozen.features:
             if name not in declaration.frozen_features:
                 declaration.frozen_features.append(name)
-    guard = guard_for(declaration)
+    from .sources import build_guard
+
+    guard, pin_notes = build_guard(session, context, declaration)
 
     # A directory of its own per run, or two runs overwrite each other's
     # round-N files -- and the "before" of a comparison is then routinely the
@@ -328,7 +330,7 @@ def improve(
 
     result = LoopResult(frozen=guard.as_dict(), settings=dict(dfm_settings),
                         declaration=declaration.describe(), used=declaration)
-    notes: list[str] = []
+    notes: list[str] = list(pin_notes)
 
     report, values, expressions, _, report_path = measure(
         session, context, roles=mapped, settings=dfm_settings, workspace=room,

@@ -40,7 +40,7 @@ from ..dfm.report import read_report
 from ..dfm.runner import (
     analyse_stl, compare_reports, find_dfm_root, settings_from_roles,
 )
-from ..dfm.sources import discover_for, remember, resolve
+from ..dfm.sources import build_guard, discover_for, remember, resolve
 from ..session import Session
 from ..versioning import versions_of
 from ._common import MESH_EXTENSIONS, guard, open_source
@@ -164,7 +164,7 @@ def register(server: Any, session: Session) -> None:
         )
         _fold_session_freeze(context, declaration)
         values, expressions = current_parameters(session, context)
-        guard_ = guard_for(declaration, expressions)
+        guard_, pin_notes = build_guard(session, context, declaration)
 
         report, values, expressions, mesh, written = measure(
             session, context, roles=declaration.roles,
@@ -179,7 +179,8 @@ def register(server: Any, session: Session) -> None:
             "checks": [c.as_dict() for c in report.checks],
             "would_change": proposal.as_dict(),
             "read_the_part_as": declaration.describe(),
-            "key_geometry": guard_.as_dict(),
+            "key_geometry": {**guard_.as_dict(),
+                             **({"pinned_by_features": pin_notes} if pin_notes else {})},
             "stl": str(mesh),
             "report": str(written),
         }
@@ -239,7 +240,7 @@ def register(server: Any, session: Session) -> None:
                 "came from with document=..., or open it and call without a path."
             )
             return out
-        guard_ = guard_for(declaration, expressions)
+        guard_, _pins = build_guard(session, context, declaration)
         out["document"] = context.doc_id
         out["would_change"] = propose(
             report, declaration.roles, guard_, values, expressions).as_dict()
@@ -481,13 +482,14 @@ def register(server: Any, session: Session) -> None:
         for name in held_features:
             if name not in declaration.frozen_features:
                 declaration.frozen_features.append(name)
-        context.frozen = guard_for(declaration, expressions)
+        context.frozen, pin_notes = build_guard(session, context, declaration)
 
         out: dict[str, Any] = {
             "document": context.doc_id,
             "declared": stated.describe(),
             "what_would_be_used": declaration.describe(),
-            "key_geometry": context.frozen.as_dict(),
+            "key_geometry": {**context.frozen.as_dict(),
+                             **({"pinned_by_features": pin_notes} if pin_notes else {})},
         }
         if unknown:
             out["not_a_parameter_of_this_part"] = unknown
@@ -551,7 +553,7 @@ def register(server: Any, session: Session) -> None:
         declaration, _ = resolve(session, context, roles=roles, freeze=freeze or ())
         _fold_session_freeze(context, declaration)
         values, expressions = current_parameters(session, context)
-        guard_ = guard_for(declaration, expressions)
+        guard_, _pins = build_guard(session, context, declaration)
         out["document"] = context.doc_id
         out["would_change"] = propose(
             report, declaration.roles, guard_, values, expressions).as_dict()
@@ -589,6 +591,16 @@ def register(server: Any, session: Session) -> None:
                 parameters or (), features=features or (),
                 reason="declared as key geometry",
             )
+        pin_notes: list[str] = []
+        if features:
+            # A frozen feature means its parameters too, here as everywhere.
+            from ..dfm.declaration import Declaration as _Declaration
+
+            pinned, pin_notes = build_guard(
+                session, context,
+                _Declaration(frozen=list(guard_.as_dict()["declared"]),
+                             frozen_features=list(guard_.features)))
+            guard_ = pinned
         context.frozen = guard_
 
         known = {name.lower() for name in expressions}
@@ -597,6 +609,8 @@ def register(server: Any, session: Session) -> None:
             if "*" not in name and "?" not in name and name.lower() not in known
         ]
         out: dict[str, Any] = {"document": context.doc_id, "key_geometry": guard_.as_dict()}
+        if pin_notes:
+            out["key_geometry"]["pinned_by_features"] = pin_notes
         if unknown:
             # Not refused: protecting a name before it exists is legitimate, and
             # a typo would otherwise protect nothing while reporting success.

@@ -825,3 +825,83 @@ class TestImportingTheSameFileTwice:
         second = call(server, "open_part", path=str(files / "bracket.stp"))
         assert second["document"] == first["document"]
         assert second["detail"]["already_open"] is True
+
+
+class TestFreezingAFeatureFreezesItsShape:
+    """Freezing a feature is a promise its geometry stays put -- and geometry is
+    changed by changing parameters, so the promise is kept by pinning every
+    parameter that reaches the feature. Without this, "freeze the Bosses"
+    stopped the feature being deleted and let every dimension of it move."""
+
+    def _housing(self, server):
+        import json
+        recipe = json.load(open("examples/moulded_housing.json"))
+        out = call(server, "build_part_from_recipe", recipe=recipe)
+        assert out["ok"], out.get("errors")
+        return out["document"]
+
+    def test_the_pins_are_derived_and_reported(self, server):
+        self._housing(server)
+        out = call(server, "protect_geometry", features=["Bosses"])
+        assert any("boss_h" in note for note in
+                   out["key_geometry"]["pinned_by_features"])
+
+    def test_and_enforced_on_a_parameter_that_reaches_the_feature(self, server):
+        self._housing(server)
+        call(server, "protect_geometry", features=["Bosses"])
+        out = call(server, "set_parameters",
+                   parameters=[{"name": "boss_h", "value": 30}], rebuild=False)
+        assert out["ok"] is False and out["error"] == "frozen_geometry"
+        assert "Bosses" in out["message"]
+
+    def test_through_the_sketch_too(self, server):
+        """boss_inset only reaches Bosses through its sketch's dimensions."""
+        self._housing(server)
+        call(server, "protect_geometry", features=["Bosses"])
+        out = call(server, "set_parameters",
+                   parameters=[{"name": "boss_inset", "value": 20}], rebuild=False)
+        assert out["ok"] is False and out["error"] == "frozen_geometry"
+
+    def test_a_parameter_that_does_not_reach_it_still_moves(self, server):
+        self._housing(server)
+        call(server, "protect_geometry", features=["Bosses"])
+        out = call(server, "set_parameters",
+                   parameters=[{"name": "rib_h", "value": 10}], rebuild=False)
+        assert out["ok"], out
+
+    def test_the_loop_reports_what_the_frozen_feature_pinned(self, server, session,
+                                                             monkeypatch, tmp_path):
+        import copy
+        from inventor_mcp.builder import build_part
+        from inventor_mcp.dfm import loop as loop_module
+        from inventor_mcp.dfm.loop import improve
+        from inventor_mcp.schema import PartRecipe
+        from test_dfm_loop import RECIPE, Scripted, report
+
+        build_part(session, PartRecipe.model_validate(copy.deepcopy(RECIPE)))
+        context = session.context()
+        monkeypatch.chdir(tmp_path)
+        scripted = Scripted(report(score=49), report("clean", score=100))
+        monkeypatch.setattr(loop_module, "measure", scripted)
+        outcome = improve(session, context, freeze_features=["Body"])
+        assert any("pinned" in note for note in outcome.notes)
+
+    def test_a_shared_parameter_blocks_improvement_and_says_why(self, server):
+        """`wall` drives the frozen Cavity AND is the DFM wall role: freezing the
+        cavity therefore blocks improving the wall, and the refusal names the
+        feature -- the truthful outcome, reported rather than resolved."""
+        self._housing(server)
+        call(server, "protect_geometry", features=["Cavity"])
+        out = call(server, "set_parameters",
+                   parameters=[{"name": "wall", "value": 3}], rebuild=False)
+        assert out["ok"] is False
+        assert "Cavity" in out["message"]
+
+    def test_a_backend_that_cannot_trace_says_so_loudly(self, server, session,
+                                                        monkeypatch):
+        self._housing(server)
+        monkeypatch.setattr(type(session.backend), "feature_dependencies",
+                            lambda self, doc_id, name: None, raising=False)
+        out = call(server, "protect_geometry", features=["Bosses"])
+        notes = " ".join(out["key_geometry"]["pinned_by_features"])
+        assert "NOT from being reshaped" in notes

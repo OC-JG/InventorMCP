@@ -31,6 +31,7 @@ from typing import Any, Iterable, Mapping
 
 from .declaration import Declaration, from_recipe, given, merge, read_sidecar
 from .discover import Discovery, discover, facts_from
+from .freeze import FreezeGuard
 
 
 def resolve(
@@ -167,3 +168,92 @@ def remember(session: Any, context: Any, declaration: Declaration,
         out["note"] = ("This part has not been saved anywhere, so there is nowhere "
                        "beside it to keep the declaration.")
     return out
+
+
+# ---------------------------------------------------------------------------
+# Building the guard, features included
+# ---------------------------------------------------------------------------
+
+
+def guard_expressions(session: Any, doc_id: str) -> dict[str, str]:
+    """Every parameter's expression, model parameters included, for a guard.
+
+    The freeze closure follows what a frozen expression reads, and a frozen
+    ``seal_face = d0 * 2`` reads a model parameter -- which ``set_parameter``
+    can write, because Inventor resolves the name in the whole collection. A
+    closure built from the user table alone was blind to that.
+    """
+    try:
+        listed = session.backend.list_parameters(doc_id, include_model=True)
+    except TypeError:
+        listed = session.backend.list_parameters(doc_id)
+    return {info.name: info.expression for info in listed}
+
+
+def build_guard(session: Any, context: Any,
+                declaration: Declaration) -> tuple[FreezeGuard, list[str]]:
+    """The guard a declaration means, with its frozen features made real.
+
+    A frozen feature is a promise that its geometry stays put, and geometry is
+    changed by changing parameters -- so each frozen feature pins every
+    parameter that reaches it: its own driven properties and the dimensions of
+    the sketches it consumes, traced by the backend, closed transitively by the
+    guard. Without this, "freeze the Bosses" stopped the feature being deleted
+    and let every dimension of it move.
+
+    Returns the guard and the notes that must travel with it -- above all the
+    honest failure: a backend that cannot trace a feature's parameters leaves
+    that feature protected from deletion and NOT from being reshaped, and
+    saying so is the difference between a limitation and a lie.
+    """
+    import fnmatch
+
+    expressions = guard_expressions(session, context.doc_id)
+    guard = FreezeGuard(
+        declaration.frozen, expressions=expressions,
+        features=declaration.frozen_features,
+    )
+    notes: list[str] = []
+    if not declaration.frozen_features:
+        return guard, notes
+
+    try:
+        listed = [info.name for info in session.backend.list_features(context.doc_id)]
+    except Exception:
+        listed = []
+    for pattern in declaration.frozen_features:
+        matched = [name for name in listed
+                   if fnmatch.fnmatch(name.lower(), pattern.lower())]
+        if not matched and "*" not in pattern and "?" not in pattern:
+            matched = [pattern]
+        for feature in matched:
+            try:
+                traced = session.backend.feature_dependencies(
+                    context.doc_id, feature)
+            except Exception as exc:
+                traced = None
+                notes.append(
+                    f"Tracing what drives the frozen feature {feature!r} failed "
+                    f"({str(exc)[:120]})."
+                )
+            if traced is None:
+                notes.append(
+                    f"The frozen feature {feature!r} is protected from being "
+                    f"suppressed or deleted, and NOT from being reshaped: this "
+                    f"backend cannot trace which parameters drive it, so none "
+                    f"were pinned. Freeze them by name."
+                )
+                continue
+            pinned = traced.get("parameters") or []
+            if pinned:
+                guard = guard.extend(
+                    pinned,
+                    reason=f"driven by the frozen feature {feature!r} -- "
+                           f"changing it would reshape geometry that was "
+                           f"declared to stay the same",
+                )
+                notes.append(
+                    f"Freezing the feature {feature!r} pinned "
+                    f"{', '.join(pinned)}."
+                )
+    return guard, notes

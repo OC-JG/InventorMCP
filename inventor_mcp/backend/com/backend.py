@@ -782,6 +782,101 @@ class ComBackend(Backend):
     _DECLARATION = "InventorMCP_DFM"
     _CHUNK = 200
 
+    #: Property names a feature's shape may be driven through, read off the
+    #: feature and its definition when tracing what a frozen feature depends on.
+    #: A superset of _DESCRIBABLE's dimensioned entries on purpose: missing one
+    #: here under-pins a frozen feature, which is protection that quietly is not.
+    _DRIVING = (
+        "Distance", "Depth", "Thickness", "Radius", "Angle", "TaperAngle",
+        "Taper", "HoleDiameter", "CounterboreDiameter", "CounterboreDepth",
+        "CountersinkDiameter", "CountersinkAngle", "SpotFaceDiameter",
+        "SpotFaceDepth", "BottomTipAngle", "XSpacing", "YSpacing", "XCount",
+        "YCount", "Count", "Spacing",
+    )
+
+    def feature_dependencies(self, doc_id: str, name: str) -> dict[str, Any] | None:  # pragma: no cover - Windows only
+        document = self._doc(doc_id)
+        feature = _dynamic(
+            _find_feature(document.ComponentDefinition.Features, name))
+        known = {
+            info.name.lower(): info.name
+            for info in self.list_parameters(doc_id)
+        }
+        via: dict[str, set[str]] = {}
+
+        def note(expression: Any, where: str) -> None:
+            if not isinstance(expression, str) or not expression.strip():
+                return
+            try:
+                reads = referenced_parameters(expression)
+            except Exception:
+                return
+            for read in reads:
+                canonical = known.get(read.lower())
+                if canonical is not None:
+                    via.setdefault(canonical, set()).add(where)
+
+        # 1. The feature's own driven properties, and its definition's.
+        holders = [feature]
+        definition = getattr(feature, "Definition", None)
+        if definition is not None:
+            holders.append(_dynamic(definition))
+        for holder in holders:
+            for attribute in self._DRIVING:
+                try:
+                    value = getattr(holder, attribute)
+                except Exception:
+                    continue
+                note(getattr(value, "Expression", None), f"its {attribute}")
+
+        # 2. Every parameter Inventor itself associates with the feature. This
+        #    is the wide net: it includes the model parameters the feature
+        #    consumes, whose expressions reference the user parameters.
+        try:
+            parameters = feature.Parameters
+            for index in range(1, int(parameters.Count) + 1):
+                parameter = parameters.Item(index)
+                note(getattr(parameter, "Expression", None),
+                     "a parameter Inventor associates with it")
+                held = str(getattr(parameter, "Name", "") or "")
+                if held.lower() in known:
+                    via.setdefault(known[held.lower()], set()).add(
+                        "a parameter Inventor associates with it")
+        except Exception:
+            pass
+
+        # 3. The dimensions of the sketches it consumes, reached through its
+        #    profile. Profile access differs per feature kind, so every route
+        #    is tried and none is required.
+        sketches = []
+        for route in ("Profile", "Definition.Profile"):
+            target = feature
+            try:
+                for step in route.split("."):
+                    target = getattr(target, step)
+                parent = getattr(target, "Parent", None)
+                if parent is not None:
+                    sketches.append(_dynamic(parent))
+            except Exception:
+                continue
+        for sketch in sketches:
+            label = str(getattr(sketch, "Name", "its sketch"))
+            try:
+                constraints = sketch.DimensionConstraints
+                for index in range(1, int(constraints.Count) + 1):
+                    dimension = constraints.Item(index)
+                    parameter = getattr(dimension, "Parameter", None)
+                    if parameter is not None:
+                        note(getattr(parameter, "Expression", None),
+                             f"a dimension of its sketch {label}")
+            except Exception:
+                continue
+
+        return {
+            "parameters": sorted(via, key=str.lower),
+            "via": {parameter: sorted(where) for parameter, where in via.items()},
+        }
+
     def document_path(self, doc_id: str) -> str | None:  # pragma: no cover - Windows only
         document = self._doc(doc_id)
         try:
