@@ -276,6 +276,11 @@ class TestRememberingTheDeclaration:
                  Declaration(roles={"wall": "wall_t"}, frozen=["bore_d"]))
 
         assert sidecar_for(part).is_file()
+        # Actually closed, not merely reopened: an open file now comes back as
+        # the document it already is, so the only way to lose the in-memory
+        # state -- which is what this test is about -- is to close it first.
+        session.backend.close_document(context.doc_id, save=False)
+        session.forget(context.doc_id)
         again = session.backend.open_document(str(part))
         second = session.register(again, "mm", "deg")
         declaration, _ = resolve(session, second, path=part)
@@ -625,3 +630,86 @@ class TestAnInferenceIsNotLaundered:
         found = call(server, "discover_dfm_roles")
         wall = found["what_would_be_used"]["roles"]["wall"]
         assert wall["from"] == "the part itself"
+
+
+class TestFreezeIntegrityFindings:
+    """The freeze-integrity lens of the review: ways protection could be lost."""
+
+    def test_an_unreadable_declaration_freezes_everything_until_fixed(
+            self, server, tmp_path):
+        """What it protects cannot be known, and the one wrong answer is
+        'nothing'. The old behaviour was a quiet note and a part whose freezes
+        were gone."""
+        from inventor_mcp.dfm.declaration import sidecar_for
+
+        part = tmp_path / "bracket.ipt"
+        part.write_bytes(b"")
+        sidecar_for(part).write_text('{"frozen": "bore_d"}', encoding="utf-8")
+        opened = call(server, "open_part", path=str(part))
+        assert opened["ok"]
+        assert "every_parameter_is_frozen_because" in opened
+        call(server, "set_parameters", parameters=[{"name": "w", "value": 2}],
+             rebuild=False)  # creating is also refused -- prove it
+        out = call(server, "set_parameters",
+                   parameters=[{"name": "anything", "value": 1}], rebuild=False)
+        assert out["ok"] is False and out["error"] == "frozen_geometry"
+        assert "could not be read" in out["message"]
+
+    def test_a_frozen_feature_cannot_be_suppressed(self, server):
+        """The other half of the freeze: protecting a parameter while its
+        feature can be deleted protects a number and loses the geometry."""
+        out = call(server, "build_part_from_recipe", recipe={
+            "name": "Sealed", "units": "mm",
+            "parameters": [{"name": "w", "value": 2}],
+            "operations": [
+                {"op": "sketch", "name": "S", "plane": "xy",
+                 "entities": [{"type": "rectangle", "center": [0, 0],
+                               "width": 40, "height": 30}]},
+                {"op": "extrude", "name": "Body", "sketch": "S", "distance": 20},
+            ],
+            "dfm": {"frozen_features": ["Body"]},
+        })
+        assert out["ok"], out.get("errors")
+        refused = call(server, "edit_feature", action="suppress", name="Body")
+        assert refused["ok"] is False and refused["error"] == "frozen_geometry"
+        forced = call(server, "edit_feature", action="suppress", name="Body",
+                      override_frozen=True)
+        assert forced["ok"]
+
+    def test_reopening_an_open_file_keeps_the_same_document(self, server, tmp_path):
+        """A second handle to the same geometry had no recipe and no freeze
+        guard -- an unprotected door into a protected part."""
+        part = tmp_path / "bracket.ipt"
+        part.write_bytes(b"")
+        first = call(server, "open_part", path=str(part))
+        call(server, "protect_geometry", parameters=["bore_d"])
+        second = call(server, "open_part", path=str(part))
+        assert second["document"] == first["document"]
+        out = call(server, "set_parameters",
+                   parameters=[{"name": "bore_d", "value": 9}], rebuild=False)
+        assert out["ok"] is False and out["error"] == "frozen_geometry"
+
+    def test_a_session_freeze_is_planning_knowledge_not_an_abort(self, session,
+                                                                 monkeypatch,
+                                                                 tmp_path):
+        """A loop that plans without the session guard proposes the change, has
+        it refused at apply, and reports that as a broken rebuild."""
+        import copy
+        from inventor_mcp.builder import build_part
+        from inventor_mcp.dfm import loop as loop_module
+        from inventor_mcp.dfm.freeze import FreezeGuard
+        from inventor_mcp.dfm.loop import improve
+        from inventor_mcp.schema import PartRecipe
+        from test_dfm_loop import RECIPE, Scripted, report
+
+        build_part(session, PartRecipe.model_validate(copy.deepcopy(RECIPE)))
+        context = session.context()
+        values = {p.name: p.expression for p in session.backend.list_parameters(context.doc_id)}
+        context.frozen = FreezeGuard(["draft_a"], expressions=values)
+        monkeypatch.chdir(tmp_path)
+        scripted = Scripted(report(score=49), report("clean", score=100))
+        monkeypatch.setattr(loop_module, "measure", scripted)
+        outcome = improve(session, context)
+        assert "broke the rebuild" not in outcome.stopped_because
+        held = [d for d in outcome.outstanding if d.reason == "frozen"]
+        assert held and any("draft_a" in d.why for d in held)

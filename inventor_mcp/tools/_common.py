@@ -186,18 +186,31 @@ def open_source(session: Any, path: str, *, working_copy: bool = False,
         declaration, _ = resolve_declaration(session, context, path=source,
                                              infer=False)
         if declaration.frozen or declaration.frozen_features:
-            expressions = {
-                p.name: p.expression
-                for p in backend.list_parameters(context.doc_id)
-            }
-            context.frozen = guard_for(declaration, expressions)
+            context.frozen = guard_for(
+                declaration, guard_expressions(session, context.doc_id))
             out["key_geometry"] = context.frozen.as_dict()
     except Exception as exc:
-        # A declaration that cannot be read must not be silently dropped as "no
-        # protection" -- that is the one wrong default. It is reported, and the
-        # DFM tools, which resolve for themselves, will raise the same problem
-        # louder.
-        out["declaration_problem"] = str(exc)[:200]
+        # A declaration exists and cannot be read, which means what it protects
+        # cannot be known -- and the one wrong answer is "nothing". So until it
+        # is fixed, everything is protected: the next parameter change is
+        # refused with this reason, which is a loud failure pointing at the
+        # actual problem, where the old behaviour was a quiet note and a part
+        # whose freezes were gone.
+        from ..dfm.freeze import FreezeGuard
+
+        out["declaration_problem"] = str(exc)[:300]
+        context.frozen = FreezeGuard(
+            ["*"],
+            reason=("unprotectable: the declaration stored for this part could "
+                    "not be read, so what it froze is unknown -- fix or delete "
+                    "it (see declaration_problem in the open_part result)"),
+        )
+        out["key_geometry"] = context.frozen.as_dict()
+        out["every_parameter_is_frozen_because"] = (
+            "the stored declaration could not be read, so what it protects is "
+            "unknown. Fix or delete it; override_frozen=True forces a change "
+            "through in the meantime."
+        )
 
     parameters = sorted(context.resolver.known())
     out.update({
@@ -218,3 +231,19 @@ def open_source(session: Any, path: str, *, working_copy: bool = False,
     else:
         out["parametric"] = True
     return out
+
+
+def guard_expressions(session: Any, doc_id: str) -> dict[str, str]:
+    """Every parameter's expression, model parameters included, for a guard.
+
+    The freeze closure follows what a frozen expression reads, and a frozen
+    ``seal_face = d0 * 2`` reads a model parameter -- which ``set_parameter``
+    can write, because Inventor resolves the name in the whole collection. A
+    closure built from the user table alone was blind to that, so editing d0
+    moved the frozen face with every report saying the freeze held.
+    """
+    try:
+        listed = session.backend.list_parameters(doc_id, include_model=True)
+    except TypeError:
+        listed = session.backend.list_parameters(doc_id)
+    return {info.name: info.expression for info in listed}

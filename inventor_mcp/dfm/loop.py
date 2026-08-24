@@ -301,6 +301,18 @@ def improve(
         declaration, discovered = declaration, None
     mapped = dict(declaration.roles)
     dfm_settings = dict(declaration.settings)
+    # The session's own guard folds in: a freeze added a moment ago with
+    # `protect_geometry` lives only on the context, and a loop that plans
+    # without it proposes the change, has it refused at apply, and reports the
+    # refusal as a broken rebuild -- an abort where a quieter "not acted on,
+    # frozen" was the truth.
+    if context.frozen is not None:
+        for name in context.frozen.as_dict()["declared"]:
+            if name not in declaration.frozen:
+                declaration.frozen.append(name)
+        for name in context.frozen.features:
+            if name not in declaration.frozen_features:
+                declaration.frozen_features.append(name)
     guard = guard_for(declaration)
 
     room = Path(workspace) if workspace else Path.cwd() / ".dfm"
@@ -404,13 +416,26 @@ def improve(
         # its new value through a revert and the reverted part was then saved.
         undo: list[tuple[str, str | None]] = []
         failed: list[dict[str, Any]] = []
+        # What each parameter was, asked with model parameters included: the
+        # user table alone conflates "the loop created this" with "this is not
+        # a user parameter", and a revert then deletes a model parameter the
+        # loop merely edited.
+        every: dict[str, str] = dict(expressions)
+        try:
+            every.update({
+                info.name: info.expression
+                for info in session.backend.list_parameters(
+                    context.doc_id, include_model=True)
+            })
+        except TypeError:
+            pass
         for change in wanted:
             try:
                 apply_parameter(session, context, ParameterSpec(
                     name=change.parameter, value=change.expression,
                     comment=f"DFM round {number}: {change.check}",
                 ))
-                undo.append((change.parameter, expressions.get(change.parameter)))
+                undo.append((change.parameter, every.get(change.parameter)))
                 applied_before.add((change.parameter.lower(), change.expression))
             except Exception as exc:
                 failed.append({"parameter": change.parameter, "error": str(exc)})

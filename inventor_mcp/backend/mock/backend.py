@@ -351,6 +351,15 @@ class MockBackend(Backend):
         return self._doc_info(document)
 
     def open_document(self, path: str) -> DocInfo:
+        # A file that is already open comes back as the document it already is,
+        # the way Inventor behaves -- minting a second handle for the same file
+        # split the session's knowledge in two, and the new handle had no freeze
+        # guard.
+        for document in self._documents.values():
+            if document.path == path:
+                self._active = document.id
+                self._record("open_document", path=path, already_open=True)
+                return self._doc_info(document)
         name = path.replace("\\", "/").rsplit("/", 1)[-1]
         info = self.new_part(name)
         document = self._doc(info.id)

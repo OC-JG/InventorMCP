@@ -455,6 +455,30 @@ class ComBackend(Backend):
             raise DocumentError(f"No such file: {path}")
         with self._translate_errors("Opening the document", DocumentError):
             document = _specialise(app.Documents.Open(path, True))
+        # Inventor hands back the already-open document for a file it has open,
+        # and minting a second handle for it split the session's knowledge in
+        # two: the new context had no recipe, no plans and no freeze guard, so
+        # reopening a protected part produced an unprotected handle to the same
+        # geometry. Matched by file name, because wrapper identity is useless
+        # under late binding -- each call returns a fresh wrapper.
+        opened = os.path.normcase(os.path.abspath(path))
+        for known_id, known in self._documents.items():
+            try:
+                held = os.path.normcase(str(known.FullFileName))
+            except Exception:
+                continue
+            if held and held == opened:
+                self._documents[known_id] = document
+                length, angle, _ = self._document_units(document)
+                return DocInfo(
+                    id=known_id,
+                    name=str(document.DisplayName),
+                    path=str(document.FullFileName) or None,
+                    kind=_document_kind(document),
+                    units=length,
+                    angle_units=angle,
+                    active=True,
+                )
         # Asked rather than assumed. This used to register every opened document
         # as millimetres and degrees, which is right for most parts and 25.4
         # times wrong for an inch-authored one -- and wrong in the direction

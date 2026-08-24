@@ -282,9 +282,27 @@ def register(server: Any, session: Session) -> None:
         name: Annotated[str, Field(description="Feature name, as shown by `inspect_part`.")],
         new_name: Annotated[str | None, Field(description="Required for 'rename'.")] = None,
         document: Annotated[str | None, Field(description="Target part.")] = None,
+        override_frozen: Annotated[bool, Field(
+            description="Alter a feature declared as key geometry anyway. Refused "
+                        "without this. Say it deliberately.")] = False,
     ) -> dict[str, Any]:
         context = session.context(document)
         backend = session.backend
+        # The other half of the freeze. Protecting a parameter while its feature
+        # can be suppressed or deleted protects a number and loses the geometry
+        # it describes -- `frozen_features` existed, was stored and merged, and
+        # was enforced nowhere until here.
+        if (not override_frozen and action in ("suppress", "delete", "rename")
+                and context.frozen is not None
+                and context.frozen.feature_frozen(name)):
+            return {
+                "ok": False,
+                "error": "frozen_geometry",
+                "message": f"The feature {name!r} is declared as key geometry, so "
+                           f"it was not {action}d.",
+                "hint": "If the change is intended, pass override_frozen=True, or "
+                        "remove the feature from the declaration.",
+            }
         if action == "suppress":
             return {"feature": backend.suppress_feature(context.doc_id, name, True).as_dict()}
         if action == "unsuppress":
