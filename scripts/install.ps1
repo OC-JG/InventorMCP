@@ -65,7 +65,14 @@ if ($claude) {
     Write-Host "-- registering with Claude Code"
     claude mcp add inventor -- "$py" -m inventor_mcp
     if ($LASTEXITCODE -ne 0) {
-        Write-Warning "Registration failed; run it yourself:`n   $register"
+        # A second run of this script lands here because the name is taken,
+        # which is the script having WORKED last time, not a failure.
+        claude mcp get inventor *> $null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "-- already registered"
+        } else {
+            Write-Warning "Registration failed; run it yourself:`n   $register"
+        }
     }
 } else {
     Write-Host ""

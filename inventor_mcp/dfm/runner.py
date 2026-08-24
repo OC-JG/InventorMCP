@@ -71,13 +71,22 @@ def find_dfm_root(explicit: str | None = None) -> Path:
         )
 
     tried: list[str] = []
-    for candidate in (os.environ.get(name) for name in ROOT_VARIABLES):
+    for variable in ROOT_VARIABLES:
+        candidate = os.environ.get(variable)
         if not candidate:
             continue
         path = Path(candidate).expanduser()
-        tried.append(str(path))
         if _looks_like_dfm(path):
             return path
+        # Somebody set this on purpose, so a wrong value is an error to fix and
+        # not a hint to fall past: silently using the pinned submodule instead
+        # would analyse against rules the variable was set to override.
+        raise DfmUnavailable(
+            f"{variable} points at {path}, which is not a checkout of the DFM "
+            f"tool: src/rules/engine.js is not there.",
+            hint=f"Fix or unset {variable}. Without it, the dfm/ submodule "
+                 f"pinned in this repository is used.",
+        )
 
     here = Path(__file__).resolve().parents[2]
     # The repository's own submodule first: it is pinned to the version the

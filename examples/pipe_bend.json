@@ -1,27 +1,30 @@
 {
   "name": "PipeBend",
-  "description": "A 90-degree pipe bend with a real wall: the swept profile is an annulus, so the bore is open end to end. Volume is analytic (Pappus): pi*(od^2-id^2)/4 * (pi*bend_r/2).",
+  "description": "A 90-degree pipe bend with a real wall: the swept profile is an annulus, so the bore is open end to end. The BORE leads the parameterisation -- tube_id is frozen as key geometry, the wall is free for the DFM loop, and the outside diameter follows -- because thickening a pipe's wall while keeping what flows through it is exactly the change a moulding loop should be allowed to make. Volume is analytic (Pappus): pi*(od^2-id^2)/4 * (pi*bend_r/2).",
   "units": "mm",
   "material": "Stainless Steel",
   "parameters": [
     {
-      "name": "tube_od",
-      "value": 20
+      "name": "tube_id",
+      "value": 16,
+      "comment": "the bore: what flows through is the function, so it is frozen",
+      "frozen": true
     },
     {
       "name": "wall",
       "value": 2,
-      "comment": "pipe wall thickness"
+      "comment": "pipe wall -- free for the DFM loop to move"
     },
     {
-      "name": "tube_id",
-      "value": "tube_od - 2 * wall",
-      "comment": "bore, driven by the wall"
+      "name": "tube_od",
+      "value": "tube_id + 2 * wall",
+      "comment": "follows the wall, keeping the bore"
     },
     {
       "name": "bend_r",
       "value": 45,
-      "comment": "centreline radius"
+      "comment": "centreline radius",
+      "frozen": true
     }
   ],
   "operations": [
@@ -76,10 +79,6 @@
     "parameters": {
       "wall": "wall"
     },
-    "frozen": [
-      "tube_id",
-      "bend_r"
-    ],
     "settings": {
       "material": "pp",
       "checks": {

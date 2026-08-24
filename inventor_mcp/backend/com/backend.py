@@ -597,8 +597,21 @@ class ComBackend(Backend):
         source = os.path.normcase(os.path.abspath(path))
         remembered = getattr(self, "_imported_from", {})
         known_id = remembered.get(source)
+        document = None
         if known_id is not None and known_id in self._documents:
             document = self._documents[known_id]
+            try:
+                # Activated, because the result is about to say active=True --
+                # and asked at all because the user closing this document in
+                # Inventor's own UI leaves the memo pointing at a dead COM
+                # object. A stale memo falls through to a fresh import rather
+                # than handing back a handle every later call would die on.
+                document.Activate()
+            except Exception:
+                self._documents.pop(known_id, None)
+                remembered.pop(source, None)
+                document = None
+        if document is not None:
             length, angle, _ = self._document_units(document)
             info = DocInfo(
                 id=known_id, name=str(document.DisplayName),
@@ -616,11 +629,16 @@ class ComBackend(Backend):
             return _specialise(app.Documents.Open(path, True))
 
         def by_imported_component() -> Any:  # noqa: D401 - closure
-            holder = app.Documents.Add(
+            # Specialised BEFORE the ComponentDefinition read, not only on
+            # return: under an early-bound cache Documents.Add hands back the
+            # generic Document, which declares no ComponentDefinition, and the
+            # read then failed -- silently demoting every import to the
+            # file-writing Documents.Open route.
+            holder = _specialise(app.Documents.Add(
                 self._k("kPartDocumentObject"),
                 app.FileManager.GetTemplateFile(self._k("kPartDocumentObject")),
                 True,
-            )
+            ))
             try:
                 components = (holder.ComponentDefinition
                               .ReferenceComponents.ImportedComponents)
@@ -634,7 +652,7 @@ class ComBackend(Backend):
                 except Exception:
                     pass
                 raise
-            return _specialise(holder)
+            return holder
 
         def by_translator() -> Any:
             addin = app.ApplicationAddIns.ItemById(self._STEP_TRANSLATOR)
@@ -1010,11 +1028,19 @@ class ComBackend(Backend):
 
     def list_documents(self) -> list[DocInfo]:  # pragma: no cover - Windows only
         app = self._require_app()
-        known = {id(document): doc_id for doc_id, document in self._documents.items()}
         results: list[DocInfo] = []
         for index in range(1, int(app.Documents.Count) + 1):
             document = _specialise(app.Documents.Item(index))
-            doc_id = known.get(id(document))
+            # By COM identity, never by Python wrapper identity: every call to
+            # Documents.Item mints a fresh wrapper, so `id(document)` matched
+            # nothing, and every listing re-registered every open document under
+            # a new handle -- the duplicate-handle bug open_document was cured
+            # of, still running here and quietly undermining the cure.
+            doc_id = None
+            for held_id, held in self._documents.items():
+                if _same_com_object(document, held):
+                    doc_id = held_id
+                    break
             if doc_id is None:
                 doc_id = self._next("doc")
                 self._documents[doc_id] = document
@@ -1025,7 +1051,7 @@ class ComBackend(Backend):
                     name=str(document.DisplayName),
                     path=str(document.FullFileName) or None,
                     kind=_document_kind(document),
-                    active=document is app.ActiveDocument,
+                    active=_same_com_object(document, app.ActiveDocument),
                     modified=bool(document.Dirty),
                 )
             )
@@ -2982,7 +3008,13 @@ def _feature_kind(feature: Any, constants: Any | None = None) -> str:  # pragma:
                 except Exception:
                     continue
     typename = str(type(feature).__name__)
-    if typename and typename not in ("CDispatch", "DispatchBaseClass", "Dispatch"):
+    # PartFeature is the early-bound cache's GENERIC wrapper for every feature,
+    # the way CDispatch is late binding's -- measured live. Reading it as a kind
+    # fabricated "part", which is not in the evidence table (so nothing mapped
+    # wrongly) and not "unknown" either (so the property-alone offer never
+    # fired): the feature's evidence just vanished.
+    if typename and typename not in ("CDispatch", "DispatchBaseClass", "Dispatch",
+                                     "PartFeature", "Feature"):
         return typename.replace("Feature", "").lower() or "unknown"
     return "unknown"
 

@@ -33,6 +33,18 @@ class TestFindingIt:
         monkeypatch.setenv("INVENTOR_MCP_DFM_ROOT", str(tmp_path))
         assert find_dfm_root() == tmp_path
 
+    def test_a_set_but_wrong_environment_variable_refuses(self, tmp_path, monkeypatch):
+        """Somebody set it on purpose: silently falling past it to the pinned
+        submodule would analyse against rules the variable was set to override."""
+        monkeypatch.setattr(runner, "_looks_like_dfm", lambda path: False)
+        for name in ROOT_VARIABLES:
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv("DFM_ROOT", str(tmp_path))
+        with pytest.raises(DfmUnavailable) as caught:
+            find_dfm_root()
+        assert "DFM_ROOT" in caught.value.message
+        assert "unset" in caught.value.hint
+
     def test_and_a_sibling_checkout_needs_no_telling(self, monkeypatch):
         here = Path(runner.__file__).resolve().parents[2]
         wanted = here.parent / "dfm"
@@ -49,6 +61,16 @@ class TestFindingIt:
             find_dfm_root()
         assert "INVENTOR_MCP_DFM_ROOT" in caught.value.hint
         assert "Looked in" in caught.value.hint, "and where it looked"
+
+    def test_the_pinned_submodule_wins_over_a_sibling(self, monkeypatch):
+        """The submodule is the version the drift tests ran against; a sibling
+        is whatever somebody last pulled."""
+        here = Path(runner.__file__).resolve().parents[2]
+        monkeypatch.setattr(runner, "_looks_like_dfm",
+                            lambda path: path in (here / "dfm", here.parent / "dfm"))
+        for name in ROOT_VARIABLES:
+            monkeypatch.delenv(name, raising=False)
+        assert find_dfm_root() == here / "dfm"
 
     def test_a_directory_that_is_not_a_checkout_is_not_accepted(self, tmp_path):
         """And is not quietly swapped for one that is.

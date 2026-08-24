@@ -98,8 +98,9 @@ of the API surface:
 The last four exist to find out whether the five unproven operations work. Each
 isolates one, so a failure names the operation rather than blocking the rest.
 The simulator builds all four and its volumes agree with a hand calculation:
-the pulley at 67.909 cm³, the elbow at 22.207 by Pappus, the duct at 186.460,
-the boss at 16.201.
+the pulley at 68.006 cm³, the elbow at 7.994 by Pappus (an annulus swept a
+quarter turn -- the pipe has a real bore now), the duct at 32.43 hollow (its
+wall comes from a cut loft), the boss at 16.201.
 
 Build each one, then in Inventor:
 

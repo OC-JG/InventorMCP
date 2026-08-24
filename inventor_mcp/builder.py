@@ -896,7 +896,12 @@ def rehearse(recipe: PartRecipe) -> dict[str, Any]:
             step["why_not"] = ("the part is hollow and the simulator has no "
                                "booleans, so this removes a whole prism here "
                                "where Inventor removes only the walls it meets")
-        hollow = hollow or op.op == "shell"
+        # A cut loft hollows a part as surely as a shell does -- the duct
+        # transition is the pattern -- and the simulator has no booleans either
+        # way, so a later cut on the hollowed body gets the same "predicted
+        # loosely" treatment rather than a guaranteed false divergence.
+        hollow = hollow or op.op == "shell" or (
+            op.op == "loft" and getattr(op, "operation", "join") == "cut")
         steps.append(step)
         _warn_about(report["warnings"], where, op, outcome)
 
