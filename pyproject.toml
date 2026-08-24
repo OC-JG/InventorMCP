@@ -37,6 +37,12 @@ inventor-mcp = "inventor_mcp.__main__:main"
 [tool.setuptools.packages.find]
 include = ["inventor_mcp*"]
 
+# The DFM bridge is JavaScript, and a wheel that leaves it out installs a
+# manufacturability loop that cannot run at all -- with nothing to say about why,
+# since every other part of it imports fine.
+[tool.setuptools.package-data]
+inventor_mcp = ["dfm/*.mjs"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 filterwarnings = ["ignore::DeprecationWarning"]

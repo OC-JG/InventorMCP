@@ -56,8 +56,22 @@ def find_dfm_root(explicit: str | None = None) -> Path:
     environment, then next to this repository -- a sibling ``dfm`` directory is
     where the two end up when both are cloned into one workspace.
     """
+    # An explicitly named path is not a hint. Falling through to a different
+    # checkout would analyse the part against rules the caller did not ask for
+    # and report success, so a path that is wrong is said to be wrong.
+    if explicit:
+        path = Path(explicit).expanduser()
+        if _looks_like_dfm(path):
+            return path
+        raise DfmUnavailable(
+            f"{path} is not a checkout of the DFM tool: "
+            f"src/rules/engine.js is not there.",
+            hint="Point dfm_root at the top of a clone of the OnlyCat DFM "
+                 "repository.",
+        )
+
     tried: list[str] = []
-    for candidate in (explicit, *(os.environ.get(name) for name in ROOT_VARIABLES)):
+    for candidate in (os.environ.get(name) for name in ROOT_VARIABLES):
         if not candidate:
             continue
         path = Path(candidate).expanduser()

@@ -275,7 +275,14 @@ adjusting only the boss wall still cannot satisfy both boss guidelines. If a
 threshold moves in the DFM tool, that file fails and names the check.
 
 It skips without Node or a checkout of the analyser. That is a real gap in
-coverage rather than a tidy one, so it reports as skipped with the reason.
+coverage rather than a tidy one, so it reports as skipped with the reason, and
+the reason names where it looked.
+
+In CI it skips by default, because the analyser is a separate private
+repository. The `dfm` job runs it when a `DFM_REPO_TOKEN` secret with read
+access to that repository exists, and prints a notice saying what is not being
+checked when it does not. Locally the sibling checkout is found without being
+told, so `pytest` runs the whole thing.
 
 ---
 
