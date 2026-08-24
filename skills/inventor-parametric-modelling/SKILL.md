@@ -319,18 +319,30 @@ at the sketch's `driven by` list.
 ## Making a part manufacturable
 
 If the DFM analyser is available — check with `dfm_capabilities` — a part can be
-measured for injection moulding and improved in a closed loop:
+measured for injection moulding and improved in a closed loop. It does not have
+to be a part you built:
 
 ```
-check_manufacture()                 # measure; changes nothing
-improve_for_manufacture(rounds=3)   # change, rebuild, measure again
+improve_for_manufacture(path="bracket.ipt", rounds=3)
 ```
 
-Four things to get right before running it.
+That works on `bracket_v2.ipt` and leaves the original alone. A STEP file is
+imported and measured but **cannot be improved** — it has no parameters to
+drive, and the tool says so rather than looping with nothing to do. An `.stl`
+goes straight to `check_manufacture(path=...)` with no Inventor at all.
 
-**Declare the roles.** Several of the analyser's checks are judged on declared
-numbers rather than measured ones — the rib ratios are all fractions of the
-*declared* wall — and the model knows those exactly. Put the map in the recipe:
+For a part nobody described, run `discover_dfm_roles` first and read it. It
+works the roles out from the part's own features — a shell's thickness is the
+wall — and reports which ones it could not. Anything under `suggestions` was
+matched by name alone and has **not** been used: confirm it with `declare_dfm`
+if it is right.
+
+Five things to get right before running it.
+
+**Declare the roles, or check what was discovered.** Several of the analyser's
+checks are judged on declared numbers rather than measured ones — the rib ratios
+are all fractions of the *declared* wall — and the model knows those exactly.
+For a part you are building, put the map in the recipe:
 
 ```jsonc
 "dfm": {
@@ -339,9 +351,13 @@ numbers rather than measured ones — the rib ratios are all fractions of the
 }
 ```
 
-Nothing is guessed from a spelling. An unmapped role comes back as a finding
-nobody can act on, named — which is the honest answer, but it is a wasted round.
-`wall` is worth more than all the others together.
+For a part handed over as a file, `declare_dfm` records the same thing in the
+part itself, so it is there next time and travels with every later version.
+
+Nothing is guessed from a spelling. A role is settled by what a feature
+demonstrably reads, or by somebody saying so, or not at all — an unmapped role
+comes back as a finding nobody can act on, named, which is the honest answer but
+a wasted round. `wall` is worth more than all the others together.
 
 **Freeze the dimensions the design depends on** before running the loop, not
 after. It is a machine for changing dimensions until a number stops rising, and
@@ -367,6 +383,11 @@ corner radius cannot be measured from a mesh at all, so a change to one could
 never be verified. Those come back under `needs_a_person`, with the analyser's
 own wording. Report them; do not try to work around them by moving other
 dimensions until the score rises.
+
+**Read `read_the_part_as` in the result.** It says which parameter was taken to
+mean what and where that reading came from. On a part nobody described,
+everything the loop did rests on it being right, so it is the first thing to
+check and the first thing to show the user.
 
 If the user already has the tool open in a browser, `read_dfm_report(path=...)`
 reads their exported JSON and says what it implies — no Node, no re-analysis.

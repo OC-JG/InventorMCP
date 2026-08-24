@@ -175,6 +175,65 @@ expressions as it goes — a guard resolved against the snapshot would work out 
 dependencies from a table that had since moved, and report a freeze it had not
 enforced.
 
+## Evidence is not a spelling, and a spelling is not evidence
+
+"Declared, never guessed" was the rule, and a part handed over as a file
+declares nothing. So role discovery had to exist, and the line it draws is the
+whole point of it.
+
+A shell feature takes its thickness from somewhere. Whatever that expression
+reads *is* the wall — not because it resembles one, but because the shell is
+built from it. That is a measurement of the model, no weaker than somebody
+saying so, and it is reported with what it was read from because it is a claim a
+person may want to check.
+
+A parameter *called* `wall_t` is a different thing entirely. A table of likely
+spellings gets most parts right, and the ones it gets wrong are
+indistinguishable from the ones it gets right until a loop has already thinned
+the wrong dimension. So a likely name is offered with the call that would accept
+it, and nothing acts on it.
+
+Two candidates map nothing. Two shells reading two different parameters is not a
+wall; it is two walls and a question, and answering it by picking one would be
+exactly the guess this avoids.
+
+The same discipline decides what to do when a stronger source disagrees with the
+evidence. A recipe mapping the wall to one parameter while the part's only shell
+reads another: the recipe wins, and the disagreement is reported. Silently
+preferring the recipe would be right and would also hide the more interesting
+fact.
+
+## The loop works on a copy, and the copy is named the way a person names one
+
+Changing the file somebody handed over is wrong twice: their work is gone, and
+there is nothing left to compare the result against. So `bracket.ipt` becomes
+`bracket_v2.ipt`, keeping whatever separator, case and zero-padding the last one
+used — because `bracket_v002` beside `bracket_v3` sorts wrong in every file
+browser there is, and a version list that sorts wrong is one somebody reads in
+the wrong order.
+
+Nothing is ever overwritten. Two runs an hour apart would otherwise land on the
+same name and the second would destroy the first, including a copy somebody had
+already reviewed. That is a worse failure than refusing to run.
+
+The copy is a filesystem copy rather than an open-and-save-elsewhere. A copy
+cannot modify what it copies; opening the original and saving it under a new name
+leaves a window in which it could.
+
+## Whether a part can be driven is a count, not an inference
+
+A translated file — STEP, IGES, SAT — carries geometry and not the history that
+made it, so it arrives with a solid body and no parameters. Every DFM finding
+still applies to it and none of them can be acted on, which is worth saying
+plainly rather than discovering at the end of a loop that reports "nothing is
+left that a parameter change answers" and reads like success.
+
+But the test is not the extension. An `.ipt` somebody made by importing a STEP
+file and never parameterised has exactly the same problem, and an assembly
+imported from a multi-body STEP has a different one. So what gets reported is a
+count of the part's user parameters and what actually arrived in the document —
+measured, the way everything else here is.
+
 ## A duplicated threshold is contained by a test, not by care
 
 The DFM tool states its thresholds as literals inside its rules and does not

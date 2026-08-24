@@ -542,10 +542,188 @@ def check_dfm(session: Session, report: Report) -> None:
                     + "; ".join(f"{d.check} ({d.reason})" for d in outstanding))
 
 
+def check_from_a_file(session: Session, report: Report) -> None:
+    """Handing over a file, which is the path a person actually takes.
+
+    Four things that cannot be checked without Inventor, and all four are things
+    this project has never done before: whether a filesystem copy of an .ipt
+    opens (a copy keeps the original's internal identity, and Inventor might
+    notice), whether an opened part reports its real units, whether a custom
+    property survives a save and a reopen, and whether role discovery has
+    anything to read on a live feature.
+    """
+    if session.backend.name == "mock":
+        report.skip("file: the whole check",
+                    "needs real files and a real translator -- run with "
+                    "--backend inventor")
+        return
+
+    from inventor_mcp.dfm.declaration import Declaration, read_sidecar
+    from inventor_mcp.dfm.sources import discover_for, remember, resolve
+    from inventor_mcp.versioning import versions_of, working_copy
+
+    recipe = PartRecipe.model_validate(
+        json.loads((ROOT / "examples" / "moulded_housing.json").read_text(encoding="utf-8"))
+    )
+    built = build_part(session, recipe, against_rehearsal=False)
+    if not report.check(bool(built.get("ok")), "file: the housing builds",
+                        str(built.get("errors"))[:200]):
+        return
+    context = session.context()
+
+    room = ROOT / ".dfm"
+    room.mkdir(parents=True, exist_ok=True)
+    original = room / "handed_over.ipt"
+    try:
+        session.backend.save_document(context.doc_id, str(original))
+    except Exception as exc:
+        report.check(False, "file: saving a part to a known path", str(exc)[:160])
+        return
+    report.check(original.is_file(), "file: the part is on disk", str(original))
+
+    # What the part says about itself, before anything is declared.
+    found = discover_for(session, context)
+    report.check(
+        found.declaration.roles.get("wall") == "wall",
+        "file: the shell names the wall on a live part",
+        f"discovered {found.declaration.roles}; evidence "
+        f"{found.declaration.evidence.get('wall', '(none)')}",
+    )
+    report.check(
+        found.declaration.roles.get("draft") == "draft_a",
+        "file: the extrude's taper names the draft",
+        f"evidence {found.declaration.evidence.get('draft', '(none)')}",
+    )
+    if found.ambiguous:
+        report.note(f"file: ambiguous roles {sorted(found.ambiguous)}")
+    report.note(f"file: suggested by name, not used: {found.suggestions}")
+
+    # A declaration written into the part, and read back after a round trip.
+    declaration = Declaration(roles={"wall": "wall"}, frozen=["boss_hole_d"],
+                              settings={"material": "abs"})
+    written = remember(session, context, declaration, path=original)
+    report.note(f"file: remembered {written}")
+    report.check(bool(written.get("sidecar")), "file: the sidecar is written",
+                 str(written.get("sidecar")))
+    stored = written.get("in_the_part")
+    if stored is None:
+        report.skip("file: a declaration inside the part",
+                    "the backend did not offer to store one")
+    else:
+        report.check(bool(stored), "file: a declaration goes into the part",
+                     str(written.get("why_not", ""))[:160])
+
+    session.backend.close_document(context.doc_id, save=True)
+    session.forget(context.doc_id)
+
+    # The working copy, and whether Inventor will open one.
+    try:
+        copy = working_copy(original)
+    except Exception as exc:
+        report.check(False, "file: making a working copy", str(exc)[:160])
+        return
+    report.check(copy.name == "handed_over_v2.ipt",
+                 "file: the copy is the next version", copy.name)
+    report.check(read_sidecar(copy) is not None,
+                 "file: the declaration travels with the copy",
+                 f"looked beside {copy}")
+
+    try:
+        info = session.backend.open_document(str(copy))
+    except Exception as exc:
+        report.check(False, "file: Inventor opens a filesystem copy", str(exc)[:200])
+        return
+    reopened = session.register(info, info.units, info.angle_units)
+    session.sync_parameters(reopened.doc_id)
+    report.check(True, "file: Inventor opens a filesystem copy",
+                 f"{info.name} units={info.units}")
+    if info.detail:
+        report.note(f"file: on opening -- {info.detail}")
+
+    parameters = session.backend.list_parameters(reopened.doc_id)
+    report.check(len(parameters) > 5, "file: the copy has its parameters",
+                 f"{len(parameters)} found")
+
+    resolved, _ = resolve(session, reopened, path=copy)
+    report.check(resolved.roles.get("wall") == "wall",
+                 "file: the reopened part still knows what its wall is",
+                 f"{resolved.roles} from {resolved.origin}")
+    report.check("boss_hole_d" in resolved.frozen,
+                 "file: and what it may not change",
+                 f"frozen {resolved.frozen}")
+    report.note(f"file: read the roles from {set(resolved.origin.values())}")
+    report.note(f"file: versions on disk -- "
+                f"{[p.name for p in versions_of(original)]}")
+
+    session.backend.close_document(reopened.doc_id, save=False)
+    report.note(f"file: delete {room} when you are done")
+
+
+def check_import(session: Session, report: Report) -> None:
+    """Importing a STEP file, which needs a STEP file to import.
+
+    Written round the fact that this repository has no STEP file to ship: one is
+    exported from the housing first, so the check is self-contained, and a
+    round trip through STEP is a fair test of the import anyway.
+    """
+    if session.backend.name == "mock":
+        report.skip("import: STEP", "the simulator has no translator")
+        return
+
+    from inventor_mcp.backend.base import ExportRequest
+
+    recipe = PartRecipe.model_validate(
+        json.loads((ROOT / "examples" / "moulded_housing.json").read_text(encoding="utf-8"))
+    )
+    built = build_part(session, recipe, against_rehearsal=False)
+    if not report.check(bool(built.get("ok")), "import: a part to export",
+                        str(built.get("errors"))[:160]):
+        return
+    context = session.context()
+    room = ROOT / ".dfm"
+    room.mkdir(parents=True, exist_ok=True)
+    step = room / "handed_over.stp"
+    try:
+        session.backend.export(context.doc_id, ExportRequest(path=str(step),
+                                                             format="step"))
+    except Exception as exc:
+        report.check(False, "import: exporting a STEP to import back",
+                     str(exc)[:160])
+        return
+    report.check(step.is_file(), "import: a STEP file exists", str(step))
+    session.backend.close_document(context.doc_id, save=False)
+    session.forget(context.doc_id)
+
+    try:
+        info = session.backend.import_geometry(str(step))
+    except Exception as exc:
+        report.check(False, "import: Inventor reads the STEP file",
+                     getattr(exc, "hint", None) or str(exc)[:300])
+        return
+    imported = session.register(info, info.units, info.angle_units)
+    session.sync_parameters(imported.doc_id)
+    detail = info.detail or {}
+    report.check(True, "import: Inventor reads the STEP file",
+                 f"route: {detail.get('route')}")
+    report.note(f"import: what arrived -- {detail}")
+    report.check(detail.get("document_kind") == "part",
+                 "import: it came in as a part rather than an assembly",
+                 str(detail.get("document_kind")))
+    report.check((detail.get("bodies") or 0) >= 1,
+                 "import: there is a solid body in it", str(detail.get("bodies")))
+    report.check(detail.get("parametric") is False,
+                 "import: and it is honest that there is nothing to drive",
+                 f"parameters: {detail.get('parameters')}")
+    session.backend.close_document(imported.doc_id, save=False)
+    report.note(f"import: delete {step} when you are done")
+
+
 CHECKS = {
     "examples": None,  # handled specially: one per recipe
     "parameter-edit": check_parameter_edit,
     "dfm": check_dfm,
+    "file": check_from_a_file,
+    "import": check_import,
     "hole-styles": check_hole_styles,
     "rollback": check_rollback,
     "threading": check_threading,

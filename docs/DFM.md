@@ -10,10 +10,20 @@ parameter changes, rebuild, and ask the tool again. A finding is closed by a
 measurement, not by an assertion that it has been addressed.
 
 ```
-recipe ──build──► part ──export──► STL ──analyse──► findings
-  ▲                                                    │
-  └──────── rebuild ◄── set parameters ◄── propose ◄────┘
+ an .ipt ──copy──► bracket_v2.ipt ─┐
+ a recipe ──build──────► part ─────┼──export──► STL ──analyse──► findings
+ a STEP file ──import──► part ─────┘                                │
+ an .stl ─────────────────────────────────────────────────► findings│
+                                    ▲                               │
+                                    └── rebuild ◄── set parameters ◄┘
 ```
+
+Hand over a part and it works on the **next version of the file** —
+`bracket.ipt` becomes `bracket_v2.ipt` — so the original cannot be changed by
+anything that goes wrong, and the two can be compared afterwards. A STEP file is
+imported and measured; it carries geometry and not the history that made it, so
+there is nothing to drive and that is said rather than discovered. An `.stl` is
+analysed with no Inventor involved at all.
 
 ---
 
@@ -34,9 +44,16 @@ recipe ──build──► part ──export──► STL ──analyse──�
 ```
 
 ```
-build_part_from_recipe(recipe=...)     # or open an existing part
-check_manufacture()                    # measure, and say what would change
-improve_for_manufacture(rounds=3)      # change it, rebuild, measure again
+improve_for_manufacture(path="bracket.ipt", rounds=3)   # the whole thing
+```
+
+or in steps:
+
+```
+check_manufacture(path="bracket.ipt")   # measure; changes nothing
+discover_dfm_roles()                    # what the part says it means
+declare_dfm(roles={...}, frozen=[...])  # correct it, and remember it
+improve_for_manufacture(rounds=3)       # change, rebuild, measure again
 ```
 
 `examples/moulded_housing.json` is a part built to exercise all of this: a
@@ -103,10 +120,40 @@ run against the part instead of against somebody's recollection of it.
 `wall` is worth more than the rest together: the rib, boss and corner guidelines
 are all fractions of it.
 
-The map is **declared, never guessed**. A role with no parameter is not an error
-— the finding comes back named as one nobody can act on — because inferring
-which parameter is "the wall" from its spelling is how a loop ends up thinning
-the wrong thing.
+### Declared, discovered, or neither — but never guessed
+
+The rule used to be "declared, never guessed", and a part handed over as a file
+declares nothing. So there is now a third way to settle a role, and the
+distinction between it and guessing is the whole of it.
+
+**Evidence.** A shell feature takes its thickness from somewhere. Whatever that
+expression reads *is* the wall — not because it resembles one but because the
+shell is built from it. Same for an extrude's taper and the draft. That is a
+measurement of the model, and it is as good as somebody saying so. It comes back
+marked `discovered`, with what it was read from, because it is a claim a person
+may want to check:
+
+```jsonc
+"wall": { "parameter": "wall_t", "from": "discovered",
+          "evidence": "the shell feature Cavity takes its wall thickness from it" }
+```
+
+**A spelling.** `wall`, `wall_t`, `t`, `thk`, `WallThickness`. A table of these
+gets most parts right, and the ones it gets wrong are indistinguishable from the
+ones it gets right until a loop has already thinned the wrong dimension. So a
+likely-looking name is **offered and never applied** — it comes back under
+`suggestions`, with the call that would accept it, and nothing acts on it.
+
+**Two answers is not an answer.** Two shells reading two different parameters is
+not a wall; it is two walls and a question. Reported, unmapped, with the call
+that settles it.
+
+A role nothing settles stays unmapped, and that is a useful answer rather than a
+gap: a check judged on a role nothing supplies is judged on the analyser's own
+default, which can report a rib too thick on a part that has no ribs. That gets
+said.
+
+`discover_dfm_roles` shows all of it without changing anything.
 
 A check whose figures no role supplies is judging the analyser's own defaults
 against your wall, which can report a rib too thick on a part with no ribs. That
@@ -118,6 +165,55 @@ the check off:
 ```
 
 ---
+
+## Handing over a file
+
+| You give it | What happens | Can the loop improve it? |
+|---|---|---|
+| `.ipt` | opened as the next version, so the original is untouched | yes, if the part has parameters |
+| `.stp` `.step` `.igs` `.iges` `.sat` `.x_t` | imported as a solid body | **no** — a translated file has no parameters |
+| `.stl` | analysed directly; Inventor is not started | no |
+| nothing | the part already open is used | yes |
+
+The middle row is the one worth reading twice. A STEP file carries geometry and
+not the history that made it, so there is no wall parameter to change — every
+finding still applies, and none of them can be acted on. `check_manufacture`
+measures it; `improve_for_manufacture` refuses with that reason rather than
+running a loop that reports "nothing left to change" and sounds like success.
+
+The same is true of an `.ipt` somebody made by importing a STEP file and never
+parameterised, which is why whether a part can be driven is reported as a **count
+of its user parameters** rather than inferred from its extension.
+
+### Versions
+
+`bracket.ipt` → `bracket_v2.ipt` → `bracket_v3.ipt`, keeping whatever separator,
+case and zero-padding the last one used. Nothing is ever overwritten: two runs an
+hour apart would otherwise land on the same name and the second would destroy the
+first, including a copy somebody had already reviewed.
+
+The copy is made by copying the file, not by opening the original and saving it
+elsewhere — a filesystem copy cannot modify what it copies, where an open-and-
+save-elsewhere leaves a window in which it could.
+
+### Where the declaration lives
+
+Whatever was worked out about a part is written back in two places, so the next
+run starts from the same reading rather than inferring it again:
+
+- **in the part**, as a custom iProperty. Travels through a rename and a move,
+  and is visible in Inventor's iProperties dialog under Custom.
+- **beside the part**, as `bracket.dfm.json`. Works everywhere, including the
+  simulator, and is readable and correctable by a person.
+
+A versioned copy carries the sidecar with it. One that had forgotten which
+parameter was the wall would rediscover it, and might discover something else.
+
+`declare_dfm` is how to correct it:
+
+```
+declare_dfm(roles={"rib_thickness": "rib_t"}, frozen=["bore_d"], material="abs")
+```
 
 ## Key geometry
 

@@ -34,6 +34,40 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   Findings no parameter answers are reported, not attempted: an undercut is a
   tooling decision, a sink is cored out, and a corner radius cannot be measured
   from a mesh at all, so a change to one could never be verified.
+- **The loop takes a file.** `improve_for_manufacture(path="bracket.ipt")` works
+  on `bracket_v2.ipt` and leaves the original alone -- changing the file
+  somebody handed over is wrong twice, because their work is gone and there is
+  nothing left to compare against. Version names keep whatever separator, case
+  and zero-padding the last one used, and nothing is ever overwritten: two runs
+  an hour apart would otherwise land on the same name and the second would
+  destroy the first. The copy is a filesystem copy rather than an
+  open-and-save-elsewhere, because a copy cannot modify what it copies.
+
+  A STEP, IGES, SAT or Parasolid file is imported as a solid body and can be
+  measured but not improved: translated geometry carries no history, so there
+  are no parameters to drive. That is reported as a *count* of the part's user
+  parameters rather than inferred from its extension -- an .ipt somebody made
+  by importing a STEP file and never parameterised has the same problem. An
+  .stl goes straight to the analyser with no Inventor at all.
+- **Role discovery, from evidence.** A part handed over as a file declares
+  nothing, so `discover_dfm_roles` works out which parameter is which from what
+  the part's features actually read: a shell feature takes its thickness from
+  somewhere, and whatever that expression reads *is* the wall -- not by
+  resemblance but by construction. Reported with what it was read from, because
+  it is a claim somebody may want to check.
+
+  What it will not do is read a spelling. A table of likely names gets most
+  parts right and the ones it gets wrong are indistinguishable from the ones it
+  gets right until a loop has thinned the wrong dimension, so a likely name is
+  offered with the call that would accept it and nothing acts on it. Two shells
+  reading two different parameters map nothing: that is not a wall, it is two
+  walls and a question.
+- **A declaration that stays with the part**, in a custom iProperty inside it
+  and a `bracket.dfm.json` beside it, so the next run starts from the same
+  reading and a versioned copy does not arrive having forgotten which parameter
+  was the wall. `declare_dfm` writes it; five sources are ranked -- what you say
+  now, the recipe, the part itself, the sidecar, discovery -- and freezes are
+  unioned across all five so no source can take protection off.
 - **Key geometry**, which is the other half of that: `frozen: true` on a
   parameter, a `dfm.frozen` list that accepts globs, `frozen_features`, and
   `protect_geometry`. Enforced in `apply_parameter` rather than in the loop --
@@ -63,6 +97,27 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   housing and asserts the frozen pilot hole comes out the size it went in.
 
 ### Fixed
+- **`_feature_kind` read `type(feature).__name__`**, which is `CDispatch` under
+  late binding -- and late is this project's default. Every feature on a live
+  part reported its kind as the name of a pywin32 wrapper class, so anything
+  reasoning about kinds was reasoning about nothing. It now asks `Object.Type`,
+  a documented property of every Inventor object, and answers "unknown" rather
+  than guessing when it cannot be read.
+- **`open_document` registered every opened part as millimetres and degrees.**
+  Right for most parts and 25.4 times wrong for an inch-authored one -- wrong in
+  the direction where a bare number in a later edit builds something a fortieth
+  of the size it should be. It now asks the document, and says so when the
+  document will not answer. (Values this server sends always carry their own
+  unit, so expressions were never affected; a bare number in a later edit was.)
+- **`Session.register` replaced a context outright**, so handing a path to a
+  tool for a part already on screen silently dropped its recipe, its sketch
+  plans and its freeze guard -- turning a protected part into an unprotected one
+  without saying anything.
+- **`headless.mjs` was missing from the wheel**, so an installed copy had a
+  manufacturability loop that could not run and nothing to say about why.
+- **An explicitly named analyser path fell through to a different checkout**,
+  analysing the part against rules the caller had not asked for and reporting
+  success.
 - **The simulator evaluated an expression once, when it was set, and kept the
   number.** `rib_t = wall_t * 0.45` stayed where it started for ever after the
   wall moved, so the simulator disagreed with Inventor about every dependent

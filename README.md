@@ -261,9 +261,20 @@ enact the parts of that verdict which really are parameter changes, rebuild, and
 ask the tool again.
 
 ```
-build_part_from_recipe(recipe=...)
-improve_for_manufacture(rounds=3)
+improve_for_manufacture(path="bracket.ipt", rounds=3)
 ```
+
+Hand it a part and it works on the next version of the file — `bracket_v2.ipt` —
+so the original is untouched and the two can be compared. A STEP file is
+imported and measured; it carries geometry and not the history that made it, so
+there is nothing to drive and it says so rather than running a loop with nothing
+to do. An `.stl` is analysed without starting Inventor at all.
+
+Which parameter is the wall comes from the part where nobody has said: a shell
+feature takes its thickness from somewhere, and whatever that expression reads
+*is* the wall. That is a measurement, and it is reported with what it was read
+from. A parameter that merely *looks* like the wall is offered and never
+applied.
 
 Each round reports which findings actually cleared, because a change that was
 applied is not the same as a finding that was answered. Ratio fixes come out as
@@ -294,7 +305,7 @@ See [docs/DFM.md](docs/DFM.md).
 |---|---|
 | `connect` | Attach to Inventor, or to the simulator |
 | `session_status` | Backend, open documents, active part and what it contains |
-| `new_part` / `open_part` / `save_part` / `close_part` / `activate_part` | Document lifecycle |
+| `new_part` / `open_part` / `save_part` / `close_part` / `activate_part` | Document lifecycle; `open_part` takes an .ipt, a STEP/IGES/SAT file, or the next version of one |
 | `part_recipe_schema` | Full JSON Schema plus the quick reference |
 | `validate_recipe` | Static checks; no Inventor needed |
 | `build_part_from_recipe` | The main text-to-model entry point |
@@ -309,9 +320,11 @@ See [docs/DFM.md](docs/DFM.md).
 | `capture_view` | Render a PNG |
 | `check_manufacture` | Measure manufacturability, and say what would change |
 | `improve_for_manufacture` | Change it, rebuild, measure again — a closed loop |
+| `discover_dfm_roles` | Work out which parameter means what, from the part itself |
+| `declare_dfm` | Say which parameter means what, and remember it in the part |
 | `read_dfm_report` | Read a report exported from the DFM tool in a browser |
 | `protect_geometry` | Declare key geometry that must not be changed |
-| `dfm_capabilities` | The roles, and what needs a person rather than a parameter |
+| `dfm_capabilities` | The roles, the formats, and what needs a person |
 
 Two prompts are published as well: `model_this_part` and `revise_part`.
 
@@ -367,6 +380,7 @@ inventor_mcp/
     base.py        the contract both backends satisfy
     com/           live Inventor over COM (Windows)
     mock/          in-memory simulator
+  versioning.py    naming and making the next version of a part file
   dfm/             manufacturability: read a DFM report, act on it, refuse to
   tools/           the MCP tool surface
   server.py        assembly: tools, resources, prompts, CLI

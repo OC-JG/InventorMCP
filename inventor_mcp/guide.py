@@ -24,11 +24,23 @@ Workflow:
 7. `check_manufacture` / `improve_for_manufacture` -- for a moulded part, measure how
    manufacturable it is by injection moulding and improve it in a closed loop: change
    a parameter, rebuild, measure again. `dfm_capabilities` says whether the analyser
-   is available. Freeze the dimensions the design depends on FIRST -- a sealing face,
-   a bearing bore, a pilot hole for a self-tapping screw -- with `frozen: true` on the
-   parameter or `protect_geometry`. The loop is a machine for changing dimensions
-   until a number stops rising, and every one of those is a legitimate way to raise a
-   DFM score and a broken part.
+   is available and which formats it takes.
+
+   Both take a `path`, so the part need not have been built here. An .ipt is worked
+   on as the next version of the file, leaving the original alone. A STEP file is
+   imported and measured but cannot be improved -- translated geometry has no
+   parameters to drive. An .stl is analysed with no Inventor at all.
+
+   For a part nobody described, `discover_dfm_roles` works out which parameter is the
+   wall from the part's own features and says what it read that from; `declare_dfm`
+   corrects it and remembers it in the part. Anything it lists under `suggestions`
+   was matched by name alone and has NOT been used.
+
+   Freeze the dimensions the design depends on FIRST -- a sealing face, a bearing
+   bore, a pilot hole for a self-tapping screw -- with `frozen: true` on the
+   parameter, `declare_dfm` or `protect_geometry`. The loop is a machine for changing
+   dimensions until a number stops rising, and every one of those is a legitimate way
+   to raise a DFM score and a broken part.
 
 Working from a 2D drawing? Read it into a `reading` first (`drawing_reading_schema`),
 write a recipe whose parameters are its dimensions, then `check_against_drawing`.
