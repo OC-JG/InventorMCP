@@ -585,3 +585,43 @@ class TestReviewFindings:
         write_sidecar(part, Declaration(frozen=["bore_d"]))
         declaration, _ = resolve(session, context)   # no path argument
         assert "bore_d" in declaration.frozen
+
+
+class TestAnInferenceIsNotLaundered:
+    """Storing the merged declaration wrote every inference into the part as
+    though the part had stated it, so a wrong inference came back next time as
+    'the part itself' -- and even infer_roles=false could not escape it."""
+
+    def _shelled(self, server):
+        call(server, "new_part", name="Housing")
+        call(server, "set_parameters", parameters=[
+            {"name": "wall_t", "value": 2.5}, {"name": "bore_d", "value": 8}],
+            rebuild=False)
+        call(server, "apply_operations", operations=[
+            {"op": "sketch", "name": "S", "plane": "xy",
+             "entities": [{"type": "rectangle", "center": [0, 0],
+                           "width": 40, "height": 30}]},
+            {"op": "extrude", "name": "E", "sketch": "S", "distance": 20},
+            {"op": "shell", "name": "Cavity",
+             "faces": {"kind": "face", "filter": "top"},
+             "thickness": "wall_t", "direction": "inside"},
+        ])
+
+    def test_declare_dfm_does_not_store_what_discovery_inferred(self, server):
+        self._shelled(server)
+        # Declare only a freeze. Discovery has meanwhile inferred the wall.
+        out = call(server, "declare_dfm", frozen=["bore_d"])
+        assert out["remembered"]["in_the_part"] is True
+        found = call(server, "discover_dfm_roles")
+        wall = found["what_would_be_used"]["roles"]["wall"]
+        assert wall["from"] == "discovered", (
+            "an inference stays an inference until a person confirms it -- "
+            "stored, it would read back as 'the part itself'")
+        assert "bore_d" in found["what_would_be_used"]["frozen"]
+
+    def test_but_a_declared_role_is_stored(self, server):
+        self._shelled(server)
+        call(server, "declare_dfm", roles={"wall": "wall_t"})
+        found = call(server, "discover_dfm_roles")
+        wall = found["what_would_be_used"]["roles"]["wall"]
+        assert wall["from"] == "the part itself"

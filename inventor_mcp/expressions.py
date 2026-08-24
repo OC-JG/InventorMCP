@@ -72,12 +72,22 @@ def _as_quantity(value: _Value) -> Quantity:
 _QUANTITY_FUNC = "__q__"
 
 _LITERAL_RE = re.compile(
-    r"""(?P<number>(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)   # 12, 12.5, .5, 1e3
+    r"""(?<![\w.])                                          # not inside a name
+        (?P<number>(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)   # 12, 12.5, .5, 1e3
         (?P<gap>\s*)
         (?P<unit>[A-Za-z]+|")?                              # mm, in, deg, "
     """,
     re.VERBOSE,
 )
+# The lookbehind is what lets a parameter be called boss1_d or m3_clearance.
+# Without it, the digits inside an identifier were read as a literal and the
+# name was cut at them: `Parameter1` tokenised as `Parameter` `__q__(1,'')`,
+# which is a syntax error when the pieces touch and -- far worse -- parses
+# cleanly in `referenced_parameters`' AST walk with the name silently absent.
+# Everything downstream of that walk then simply did not see the parameter:
+# discovery dropped a wall candidate, and the freeze closure lost a dependency
+# somebody had declared, both without a word. Inventor's own model parameters
+# are named d0, d1, d2, so this was not an exotic spelling.
 
 
 def _rewrite_literals(source: str) -> str:

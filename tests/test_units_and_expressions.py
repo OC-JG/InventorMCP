@@ -5,7 +5,7 @@ import math
 import pytest
 
 from inventor_mcp.errors import ExpressionError, UnitError
-from inventor_mcp.expressions import evaluate, referenced_parameters, validate
+from inventor_mcp.expressions import UnitContext, evaluate, referenced_parameters, validate
 from inventor_mcp.units import Dim, Quantity, convert, format_quantity, parse_quantity, to_internal
 
 
@@ -444,3 +444,41 @@ class TestCountsInARecipe:
                     {"type": "bolt_circle", "diameter": 60, "count": "n / 2"}]}]}))
         assert report["ok"] is False
         assert "whole number" in report["findings"][0]["error"]
+
+
+class TestNamesWithDigitsInThem:
+    """`boss1_d`, `m3_clearance`, Inventor's own d0/d1 model parameters.
+
+    The literal tokeniser used to split an identifier at its digits:
+    `Parameter1` became `Parameter __q__(1,'')`, a syntax error when the pieces
+    touch and -- far worse -- a clean parse in `referenced_parameters`, with the
+    name silently absent. Discovery then dropped a wall candidate and the freeze
+    closure lost a declared dependency, both without a word.
+    """
+
+    @pytest.mark.parametrize("source, names", [
+        ("Parameter1 * 2", {"Parameter1"}),
+        ("wall2 - 1", {"wall2"}),
+        ("d0 / 2", {"d0"}),
+        ("boss1_d + wall", {"boss1_d", "wall"}),
+        ("m3_clearance", {"m3_clearance"}),
+    ])
+    def test_they_are_seen(self, source, names):
+        assert referenced_parameters(source) == names
+
+    def test_and_they_evaluate(self):
+        context = UnitContext("mm", "deg")
+        two = Quantity(2.0, Dim.LENGTH)
+        assert evaluate("boss1_d / 2", {"boss1_d": two}, context).value == 1.0
+
+    @pytest.mark.parametrize("source", ["12.5 mm", ".5 in", "1e3 mm", "2 * 3"])
+    def test_a_literal_is_still_a_literal(self, source):
+        assert referenced_parameters(source) == set()
+
+    def test_the_freeze_closure_follows_a_digit_named_dependency(self):
+        """The consequence that made this worth a class of its own: freezing
+        `seal_face = boss1_d - 0.4` must protect boss1_d."""
+        from inventor_mcp.dfm.freeze import FreezeGuard
+        guard = FreezeGuard(["seal_face"], expressions={
+            "boss1_d": "8", "seal_face": "boss1_d - 0.4"})
+        assert guard.check("boss1_d") is not None

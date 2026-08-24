@@ -419,7 +419,18 @@ def register(server: Any, session: Session) -> None:
                 + "."
             )
         if remember_it:
-            out["remembered"] = remember(session, context, declaration)
+            # What gets written is what somebody said -- this call and the
+            # stored sources -- never what discovery inferred. Writing the
+            # merged declaration stored every inference as though the part had
+            # stated it, so a wrong inference came back next time as "the part
+            # itself" and even infer_roles=false could not escape it. An
+            # inference stays an inference until a person confirms it, and
+            # confirming it is exactly what passing it to this tool does.
+            stated_only, _ = resolve(session, context, roles=roles,
+                                     freeze=frozen or (),
+                                     freeze_features=frozen_features or (),
+                                     settings=combined, infer=False)
+            out["remembered"] = remember(session, context, stated_only)
         return out
 
     @server.tool(

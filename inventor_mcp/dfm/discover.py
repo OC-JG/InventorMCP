@@ -302,13 +302,18 @@ def discover(
             f"a claim to it. Say which with roles={{{role!r}: '<parameter>'}}."
         )
 
-    suggestions = _suggest(
-        [role for role in ROLES if role not in declaration.roles and role not in ambiguous],
-        known,
-    )
+    # The kind-less property offers first: "something takes its thickness from
+    # this" is weaker than evidence and still a measurement, where a spelling is
+    # neither. setdefault the other way round had the name-guess shadowing it.
+    suggestions: dict[str, str] = {}
     for role, parameter in offered.items():
         if role not in declaration.roles and role not in ambiguous:
-            suggestions.setdefault(role, parameter)
+            suggestions[role] = parameter
+    for role, parameter in _suggest(
+        [role for role in ROLES if role not in declaration.roles and role not in ambiguous],
+        known,
+    ).items():
+        suggestions.setdefault(role, parameter)
     notes.extend(sorted(kind_notes))
     if suggestions:
         notes.append(

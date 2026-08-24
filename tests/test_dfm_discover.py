@@ -252,3 +252,14 @@ class TestAnUnreadableKindIsNotEvidence:
         ], ["wall_t", "rib_t"])
         assert found.declaration.roles["wall"] == "wall_t"
         assert "wall" not in found.suggestions, "the offer must not shadow real evidence"
+
+
+class TestOfferPriority:
+    def test_a_kindless_property_offer_outranks_a_name_guess(self):
+        """'Something takes its thickness from shell_t' is a measurement, weaker
+        than evidence; 'a parameter is called wall_thickness' is neither."""
+        found = discover(
+            [{"name": "C", "type": "unknown", "thickness": "shell_t"}],
+            ["shell_t", "wall_thickness"],
+        )
+        assert found.suggestions["wall"] == "shell_t"
