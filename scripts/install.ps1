@@ -44,9 +44,24 @@ if (-not (Test-Path "$root\.venv")) {
     python -m venv "$root\.venv"
 }
 $py = "$root\.venv\Scripts\python.exe"
-Write-Host "-- installing inventor_mcp (editable)"
+Write-Host "-- installing inventor_mcp (editable, with the inventor and dev extras)"
 & $py -m pip install --quiet --upgrade pip
-& $py -m pip install --quiet -e "$root"
+# Both extras, not a bare `-e .`. pywin32 lives in the `inventor` extra and is
+# what the COM backend imports, and pytest lives in `dev`: installing neither
+# produced a venv that could not reach Inventor and could not run the suite,
+# reporting only "No module named pytest" -- which reads like a missing test
+# dependency rather than a server that will not start.
+& $py -m pip install --quiet -e "$root[inventor,dev]"
+if ($LASTEXITCODE -ne 0) { throw "pip install failed. Run it again without --quiet to see why." }
+
+& $py -c "import win32com.client" 2>$null
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "-- pywin32 imports; the COM backend can reach Inventor"
+} else {
+    Write-Warning ("pywin32 did not import. Inventor's automation API is " +
+        "unreachable without it, so the server will only offer the simulator. " +
+        "Try: & '$py' -m pip install pywin32")
+}
 
 # -- 3. node -----------------------------------------------------------------
 $node = Get-Command node -ErrorAction SilentlyContinue

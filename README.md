@@ -58,7 +58,7 @@ By hand, the script's steps are:
 git submodule update --init dfm
 py -m venv .venv
 .venv\Scripts\activate
-pip install -e .
+pip install -e ".[inventor,dev]"
 claude mcp add inventor -- .venv\Scripts\python.exe -m inventor_mcp
 ```
 
@@ -410,7 +410,7 @@ heuristic.
 ## Development
 
 ```bash
-pip install -e ".[dev]"
+pip install -e ".[dev]"     # add ,inventor on the Windows machine, for pywin32
 pytest                      # the whole suite, no Inventor required
 ```
 
