@@ -99,8 +99,9 @@ class Scripted:
         self.seen.append(dict(values))
         index = min(self.calls, len(self.reports) - 1)
         self.calls += 1
+        told = dict(kwargs.get("settings") or {})
         return (self.reports[index], values, expressions,
-                Path("part.stl"), Path("report.json"))
+                Path(f"round-{index}.stl"), Path(f"round-{index}.json"), told)
 
 
 @pytest.fixture

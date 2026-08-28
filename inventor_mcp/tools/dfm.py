@@ -166,7 +166,7 @@ def register(server: Any, session: Session) -> None:
         values, expressions = current_parameters(session, context)
         guard_, pin_notes = build_guard(session, context, declaration)
 
-        report, values, expressions, mesh, written = measure(
+        report, values, expressions, mesh, written, told = measure(
             session, context, roles=declaration.roles,
             settings=declaration.settings, workspace=_workspace(workspace),
             label=_stamped(f"{context.name}-check", "").rstrip("."),
@@ -183,6 +183,12 @@ def register(server: Any, session: Session) -> None:
                              **({"pinned_by_features": pin_notes} if pin_notes else {})},
             "stl": str(mesh),
             "report": str(written),
+            # What the analyser was told, once the part's own parameters had
+            # been read into it. The browser tool asks a person to type these
+            # in by hand, and a panel filled from its defaults instead scores
+            # the same mesh differently -- so the two disagree, visibly, with
+            # nothing on screen to say why.
+            "analyser_input": told,
         }
         if opened:
             out["file"] = {k: v for k, v in opened.items()
@@ -361,8 +367,11 @@ def register(server: Any, session: Session) -> None:
         # comparison rather than diffed here: it knows which direction is better
         # for each measurement, and it raises a caveat where a score moved for a
         # reason other than the part.
-        first, last = result.rounds[0], result.rounds[-1]
-        if len(result.rounds) > 1 and first.report and last.report:
+        # Against the round that is still in the part. A reverted round is kept
+        # in the history but its values were put back, so comparing round 0 with
+        # it reports the movement of a part that no longer exists.
+        first, last = result.rounds[0], (result.landed or result.rounds[-1])
+        if len(result.rounds) > 1 and first is not last and first.report and last.report:
             try:
                 out["what_moved"] = compare_reports(
                     first.report, last.report, dfm_root=dfm_root)

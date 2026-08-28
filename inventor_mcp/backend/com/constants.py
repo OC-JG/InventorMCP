@@ -106,10 +106,45 @@ FALLBACK: dict[str, int] = {
 #: right about the dimension-orientation values (19201/19202/19203) and about
 #: ``kTorusSurface``, and the sphere is 5896 rather than either guess.
 #:
-#: Nothing is disputed now, so nothing refuses. Re-run
-#: ``scripts/dump_constants.py`` on any release that is not 2027.1: these
+#: Re-run ``scripts/dump_constants.py`` on any release that is not 2027.1: these
 #: numbers are a measurement of one version, not a fact about the API.
-SUSPECT: dict[str, str] = {}
+#:
+#: Which is what Inventor 2026.1 then said. Forty-seven of the fifty-one agree
+#: with it exactly; the four below are not in its type library under these names
+#: at all, so on 2026 there is nothing to read and the table is what would be
+#: used -- and the table has never been checked for them anywhere.
+#:
+#: Three of the four give themselves away by their numbering. Shell directions
+#: run 41217 and 41218, so a third member of that enum is not 41987. Rendering
+#: styles run 8706 and 8708, so hidden line is not 9986. A value out of its own
+#: family is the signature of the mistake that put ``kThroughAllExtent`` on
+#: Inventor's ``kToNextExtent`` -- an extrude that stopped at the next face
+#: while every report said "through all", wrong in a way nothing raises.
+#:
+#: So they refuse. ``kFlatHoleBottom`` and ``kAngleHoleBottom`` are not reached
+#: by any code path today -- the hole calls take a ``FlatBottom`` boolean and a
+#: ``BottomTipAngle`` instead -- and refusing costs nothing. The other two are
+#: reachable: a shell with ``direction: "both"``, and ``capture_view`` in
+#: hidden-line mode. On a release whose type library has the names, none of this
+#: fires; ``resolve`` prefers the type library and never consults the table.
+SUSPECT: dict[str, str] = {
+    "kBothShellDirection": (
+        "Inventor 2026.1's type library has no such name, and 41987 is outside "
+        "the 41217/41218 family the other two shell directions belong to"
+    ),
+    "kHiddenLineRendering": (
+        "Inventor 2026.1's type library has no such name, and 9986 is outside "
+        "the 8706/8708 family the other two render styles belong to"
+    ),
+    "kFlatHoleBottom": (
+        "Inventor 2026.1's type library has no such name; nothing reads this "
+        "entry today, so it has never been exercised anywhere"
+    ),
+    "kAngleHoleBottom": (
+        "Inventor 2026.1's type library has no such name; nothing reads this "
+        "entry today, so it has never been exercised anywhere"
+    ),
+}
 
 
 class Constants:

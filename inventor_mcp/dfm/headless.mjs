@@ -197,7 +197,14 @@ const shot = estimateShot({
 });
 
 const report = buildExportJSON({
-  sessionId: 'HEADLESS',
+  /*
+   * Named after the mesh, not a constant. The browser panel labels a comparison
+   * with timestamp-to-the-minute plus session id, so two rounds of the same loop
+   * -- which routinely finish inside one minute -- both rendered
+   * "10:31 HEADLESS ABS" and the before and after were indistinguishable on
+   * screen. The file name is the one thing that always differs.
+   */
+  sessionId: (args.session || path.basename(args.stl).replace(/\.[^.]+$/, '')).toUpperCase(),
   dfm: { input, result },
   analysis,
   twoShot: null,

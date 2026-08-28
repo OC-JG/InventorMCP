@@ -1335,12 +1335,61 @@ class TestTheMeasuredEnumValues:
         assert FALLBACK["kVerticalDim"] == 19202
         assert FALLBACK["kAlignedDim"] == 19203
 
-    def test_nothing_is_disputed_any_more(self):
-        from inventor_mcp.backend.com.constants import SUSPECT
+    def test_what_2026_reopened_is_written_down(self):
+        """Four names 2026.1's type library does not have.
 
-        assert SUSPECT == {}, (
-            "a disputed value refuses to resolve, so anything listed here must "
-            "genuinely be unsettled -- measure it instead")
+        Everything else in the table -- forty-seven of fifty-one -- 2026.1
+        agreed with exactly, which is the strongest evidence yet that these are
+        API facts rather than one release's numbers. The four it has no name for
+        are a different case: there is nothing to read, so the table is what
+        would be used, and the table has never been checked for them on any
+        release. They refuse rather than guess.
+        """
+        from inventor_mcp.backend.com.constants import FALLBACK, SUSPECT
+
+        assert set(SUSPECT) == {
+            "kBothShellDirection", "kHiddenLineRendering",
+            "kFlatHoleBottom", "kAngleHoleBottom",
+        }
+        for name, why in SUSPECT.items():
+            assert name in FALLBACK, f"{name} is disputed but not in the table"
+            assert "2026.1" in why, (
+                f"{name}'s reason should say which release said so")
+
+    def test_the_two_reachable_disputes_are_out_of_their_own_family(self):
+        """Why these are refused rather than left to resolve quietly.
+
+        A value from the wrong numbering family is how `kThroughAllExtent` came
+        to be Inventor's `kToNextExtent`. Shell directions run 41217/41218 and
+        render styles run 8706/8708, so neither 41987 nor 9986 belongs where the
+        table puts it -- and both are reachable from the tool surface, by a
+        shell with direction "both" and by capture_view in hidden-line mode.
+        """
+        from inventor_mcp.backend.com.constants import FALLBACK
+
+        shell = {FALLBACK["kInsideShellDirection"], FALLBACK["kOutsideShellDirection"]}
+        assert all(abs(FALLBACK["kBothShellDirection"] - v) > 16 for v in shell)
+
+        render = {FALLBACK["kShadedRendering"], FALLBACK["kWireframeRendering"]}
+        assert all(abs(FALLBACK["kHiddenLineRendering"] - v) > 16 for v in render)
+
+    def test_the_unreachable_two_are_still_unreached(self):
+        """kFlatHoleBottom and kAngleHoleBottom cost nothing to refuse.
+
+        The hole calls take a `FlatBottom` boolean and a `BottomTipAngle`
+        instead, so nothing resolves these names. If that ever changes, this
+        test fails and the value has to be measured before it can be used.
+        """
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parent.parent / "inventor_mcp"
+        table = root / "backend" / "com" / "constants.py"
+        for name in ("kFlatHoleBottom", "kAngleHoleBottom"):
+            users = [f for f in root.rglob("*.py")
+                     if f != table and name in f.read_text(encoding="utf-8")]
+            assert not users, (
+                f"{name} is now read by {[str(f) for f in users]}, and it is "
+                "disputed -- measure it on a live Inventor first")
 
     def test_the_refusal_mechanism_still_works(self):
         """Kept for the next release that contradicts a measurement."""

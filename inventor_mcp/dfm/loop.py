@@ -99,6 +99,12 @@ class Round:
             out["rebuild"] = self.rebuild
         if self.report:
             out["report"] = self.report
+        if self.stl:
+            # The mesh, not just the verdict on it. The report names the file it
+            # was computed from, so leaving this out meant a caller could only
+            # reach the geometry by knowing that an .stl sits beside every .json
+            # -- which is true, and was written down nowhere.
+            out["stl"] = self.stl
         return out
 
 
@@ -125,6 +131,29 @@ class LoopResult:
     outstanding: tuple[Deferred, ...] = ()
     notes: tuple[str, ...] = ()
     settings: dict[str, Any] = field(default_factory=dict)
+    #: Where the round-by-round meshes and reports were written.
+    workspace: str = ""
+    #: What the analyser was actually told, once the part's own parameters had
+    #: been read into it -- nominal wall, rib thickness, boss diameter and the
+    #: rest. Reported because the browser tool asks a person to type those
+    #: numbers in: a panel filled from the tool's defaults instead of these
+    #: scores the same mesh differently, and the two then disagree with no
+    #: indication of why.
+    analyser_input: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def landed(self) -> Round | None:
+        """The last round whose values are still in the part.
+
+        Not simply the last round. When a change makes the part worse the loop
+        undoes it, and the round is kept -- it is honest history -- but the
+        document then holds what the round *before* it left. Reporting
+        ``rounds[-1]`` as the outcome describes a part that was thrown away.
+        """
+        for entry in reversed(self.rounds):
+            if not entry.reverted:
+                return entry
+        return self.rounds[0] if self.rounds else None
 
     @property
     def improvement(self) -> float | None:
@@ -148,6 +177,8 @@ class LoopResult:
             "needs_a_person": [d.as_dict() for d in self.outstanding],
             "notes": list(self.notes),
             "dfm_settings": self.settings,
+            "workspace": self.workspace,
+            "analyser_input": self.analyser_input,
         }
 
 
@@ -235,7 +266,7 @@ def measure(
     dfm_root: str | None = None,
     gate: Sequence[float] | None = None,
     pull_axis: str = "+z",
-) -> tuple[DfmReport, dict[str, float], dict[str, str], Path, Path]:
+) -> tuple[DfmReport, dict[str, float], dict[str, str], Path, Path, dict[str, Any]]:
     """Export the part, analyse it, and return the report with what it was of."""
     values, expressions = current_parameters(session, context)
     stl = workspace / f"{label}.stl"
@@ -248,15 +279,16 @@ def measure(
             f"files -- connect to Inventor to run the DFM loop."
         )
     report_path = workspace / f"{label}.json"
+    told = settings_from_roles(roles, values, settings)
     report = analyse_stl(
         stl,
-        settings_from_roles(roles, values, settings),
+        told,
         dfm_root=dfm_root,
         gate=gate,
         pull_axis=pull_axis,
         save_report_to=report_path,
     )
-    return report, values, expressions, stl, report_path
+    return report, values, expressions, stl, report_path, told
 
 
 # ---------------------------------------------------------------------------
@@ -336,13 +368,15 @@ def improve(
     room.mkdir(parents=True, exist_ok=True)
 
     result = LoopResult(frozen=guard.as_dict(), settings=dict(dfm_settings),
-                        declaration=declaration.describe(), used=declaration)
+                        declaration=declaration.describe(), used=declaration,
+                        workspace=str(room))
     notes: list[str] = list(pin_notes)
 
-    report, values, expressions, _, report_path = measure(
+    report, values, expressions, stl, report_path, told = measure(
         session, context, roles=mapped, settings=dfm_settings, workspace=room,
         label="round-0", dfm_root=dfm_root, gate=gate, pull_axis=pull_axis,
     )
+    result.analyser_input = told
     # Against what the model holds *now*, not what the recipe said when it was
     # built. The recipe is a snapshot: parameters get edited by hand afterwards,
     # and this loop itself rewrites literals into expressions as it goes. A guard
@@ -355,7 +389,8 @@ def improve(
     result.grade_at_start = report.grade
     result.rounds = (Round(
         number=0, score=report.score, grade=report.grade,
-        findings=tuple(c.key for c in report.findings), report=str(report_path),
+        findings=tuple(c.key for c in report.findings),
+        stl=str(stl), report=str(report_path),
     ),)
 
     if not report.trustworthy:
@@ -475,7 +510,7 @@ def improve(
             )
             break
 
-        after, values, expressions, stl, report_path = measure(
+        after, values, expressions, stl, report_path, told = measure(
             session, context, roles=mapped, settings=dfm_settings, workspace=room,
             label=f"round-{number}", dfm_root=dfm_root, gate=gate, pull_axis=pull_axis,
         )
@@ -510,6 +545,7 @@ def improve(
 
         previous_best = best_score
         result.rounds += (entry,)
+        result.analyser_input = told
         report = after
         best_score = max(best_score, score)
         guard = guard.with_expressions(expressions)
@@ -534,7 +570,11 @@ def improve(
     else:
         result.stopped_because = f"the {rounds}-round limit was reached"
 
-    last = result.rounds[-1]
+    # The round that is still in the part, which is not always the last one:
+    # a reverted round is kept as history but its score belongs to a part that
+    # was undone, and reporting it means the loop states a number nobody can
+    # reproduce by opening the file.
+    last = result.landed or result.rounds[-1]
     result.finished_at = last.score
     result.grade_at_end = last.grade
     result.frozen = guard.as_dict()

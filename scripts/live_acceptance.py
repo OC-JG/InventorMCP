@@ -57,6 +57,7 @@ class Report:
     def __init__(self) -> None:
         self.checks: list[tuple[bool, str, str]] = []
         self.skipped: list[str] = []
+        self.recorded: list[str] = []
 
     def check(self, ok: bool, what: str, detail: str = "") -> bool:
         self.checks.append((ok, what, detail))
@@ -71,6 +72,11 @@ class Report:
         """Not applicable here, which is different from failing."""
         self.skipped.append(what)
         print(f"  [skip] {what}\n         {why}")
+
+    def seeded(self, what: str, why: str) -> None:
+        """A baseline was written, not checked. Neither a pass nor a failure."""
+        self.recorded.append(what)
+        print(f"  [seed] {what}\n         {why}")
 
     def note(self, text: str) -> None:
         print(f"         {text}")
@@ -136,8 +142,13 @@ def check_example(session: Session, path: Path, report: Report, record: bool) ->
         if name in KNOWN and not record:
             baseline["volume_cm3"] = KNOWN[name]
         wanted.write_text(json.dumps(baseline, indent=2) + "\n")
-        report.check(True, f"{name}: recorded {seen['volume_cm3']:.4f} cm^3",
-                     "seeded; check the arithmetic before trusting it")
+        # Not report.check. Seeding a baseline compares nothing -- it writes down
+        # whatever this run produced and agrees with it -- so counting it as a
+        # passed check makes a first run on a new machine read as a verification
+        # it has not performed. "65 of 65 checks passed" said exactly that about
+        # two examples that had never been checked against anything.
+        report.seeded(f"{name}: recorded {seen['volume_cm3']:.4f} cm^3",
+                      "nothing was compared; check the arithmetic before trusting it")
         return
 
     expected = json.loads(wanted.read_text())
@@ -402,6 +413,27 @@ def check_threading(session: Session, report: Report) -> None:
                      f"every call ran on thread {pinned.thread_id}")
 
 
+def _families(names: list[str]) -> list[str]:
+    """Search stems for `--find`, from the names themselves.
+
+    ``kBothShellDirection`` is worth asking about as "Shell": the enum is there,
+    and it is the member this release spells differently. Printing the whole name
+    would find nothing, which is what the run already told us.
+    """
+    stems = []
+    for name in names:
+        body = name[1:] if name.startswith("k") else name
+        for word in ("Shell", "Bottom", "Rendering", "Render", "Direction",
+                     "Hole", "Extent", "Operation", "Dim", "Surface", "Curve"):
+            if word in body and word not in stems:
+                stems.append(word)
+                break
+        else:
+            if body not in stems:
+                stems.append(body)
+    return stems
+
+
 def check_constants(session: Session, report: Report) -> None:
     """Whether the fallback enum table is right, which nothing has checked."""
     print("\n--- the enum fallback table")
@@ -415,18 +447,36 @@ def check_constants(session: Session, report: Report) -> None:
         report.check(False, "the type library could not be read",
                      "delete %LOCALAPPDATA%\\Temp\\gen_py and re-run")
         return
-    wrong = []
+    wrong, absent = [], []
     for name, table in sorted(FALLBACK.items()):
         actual = getattr(constants._module, name, None)
-        if isinstance(actual, int) and actual != table:
+        if not isinstance(actual, int):
+            absent.append(name)
+        elif actual != table:
             wrong.append((name, table, actual))
-    report.check(not wrong, f"{len(FALLBACK)} fallback value(s) match Inventor",
+    # Counted, not assumed. The first version tested only `actual != table` and
+    # printed len(FALLBACK) either way, so a name this release does not have at
+    # all -- where `actual` is None and there is nothing to compare -- passed,
+    # and the line read "51 fallback value(s) match Inventor" on a machine where
+    # four of them had never been read. That is the failure mode this whole
+    # script exists to remove.
+    checked = len(FALLBACK) - len(absent)
+    report.check(not wrong, f"{checked} of {len(FALLBACK)} fallback value(s) "
+                 f"match Inventor",
                  "\n         ".join(f'"{n}": {a},  # table said {t}'
                                     + ("   (disputed)" if n in SUSPECT else "")
                                     for n, t, a in wrong))
     if wrong:
         report.note("Paste those into FALLBACK in "
                     "inventor_mcp/backend/com/constants.py.")
+    report.check(not absent,
+                 f"every fallback name exists in this release's type library",
+                 "this release has no such name, so the table value is what would "
+                 "be used and it has never been verified here:\n         "
+                 + ", ".join(absent)
+                 + "\n         Ask Inventor what it does call them: "
+                 + " ".join(f"python scripts/dump_constants.py --find {stem}"
+                            for stem in _families(absent)))
 
 
 def check_dfm(session: Session, report: Report) -> None:
@@ -799,7 +849,7 @@ def main(argv: list[str] | None = None) -> int:
             traceback.print_exc(limit=4)
 
     print("\n" + "=" * 70)
-    if not report.checks and not report.skipped:
+    if not report.checks and not report.skipped and not report.recorded:
         # Nothing ran, which is not the same as nothing failing. Saying "0 of 0
         # passed" and exiting zero is how a filter typo looks like a clean run.
         print(f"Nothing matched --only {args.only}. Known names: examples, "
@@ -808,9 +858,17 @@ def main(argv: list[str] | None = None) -> int:
         print("=" * 70)
         return 1
     print(f"{len(report.checks) - len(report.failed)} of {len(report.checks)} checks passed"
-          + (f", {len(report.skipped)} skipped" if report.skipped else ""))
+          + (f", {len(report.skipped)} skipped" if report.skipped else "")
+          + (f", {len(report.recorded)} recorded" if report.recorded else ""))
     for _, what, detail in report.failed:
         print(f"  FAIL  {what}" + (f"  ({detail.splitlines()[0]})" if detail else ""))
+    if report.recorded:
+        print("\nRecorded, not checked -- this run wrote the baseline it would "
+              "have compared against:")
+        for what in report.recorded:
+            print(f"  seed  {what}")
+        print("  Check the arithmetic, commit the file, and the next run is a "
+              "regression test.")
     print("=" * 70)
     return 1 if report.failed else 0
 
