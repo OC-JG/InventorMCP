@@ -95,7 +95,75 @@ if ($claude) {
     Write-Host "   $register"
 }
 
-# -- 5. prove it -------------------------------------------------------------
+# -- 5. the Claude desktop app -----------------------------------------------
+#
+# Done here rather than left in the README, because the manual version is a
+# merge and the merge is what goes wrong. Pasting the documented snippet into a
+# config that already has settings in it produces two JSON objects end to end --
+# valid-looking, parseable by eye, rejected by the app, and the only symptom is
+# that the server is not there. That happened on the first machine this was
+# installed on.
+$desktopDir = Join-Path $env:APPDATA "Claude"
+$desktopCfg = Join-Path $desktopDir "claude_desktop_config.json"
+$entry = [pscustomobject]@{
+    command = $py
+    args    = @("-m", "inventor_mcp", "--backend", "auto")
+}
+
+if (-not (Test-Path $desktopDir)) {
+    Write-Host "-- no Claude desktop app found ($desktopDir); skipping"
+} else {
+    $config = $null
+    if (Test-Path $desktopCfg) {
+        $raw = Get-Content $desktopCfg -Raw -Encoding utf8
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            # An empty file is not a broken one. ConvertFrom-Json throws on it in
+            # Windows PowerShell and returns nothing in PowerShell 7, so without
+            # this the two hosts disagree about whether to write anything.
+            $config = [pscustomobject]@{}
+        } else {
+            try {
+                $config = $raw | ConvertFrom-Json
+            } catch {
+                # Refuse rather than overwrite. Whatever is in there is somebody's
+                # settings, and a file that does not parse is more likely to be a
+                # half-finished edit than something to throw away.
+                Write-Warning ("$desktopCfg is not valid JSON, so it has been left " +
+                    "alone. Fix or delete it and re-run this script.`n   " +
+                    $_.Exception.Message)
+            }
+            if ($config -isnot [psobject] -or $config -is [array]) {
+                Write-Warning ("$desktopCfg parses, but its top level is not an " +
+                    "object, so there is nowhere to put mcpServers. Left alone.")
+                $config = $null
+            }
+            if ($config) { Copy-Item $desktopCfg "$desktopCfg.bak" -Force }
+        }
+    } else {
+        $config = [pscustomobject]@{}
+    }
+
+    if ($config) {
+        if (-not $config.PSObject.Properties['mcpServers']) {
+            $config | Add-Member -NotePropertyName mcpServers -NotePropertyValue ([pscustomobject]@{})
+        }
+        if ($config.mcpServers.PSObject.Properties['inventor']) {
+            $config.mcpServers.inventor = $entry
+        } else {
+            $config.mcpServers | Add-Member -NotePropertyName inventor -NotePropertyValue $entry
+        }
+        # WriteAllText rather than Set-Content: Windows PowerShell's utf8 writes
+        # a byte-order mark, and a BOM in front of the opening brace is another
+        # way to have a file that looks right and does not parse.
+        $json = $config | ConvertTo-Json -Depth 24
+        [System.IO.File]::WriteAllText($desktopCfg, $json, (New-Object System.Text.UTF8Encoding($false)))
+        Write-Host "-- registered with the Claude desktop app"
+        Write-Host "   $desktopCfg"
+        Write-Host "   quit Claude from its tray icon -- not just the window -- and reopen it"
+    }
+}
+
+# -- 6. prove it -------------------------------------------------------------
 Write-Host "-- checking the pieces line up"
 & $py -c @"
 from inventor_mcp.dfm.runner import find_dfm_root, DfmUnavailable
