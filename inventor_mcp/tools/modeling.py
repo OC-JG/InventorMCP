@@ -6,7 +6,13 @@ from typing import Annotated, Any
 
 from pydantic import Field, TypeAdapter
 
-from ..builder import apply_operation, apply_parameter, build_part, check_recipe
+from ..builder import (
+    apply_operation,
+    apply_parameter,
+    build_part,
+    check_recipe,
+    rehearse,
+)
 from ..guide import MODELLING_NOTES, RECIPE_CHEATSHEET
 from ..schema import Operation, ParameterSpec, PartRecipe, recipe_json_schema
 from ..session import Session
@@ -33,21 +39,82 @@ def register(server: Any, session: Session) -> None:
         return payload
 
     @server.tool(
-        description="Statically check a part recipe without touching Inventor: expressions, "
-        "units, sketch closure, references between operations, hole centres. "
-        "Returns per-sketch geometry counts and every problem found. "
-        "Cheap -- run it before `build_part_from_recipe`.\n\n" + RECIPE_CHEATSHEET,
+        description="Check a part recipe without touching Inventor, then rehearse it: "
+        "expressions, units, sketch closure, references between operations and hole "
+        "centres, and then a full build in the simulator reporting what each "
+        "operation would do to the part.\n\n"
+        "Read the `warnings`. They are the things a valid recipe gets wrong: a cut "
+        "whose profile misses the part, a parameter that drives no geometry. Read "
+        "`steps` for the volume each operation moves, and check those numbers "
+        "against what you intended -- a 9 mm hole 6 mm deep removes 0.382 cm3.\n\n"
+        "Free and instant. Always run it before `build_part_from_recipe`.\n\n"
+        + RECIPE_CHEATSHEET,
     )
     @guard
     def validate_recipe(
         recipe: Annotated[dict[str, Any], Field(description="The recipe object to check.")],
+        rehearsal: Annotated[bool, Field(
+            description="Also build it in the simulator and report what each operation "
+                        "would do. Free, needs no Inventor, and catches a valid recipe "
+                        "that builds the wrong part.")] = True,
     ) -> dict[str, Any]:
         parsed = PartRecipe.model_validate(recipe)
-        result = check_recipe(parsed)
+        result = rehearse(parsed) if rehearsal else check_recipe(parsed)
         result["name"] = parsed.name
         result["units"] = parsed.units
         result["operation_count"] = len(parsed.operations)
         return result
+
+    @server.tool(
+        description="Check a recipe against a 2D drawing you have read.\n\n"
+        "A drawing is a specification, not a picture: tracing its outlines gives "
+        "geometry with no parameters, which is the one thing this server exists "
+        "not to produce. So read the drawing into a `reading` -- its views, its "
+        "dimensions, its projection angle, its notes -- write a recipe whose "
+        "PARAMETERS are those dimensions, and then call this to check one against "
+        "the other.\n\n"
+        "It reports: every drawing dimension that reached the model (`matched`), "
+        "every one that did not (`missing` -- misread or left out), every number "
+        "the model asserts as a bare literal that the drawing never gives "
+        "(`invented`), and values correctly computed from drawing dimensions "
+        "(`derived`, which is what a parametric model should do). It also checks "
+        "the part's overall size against what the views show.\n\n"
+        "Record anything you could not make out in `unreadable` rather than "
+        "guessing. A missed dimension is recoverable; an invented one is not.",
+    )
+    @guard
+    def check_against_drawing(
+        recipe: Annotated[dict[str, Any], Field(description="The recipe to check.")],
+        reading: Annotated[dict[str, Any], Field(
+            description="What the drawing says. See `drawing_reading_schema`.")],
+    ) -> dict[str, Any]:
+        from ..drawing import DrawingReading, compare
+
+        parsed = PartRecipe.model_validate(recipe)
+        read = DrawingReading.model_validate(reading)
+        rehearsal = rehearse(parsed)
+        if not rehearsal["ok"]:
+            return {
+                "ok": False,
+                "error": "the recipe does not build, so it cannot be compared",
+                "findings": rehearsal["findings"],
+            }
+        result = compare(read, rehearsal)
+        result["rehearsal"] = {
+            "warnings": rehearsal["warnings"],
+            "result": rehearsal.get("result"),
+        }
+        return result
+
+    @server.tool(
+        description="The JSON Schema for a drawing reading -- what to write down "
+        "when you look at a 2D drawing, before writing any recipe.",
+    )
+    @guard
+    def drawing_reading_schema() -> dict[str, Any]:
+        from ..drawing import DrawingReading
+
+        return {"json_schema": DrawingReading.model_json_schema()}
 
     @server.tool(
         description="Build a parametric part from a recipe. Creates the part, declares every "
@@ -67,6 +134,20 @@ def register(server: Any, session: Session) -> None:
         validate_first: Annotated[
             bool, Field(description="Run the static checks first and refuse to build if they fail.")
         ] = True,
+        rollback_on_error: Annotated[
+            bool,
+            Field(description="Undo the whole build if any step fails, using Inventor's own "
+                              "transactions. Off by default: a half-built part is usually the "
+                              "best evidence about what went wrong. Turn it on when the part "
+                              "matters more than the diagnosis."),
+        ] = False,
+        against_rehearsal: Annotated[
+            bool,
+            Field(description="Rehearse in the simulator first and report any operation whose "
+                              "live volume change disagrees with the prediction. On by "
+                              "default: it costs milliseconds and it is how a fillet on the "
+                              "wrong edge announces itself. Read `divergence` if it appears."),
+        ] = True,
     ) -> dict[str, Any]:
         parsed = PartRecipe.model_validate(recipe)
         session.ensure_backend()
@@ -81,7 +162,9 @@ def register(server: Any, session: Session) -> None:
                     "hint": "Fix the findings, or call again with validate_first=false to "
                             "build anyway and see how far it gets.",
                 }
-        result = build_part(session, parsed, document=document, stop_on_error=stop_on_error)
+        result = build_part(session, parsed, document=document, stop_on_error=stop_on_error,
+                            rollback_on_error=rollback_on_error,
+                            against_rehearsal=against_rehearsal)
         context = session.context(result["document"])
         if "mass_properties" in result:
             result["bounding_box"] = display_box(
@@ -102,11 +185,22 @@ def register(server: Any, session: Session) -> None:
         ],
         document: Annotated[str | None, Field(description="Target part; defaults to the active one.")] = None,
         stop_on_error: Annotated[bool, Field(description="Stop at the first failure.")] = True,
+        rollback_on_error: Annotated[
+            bool,
+            Field(description="Undo these operations if any of them fails, using Inventor's "
+                              "own transactions, leaving the part as it was. Off by default, "
+                              "because the half-applied state is usually what explains the "
+                              "failure -- but this is the way to retry a hole, which consumes "
+                              "its sketch and so cannot be retried otherwise."),
+        ] = False,
     ) -> dict[str, Any]:
         parsed = _OPERATIONS.validate_python(operations)
         context = session.context(document)
         results: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
+        backend = session.backend
+        handle = backend.begin_transaction(context.doc_id, "Apply operations") \
+            if rollback_on_error else None
         for index, op in enumerate(parsed):
             try:
                 results.append({"index": index, **apply_operation(session, context, op)})
@@ -115,12 +209,28 @@ def register(server: Any, session: Session) -> None:
                                "hint": getattr(exc, "hint", None)})
                 if stop_on_error:
                     break
-        return {
+        report = {
             "ok": not errors,
             "document": context.doc_id,
             "applied": results,
             "errors": errors,
         }
+        if rollback_on_error and handle is None:
+            report["rollback"] = "not available from this backend, so nothing was undone"
+        elif handle is not None and errors:
+            report["rolled_back"] = backend.abort_transaction(handle)
+            if report["rolled_back"]:
+                # The entries stay: they say what was built and are the record of
+                # how far it got. They just no longer describe anything that is
+                # in the part, and that has to be said rather than inferred.
+                report["applied_then_undone"] = True
+            report["rollback"] = ("the part is as it was before the call, so nothing "
+                                  "under `applied` exists any more"
+                                  if report["rolled_back"] else
+                                  "the rollback itself failed -- inspect the part")
+        elif handle is not None:
+            backend.commit_transaction(handle)
+        return report
 
     @server.tool(
         description="Declare or change driving parameters, then rebuild. This is how you revise a "
@@ -136,11 +246,22 @@ def register(server: Any, session: Session) -> None:
         ],
         document: Annotated[str | None, Field(description="Target part; defaults to the active one.")] = None,
         rebuild: Annotated[bool, Field(description="Rebuild the model after applying the changes.")] = True,
+        override_frozen: Annotated[bool, Field(
+            description="Change a parameter marked as key geometry anyway. Refused "
+                        "without this, including for anything a protected value is "
+                        "computed from. Say it deliberately.")] = False,
     ) -> dict[str, Any]:
         parsed = _PARAMETERS.validate_python(parameters)
         context = session.context(document)
-        applied = [apply_parameter(session, context, spec) for spec in parsed]
+        applied = [
+            apply_parameter(session, context, spec, override_frozen=override_frozen)
+            for spec in parsed
+        ]
         result: dict[str, Any] = {"document": context.doc_id, "parameters": applied}
+        if override_frozen and context.frozen is not None:
+            touched = [spec.name for spec in parsed if context.frozen.check(spec.name)]
+            if touched:
+                result["overrode_key_geometry"] = touched
         if rebuild:
             result["rebuild"] = session.backend.rebuild(context.doc_id)
             try:
@@ -161,9 +282,27 @@ def register(server: Any, session: Session) -> None:
         name: Annotated[str, Field(description="Feature name, as shown by `inspect_part`.")],
         new_name: Annotated[str | None, Field(description="Required for 'rename'.")] = None,
         document: Annotated[str | None, Field(description="Target part.")] = None,
+        override_frozen: Annotated[bool, Field(
+            description="Alter a feature declared as key geometry anyway. Refused "
+                        "without this. Say it deliberately.")] = False,
     ) -> dict[str, Any]:
         context = session.context(document)
         backend = session.backend
+        # The other half of the freeze. Protecting a parameter while its feature
+        # can be suppressed or deleted protects a number and loses the geometry
+        # it describes -- `frozen_features` existed, was stored and merged, and
+        # was enforced nowhere until here.
+        if (not override_frozen and action in ("suppress", "delete", "rename")
+                and context.frozen is not None
+                and context.frozen.feature_frozen(name)):
+            return {
+                "ok": False,
+                "error": "frozen_geometry",
+                "message": f"The feature {name!r} is declared as key geometry, so "
+                           f"it was not {action}d.",
+                "hint": "If the change is intended, pass override_frozen=True, or "
+                        "remove the feature from the declaration.",
+            }
         if action == "suppress":
             return {"feature": backend.suppress_feature(context.doc_id, name, True).as_dict()}
         if action == "unsuppress":

@@ -210,3 +210,167 @@ class TestCutsAndPlanes:
             apply(session, block, [
                 {"op": "sketch", "name": "Nowhere", "plane": "abc", "entities": [
                     {"type": "circle", "diameter": 5}]}])
+
+
+class TestConvexity:
+    """"Round the inside corner" should be sayable without guessing a point.
+
+    A `near` point depends on which way the sketch plane faces, which is not
+    something a recipe author should have to know; `concave` does not.
+    """
+
+    def test_the_selector_accepts_it(self):
+        assert Selector.model_validate({"filter": "concave"}).filter == "concave"
+        assert Selector.model_validate({"filter": "convex"}).filter == "convex"
+
+    def test_it_survives_resolution(self, session, block):
+        resolved = resolve_selector(
+            Selector.model_validate({"kind": "edge", "filter": "concave"}), block.resolver
+        )
+        assert resolved.filter == "concave"
+
+    def test_the_simulator_knows_a_profile_corner(self, session, block):
+        """The one case it can answer: an edge along an extrusion at a corner.
+
+        It used to decline for every edge and match all of them, which is worse
+        than declining -- a recipe asking for the single concave edge on an
+        angle bracket got whichever edge came first.
+        """
+        every = select(session, block, kind="edge", filter="all")
+        convex = select(session, block, kind="edge", filter="convex")
+        assert 0 < len(convex) < len(every)
+        assert all(match.convexity == "convex" for match in convex)
+        assert all(match.convexity_from == "profile corner" for match in convex)
+
+    def test_a_box_has_no_concave_edge(self, session, block):
+        assert select(session, block, kind="edge", filter="concave") == []
+
+    def test_it_still_declines_for_the_edges_it_cannot_see(self, session, block):
+        """A cap edge's convexity depends on what the boss sits on."""
+        every = select(session, block, kind="edge", filter="all")
+        assert any(match.convexity is None for match in every)
+
+    def test_an_l_section_has_exactly_one_concave_edge(self, session):
+        """The inside corner, which is what a bracket's fillet is for."""
+        from inventor_mcp.builder import build_part
+        from inventor_mcp.schema import PartRecipe
+
+        build_part(session, PartRecipe.model_validate({
+            "name": "L", "units": "mm", "operations": [
+                {"op": "sketch", "name": "S", "plane": "xz", "entities": [
+                    {"type": "polyline", "closed": True, "points": [
+                        [0, 0], [60, 0], [60, 6], [6, 6], [6, 40], [0, 40]]}]},
+                {"op": "extrude", "sketch": "S", "distance": 30},
+            ]}))
+        context = session.context(session.active)
+        [inside] = select(session, context, kind="edge", filter="concave")
+        assert inside.length == pytest.approx(3.0), "it runs the length of the extrusion"
+        assert len(select(session, context, kind="edge", filter="convex")) == 5
+
+    def test_the_com_filter_requires_a_known_convexity(self):
+        from inventor_mcp.backend.base import TopoInfo
+        from inventor_mcp.backend.com import backend as com
+
+        inside = TopoInfo(id="e1", kind="edge", description="", convexity="concave")
+        outside = TopoInfo(id="e2", kind="edge", description="", convexity="convex")
+        unknown = TopoInfo(id="e3", kind="edge", description="")
+        assert com._com_passes_filter(inside, "concave") is True
+        assert com._com_passes_filter(outside, "concave") is False
+        assert com._com_passes_filter(unknown, "concave") is False
+        assert com._com_passes_filter(unknown, "convex") is False
+
+
+class TestEveryOperationReportsWhatItDid:
+    """An operation that only says it ran has told the model nothing.
+
+    A cut that met no material, a hole drilled past the part and a fillet on
+    the wrong edge all reported success. The volume was the witness every time,
+    and it was computed and then thrown away -- printed in a script for a human
+    to read rather than returned to the model that could act on it.
+    """
+
+    def test_a_cut_reports_the_material_it_removed(self, session, block):
+        [result] = apply(session, block, [
+            {"op": "sketch", "name": "P", "plane": "xy", "entities": [
+                {"type": "circle", "center": [0, 0], "diameter": 20}]},
+        ])
+        [cut] = apply(session, block, [
+            {"op": "extrude", "sketch": "P", "distance": 5, "operation": "cut"}])
+        assert cut["measured"]["volume_change_cm3"] < 0
+        assert "note" not in cut["measured"]
+
+    def test_an_operation_that_changed_nothing_says_so(self, session, block):
+        """The signal that was missing for three rounds of live debugging.
+
+        A work plane is the example because it genuinely adds no material. A
+        pattern used to serve here, back when the simulator did not model an
+        occurrence's volume -- which meant a pattern that worked and a cut that
+        met no material looked identical, the very thing this reports.
+        """
+        [result] = apply(session, block, [
+            {"op": "work_plane", "base": "xy", "offset": 10}])
+        assert result["measured"]["note"] == "the volume did not change"
+
+    def test_a_pattern_of_a_cut_removes_more_material(self, session, block):
+        """An occurrence does what its seed did, so three slots remove three."""
+        apply(session, block, [
+            {"op": "sketch", "name": "Slot", "plane": "xy", "entities": [
+                {"type": "circle", "center": [-15, 0], "diameter": 6}]},
+        ])
+        [cut] = apply(session, block, [
+            {"op": "extrude", "sketch": "Slot", "distance": 20, "operation": "cut"}])
+        one = cut["measured"]["volume_change_cm3"]
+        assert one < 0
+        [pattern] = apply(session, block, [
+            {"op": "rectangular_pattern", "features": [cut["name"]],
+             "axis1": "x", "count1": 3, "spacing1": 15}])
+        assert pattern["measured"]["volume_change_cm3"] == pytest.approx(2 * one)
+
+    def test_the_topology_counts_come_back_too(self, session, block):
+        [result] = apply(session, block, [
+            {"op": "fillet", "edges": {"filter": "vertical"}, "radius": 5}])
+        assert result["measured"]["faces"] > 0
+        assert result["measured"]["edges"] > 0
+
+    def test_a_fillet_reports_the_edges_it_consumed(self, session, block):
+        [result] = apply(session, block, [
+            {"op": "fillet", "edges": {"filter": "vertical"}, "radius": 5}])
+        assert result["measured"]["edges_change"] != 0
+
+    def test_a_sketch_is_not_weighed(self, session, block):
+        """It adds no material, so a volume report would be noise."""
+        [result] = apply(session, block, [
+            {"op": "sketch", "name": "S", "plane": "xy", "entities": [
+                {"type": "circle", "diameter": 10}]}])
+        assert "measured" not in result
+
+    def test_the_first_measurement_admits_it_has_no_baseline(self, session):
+        from inventor_mcp.builder import build_part
+        from inventor_mcp.schema import PartRecipe
+
+        recipe = PartRecipe.model_validate(BLOCK)
+        operations = recipe.operations
+        recipe.operations = []
+        build_part(session, recipe)
+        context = session.context()
+        results = [apply_operation(session, context, op) for op in operations]
+        first = next(r for r in results if "measured" in r)
+        assert first["measured"]["note"] == "first measurement, nothing to compare"
+        assert "volume_change_cm3" not in first["measured"]
+
+    def test_a_growing_part_reports_a_bigger_span(self, session, block):
+        [result] = apply(session, block, [
+            {"op": "sketch", "name": "Tower", "plane": "xy", "entities": [
+                {"type": "circle", "center": [0, 0], "diameter": 10}]},
+        ])
+        [grown] = apply(session, block, [
+            {"op": "extrude", "sketch": "Tower", "distance": 30}])
+        assert grown["measured"]["span_mm"] != grown["measured"]["span_mm_was"]
+
+    def test_a_backend_that_cannot_measure_is_not_guessed_at(self, session, block):
+        """No measurement is reported rather than a fabricated one."""
+        from inventor_mcp.builder import measure
+
+        session.backend.mass_properties = lambda doc_id: (_ for _ in ()).throw(
+            RuntimeError("no solid"))
+        assert measure(session, block) is None

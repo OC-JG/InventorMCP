@@ -12,10 +12,11 @@ precise validation error the model can fix, not be silently ignored.
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, Union
+from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .dfm.roles import ROLE_NAMES as DFM_ROLE_NAMES
 from .units import ANGLE_UNIT_NAMES, LENGTH_UNIT_NAMES
 
 # ``20`` (a number in the recipe's units) or ``"width / 2"`` (an expression).
@@ -56,6 +57,13 @@ class ParameterSpec(Base):
         "use 'ul' for a unitless count and 'deg' for an angle.",
     )
     key: bool = Field(False, description="Mark as a key parameter in Inventor.")
+    frozen: bool = Field(
+        False,
+        description="This value is key geometry: automated changes -- the DFM "
+        "improvement loop above all -- must not touch it. A sealing face, a "
+        "bearing bore, a mating pitch. Anything a frozen value is computed from "
+        "is protected too, since changing that would move it just as surely.",
+    )
 
     @field_validator("name")
     @classmethod
@@ -163,7 +171,7 @@ class SlotEntity(EntityBase):
 class PolygonEntity(EntityBase):
     type: Literal["polygon"] = "polygon"
     center: Point2D = [0.0, 0.0]
-    sides: int = Field(6, ge=3, le=120)
+    sides: CountSpec = Field(6, description="3 to 120; may be an expression.")
     size: ValueSpec = Field(description="Across-corners or across-flats distance, see `fit`.")
     fit: Literal["circumscribed", "inscribed"] = Field(
         "inscribed",
@@ -183,8 +191,8 @@ class GridEntity(EntityBase):
 
     type: Literal["point_grid"] = "point_grid"
     center: Point2D = [0.0, 0.0]
-    columns: int = Field(2, ge=1, le=200)
-    rows: int = Field(2, ge=1, le=200)
+    columns: CountSpec = Field(2, description="1 to 200; may be an expression.")
+    rows: CountSpec = Field(2, description="1 to 200; may be an expression.")
     x_spacing: ValueSpec = 10.0
     y_spacing: ValueSpec = 10.0
 
@@ -193,7 +201,7 @@ class BoltCircleEntity(EntityBase):
     type: Literal["bolt_circle"] = "bolt_circle"
     center: Point2D = [0.0, 0.0]
     diameter: ValueSpec = Field(description="Pitch circle diameter.")
-    count: int = Field(4, ge=1, le=200)
+    count: CountSpec = Field(4, description="1 to 200; may be an expression.")
     start_angle: float = 0.0
 
 
@@ -309,7 +317,19 @@ class Selector(Base):
 # ---------------------------------------------------------------------------
 
 BooleanOp = Literal["join", "cut", "intersect", "new_body"]
+#: A whole number, which may be written as an expression of parameters so that
+#: "one bolt per 60 mm of pitch circle" is sayable and a count is revisable the
+#: way a length is. Bounds are checked when it is resolved, since a string
+#: cannot be range-checked before its parameters are known.
+CountSpec = Union[int, str]
+
 Direction = Literal["positive", "negative", "symmetric"]
+
+#: Which way a hole is drilled, relative to its sketch plane's own normal --
+#: the same meaning `direction` has on an extrude. "auto" is the sensible
+#: default and what almost every recipe wants: a hole placed on a face is
+#: drilled into the part, and the backend can see which side that is.
+HoleDirection = Literal["auto", "positive", "negative"]
 PlaneRef = str  # "xy" | "xz" | "yz" | "face:<handle>" | "plane:<name>" | a work-plane name
 AxisRef = str  # "x" | "y" | "z" | sketch-entity name | edge handle
 
@@ -384,17 +404,48 @@ class HoleOp(OpBase):
         default_factory=list,
         description="Named point entities to use. Empty means every hole-centre point in the sketch.",
     )
-    diameter: ValueSpec = Field(description="Nominal (drill) diameter.")
+    diameter: ValueSpec = Field(
+        description="Nominal (drill) diameter. For a tapped hole give the tap-drill "
+        "diameter: Inventor takes the real one from its thread table, and the "
+        "server reports it back so the two can be compared."
+    )
     depth: ValueSpec | None = Field(None, description="Blind depth. Omit for a through hole.")
     through_all: bool = True
-    direction: Direction = "negative"
+    direction: HoleDirection = Field(
+        "auto",
+        description="Which way to drill, along the sketch plane's normal "
+        "('positive'), against it ('negative'), or into whichever side the "
+        "material is on ('auto', the default and almost always right).",
+    )
     style: Literal["drilled", "counterbore", "countersink", "spotface"] = "drilled"
     cbore_diameter: ValueSpec | None = None
     cbore_depth: ValueSpec | None = None
     csink_diameter: ValueSpec | None = None
     csink_angle: ValueSpec = "90 deg"
-    tap: str | None = Field(None, description="Thread designation to tap, e.g. 'M6x1'.")
-    bottom_angle: ValueSpec = Field("118 deg", description="Drill point angle for blind holes.")
+    tap: str | None = Field(
+        None,
+        description="Thread designation to tap, e.g. 'M6x1' or '1/4-20'. Inventor "
+        "takes the drill size from its own thread table, so `diameter` stops "
+        "governing the bore when this is given.",
+    )
+    tap_type: str | None = Field(
+        None,
+        description="Which thread table, as Inventor names it: 'ANSI Metric M "
+        "Profile', 'ANSI Unified Screw Threads', 'NPT', 'BSP'. Derived from the "
+        "designation when omitted.",
+    )
+    tap_class: str | None = Field(
+        None, description="Thread class, e.g. '6H' or '2B'. Defaults by thread type."
+    )
+    tap_right_handed: bool = True
+    tap_full_depth: bool = Field(
+        True, description="Thread the whole depth of the hole rather than part of it."
+    )
+    bottom_angle: ValueSpec | None = Field(
+        None,
+        description="Drill point angle for a blind hole, e.g. '118 deg'. Omit for "
+        "a flat bottom, which is what Inventor's own hole dialog gives.",
+    )
 
     @model_validator(mode="after")
     def _depth_consistency(self) -> "HoleOp":
@@ -445,10 +496,10 @@ class RectangularPatternOp(OpBase):
         default_factory=list, description="Features to pattern. Empty means the previous feature."
     )
     axis1: AxisRef = "x"
-    count1: int = Field(2, ge=1, le=1000)
+    count1: CountSpec = Field(2, description="1 to 1000; may be an expression.")
     spacing1: ValueSpec = 10.0
     axis2: AxisRef | None = None
-    count2: int = Field(1, ge=1, le=1000)
+    count2: CountSpec = Field(1, description="1 to 1000; may be an expression.")
     spacing2: ValueSpec | None = None
     flip1: bool = False
     flip2: bool = False
@@ -458,7 +509,7 @@ class CircularPatternOp(OpBase):
     op: Literal["circular_pattern"] = "circular_pattern"
     features: list[str] = Field(default_factory=list)
     axis: AxisRef = "z"
-    count: int = Field(4, ge=1, le=1000)
+    count: CountSpec = Field(4, description="1 to 1000; may be an expression.")
     angle: ValueSpec = "360 deg"
     fitted: bool = Field(True, description="Spread occurrences evenly over `angle`.")
 
@@ -519,6 +570,49 @@ Operation = Annotated[
 # ---------------------------------------------------------------------------
 
 
+class DfmSpec(Base):
+    """How this part is judged for manufacture, and what may not be changed.
+
+    Wholly optional: a recipe without this block builds exactly as before. With
+    it, the DFM loop can read the model's own parameters instead of asking
+    somebody to retype them, and knows what it is not allowed to move.
+    """
+
+    parameters: dict[str, Name] = Field(
+        default_factory=dict,
+        description="Which parameter plays which role in the manufacturability "
+        "assessment, as {role: parameter}. Roles: " + ", ".join(DFM_ROLE_NAMES)
+        + ". Declaring 'wall' matters most -- the rib, boss and corner guidelines "
+        "are all fractions of the nominal wall.",
+    )
+    frozen: list[str] = Field(
+        default_factory=list,
+        description="Parameters an automated change may not touch, over and above "
+        "those marked frozen individually. A '*' glob is allowed, so 'seal_*' "
+        "protects a family.",
+    )
+    frozen_features: list[str] = Field(
+        default_factory=list,
+        description="Features an automated change may not suppress, delete or edit.",
+    )
+    settings: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Settings for the DFM analyser, using its own names: "
+        "'material' ('abs', 'pp', 'pc', ...), 'surfaceFinish', 'moldType', and the "
+        "'checks' to run. Anything not given here keeps the tool's own default.",
+    )
+
+    @field_validator("parameters")
+    @classmethod
+    def _known_roles(cls, value: dict[str, str]) -> dict[str, str]:
+        unknown = sorted(set(value) - set(DFM_ROLE_NAMES))
+        if unknown:
+            raise ValueError(
+                f"Unknown DFM role(s) {unknown}. Known roles: {list(DFM_ROLE_NAMES)}."
+            )
+        return value
+
+
 class PartRecipe(Base):
     """A complete, replayable description of a parametric part."""
 
@@ -529,6 +623,11 @@ class PartRecipe(Base):
     material: str | None = None
     parameters: list[ParameterSpec] = Field(default_factory=list)
     operations: list[Operation] = Field(default_factory=list)
+    dfm: DfmSpec | None = Field(
+        None,
+        description="Manufacturability: which parameter means what, and which are "
+        "key geometry that must not be changed automatically.",
+    )
 
     @model_validator(mode="after")
     def _unique_parameter_names(self) -> "PartRecipe":
@@ -538,6 +637,31 @@ class PartRecipe(Base):
             if key in seen:
                 raise ValueError(f"Duplicate parameter name {parameter.name!r}.")
             seen.add(key)
+        return self
+
+    @model_validator(mode="after")
+    def _dfm_names_exist(self) -> "PartRecipe":
+        """A role pointing at a parameter that is not there is a typo, and it
+        would otherwise surface much later as "no parameter is declared for
+        'wall'" while the recipe plainly declares one."""
+        if self.dfm is None:
+            return self
+        known = {parameter.name.lower() for parameter in self.parameters}
+        for role, name in self.dfm.parameters.items():
+            if name.lower() not in known:
+                raise ValueError(
+                    f"The DFM role {role!r} points at a parameter {name!r} that this "
+                    f"recipe does not declare."
+                )
+        for pattern in self.dfm.frozen:
+            if "*" in pattern or "?" in pattern:
+                continue
+            if pattern.lower() not in known:
+                raise ValueError(
+                    f"{pattern!r} is listed as frozen but is not a parameter of this "
+                    f"recipe. Use a glob such as 'seal_*' to protect names that do "
+                    f"not exist yet."
+                )
         return self
 
     @model_validator(mode="after")

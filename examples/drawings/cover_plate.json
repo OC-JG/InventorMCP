@@ -1,0 +1,46 @@
+{
+  "title": "COVER PLATE — 100 x 60 x 10",
+  "units": "mm",
+  "projection": "first_angle",
+  "scale": "1:1",
+  "material": "Aluminium 6082-T6",
+  "views": [
+    {
+      "name": "FRONT",
+      "kind": "front",
+      "shows": "the length and the thickness",
+      "extent": [100, 10]
+    },
+    {
+      "name": "PLAN",
+      "kind": "top",
+      "shows": "the bolt pattern and the centre hole",
+      "extent": [100, 60]
+    },
+    {
+      "name": "SECTION A-A",
+      "kind": "section",
+      "shows": "the counterbore depth and the countersink angle"
+    }
+  ],
+  "dimensions": [
+    {"value": 100, "label": "overall length", "view": "PLAN"},
+    {"value": 60, "label": "overall width", "view": "PLAN"},
+    {"value": 10, "label": "thickness", "kind": "thickness", "view": "FRONT"},
+    {"value": 12, "label": "bolt centre to edge", "view": "PLAN"},
+    {"value": 76, "label": "bolt spacing across", "view": "PLAN", "reference": true},
+    {"value": 36, "label": "bolt spacing up", "view": "PLAN", "reference": true},
+    {"value": 6.6, "label": "4 x bolt hole", "kind": "diameter", "count": 4, "view": "PLAN"},
+    {"value": 11, "label": "counterbore", "kind": "diameter", "count": 4, "view": "SECTION A-A"},
+    {"value": 6.6, "label": "counterbore depth", "view": "SECTION A-A"},
+    {"value": 8, "label": "centre hole", "kind": "diameter", "view": "PLAN"},
+    {"value": 16, "label": "countersink at face", "kind": "diameter", "view": "SECTION A-A"},
+    {"value": 90, "label": "countersink included angle", "kind": "angle", "view": "SECTION A-A"}
+  ],
+  "notes": [
+    "DEBURR ALL EDGES",
+    "COUNTERBORES TO CLEAR M6 SOCKET HEAD CAP SCREW",
+    "TOLERANCES UNLESS STATED: +/-0.2"
+  ],
+  "overall": [100, 60, 10]
+}

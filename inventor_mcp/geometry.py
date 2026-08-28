@@ -11,11 +11,14 @@ bookkeeping is checked without Inventor running.
 
 from __future__ import annotations
 
+import ast
+import logging
 import math
 from itertools import count
 from typing import Iterable, Sequence
 
-from .errors import SketchError
+from .errors import ExpressionError, SketchError
+from .expressions import _parse
 from .plan import (
     ORIGIN,
     Constraint,
@@ -29,7 +32,7 @@ from .plan import (
     Ref,
     SketchPlan,
 )
-from .resolve import Resolved, Resolver
+from .resolve import Resolved, Resolver, _is_simple
 from .schema import (
     ArcEntity,
     BoltCircleEntity,
@@ -50,6 +53,16 @@ from .schema import (
 #: Coordinates closer than this (in cm) are treated as the same point.
 TOL = 1.0e-7
 
+#: A gap smaller than this is aligned rather than dimensioned.  TOL is a
+#: nanometre: the right test for "is this segment axis-aligned", and the wrong
+#: one for "is this worth asking Inventor to hold", since a sub-micron driving
+#: dimension sits below the solver's own tolerance and is a redundancy
+#: candidate rather than a constraint.
+DIM_MIN = 1.0e-4
+
+
+logger = logging.getLogger(__name__)
+
 
 class _Ids:
     def __init__(self) -> None:
@@ -64,14 +77,37 @@ def _at_origin(value: float) -> bool:
     return abs(value) <= TOL
 
 
+def _negate(source: str) -> str:
+    """*source* with its sign flipped, kept readable where it safely can be.
+
+    Dropping a leading minus is the negation only when that minus governs the
+    whole expression.  ``-a`` negates to ``a``, but ``-a + 2`` negates to
+    ``a - 2`` and emphatically not to ``a + 2`` -- which is what dropping the
+    character gives, and what shipped: with ``a = 100 mm`` the recipe meant
+    -98 mm and Inventor was driven to +102 mm, four millimetres out, while the
+    simulator kept the right number and agreed with nobody.
+
+    Whether the minus governs the whole expression is a question about the
+    parse tree, so ask the parser rather than the first character.  Where it
+    does not, wrap: ``-(...)`` is arithmetic Inventor certainly understands,
+    which the previous fallback of ``abs(...)`` never was.
+    """
+    source = source.strip()
+    try:
+        node = _parse(source).body
+    except ExpressionError:  # pragma: no cover - resolution parsed it already
+        return f"-({source})"
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+        # A top-level unary minus means the text really does start with one.
+        return source[1:].strip()
+    return f"-({source})"
+
+
 def _magnitude(resolved: Resolved) -> Resolved:
     """The same value as a positive quantity, since dimensions are unsigned."""
     if resolved.value >= 0:
         return resolved
-    source = resolved.expression.strip()
-    if source.startswith("-"):
-        return Resolved(source[1:].strip(), -resolved.value, resolved.dim)
-    return Resolved(f"abs({source})", -resolved.value, resolved.dim)
+    return Resolved(_negate(resolved.expression), -resolved.value, resolved.dim)
 
 
 def _anchor(
@@ -178,23 +214,27 @@ def _plan_line(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: LineEntity
 
 def _plan_polyline(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: PolylineEntity) -> None:
     first, first_x, first_y = _anchor(resolver, spec.points[0])
-    points = [first] + [resolver.point2d(p) for p in spec.points[1:]]
+    # The expressions are kept, not just the numbers: they are what ends up
+    # driving the outline, and resolver.point2d throws them away.
+    coords = [resolver.coordinates(point) for point in spec.points]
+    points = [first] + [(x.value, y.value) for x, y in coords[1:]]
     if spec.closed and math.dist(points[0], points[-1]) <= TOL:
-        points = points[:-1]
+        points, coords = points[:-1], coords[:-1]
     if len(points) < 2:
         raise SketchError("A polyline needs at least two distinct points.")
 
-    pairs = list(zip(points, points[1:]))
+    segments = [(index, index + 1) for index in range(len(points) - 1)]
     if spec.closed:
-        pairs.append((points[-1], points[0]))
+        segments.append((len(points) - 1, 0))
 
     lines = []
-    for start, end in pairs:
-        if math.dist(start, end) <= TOL:
+    for start, end in segments:
+        if math.dist(points[start], points[end]) <= TOL:
             raise SketchError("A polyline may not contain a zero-length segment.")
         lines.append(
             plan.add(
-                PLine(ids.next("line"), spec.construction, spec.centerline, start=start, end=end),
+                PLine(ids.next("line"), spec.construction, spec.centerline,
+                      start=points[start], end=points[end]),
                 spec.name,
             )
         )
@@ -205,15 +245,154 @@ def _plan_polyline(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: Polyli
         plan.constrain("coincident", Ref(lines[-1].id, PointRef.END), Ref(lines[0].id, PointRef.START))
 
     if spec.dimension:
+        kinds: list[str | None] = []
         for line in lines:
             dx, dy = line.end[0] - line.start[0], line.end[1] - line.start[1]
             if _at_origin(dy):
+                kinds.append("horizontal")
                 plan.constrain("horizontal", Ref(line.id))
             elif _at_origin(dx):
+                kinds.append("vertical")
                 plan.constrain("vertical", Ref(line.id))
+            else:
+                kinds.append(None)
+                if abs(dx) <= DIM_MIN or abs(dy) <= DIM_MIN:
+                    logger.warning(
+                        "Polyline segment %s is within a micron of axis-aligned but not "
+                        "aligned (dx=%.3g dy=%.3g cm); it will be treated as oblique, "
+                        "which changes how the outline is dimensioned.",
+                        line.id, dx, dy)
+        _dimension_rails(plan, coords, segments, kinds, lines)
 
     _locate(plan, resolver, Ref(lines[0].id, PointRef.START), points[0], spec.locate,
             x_expression=first_x, y_expression=first_y)
+
+
+def _dimension_rails(
+    plan: SketchPlan,
+    coords: Sequence[tuple[Resolved, ...]],
+    segments: Sequence[tuple[int, int]],
+    kinds: Sequence[str | None],
+    lines: Sequence[PLine],
+) -> None:
+    """Drive an axis-aligned outline from its recipe's own expressions.
+
+    A polyline used to carry no dimensions at all, so an L-section's
+    ``base_len`` and ``upright_h`` were evaluated once when the recipe was
+    written and then thrown away: the profile could not be revised, which is
+    the one thing a parametric model is for.
+
+    The count has to be exact.  Emitting a dimension per vertex duplicates what
+    the horizontal and vertical constraints already say, and Inventor refuses a
+    redundant dimension -- so the rule counts what is genuinely free and
+    dimensions only that.
+
+    A *rail* is a set of vertices that a chain of constraints already forces to
+    share one coordinate: a horizontal segment equates its two vertices' Y, a
+    vertical segment equates their X.  Every rail after the first on each axis
+    is one free coordinate, so it gets one dimension, measured back to the rail
+    holding vertex 0 -- the corner ``_locate`` pins, so every measurement
+    chains from a known point.  Nothing else is emitted, ever.
+    """
+    count = len(coords)
+    # parents[0] groups vertices sharing an X coordinate, parents[1] a Y.
+    parents = [{index: index for index in range(count)} for _ in range(2)]
+
+    def find(axis: int, index: int) -> int:
+        while parents[axis][index] != index:
+            parents[axis][index] = parents[axis][parents[axis][index]]
+            index = parents[axis][index]
+        return index
+
+    for (start, end), kind in zip(segments, kinds):
+        # A horizontal segment fixes both ends' Y; a vertical one fixes their X.
+        axis = 1 if kind == "horizontal" else 0 if kind == "vertical" else None
+        if axis is None:
+            continue  # an oblique segment constrains neither, so it frees none
+        first, second = find(axis, start), find(axis, end)
+        if first != second:
+            parents[axis][first] = second
+
+    def vertex_ref(index: int) -> Ref:
+        if index < len(lines):
+            return Ref(lines[index].id, PointRef.START)
+        return Ref(lines[-1].id, PointRef.END)
+
+    joined = {frozenset(segment): index for index, segment in enumerate(segments)}
+
+    for axis in (0, 1):
+        datum = find(axis, 0)
+        rails: dict[int, list[int]] = {}
+        for index in range(count):
+            rails.setdefault(find(axis, index), []).append(index)
+
+        for root, members in sorted(rails.items(), key=lambda item: min(item[1])):
+            if root == datum:
+                continue
+            # Measure whichever pair spans least across the page, preferring two
+            # ends of one segment: a length on a line along its own axis is the
+            # shape _plan_rectangle already ships and Inventor already accepts.
+            here, there = min(
+                ((a, b) for a in rails[datum] for b in members),
+                key=lambda pair: (
+                    round(abs(coords[pair[0]][1 - axis].value
+                              - coords[pair[1]][1 - axis].value), 9),
+                    0 if frozenset(pair) in joined else 1,
+                    pair,
+                ),
+            )
+            _drive_rail(plan, coords, lines, joined, axis, here, there, vertex_ref)
+
+
+def _drive_rail(
+    plan: SketchPlan,
+    coords: Sequence[tuple[Resolved, ...]],
+    lines: Sequence[PLine],
+    joined: dict,
+    axis: int,
+    here: int,
+    there: int,
+    vertex_ref,
+) -> None:
+    """One dimension, or one alignment where there is no distance to drive."""
+    from_, to = coords[here][axis], coords[there][axis]
+    segment = joined.get(frozenset((here, there)))
+    if segment is not None:
+        line = lines[segment]
+        refs = ((Ref(line.id, PointRef.START), Ref(line.id, PointRef.END))
+                if (here, there) == (segment, segment + 1) or here < there
+                else (Ref(line.id, PointRef.END), Ref(line.id, PointRef.START)))
+    else:
+        refs = (vertex_ref(here), vertex_ref(there))
+
+    kind = "horizontal" if axis == 0 else "vertical"
+    gap = to.value - from_.value
+    if from_.expression.strip() == to.expression.strip() or abs(gap) <= DIM_MIN:
+        # Nothing to drive: the two coordinates are the same expression, or the
+        # same number to within the solver's own tolerance. An alignment costs
+        # the identical degree of freedom and cannot be refused as redundant.
+        plan.constrain("vertical_align" if axis == 0 else "horizontal_align", *refs)
+        if from_.expression.strip() != to.expression.strip():
+            plan.undriven_expressions.append(to.expression)
+        return
+
+    if _at_origin(from_.value):
+        driving = _magnitude(to)
+    elif _at_origin(to.value):
+        driving = _magnitude(from_)
+    else:
+        high, low = (to, from_) if gap > 0 else (from_, to)
+        subtrahend = low.expression.strip()
+        if not _is_simple(subtrahend):
+            subtrahend = f"({subtrahend})"
+        driving = Resolved(f"{high.expression.strip()} - {subtrahend}",
+                           high.value - low.value, high.dim)
+
+    across = (coords[here][1 - axis].value + coords[there][1 - axis].value) / 2
+    middle = (from_.value + to.value) / 2
+    offset = (middle, across - 0.4) if axis == 0 else (across - 0.4, middle)
+    plan.dimension(kind, refs, driving.expression, abs(driving.value),
+                   text_offset=offset, optional=True)
 
 
 def _plan_rectangle(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: RectangleEntity) -> None:
@@ -278,9 +457,9 @@ def _plan_rectangle(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: Recta
         )
         plan.constrain("coincident", Ref(diagonal.id, PointRef.START), Ref(lines[0].id, PointRef.START))
         plan.constrain("coincident", Ref(diagonal.id, PointRef.END), Ref(lines[2].id, PointRef.START))
-        if _at_origin(cx) and _at_origin(cy):
-            plan.constrain("midpoint", ORIGIN, Ref(diagonal.id))
-            return
+        # The centre gets its own point even when it sits on the origin: a
+        # midpoint constraint moves the *point* onto the line, and the sketch
+        # origin is grounded, so it cannot be the one that moves.
         center_point = plan.add(PPoint(ids.next("cpoint"), construction=True, position=(cx, cy)))
         plan.constrain("midpoint", Ref(center_point.id), Ref(diagonal.id))
         _locate(plan, resolver, Ref(center_point.id), (cx, cy), "origin",
@@ -404,7 +583,7 @@ def _plan_slot(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: SlotEntity
     plan.constrain("tangent", Ref(upper.id), Ref(arc2.id))
     plan.constrain("tangent", Ref(lower.id), Ref(arc1.id))
     plan.constrain("tangent", Ref(lower.id), Ref(arc2.id))
-    plan.constrain("equal", Ref(arc1.id), Ref(arc2.id))
+    plan.constrain("equal_radius", Ref(arc1.id), Ref(arc2.id))
 
     if _at_origin(math.sin(angle)):
         plan.constrain("horizontal", Ref(centerline.id))
@@ -422,18 +601,22 @@ def _plan_slot(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: SlotEntity
         plan.dimension("diameter", (Ref(arc1.id),), width.expression, width.value,
                        text_offset=(-radius, radius))
 
-    if spec.locate == "origin" and _at_origin(center[0]) and _at_origin(center[1]):
-        plan.constrain("midpoint", ORIGIN, Ref(centerline.id))
-    else:
-        _locate(plan, resolver, Ref(arc1.id, PointRef.CENTER), c1, spec.locate,
-                entity=Ref(centerline.id))
+    if spec.locate == "none":
+        return
+    if spec.locate == "fix":
+        plan.constrain("ground", Ref(centerline.id))
+        return
+    center_point = plan.add(PPoint(ids.next("cpoint"), construction=True, position=center))
+    plan.constrain("midpoint", Ref(center_point.id), Ref(centerline.id))
+    _locate(plan, resolver, Ref(center_point.id), center, "origin",
+            x_expression=anchor_x, y_expression=anchor_y)
 
 
 def _plan_polygon(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: PolygonEntity) -> None:
     size = resolver.length(spec.size, "polygon size", positive=True)
     center, anchor_x, anchor_y = _anchor(resolver, spec.center)
     rotation = math.radians(spec.rotation)
-    sides = spec.sides
+    sides = resolver.count(spec.sides, "polygon sides", minimum=3, maximum=120)
 
     if spec.fit == "inscribed":
         guide_radius = size.value / 2  # across corners
@@ -468,8 +651,11 @@ def _plan_polygon(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: Polygon
         for line in lines:
             plan.constrain("tangent", Ref(line.id), Ref(guide.id))
     # Equal edges leave exactly one degree of freedom: the polygon's rotation.
-    for previous, current in zip(lines, lines[1:]):
-        plan.constrain("equal", Ref(previous.id), Ref(current.id))
+    # Measured against the first edge rather than chained around the loop --
+    # the same count, but the closing pair is never constrained to each other,
+    # which Inventor's redundancy detection objects to.
+    for other in lines[1:]:
+        plan.constrain("equal_length", Ref(lines[0].id), Ref(other.id))
 
     if spec.dimension:
         plan.dimension("diameter", (Ref(guide.id),), size.expression, size.value,
@@ -500,13 +686,15 @@ def _plan_grid(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: GridEntity
     y_spacing = resolver.length(spec.y_spacing, "grid y_spacing", positive=True)
     center = resolver.point2d(spec.center)
 
-    x0 = center[0] - (spec.columns - 1) * x_spacing.value / 2
-    y0 = center[1] - (spec.rows - 1) * y_spacing.value / 2
+    columns = resolver.count(spec.columns, "grid columns", maximum=200)
+    rows = resolver.count(spec.rows, "grid rows", maximum=200)
+    x0 = center[0] - (columns - 1) * x_spacing.value / 2
+    y0 = center[1] - (rows - 1) * y_spacing.value / 2
 
     grid: list[list[PPoint]] = []
-    for row in range(spec.rows):
+    for row in range(rows):
         row_points = []
-        for column in range(spec.columns):
+        for column in range(columns):
             position = (x0 + column * x_spacing.value, y0 + row * y_spacing.value)
             row_points.append(
                 plan.add(
@@ -520,13 +708,13 @@ def _plan_grid(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: GridEntity
     for row_points in grid:
         for previous, current in zip(row_points, row_points[1:]):
             plan.constrain("horizontal_align", Ref(previous.id), Ref(current.id))
-    for column in range(spec.columns):
-        column_points = [grid[row][column] for row in range(spec.rows)]
+    for column in range(columns):
+        column_points = [grid[row][column] for row in range(rows)]
         for previous, current in zip(column_points, column_points[1:]):
             plan.constrain("vertical_align", Ref(previous.id), Ref(current.id))
 
     if spec.dimension:
-        if spec.columns > 1:
+        if columns > 1:
             plan.dimension(
                 "horizontal",
                 (Ref(grid[0][0].id), Ref(grid[0][1].id)),
@@ -534,7 +722,7 @@ def _plan_grid(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: GridEntity
                 x_spacing.value,
                 text_offset=(0.0, -0.4),
             )
-        if spec.rows > 1:
+        if rows > 1:
             plan.dimension(
                 "vertical",
                 (Ref(grid[0][0].id), Ref(grid[1][0].id)),
@@ -546,8 +734,8 @@ def _plan_grid(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: GridEntity
     # Centring the grid parametrically only works when the centre is the origin;
     # otherwise the corner is located numerically.
     if spec.locate == "origin" and _at_origin(center[0]) and _at_origin(center[1]):
-        half_x = resolver_half(resolver, x_spacing, spec.columns - 1)
-        half_y = resolver_half(resolver, y_spacing, spec.rows - 1)
+        half_x = resolver_half(resolver, x_spacing, columns - 1)
+        half_y = resolver_half(resolver, y_spacing, rows - 1)
         _locate(
             plan,
             resolver,
@@ -577,7 +765,8 @@ def _plan_bolt_circle(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: Bol
     center, anchor_x, anchor_y = _anchor(resolver, spec.center)
     radius = diameter.value / 2
     start = math.radians(spec.start_angle)
-    step = 2 * math.pi / spec.count
+    count = resolver.count(spec.count, "bolt circle count", maximum=200)
+    step = 2 * math.pi / count
 
     guide = plan.add(PCircle(ids.next("cguide"), construction=True, center=center, radius=radius))
     if spec.dimension:
@@ -587,7 +776,7 @@ def _plan_bolt_circle(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: Bol
             entity=Ref(guide.id), x_expression=anchor_x, y_expression=anchor_y)
 
     radials: list[str] = []
-    for index in range(spec.count):
+    for index in range(count):
         angle = start + index * step
         position = (center[0] + radius * math.cos(angle), center[1] + radius * math.sin(angle))
         point = plan.add(
@@ -618,7 +807,7 @@ def _plan_bolt_circle(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: Bol
         anchor = resolver.literal_angle(start)
         plan.dimension("angle", (Ref(reference.id), Ref(radials[0])), anchor.expression, start)
 
-    if spec.count > 1:
+    if count > 1:
         step_expression = resolver.literal_angle(step)
         for previous, current in zip(radials, radials[1:]):
             plan.dimension(
@@ -684,11 +873,16 @@ def _resolve_ref(plan: SketchPlan, token: str) -> Ref:
 def _apply_constraints(plan: SketchPlan, specs: Iterable[ConstraintSpec]) -> None:
     for spec in specs:
         refs = tuple(_resolve_ref(plan, token) for token in spec.entities)
-        kind = spec.type
+        kind: str = spec.type
         if kind == "fix":
             for ref in refs:
                 plan.constrain("ground", ref)
             continue
+        if kind == "equal":
+            # Inventor has no single "equal": lines match on length, curves on
+            # radius. The plan knows which is meant, so it records which.
+            primitive = plan.by_id(refs[0].entity)
+            kind = "equal_radius" if isinstance(primitive, (PCircle, PArc)) else "equal_length"
         plan.constraints.append(Constraint(kind, refs))  # type: ignore[arg-type]
 
 
@@ -794,6 +988,12 @@ def profile_loops(plan: SketchPlan) -> list[list[str]]:
     return loops
 
 
+#: How many points a full circle or ellipse is sampled into. Sixty-four keeps the
+#: sampled area within a hundredth of a percent, which is well inside anything
+#: that depends on it.
+_ROUND = 64
+
+
 def _sample(primitive: Primitive, reverse: bool) -> list[tuple[float, float]]:
     """Points along a primitive from its start to its end, optionally reversed."""
     if isinstance(primitive, PLine):
@@ -808,26 +1008,45 @@ def _sample(primitive: Primitive, reverse: bool) -> list[tuple[float, float]]:
             )
             for i in range(steps + 1)
         ]
-    else:  # pragma: no cover - circles and ellipses are single-primitive loops
+    elif isinstance(primitive, PCircle):
+        # Sampled rather than skipped: a circle is a whole loop on its own, and a
+        # loop with no points cannot be tested for containment -- which is how
+        # four circular bosses in one sketch were once counted as one boss with
+        # three holes in it. The area is still computed exactly elsewhere.
+        points = [
+            (primitive.center[0] + primitive.radius * math.cos(2 * math.pi * i / _ROUND),
+             primitive.center[1] + primitive.radius * math.sin(2 * math.pi * i / _ROUND))
+            for i in range(_ROUND)
+        ]
+    elif isinstance(primitive, PEllipse):
+        points = []
+        for i in range(_ROUND):
+            angle = 2 * math.pi * i / _ROUND
+            u = primitive.major_radius * math.cos(angle)
+            v = primitive.minor_radius * math.sin(angle)
+            points.append((
+                primitive.center[0] + u * math.cos(primitive.rotation)
+                - v * math.sin(primitive.rotation),
+                primitive.center[1] + u * math.sin(primitive.rotation)
+                + v * math.cos(primitive.rotation),
+            ))
+    else:  # pragma: no cover - every loop primitive is accounted for above
         return []
     return list(reversed(points)) if reverse else points
 
 
-def loop_area(plan: SketchPlan, loop: Sequence[str]) -> float:
-    """Area enclosed by a closed loop, in cm^2 (arcs are sampled).
+def loop_points(plan: SketchPlan, loop: Sequence[str]) -> list[tuple[float, float]]:
+    """A closed loop as an ordered polygon, arcs sampled, in sketch coordinates.
 
-    Segments are chained end-to-end before the shoelace sum, because the loop
-    walker returns them in connection order but not necessarily in a consistent
-    direction -- and a polygon assembled from mis-oriented segments crosses
-    itself and reports nonsense.
+    Segments are chained end-to-end rather than taken in the order the loop
+    walker returns them: it gives them in connection order but not in a
+    consistent direction, and a polygon assembled from mis-oriented segments
+    crosses itself. A self-crossing polygon reports a nonsense area and answers
+    "is this point inside" wrongly, which is the same bug twice.
     """
     if len(loop) == 1:
         primitive = plan.by_id(loop[0])
-        if isinstance(primitive, PCircle):
-            return math.pi * primitive.radius**2
-        if isinstance(primitive, PEllipse):
-            return math.pi * primitive.major_radius * primitive.minor_radius
-        return 0.0
+        return _sample(primitive, False)
 
     points: list[tuple[float, float]] = []
     cursor: tuple[float, float] | None = None
@@ -850,11 +1069,165 @@ def loop_area(plan: SketchPlan, loop: Sequence[str]) -> float:
         segment = list(reversed(forward)) if reverse else forward
         points.extend(segment[:-1])
         cursor = segment[-1]
+    return points
 
+
+def polygon_centroid(points: Sequence[tuple[float, float]]) -> tuple[float, float] | None:
+    """The area centroid of a closed polygon, or None if it encloses nothing.
+
+    Not the bounding box's centre, and not the mean of the vertices. Pappus's
+    theorem needs the real one: a groove profile that is a triangle has its
+    centroid a third of the way from base to apex, and using the box centre put
+    the pulley's groove 2.6% out in a direction nothing would have questioned.
+    """
+    total = 0.0
+    cx = cy = 0.0
+    count = len(points)
+    if count < 3:
+        return None
+    for index in range(count):
+        x0, y0 = points[index]
+        x1, y1 = points[(index + 1) % count]
+        cross = x0 * y1 - x1 * y0
+        total += cross
+        cx += (x0 + x1) * cross
+        cy += (y0 + y1) * cross
+    if abs(total) < 1e-12:
+        return None
+    return (cx / (3 * total), cy / (3 * total))
+
+
+def inset_area(points: Sequence[tuple[float, float]], distance: float) -> float | None:
+    """The area of the polygon offset inward by *distance*, or None if it collapses.
+
+    Exact for any simple polygon whose inward offset does not self-intersect,
+    which is the case a wall thickness is. The identity is
+    ``A - P*d + d^2 * sum(tan(turn/2))``: each straight edge loses a strip of
+    length times distance, and each corner is then double-counted or
+    under-counted by an amount that depends only on how sharply it turns. A
+    right-angle corner contributes ``+d^2``; a fully rounded outline's many tiny
+    turns sum to ``+pi*d^2``, which is the Steiner formula; a reflex corner
+    contributes a negative amount.
+
+    This is what makes a shelled box exactly predictable rather than estimated:
+    the cavity is the outline inset by the wall thickness, swept.
+    """
+    count = len(points)
+    if count < 3 or distance <= 0:
+        return None
+    area = 0.0
+    perimeter = 0.0
+    corners = 0.0
+    for index in range(count):
+        previous = points[index - 1]
+        here = points[index]
+        following = points[(index + 1) % count]
+        area += here[0] * following[1] - following[0] * here[1]
+        perimeter += math.dist(here, following)
+        incoming = (here[0] - previous[0], here[1] - previous[1])
+        outgoing = (following[0] - here[0], following[1] - here[1])
+        if math.hypot(*incoming) == 0 or math.hypot(*outgoing) == 0:
+            continue
+        cross = incoming[0] * outgoing[1] - incoming[1] * outgoing[0]
+        dot = incoming[0] * outgoing[0] + incoming[1] * outgoing[1]
+        turn = math.atan2(cross, dot)
+        corners += math.tan(turn / 2)
+    signed = area / 2
+    # The turning angles are signed by the winding direction; the corner term has
+    # to be read the same way round as the area.
+    if signed < 0:
+        corners = -corners
+    inner = abs(signed) - perimeter * distance + distance**2 * corners
+    return inner if inner > 0 else None
+
+
+def clip_to_box(points: Sequence[tuple[float, float]],
+                low_u: float, high_u: float,
+                low_v: float, high_v: float) -> list[tuple[float, float]]:
+    """The polygon trimmed to a rectangle, by Sutherland-Hodgman.
+
+    Used to ask what a revolved *cut* actually removes. A groove profile is
+    normally drawn to overshoot the part so the cut is certain to break through,
+    and charging the overshoot as removed material is the difference between a
+    pulley of 65.6 cm^3 and one of 68.0.
+    """
+    polygon = list(points)
+    for inside, intersect in (
+        (lambda p: p[0] >= low_u, lambda a, b: _cross_u(a, b, low_u)),
+        (lambda p: p[0] <= high_u, lambda a, b: _cross_u(a, b, high_u)),
+        (lambda p: p[1] >= low_v, lambda a, b: _cross_v(a, b, low_v)),
+        (lambda p: p[1] <= high_v, lambda a, b: _cross_v(a, b, high_v)),
+    ):
+        if not polygon:
+            return []
+        clipped: list[tuple[float, float]] = []
+        for index in range(len(polygon)):
+            current = polygon[index]
+            previous = polygon[index - 1]
+            if inside(current):
+                if not inside(previous):
+                    clipped.append(intersect(previous, current))
+                clipped.append(current)
+            elif inside(previous):
+                clipped.append(intersect(previous, current))
+        polygon = clipped
+    return polygon
+
+
+def _cross_u(a: tuple[float, float], b: tuple[float, float], at: float) -> tuple[float, float]:
+    span = b[0] - a[0]
+    if span == 0:  # pragma: no cover - the edge is on the boundary already
+        return (at, a[1])
+    t = (at - a[0]) / span
+    return (at, a[1] + t * (b[1] - a[1]))
+
+
+def _cross_v(a: tuple[float, float], b: tuple[float, float], at: float) -> tuple[float, float]:
+    span = b[1] - a[1]
+    if span == 0:  # pragma: no cover - the edge is on the boundary already
+        return (a[0], at)
+    t = (at - a[1]) / span
+    return (a[0] + t * (b[0] - a[0]), at)
+
+
+def loop_area(plan: SketchPlan, loop: Sequence[str]) -> float:
+    """Area enclosed by a closed loop, in cm^2 (arcs are sampled)."""
+    if len(loop) == 1:
+        primitive = plan.by_id(loop[0])
+        if isinstance(primitive, PCircle):
+            return math.pi * primitive.radius**2
+        if isinstance(primitive, PEllipse):
+            return math.pi * primitive.major_radius * primitive.minor_radius
+        return 0.0
+
+    points = loop_points(plan, loop)
     area = 0.0
     for current, following_point in zip(points, points[1:] + points[:1]):
         area += current[0] * following_point[1] - following_point[0] * current[1]
     return abs(area) / 2.0
+
+
+def _arc_extremes(arc: PArc) -> list[tuple[float, float]]:
+    """The points that bound an arc: its ends, and any axis extreme it passes.
+
+    Treating an arc as its whole circle was doubling the bounding box of a
+    swept elbow -- a quarter arc of radius 45 measured 90 across instead of 45.
+    Bounds are used to decide whether a cut reaches the part at all, so a loose
+    one is a missed warning.
+    """
+    start, end = arc.start_angle, arc.end_angle
+    sweep = (end - start) % (2 * math.pi) or 2 * math.pi
+    points = [
+        (arc.center[0] + arc.radius * math.cos(angle),
+         arc.center[1] + arc.radius * math.sin(angle))
+        for angle in (start, end)
+    ]
+    for quarter in range(4):
+        angle = quarter * math.pi / 2
+        if (angle - start) % (2 * math.pi) <= sweep:
+            points.append((arc.center[0] + arc.radius * math.cos(angle),
+                           arc.center[1] + arc.radius * math.sin(angle)))
+    return points
 
 
 def plan_bounds(plan: SketchPlan) -> tuple[float, float, float, float]:
@@ -871,8 +1244,9 @@ def plan_bounds(plan: SketchPlan) -> tuple[float, float, float, float]:
             xs.extend([primitive.center[0] - primitive.radius, primitive.center[0] + primitive.radius])
             ys.extend([primitive.center[1] - primitive.radius, primitive.center[1] + primitive.radius])
         elif isinstance(primitive, PArc):
-            xs.extend([primitive.center[0] - primitive.radius, primitive.center[0] + primitive.radius])
-            ys.extend([primitive.center[1] - primitive.radius, primitive.center[1] + primitive.radius])
+            for x, y in _arc_extremes(primitive):
+                xs.append(x)
+                ys.append(y)
         elif isinstance(primitive, PEllipse):
             xs.extend([primitive.center[0] - primitive.major_radius, primitive.center[0] + primitive.major_radius])
             ys.extend([primitive.center[1] - primitive.major_radius, primitive.center[1] + primitive.major_radius])

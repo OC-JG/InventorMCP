@@ -252,3 +252,146 @@ class TestDocumentLifecycle:
         status = call(connected, "session_status")
         assert len(status["documents"]) == 2
         assert call(connected, "activate_part", {"document": first["document"]})["ok"]
+
+
+class TestErrorsDoNotLeakTheFilesystem:
+    """An error travels to whatever is driving the server.
+
+    A COM failure readily carries an absolute path -- a user name, a project
+    directory, a network share. The filename is the part that helps diagnose;
+    the route to it is nobody else's business. Sanitising happens in
+    `to_dict`, on the way out, so no future error can forget to do it.
+    """
+
+    def sanitised(self, message, hint=None):
+        from inventor_mcp.errors import DocumentError
+
+        return DocumentError(message, hint=hint).to_dict()
+
+    def test_a_windows_path_keeps_only_its_filename(self):
+        payload = self.sanitised(r"Could not open C:\Users\James\Parts\bracket.ipt")
+        assert "James" not in payload["message"]
+        assert "bracket.ipt" in payload["message"]
+
+    def test_a_network_share_too(self):
+        payload = self.sanitised(r"export failed to \\FILESERVER\cad\jobs\x.step")
+        assert "FILESERVER" not in payload["message"]
+        assert "x.step" in payload["message"]
+
+    def test_and_a_home_directory(self):
+        payload = self.sanitised("reading /home/james/parts/shaft.ipt failed")
+        assert "james" not in payload["message"]
+        assert "shaft.ipt" in payload["message"]
+
+    def test_hints_are_sanitised_as_well(self):
+        payload = self.sanitised("nope", hint=r"try C:\Users\James\other.ipt")
+        assert "James" not in payload["hint"]
+
+    def test_the_explanation_survives(self):
+        """Over-matching would eat the sentence, which is the worse failure."""
+        payload = self.sanitised(
+            r"cannot write C:\Temp\a.png because the disk is full")
+        assert payload["message"].endswith("because the disk is full")
+
+    def test_two_paths_in_one_message_keep_the_words_between_them(self):
+        payload = self.sanitised(
+            r"C:\a\b.ipt and \\server\share\c.step both failed")
+        assert " and " in payload["message"]
+        assert payload["message"].endswith("both failed")
+        assert "server" not in payload["message"]
+
+    def test_a_message_with_no_path_is_untouched(self):
+        assert self.sanitised("The hole removed no material.")["message"] == (
+            "The hole removed no material.")
+
+    def test_a_spaced_path_is_only_partly_redacted_and_that_is_deliberate(self):
+        """The documented limit: the root and user name still go."""
+        payload = self.sanitised(r"open C:\Users\Jo\My Parts\x.ipt")
+        assert "C:" not in payload["message"]
+        assert "Jo" not in payload["message"].replace("Parts", "")
+        assert "x.ipt" in payload["message"]
+
+
+class TestTheWholeSurfaceEndToEnd:
+    """A client's path, which nothing exercised until now.
+
+    `live_smoke.py` imports the builder directly, so the tool layer had never
+    been driven from end to end -- against Inventor or the simulator. Every
+    integration seam between the tools, the builder and a backend is here.
+    """
+
+    def recipe(self):
+        from pathlib import Path
+
+        path = Path(__file__).resolve().parent.parent / "examples" / "angle_bracket.json"
+        return json.loads(path.read_text())
+
+    def test_a_recipe_builds_through_the_tool(self, connected):
+        built = call(connected, "build_part_from_recipe", {"recipe": self.recipe()})
+        assert built["ok"] is True
+        assert len(built["operations"]) == 8
+
+    def test_the_measurement_reaches_the_client(self, connected):
+        """The whole point of computing it: the model has to see it."""
+        built = call(connected, "build_part_from_recipe", {"recipe": self.recipe()})
+        measured = [op["measured"] for op in built["operations"] if "measured" in op]
+        assert len(measured) == 5, "every non-sketch operation should report"
+        assert all("volume_cm3" in report for report in measured)
+        assert any("volume_change_cm3" in report for report in measured)
+
+    def test_an_operation_that_did_nothing_says_so_to_the_client(self, connected):
+        """A work plane adds no material, and the client has to be told.
+
+        The bracket's mirror used to serve as the example, back when the
+        simulator did not model what an occurrence removes. It does now, so the
+        no-op has to be something that really is one.
+        """
+        call(connected, "build_part_from_recipe", {"recipe": self.recipe()})
+        applied = call(connected, "apply_operations", {"operations": [
+            {"op": "work_plane", "base": "xy", "offset": 10}]})
+        assert applied["ok"] is True
+        notes = [op["measured"].get("note") for op in applied["applied"]
+                 if "measured" in op]
+        assert "the volume did not change" in notes
+
+    def test_the_mirrored_cut_removes_material_too(self, connected):
+        """The bracket mirrors a slot cut; both slots have to be in the volume."""
+        built = call(connected, "build_part_from_recipe", {"recipe": self.recipe()})
+        by_name = {op.get("name"): op for op in built["operations"] if "measured" in op}
+        cut = by_name["SlotCut"]["measured"]["volume_change_cm3"]
+        mirrored = by_name["SlotPair"]["measured"]["volume_change_cm3"]
+        assert cut < 0
+        # Both are rounded to six decimals on the way out, so compare there.
+        assert mirrored == pytest.approx(cut, abs=1e-5)
+
+    def test_appending_operations_reports_too(self, connected):
+        call(connected, "build_part_from_recipe", {"recipe": self.recipe()})
+        applied = call(connected, "apply_operations", {"operations": [
+            {"op": "sketch", "name": "Extra", "plane": "xy", "entities": [
+                {"type": "circle", "center": [40, 0], "diameter": 12}]},
+            {"op": "extrude", "sketch": "Extra", "distance": 4, "operation": "cut"},
+        ]})
+        assert applied["ok"] is True
+        cut = next(op for op in applied["applied"] if op["op"] == "extrude")
+        assert cut["measured"]["volume_change_cm3"] < 0
+
+    def test_a_parameter_can_be_changed_through_the_tool(self, connected):
+        call(connected, "build_part_from_recipe", {"recipe": self.recipe()})
+        changed = call(connected, "set_parameters",
+                       {"parameters": [{"name": "base_len", "value": 120}]})
+        assert changed["ok"] is True
+
+    def test_the_part_can_be_measured_and_inspected(self, connected):
+        call(connected, "build_part_from_recipe", {"recipe": self.recipe()})
+        measured = call(connected, "measure_part")
+        assert measured["volume_cm3"] > 0
+        assert measured["bounding_box"]["size"][0] > 0
+        inspected = call(connected, "inspect_part")
+        assert inspected["features"] and inspected["sketches"]
+
+    def test_a_sketch_reports_which_parameters_drive_it(self, connected):
+        """So a model can tell a parametric outline from a frozen one."""
+        call(connected, "build_part_from_recipe", {"recipe": self.recipe()})
+        inspected = call(connected, "inspect_part")
+        section = next(s for s in inspected["sketches"] if s["name"] == "Section")
+        assert sorted(section["driven_parameters"]) == ["base_len", "thk", "upright_h"]

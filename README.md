@@ -29,38 +29,84 @@ the holes with it.
 
 ## Install
 
-```bash
-git clone https://github.com/OC-JG/InventorMCP
+The server runs on your own machine, next to Inventor. Inventor's automation API is
+Windows-only, so **for real geometry this must be a Windows machine with Inventor
+installed**; everything else (writing recipes, validating them, the test suite) runs
+anywhere.
+
+```powershell
+git clone --recurse-submodules https://github.com/OC-JG/InventorMCP
 cd InventorMCP
-pip install -e .            # server only, works everywhere
-pip install -e ".[inventor]" # adds pywin32, on Windows with Inventor installed
+powershell -ExecutionPolicy Bypass -File scripts\install.ps1
 ```
 
-Python 3.10+. Autodesk Inventor is needed only to produce real geometry — see
-[Working without Inventor](#working-without-inventor).
+The script makes the venv, installs the package, pulls the DFM analyser submodule
+if the clone skipped it, checks for Node, and registers the server with Claude
+Code when the `claude` CLI is on PATH — printing the command to run yourself when
+it is not. Safe to re-run.
 
-## Connect it to a client
+The [DFM analyser](https://github.com/OC-JG/DFM) rides along as the `dfm/`
+submodule, pinned to the version this repository's tests ran against — one clone
+is the whole tool, and the same checkout is the browser tool: open
+`dfm\dfm-tool.html`. Node 18+ is the analyser's one dependency (no `npm
+install`); without it, everything except the DFM tools still works and
+`dfm_capabilities` says exactly what is missing.
 
-<details open>
-<summary><b>Claude Desktop / Claude Code</b></summary>
+By hand, the script's steps are:
+
+```powershell
+git submodule update --init dfm
+py -m venv .venv
+.venv\Scripts\activate
+pip install -e .
+claude mcp add inventor -- .venv\Scripts\python.exe -m inventor_mcp
+```
+
+## Add it to Claude
+
+### Claude Code
+
+From inside the cloned repo, with the virtualenv active:
+
+```bash
+claude mcp add inventor -- python -m inventor_mcp --backend auto
+```
+
+The repo also ships a project-scoped [`.mcp.json`](.mcp.json), so if you open this
+directory with Claude Code it will offer to enable the server for you. Check it with:
+
+```bash
+claude mcp list
+```
+
+### Claude Desktop
+
+Edit the config file — create it if it does not exist:
+
+| OS | Path |
+|---|---|
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
 
 ```json
 {
   "mcpServers": {
     "inventor": {
-      "command": "python",
+      "command": "C:\\path\\to\\InventorMCP\\.venv\\Scripts\\python.exe",
       "args": ["-m", "inventor_mcp", "--backend", "auto"]
     }
   }
 }
 ```
 
-On Windows the path is usually `"command": "py"` or the full path to `python.exe`
-inside the environment you installed into.
-</details>
+Restart Claude Desktop, then look for the tools icon in the message box.
 
-<details>
-<summary><b>Any other MCP client</b></summary>
+> **Use the absolute path to the `python.exe` inside your virtualenv.** Claude
+> Desktop launches the server without your shell's `PATH`, so a bare `"python"` is
+> the single most common reason a server shows as failed. On Windows, note the
+> doubled backslashes — JSON requires them.
+
+### Any other MCP client
 
 The server speaks stdio by default:
 
@@ -70,10 +116,45 @@ inventor-mcp --transport streamable-http
 ```
 
 `--backend` takes `auto` (Inventor when available, otherwise the simulator),
-`inventor` (fail if Inventor is unreachable) or `mock` (always simulate).
-Every flag also has an environment variable: `INVENTOR_MCP_BACKEND`,
+`inventor` (fail loudly if Inventor is unreachable) or `mock` (always simulate).
+Every flag has an environment variable too: `INVENTOR_MCP_BACKEND`,
 `INVENTOR_MCP_TRANSPORT`, `INVENTOR_MCP_LOG_LEVEL`.
-</details>
+
+### The escape hatch
+
+Inventor's API is much larger than the recipe schema — sheet metal, iLogic,
+drawing views, assemblies. If you need one of those, you can hand the model the
+API directly:
+
+```powershell
+set INVENTOR_MCP_ESCAPE_HATCH=on
+```
+
+That registers one extra tool, `run_inventor_script`, which executes Python
+against the live application. **There is no sandbox.** It runs in the server's
+own process with the same rights as whoever started it, so it can do anything
+you can do at that keyboard. Every call is logged with the code it ran, and a
+script that raises is rolled back by default — but that is containment of
+mistakes, not of intent.
+
+Without the variable the tool is not registered at all, so the model cannot see
+that it exists, and no prompt can talk it into using something that is not
+there. That is the intended state for anything unattended.
+
+### Check it worked
+
+Ask Claude to call `connect`. A healthy live connection replies:
+
+```json
+{"backend": "inventor", "simulated": false, "connected": true, "version": "2025"}
+```
+
+If it says `"backend": "mock"`, Inventor was not reachable and you are talking to the
+simulator — useful, but it will not produce a real part. Run with
+`--backend inventor` to see why it failed rather than falling back silently.
+
+Then try: *"Model a 120 x 80 x 8 mm aluminium mounting plate with 10 mm corner radii
+and four M6 clearance holes 12 mm in from each edge."*
 
 ---
 
@@ -128,8 +209,8 @@ That indirection is what buys the useful properties:
 ```
 
 More in [`examples/`](examples/): a flanged shaft, a hex standoff, a shelled
-enclosure and an angle bracket. Each one is exercised by the test suite, so they
-cannot drift out of date.
+enclosure, an angle bracket and a counterbored cover plate. Each one is
+exercised by the test suite, so they cannot drift out of date.
 
 ### Sketches come out constrained
 
@@ -183,13 +264,59 @@ inventor-mcp --backend mock
 
 ---
 
+## Manufacturability
+
+If you have the [OnlyCat DFM tool](https://github.com/OC-JG/DFM) checked out,
+this server can measure how manufacturable a part is by injection moulding,
+enact the parts of that verdict which really are parameter changes, rebuild, and
+ask the tool again.
+
+```
+improve_for_manufacture(path="bracket.ipt", rounds=3)
+```
+
+Hand it a part and it works on the next version of the file — `bracket_v2.ipt` —
+so the original is untouched and the two can be compared. A STEP file is
+imported and measured; it carries geometry and not the history that made it, so
+there is nothing to drive and it says so rather than running a loop with nothing
+to do. An `.stl` is analysed without starting Inventor at all.
+
+Which parameter is the wall comes from the part where nobody has said: a shell
+feature takes its thickness from somewhere, and whatever that expression reads
+*is* the wall. That is a measurement, and it is reported with what it was read
+from. A parameter that merely *looks* like the wall is offered and never
+applied.
+
+Each round reports which findings actually cleared, because a change that was
+applied is not the same as a finding that was answered. Ratio fixes come out as
+expressions — a rib becomes `wall_t * 0.45`, not `0.9 mm` — so the relationship
+survives the next wall change instead of quietly re-breaking the check.
+
+Dimensions the design depends on can be declared as key geometry and are then
+refused, including anything a protected value is computed from:
+
+```jsonc
+{ "name": "seal_face", "value": "plate_t - gasket_crush", "frozen": true }
+```
+
+That protects `plate_t` as well — editing it would move the sealing face just as
+surely, and it would not have appeared in any frozen list.
+
+Findings no parameter answers — an undercut, a sink, a corner radius a mesh
+cannot even be measured for — come back with the tool's own wording and a reason
+for not touching them.
+
+See [docs/DFM.md](docs/DFM.md).
+
+---
+
 ## Tools
 
 | Tool | What it is for |
 |---|---|
 | `connect` | Attach to Inventor, or to the simulator |
 | `session_status` | Backend, open documents, active part and what it contains |
-| `new_part` / `open_part` / `save_part` / `close_part` / `activate_part` | Document lifecycle |
+| `new_part` / `open_part` / `save_part` / `close_part` / `activate_part` | Document lifecycle; `open_part` takes an .ipt, a STEP/IGES/SAT file, or the next version of one |
 | `part_recipe_schema` | Full JSON Schema plus the quick reference |
 | `validate_recipe` | Static checks; no Inventor needed |
 | `build_part_from_recipe` | The main text-to-model entry point |
@@ -202,6 +329,15 @@ inventor-mcp --backend mock
 | `measure_part` | Bounding box, volume, area, mass, centre of mass |
 | `export_model` | STEP, STL, IGES, SAT, DWG, DXF, OBJ, 3MF |
 | `capture_view` | Render a PNG |
+| `check_manufacture` | Measure manufacturability, and say what would change |
+| `improve_for_manufacture` | Change it, rebuild, measure again — a closed loop |
+| `discover_dfm_roles` | Work out which parameter means what, from the part itself |
+| `promote_parameters` | Name a parameterless part's dimensions in place, so the loop can drive it |
+| `declare_dfm` | Say which parameter means what, and remember it in the part |
+| `read_dfm_report` | Read a report exported from the DFM tool in a browser |
+| `protect_geometry` | Declare key geometry that must not be changed |
+| `compare_manufacture` | What moved between two runs — the question a versioned part answers |
+| `dfm_capabilities` | The roles, the formats, and what needs a person |
 
 Two prompts are published as well: `model_this_part` and `revise_part`.
 
@@ -223,7 +359,7 @@ Errors come back as data, not exceptions:
 Values may be numbers (in the recipe's units) or expressions:
 
 ```
-"plate_w / 2"        "1.5 in"        "wall * 2 + 3 mm"      "sqrt(2) * pcd / 2"
+"plate_w / 2"        "1.5 in"        "wall * 2 + 3 mm"      "sqrt(2) * bolt_pcd / 2"
 "sin(30 deg) * r"    "max(t, 3 mm)"  "flange_d - 16"
 ```
 
@@ -257,18 +393,25 @@ inventor_mcp/
     base.py        the contract both backends satisfy
     com/           live Inventor over COM (Windows)
     mock/          in-memory simulator
+  versioning.py    naming and making the next version of a part file
+  dfm/             manufacturability: read a DFM report, act on it, refuse to
   tools/           the MCP tool surface
   server.py        assembly: tools, resources, prompts, CLI
 ```
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for why it is split that way, and
-[docs/INVENTOR_SETUP.md](docs/INVENTOR_SETUP.md) for the Windows/COM specifics.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for why it is split that way,
+[docs/INVENTOR_SETUP.md](docs/INVENTOR_SETUP.md) for the Windows/COM specifics,
+[docs/DFM.md](docs/DFM.md) for the manufacturability loop and how key geometry
+is protected, and [docs/DECISIONS.md](docs/DECISIONS.md) for the choices that
+surprise people — why a failed build is left where it stopped, why the
+simulator counts as a real implementation, and why an honest "unknown" beats a
+heuristic.
 
 ## Development
 
 ```bash
 pip install -e ".[dev]"
-pytest                      # 213 tests, no Inventor required
+pytest                      # the whole suite, no Inventor required
 ```
 
 ### Status
@@ -276,12 +419,34 @@ pytest                      # 213 tests, no Inventor required
 The recipe layer, expression evaluator, geometry expansion, selectors, tool surface
 and simulator are covered by the test suite and run on any platform.
 
-The COM backend's calls into Inventor cannot be exercised on a Linux CI machine.
-Its structure, error translation, enum resolution and selector filtering are tested;
-the API calls themselves need a pass on a Windows machine with Inventor installed
-before they should be trusted in anger. `docs/INVENTOR_SETUP.md` lists what to check
-first and how to diagnose an enum mismatch if one shows up.
+**All five examples build end to end against Inventor 2027.1**, and every volume
+matches a hand calculation to five significant figures or better. Between them
+they cover parameters with expressions, constrained sketches on all three origin
+planes and on an offset work plane, extrudes and cuts, revolved-free profiles
+from polylines and slots and bolt circles, blind and through holes, fillets and
+chamfers chosen by selector, mirroring, shells, mass properties, and export to
+STEP, STL and PNG.
+
+Not yet exercised live: revolve, sweep, loft, patterns, threads and the
+counterbore, countersink and tapped hole styles. Recipes now reach all of them —
+`belt_pulley`, `pipe_bend`, `duct_transition`, `threaded_boss` and
+`cover_plate` — so what is missing is a run, not a recipe. See
+[docs/INVENTOR_SETUP.md](docs/INVENTOR_SETUP.md) for what is confirmed, what is
+not, and the Inventor API quirks that cost the most time getting there.
+
+## Inventor versions
+
+Driven against **Inventor 2027.1** on Windows with Python 3.14 and pywin32, and
+nothing else. Every quirk recorded in
+[docs/INVENTOR_SETUP.md](docs/INVENTOR_SETUP.md) was measured there.
+
+Earlier versions are likely to need different enum values, and the COM backend
+reads them from Inventor's own type library first, so a machine with a working
+pywin32 cache should be fine. The fallback table is *not* verified — where its
+value is disputed the server now refuses rather than guessing, and
+`scripts/dump_constants.py` prints what Inventor actually says. Reports from
+2022–2026 are welcome and are the fastest way to widen this.
 
 ## Licence
 
-MIT.
+MIT — see [LICENSE](LICENSE).

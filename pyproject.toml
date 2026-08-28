@@ -1,5 +1,8 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+# PEP 639: `license` is an SPDX string and `license-files` names the file.
+# The table form (`{ text = "MIT" }`) is rejected outright from 77 on, which
+# is what every CI run failed on before anybody looked at the logs.
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,7 +11,8 @@ version = "0.1.0"
 description = "MCP server that turns natural-language descriptions into parametric Autodesk Inventor models"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "OnlyCat" }]
 keywords = ["mcp", "autodesk", "inventor", "cad", "parametric", "text-to-cad"]
 classifiers = [
@@ -32,6 +36,12 @@ inventor-mcp = "inventor_mcp.__main__:main"
 
 [tool.setuptools.packages.find]
 include = ["inventor_mcp*"]
+
+# The DFM bridge is JavaScript, and a wheel that leaves it out installs a
+# manufacturability loop that cannot run at all -- with nothing to say about why,
+# since every other part of it imports fine.
+[tool.setuptools.package-data]
+inventor_mcp = ["dfm/*.mjs"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

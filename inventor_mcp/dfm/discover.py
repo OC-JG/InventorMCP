@@ -1,0 +1,439 @@
+"""Working out which parameter plays which DFM role, from evidence.
+
+A recipe can say. A part somebody hands over cannot, and the loop needs to know
+before it may change anything -- so something has to work it out, and there are
+two very different ways to try.
+
+The wrong way is the parameter's name. ``wall``, ``wall_t``, ``t``, ``thk``,
+``WallThickness``: a table of spellings gets most parts right, and the parts it
+gets wrong are indistinguishable from the parts it gets right until a loop has
+already thinned the wrong dimension. This project has a standing rule about
+that, and it holds here.
+
+The right way is what the parameter actually *does*. A shell feature takes its
+thickness from somewhere; whatever that expression reads is the wall, not by
+resemblance but by construction. An extrude with a taper takes the angle from
+somewhere; that is the draft. Those are measurements of the model, and they are
+as good as a declaration.
+
+So:
+
+* **evidence maps a role.** One shell, one parameter in its thickness, one
+  answer -- and the answer is reported with what it was read from, because it is
+  a claim somebody may want to check.
+* **ambiguity maps nothing.** Two shells reading two different parameters is not
+  a wall; it is two walls and a question. Reported, unmapped.
+* **a name is a suggestion and never a mapping.** Where no evidence exists, a
+  likely-looking parameter comes back under ``suggestions`` with the exact call
+  needed to accept it. Nothing acts on a suggestion.
+
+The unmapped roles matter as much as the mapped ones. A rib ratio judged against
+a parameter nobody supplied is judged against the analyser's default, which can
+report a rib too thick on a part that has no ribs -- so leaving a role unmapped
+and saying so is the useful answer, not a gap in this file.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from typing import Any, Iterable, Mapping, Sequence
+
+from ..expressions import referenced_parameters
+from .declaration import Declaration
+from .roles import ROLES
+
+
+@dataclass(frozen=True)
+class FeatureFacts:
+    """One feature, reduced to what it is and what expressions it holds.
+
+    Deliberately not a live COM object: the rules below are then a pure function
+    of a few strings, testable without Inventor and without a mesh, and whatever
+    the backend can actually read gets normalised into this on the way in.
+    """
+
+    name: str
+    kind: str
+    expressions: dict[str, str] = field(default_factory=dict)
+
+    def expression(self, *names: str) -> tuple[str, str] | None:
+        """The first of *names* this feature carries, as (property, expression)."""
+        for wanted in names:
+            for held, expression in self.expressions.items():
+                if held.lower().replace("_", "") == wanted.lower().replace("_", ""):
+                    if expression and str(expression).strip():
+                        return held, str(expression)
+        return None
+
+
+#: What a feature reading a parameter proves about that parameter.
+#:
+#: Each entry is (feature kind, the properties to look at, the role it proves,
+#: how to say it). The kinds are matched loosely -- Inventor calls a shell
+#: feature's type ``kShellFeatureObject`` and this project's own info calls it
+#: ``shell`` -- so a substring is enough and a release renaming its enums does
+#: not silently stop the evidence working.
+EVIDENCE: tuple[tuple[str, tuple[str, ...], str, str], ...] = (
+    ("shell", ("thickness",), "wall",
+     "the shell feature {feature} takes its wall thickness from it"),
+    ("thicken", ("thickness",), "wall",
+     "the thicken feature {feature} takes its thickness from it"),
+    ("extrude", ("taper", "taperangle"), "draft",
+     "the extrude {feature} takes its draft angle from it"),
+    ("revolve", ("taper", "taperangle"), "draft",
+     "the revolve {feature} takes its draft angle from it"),
+)
+
+#: Spellings that suggest a role, used only to offer a candidate a person can
+#: accept. Never applied. Ordered longest-first inside each role so ``rib_t``
+#: does not match the pattern meant for ``t``.
+SUGGESTS: dict[str, tuple[str, ...]] = {
+    "wall": ("wall_thickness", "wallthk", "wall_t", "wall", "shell_t", "shell",
+             "nominal_wall", "thk", "thickness"),
+    "draft": ("draft_angle", "draft_a", "draft", "taper_angle", "taper"),
+    "rib_thickness": ("rib_thickness", "rib_thk", "rib_t", "rib_w", "rib"),
+    "rib_height": ("rib_height", "rib_h"),
+    "rib_fillet": ("rib_fillet", "rib_radius", "rib_r", "rib_root"),
+    "boss_od": ("boss_od", "boss_diameter", "boss_d", "boss_dia", "boss"),
+    "boss_wall": ("boss_wall", "boss_w", "boss_t", "boss_thickness"),
+}
+
+
+#: The name a promoted role's new parameter gets, unless the caller names it.
+PROMOTED_NAMES = {
+    "wall": "wall_t", "draft": "draft_a", "rib_thickness": "rib_t",
+    "rib_height": "rib_h", "rib_fillet": "rib_r",
+    "boss_od": "boss_d", "boss_wall": "boss_w",
+}
+
+
+@dataclass
+class Discovery:
+    """What could be worked out, what could not, and why."""
+
+    declaration: Declaration = field(default_factory=Declaration)
+    #: role -> [(parameter, why)] where more than one answer was found
+    ambiguous: dict[str, list[tuple[str, str]]] = field(default_factory=dict)
+    #: role -> parameter, from spelling alone. Never applied.
+    suggestions: dict[str, str] = field(default_factory=dict)
+    #: Places a role demonstrably lives that no named parameter drives: a
+    #: shell whose thickness is the literal "2.5 mm", or a bare model
+    #: parameter. The evidence is as strong as a mapping -- the shell still
+    #: reads it -- but there is nothing to drive until the value is promoted
+    #: to a named parameter. Each entry carries everything `promote_parameters`
+    #: needs to do that.
+    promotable: list[dict[str, str]] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+
+    def as_dict(self) -> dict[str, Any]:
+        out: dict[str, Any] = self.declaration.describe()
+        if self.ambiguous:
+            out["ambiguous"] = {
+                role: [{"parameter": name, "because": why} for name, why in found]
+                for role, found in sorted(self.ambiguous.items())
+            }
+        if self.suggestions:
+            out["suggestions"] = dict(sorted(self.suggestions.items()))
+            out["to_accept_the_suggestions"] = {
+                "roles": dict(sorted(self.suggestions.items())),
+            }
+        if self.promotable:
+            out["promotable"] = list(self.promotable)
+            out["to_promote"] = {
+                "promotions": [
+                    {"feature": entry["feature"], "property": entry["property"],
+                     "name": entry["suggested_name"]}
+                    for entry in self.promotable
+                ],
+            }
+        out["notes"] = list(self.notes) + list(self.declaration.notes)
+        return out
+
+
+def facts_from(session: Any, doc_id: str) -> list[dict[str, Any]]:
+    """Everything a backend can say about each of a part's features.
+
+    Two sources, combined because neither is complete on its own. ``list_features``
+    carries what this project recorded when it built the feature, which is
+    everything on a part built here and nothing on one that was opened.
+    ``describe_feature`` asks Inventor, which is the only source for a part
+    nobody described -- and it reports a driven property as both its value and
+    the expression driving it, which is the expression this needs.
+
+    A feature that cannot be described contributes what ``list_features`` knows
+    and no more. Failing the whole discovery because one feature would not answer
+    would throw away the evidence from all the others.
+    """
+    facts: list[dict[str, Any]] = []
+    for info in session.backend.list_features(doc_id):
+        entry: dict[str, Any] = {"name": info.name, "kind": info.kind}
+        entry.update(getattr(info, "detail", None) or {})
+        try:
+            described = session.backend.describe_feature(doc_id, info.name)
+        except Exception:
+            described = None
+        if isinstance(described, Mapping):
+            for key, value in described.items():
+                if key in ("name", "kind"):
+                    continue
+                entry.setdefault(key, value)
+            if described.get("kind") and entry["kind"] in ("", "unknown", "feature"):
+                entry["kind"] = described["kind"]
+        facts.append(entry)
+    return facts
+
+
+def normalise(description: Mapping[str, Any]) -> FeatureFacts:
+    """One feature's facts, out of whatever shape the backend reported.
+
+    Written tolerantly on purpose. ``list_features`` and ``describe_feature``
+    report different shapes, releases rename properties, and a feature this
+    cannot read contributes no evidence -- which is a smaller problem than one it
+    reads wrongly.
+    """
+    name = str(description.get("name") or description.get("feature") or "")
+    kind = str(
+        description.get("kind")
+        or description.get("type")
+        or description.get("feature_type")
+        or ""
+    )
+    expressions: dict[str, str] = {}
+    for key, value in description.items():
+        if key in ("name", "feature", "kind", "type", "feature_type"):
+            continue
+        # `describe_feature` reports a feature's own properties and its
+        # definition's under one flat mapping, the latter prefixed. The prefix is
+        # about where the property was read from, not what it means.
+        held = str(key).rsplit(".", 1)[-1]
+        if isinstance(value, str):
+            if value.strip():
+                expressions.setdefault(held, value)
+        elif isinstance(value, Mapping):
+            # A dimensioned property comes back as what it measures *and* what
+            # drives it: {"value": 0.25, "expression": "wall"}. The expression is
+            # the evidence; the value is the same number under another name.
+            # Reading the inner key here rather than the outer one is a bug this
+            # had: every driven property landed under "expression" and the
+            # feature appeared to hold one property called that.
+            driven = value.get("expression")
+            if isinstance(driven, str) and driven.strip():
+                expressions.setdefault(held, driven)
+                continue
+            for inner, nested in value.items():
+                if isinstance(nested, str) and nested.strip():
+                    expressions.setdefault(str(inner).rsplit(".", 1)[-1], nested)
+                elif isinstance(nested, Mapping):
+                    deeper = nested.get("expression")
+                    if isinstance(deeper, str) and deeper.strip():
+                        expressions.setdefault(str(inner).rsplit(".", 1)[-1], deeper)
+    return FeatureFacts(name=name, kind=kind, expressions=expressions)
+
+
+def discover(
+    features: Iterable[Mapping[str, Any]],
+    parameters: Iterable[str],
+    *,
+    consumed_by: Mapping[str, Sequence[str]] | None = None,
+) -> Discovery:
+    """Work out the role map from the part itself.
+
+    *features* are feature descriptions, *parameters* the user parameter names
+    that exist, and *consumed_by* an optional parameter-to-features index -- a
+    second, independent channel for the same evidence, used where a feature's own
+    expressions could not be read but the parameter table knows what reads it.
+    """
+    known = {name.lower(): name for name in parameters}
+    facts = [normalise(entry) for entry in features]
+    found: dict[str, list[tuple[str, str]]] = {}
+    promotable: list[dict[str, str]] = []
+    #: role -> parameter matched on a property whose feature kind was unreadable.
+    #: The same standing as a likely name: offered, never applied.
+    offered: dict[str, str] = {}
+    kind_notes: set[str] = set()
+
+    for fact in facts:
+        unreadable = fact.kind.lower() in ("", "unknown", "feature")
+        for kind, properties, role, wording in EVIDENCE:
+            if unreadable:
+                # The property is there and what kind of feature holds it could
+                # not be read -- and the kind is half the evidence. Inventor's
+                # rib feature has a thickness too, so "something has a thickness
+                # driven by rib_t" maps the wall to a rib on any part whose only
+                # thickness-carrying feature is a rib. The first version of this
+                # used the property anyway, counting on two candidates coming
+                # out ambiguous; one candidate sailed straight through, and one
+                # candidate that is a rib is exactly the wrong-parameter mapping
+                # this module exists to prevent. So an unreadable kind demotes
+                # the match to an offer, the same standing as a likely name.
+                held = fact.expression(*properties)
+                if held is None:
+                    continue
+                for referenced in _parameters_in(held[1], known):
+                    offered.setdefault(role, referenced)
+                    kind_notes.add(
+                        f"{fact.name or '(unnamed)'} takes its {held[0].lower()} "
+                        f"from {referenced}, but what kind of feature it is could "
+                        f"not be read -- a rib has a thickness too -- so this is "
+                        f"offered rather than used. Confirm it with "
+                        f"roles={{{role!r}: {referenced!r}}}, and run "
+                        f"scripts/probe_import_and_properties.py --only discovery "
+                        f"to find out why the kind is unreadable."
+                    )
+                continue
+            if kind not in fact.kind.lower():
+                continue
+            held = fact.expression(*properties)
+            if held is None:
+                continue
+            because = wording.format(feature=fact.name or "(unnamed)")
+            referenced = _parameters_in(held[1], known)
+            for parameter in referenced:
+                _record(found, role, parameter, because)
+            if not referenced:
+                # The role demonstrably lives here -- the feature reads this
+                # property -- and nothing named drives it: a literal, or a bare
+                # model parameter. That is not a mapping and it is not nothing:
+                # it is the exact spot a promotion turns into one.
+                promotable.append({
+                    "role": role,
+                    "feature": fact.name or "(unnamed)",
+                    "property": held[0],
+                    "currently": held[1],
+                    "suggested_name": PROMOTED_NAMES.get(role, role),
+                    "why": f"{because}, but {held[1]!r} names no user parameter "
+                           f"-- promote it to drive this feature",
+                })
+
+    # The parameter table's own view, where there is one. A parameter Inventor
+    # says is consumed by a shell is the wall whether or not the shell's own
+    # thickness expression could be read.
+    by_kind = {fact.name: fact.kind.lower() for fact in facts}
+    for parameter, consumers in (consumed_by or {}).items():
+        canonical = known.get(parameter.lower())
+        if canonical is None:
+            continue
+        for consumer in consumers or ():
+            kind = by_kind.get(str(consumer), str(consumer)).lower()
+            for wanted, _properties, role, _wording in EVIDENCE:
+                if wanted in kind:
+                    _record(found, role, canonical,
+                            f"Inventor reports {consumer} as consuming it, and "
+                            f"{consumer} is a {wanted} feature")
+
+    declaration = Declaration()
+    ambiguous: dict[str, list[tuple[str, str]]] = {}
+    notes: list[str] = []
+    for role, candidates in found.items():
+        distinct = sorted({name for name, _ in candidates})
+        if len(distinct) == 1:
+            declaration.roles[role] = distinct[0]
+            declaration.origin[role] = "discovered"
+            declaration.evidence[role] = "; ".join(
+                sorted({why for _, why in candidates})
+            )
+            continue
+        # Two answers is not an answer. Reported rather than resolved: picking
+        # one would be exactly the guess this file exists to avoid.
+        ambiguous[role] = candidates
+        notes.append(
+            f"Could not settle the {role!r} role: {', '.join(distinct)} all have "
+            f"a claim to it. Say which with roles={{{role!r}: '<parameter>'}}."
+        )
+
+    # The kind-less property offers first: "something takes its thickness from
+    # this" is weaker than evidence and still a measurement, where a spelling is
+    # neither. setdefault the other way round had the name-guess shadowing it.
+    suggestions: dict[str, str] = {}
+    for role, parameter in offered.items():
+        if role not in declaration.roles and role not in ambiguous:
+            suggestions[role] = parameter
+    for role, parameter in _suggest(
+        [role for role in ROLES if role not in declaration.roles and role not in ambiguous],
+        known,
+    ).items():
+        suggestions.setdefault(role, parameter)
+    notes.extend(sorted(kind_notes))
+    if suggestions:
+        notes.append(
+            "The rest were matched by name alone, which is not evidence, so they "
+            "are offered rather than used. Nothing acts on a suggestion."
+        )
+    unmapped = [role for role in ROLES
+                if role not in declaration.roles and role not in suggestions
+                and role not in ambiguous]
+    if unmapped:
+        notes.append(
+            "Nothing in this part points to a parameter for "
+            + ", ".join(sorted(unmapped))
+            + ". A check judged on a role nothing supplies is judged on the "
+            "analyser's own default, which can report a rib too thick on a part "
+            "with no ribs -- so declare them or switch that check off."
+        )
+
+    if promotable:
+        notes.append(
+            "Some roles demonstrably live in this part and nothing named drives "
+            "them -- a literal or a bare model dimension. `promote_parameters` "
+            "turns each into a named parameter at its current value, in place: "
+            "no geometry is re-authored, and the part becomes drivable."
+        )
+
+    return Discovery(declaration=declaration, ambiguous=ambiguous,
+                     suggestions=suggestions, promotable=promotable, notes=notes)
+
+
+def _parameters_in(expression: str, known: Mapping[str, str]) -> list[str]:
+    """Which user parameters an expression reads.
+
+    A literal reads none, and that is the common case for a feature nobody made
+    parametric -- a shell whose thickness is ``2 mm`` proves there is a wall and
+    proves no parameter drives it, which is worth knowing and is not a role.
+    """
+    try:
+        referenced = referenced_parameters(expression)
+    except Exception:
+        # Inventor writes expressions this project's parser does not accept --
+        # unit suffixes it spells differently, functions it does not have. An
+        # expression that will not parse contributes nothing rather than a guess.
+        return []
+    return sorted(
+        known[name.lower()] for name in referenced if name.lower() in known
+    )
+
+
+def _record(found: dict[str, list[tuple[str, str]]], role: str,
+            parameter: str, why: str) -> None:
+    entries = found.setdefault(role, [])
+    if (parameter, why) not in entries:
+        entries.append((parameter, why))
+
+
+_WORD = re.compile(r"[^a-z0-9]+")
+
+
+def _suggest(roles: Sequence[str], known: Mapping[str, str]) -> dict[str, str]:
+    """A likely parameter per role, from spelling alone.
+
+    Longest pattern first, so ``rib_thickness`` is not claimed by the pattern
+    meant for ``thickness``, and one parameter is never suggested for two roles.
+    """
+    out: dict[str, str] = {}
+    claimed: set[str] = set()
+    ordered = sorted(
+        ((role, pattern) for role in roles for pattern in SUGGESTS.get(role, ())),
+        key=lambda pair: -len(pair[1]),
+    )
+    for role, pattern in ordered:
+        if role in out:
+            continue
+        flattened = _WORD.sub("", pattern)
+        for lowered, canonical in sorted(known.items()):
+            if canonical in claimed:
+                continue
+            if _WORD.sub("", lowered) == flattened:
+                out[role] = canonical
+                claimed.add(canonical)
+                break
+    return out

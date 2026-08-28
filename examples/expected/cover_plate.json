@@ -1,0 +1,5 @@
+{
+  "volume_cm3": 56.255104,
+  "span_mm": [100.0, 60.0, 10.0],
+  "checked": "100x60x10 plate - 4x(pi*3.3^2*10 bore + pi*(5.5^2-3.3^2)*6.6 counterbore) - (pi*4^2*10 bore + 90 deg cone from r4 to r8); derived by hand, not yet seen live"
+}

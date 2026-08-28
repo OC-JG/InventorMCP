@@ -23,3 +23,6 @@ OldVersions/
 *.bmp
 *.png
 !docs/**/*.png
+
+# DFM loop working files: an STL and a report per round.
+.dfm/

@@ -64,6 +64,10 @@ class DocInfo(Info):
     angle_units: str = "deg"
     active: bool = False
     modified: bool = False
+    #: Anything worth saying about how this document came to be -- which import
+    #: route worked, what arrived in it. Absent unless there is something to say,
+    #: so every existing result is unchanged.
+    detail: dict[str, Any] | None = None
 
 
 @dataclass
@@ -90,6 +94,29 @@ class SketchInfo(Info):
     hole_centers: int = 0
     fully_constrained: bool | None = None
     degrees_of_freedom: int | None = None
+    #: Constraints Inventor inferred for itself, so ours were not needed. Benign.
+    inferred_constraints: int = 0
+    #: Constraints Inventor refused as dependent on the others. The sketch still
+    #: closes, but a degree of freedom is left in it.
+    refused_constraints: int = 0
+    #: Dimensions Inventor accepted *and* stored an expression for. These are
+    #: the only ones that actually drive anything.
+    driving_dimensions: int = 0
+    #: Dimensions Inventor refused, or would not store an expression for. The
+    #: sketch survives with a degree of freedom left in it.
+    refused_dimensions: int = 0
+    #: Recipe parameters that reached at least one driving dimension. A sketch
+    #: with closed loops and none of these is not parametric, however many
+    #: dimensions it appears to carry.
+    driven_parameters: list[str] = field(default_factory=list)
+    #: Expressions the planner had to drop, so a run names the parameter that
+    #: did not reach the model.
+    undriven_expressions: list[str] = field(default_factory=list)
+    #: Where the sketch's own axes point in model space, as measured, and the
+    #: transform applied to the recipe's coordinates to suit them. A plane's
+    #: internal orientation is not derivable from its name, and getting it wrong
+    #: moves geometry silently, so what was measured is worth reporting.
+    axes: str | None = None
 
 
 @dataclass
@@ -115,6 +142,13 @@ class TopoInfo(Info):
     length: float | None = None
     area: float | None = None
     geometry: str | None = None
+    #: "convex" (an outside corner) or "concave" (an inside one), when it can
+    #: be determined. ``None`` means unknown, which never matches either filter.
+    convexity: str | None = None
+    #: How that was decided -- "loops" is exact, "sampled" is a heuristic that
+    #: a face with a hole in it can fool. Worth showing, because a wrong
+    #: convexity puts a fillet on the wrong edge with nothing else to see.
+    convexity_from: str | None = None
 
 
 @dataclass
@@ -216,14 +250,23 @@ class HoleRequest:
     point_indices: Sequence[int] = ()
     depth: Driven | None = None
     through_all: bool = True
-    direction: str = "negative"
+    #: "auto" | "positive" | "negative", relative to the sketch plane's normal.
+    direction: str = "auto"
     style: str = "drilled"
     cbore_diameter: Driven | None = None
     cbore_depth: Driven | None = None
     csink_diameter: Driven | None = None
     csink_angle: Driven | None = None
     bottom_angle: Driven | None = None
+    #: Thread designation to tap, e.g. "M6x1". When given, Inventor takes the
+    #: drill size from its own thread table and `diameter` no longer governs it.
     tap: str | None = None
+    #: Which thread table, e.g. "ANSI Metric M Profile". Derived from the
+    #: designation when omitted.
+    tap_type: str | None = None
+    tap_class: str | None = None
+    tap_right_handed: bool = True
+    tap_full_depth: bool = True
     name: str | None = None
 
 
@@ -357,6 +400,17 @@ class Backend(ABC):
     @abstractmethod
     def close_document(self, doc_id: str, *, save: bool = False) -> None: ...
 
+    def topology_counts(self, doc_id: str) -> dict[str, int]:
+        """How many faces and edges the solid has, cheaply.
+
+        Read after every operation so a result can say whether the topology
+        moved as well as the volume: a cut that changed the volume but added no
+        faces, or a fillet that added faces and removed nothing, is worth
+        knowing about at the point it happened. A backend that cannot answer
+        returns nothing rather than a guess.
+        """
+        return {}
+
     @abstractmethod
     def set_material(self, doc_id: str, material: str, appearance: str | None = None) -> DocInfo: ...
 
@@ -439,6 +493,127 @@ class Backend(ABC):
 
     @abstractmethod
     def rebuild(self, doc_id: str) -> dict[str, Any]: ...
+
+    # -- undo --------------------------------------------------------------
+    # Not abstract: a backend that cannot undo says so by returning None, and
+    # the caller carries on without a net rather than refusing to build.
+    def begin_transaction(self, doc_id: str, name: str) -> str | None:
+        """Start a unit of work that can be abandoned whole, or None if it cannot.
+
+        Opt-in, because the default behaviour is deliberately the opposite:
+        a half-built part is evidence, and deleting the evidence to leave a
+        clean document has cost more debugging time than it has saved. What
+        makes it worth having at all is that some failures cannot be undone
+        any other way -- a hole consumes its sketch, so there is nothing left
+        to retry with unless the whole thing is rolled back.
+        """
+        return None
+
+    def commit_transaction(self, handle: str) -> None:
+        """Keep the work. Idempotent, and silent if the handle is unknown."""
+
+    def abort_transaction(self, handle: str) -> bool:
+        """Undo everything since :meth:`begin_transaction`. False if it could not."""
+        return False
+
+    def import_geometry(self, path: str, *, name: str | None = None) -> DocInfo:
+        """Read a translated format -- STEP, IGES, SAT -- into a new part.
+
+        What arrives is a solid body and, in general, no features and no
+        parameters: a translated file carries geometry and not the history that
+        made it. That matters more here than it looks, because the DFM loop
+        drives parameters, so a part imported this way can be measured and
+        cannot be improved. The caller is expected to say so rather than run a
+        loop that reports "nothing is left that a parameter change answers" and
+        sounds like success.
+        """
+        raise NotImplementedError(
+            f"The {self.name} backend cannot import translated geometry."
+        )
+
+    def document_path(self, doc_id: str) -> str | None:
+        """Where this document lives on disk, or ``None`` if nowhere yet.
+
+        Asked of the document itself rather than matched out of
+        ``list_documents``: on the COM backend that listing identifies documents
+        by Python wrapper identity, and late binding hands back a fresh wrapper
+        per call, so an id-to-id match over it never matches anything -- which
+        silently lost the sidecar (and the freezes in it) for any part whose
+        path was not passed in explicitly.
+        """
+        return None
+
+    def promote_parameter(self, doc_id: str, feature: str, prop: str,
+                          name: str) -> dict[str, Any]:
+        """Give one driven property a named parameter, in place.
+
+        An .ipt "without parameters" is not parameterless -- every dimension in
+        it is a model parameter with a value; what is missing is names. So
+        nothing is re-authored: a user parameter is created at the property's
+        current value, and the property's expression is rewritten to reference
+        it. The feature tree, the sketches and the constraints stay exactly as
+        they are, and the part becomes drivable.
+
+        Value-preserving by construction: the geometry after the promotion is
+        the geometry before it, which is what makes this safe to do to a part
+        somebody handed over.
+        """
+        raise NotImplementedError(
+            f"The {self.name} backend cannot promote a dimension to a parameter."
+        )
+
+    def feature_dependencies(self, doc_id: str, name: str) -> dict[str, Any] | None:
+        """The user parameters that drive one feature, or ``None`` for "cannot say".
+
+        Freezing a feature is a promise that its geometry stays put, and the
+        loop changes geometry by changing parameters -- so the promise is kept
+        by pinning every parameter that reaches the feature: its own driven
+        properties, and the dimensions of the sketches it consumes. ``None``
+        means this backend cannot trace that, which the caller must report
+        loudly: a feature "frozen" without its parameters pinned is protected
+        from deletion and not from being reshaped.
+        """
+        return None
+
+    def read_declaration(self, doc_id: str) -> dict[str, Any] | None:
+        """The DFM declaration kept inside the document, if there is one.
+
+        Optional. A backend that cannot store one returns ``None``, which reads
+        as "nobody asked this part" rather than "this part says nothing is
+        frozen" -- a distinction that decides whether a freeze is honoured.
+        """
+        return None
+
+    def write_declaration(self, doc_id: str, declaration: dict[str, Any]) -> None:
+        """Keep the DFM declaration inside the document, so it travels with it."""
+        raise NotImplementedError(
+            f"The {self.name} backend cannot store a declaration in the document."
+        )
+
+    def describe_feature(self, doc_id: str, name: str) -> dict[str, Any]:
+        """Every property of one feature that can be read, as plain data.
+
+        Plain data because a live COM object cannot leave the thread that made
+        it: the backend is pinned to one apartment, so a caller that reaches into
+        a returned feature gets "the application called an interface that was
+        marshalled for a different thread". Reading the properties *there* and
+        returning numbers is the only way to ask what Inventor actually built.
+        """
+        raise NotImplementedError(
+            f"The {self.name} backend cannot describe a feature's properties."
+        )
+
+    # -- escape hatch ------------------------------------------------------
+    def run_script(self, doc_id: str | None, code: str) -> dict[str, Any]:
+        """Run Python against the live API, for what the recipe cannot say.
+
+        Not abstract, and refuses by default: a backend that has no live API to
+        reach has nothing to offer here, and pretending otherwise would let a
+        script "succeed" against nothing.
+        """
+        raise NotImplementedError(
+            f"The {self.name} backend has no live Inventor API to run a script against."
+        )
 
     # -- output ------------------------------------------------------------
     @abstractmethod

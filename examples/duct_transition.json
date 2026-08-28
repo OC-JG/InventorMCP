@@ -1,0 +1,130 @@
+{
+  "name": "DuctTransition",
+  "description": "A round-to-square duct transition with a real wall: the outer loft is joined and an inner loft is cut, so both ends are open. Wall thickness drives both inner profiles.",
+  "units": "mm",
+  "material": "ABS Plastic",
+  "parameters": [
+    {
+      "name": "inlet_d",
+      "value": 60,
+      "comment": "round end, outside"
+    },
+    {
+      "name": "outlet",
+      "value": 50,
+      "comment": "square end, outside, across the flats"
+    },
+    {
+      "name": "height",
+      "value": 70
+    },
+    {
+      "name": "wall",
+      "value": 2.5,
+      "comment": "duct wall"
+    }
+  ],
+  "operations": [
+    {
+      "op": "sketch",
+      "name": "Inlet",
+      "plane": "xy",
+      "entities": [
+        {
+          "type": "circle",
+          "center": [
+            0,
+            0
+          ],
+          "diameter": "inlet_d"
+        }
+      ]
+    },
+    {
+      "op": "work_plane",
+      "name": "Top",
+      "kind": "offset",
+      "base": "xy",
+      "offset": "height"
+    },
+    {
+      "op": "sketch",
+      "name": "Outlet",
+      "plane": "Top",
+      "entities": [
+        {
+          "type": "rectangle",
+          "center": [
+            0,
+            0
+          ],
+          "width": "outlet",
+          "height": "outlet"
+        }
+      ]
+    },
+    {
+      "op": "loft",
+      "name": "Body",
+      "sketches": [
+        "Inlet",
+        "Outlet"
+      ]
+    },
+    {
+      "op": "sketch",
+      "name": "InletBore",
+      "plane": "xy",
+      "entities": [
+        {
+          "type": "circle",
+          "center": [
+            0,
+            0
+          ],
+          "diameter": "inlet_d - 2 * wall"
+        }
+      ]
+    },
+    {
+      "op": "sketch",
+      "name": "OutletBore",
+      "plane": "Top",
+      "entities": [
+        {
+          "type": "rectangle",
+          "center": [
+            0,
+            0
+          ],
+          "width": "outlet - 2 * wall",
+          "height": "outlet - 2 * wall"
+        }
+      ]
+    },
+    {
+      "op": "loft",
+      "name": "Bore",
+      "sketches": [
+        "InletBore",
+        "OutletBore"
+      ],
+      "operation": "cut"
+    }
+  ],
+  "dfm": {
+    "parameters": {
+      "wall": "wall"
+    },
+    "frozen": [
+      "inlet_d",
+      "outlet"
+    ],
+    "settings": {
+      "material": "abs",
+      "checks": {
+        "ribs": false
+      }
+    }
+  }
+}

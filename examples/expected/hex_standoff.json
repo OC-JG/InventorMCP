@@ -1,0 +1,7 @@
+{
+  "volume_cm3": 1.0466,
+  "faces": 11,
+  "edges": 22,
+  "span_mm": [9.238, 8.0, 25.0],
+  "checked": "RECORDED from Inventor 2027.1. The span confirms the hexagon: 8.0 mm across the flats and 9.238 across the corners, which is 8 / cos 30 = 9.2376. The volume is not derived -- the chamfer on a hex prism's end edges meets three faces at each corner and the simulator's prism estimate (1.0386) is 0.8% below. Regression baseline."
+}

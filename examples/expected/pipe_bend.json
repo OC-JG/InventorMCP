@@ -1,0 +1,4 @@
+{
+  "volume_cm3": 7.99438,
+  "checked": "Hand-derived by Pappus: an annulus pi*(10^2-8^2)=36pi mm^2 swept a quarter-turn along r=45, path length 22.5pi mm, so V = 810*pi^2 = 7994.380 mm^3. The old value (22.20661) was the SOLID sweep -- the recipe had no bore until a live run noticed the pipe was not a pipe."
+}

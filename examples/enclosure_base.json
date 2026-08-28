@@ -1,19 +1,56 @@
 {
   "name": "EnclosureBase",
-  "description": "Shelled enclosure base with a slotted cable entry and four lid bosses",
+  "description": "Shelled enclosure base: a filleted box hollowed out, four pillars standing on the floor with pilot holes, and a cable entry cut through both end walls.",
   "units": "mm",
   "material": "ABS Plastic",
   "parameters": [
-    {"name": "box_w", "value": 100},
-    {"name": "box_d", "value": 70},
-    {"name": "box_h", "value": 35},
-    {"name": "wall", "value": 2.5, "comment": "wall thickness"},
-    {"name": "corner_r", "value": 6},
-    {"name": "boss_d", "value": 7},
-    {"name": "boss_hole_d", "value": 2.5, "comment": "M3 self-tapping pilot"},
-    {"name": "boss_inset", "value": "corner_r + boss_d / 2"},
-    {"name": "cable_w", "value": 12},
-    {"name": "cable_h", "value": 6}
+    {
+      "name": "box_w",
+      "value": 100
+    },
+    {
+      "name": "box_d",
+      "value": 70
+    },
+    {
+      "name": "box_h",
+      "value": 35
+    },
+    {
+      "name": "wall",
+      "value": 2.5,
+      "comment": "wall thickness"
+    },
+    {
+      "name": "corner_r",
+      "value": 6
+    },
+    {
+      "name": "boss_d",
+      "value": 7
+    },
+    {
+      "name": "boss_hole_d",
+      "value": 2.5,
+      "comment": "M3 self-tapping pilot"
+    },
+    {
+      "name": "boss_inset",
+      "value": "corner_r + boss_d / 2"
+    },
+    {
+      "name": "boss_h",
+      "value": "box_h - wall - 5",
+      "comment": "boss stands on the floor, stopping below the rim"
+    },
+    {
+      "name": "cable_w",
+      "value": 12
+    },
+    {
+      "name": "cable_h",
+      "value": 6
+    }
   ],
   "operations": [
     {
@@ -21,26 +58,99 @@
       "name": "Outline",
       "plane": "xy",
       "entities": [
-        {"type": "rectangle", "center": [0, 0], "width": "box_w", "height": "box_d"}
+        {
+          "type": "rectangle",
+          "center": [
+            0,
+            0
+          ],
+          "width": "box_w",
+          "height": "box_d"
+        }
       ]
     },
-    {"op": "extrude", "name": "Block", "sketch": "Outline", "distance": "box_h"},
-    {"op": "fillet", "name": "Corners", "edges": {"filter": "vertical"}, "radius": "corner_r"},
+    {
+      "op": "extrude",
+      "name": "Block",
+      "sketch": "Outline",
+      "distance": "box_h"
+    },
+    {
+      "op": "fillet",
+      "name": "Corners",
+      "edges": {
+        "filter": "vertical"
+      },
+      "radius": "corner_r"
+    },
     {
       "op": "shell",
       "name": "Cavity",
-      "faces": {"kind": "face", "filter": "top"},
+      "faces": {
+        "kind": "face",
+        "filter": "top"
+      },
       "thickness": "wall",
       "direction": "inside"
     },
     {
       "op": "sketch",
+      "name": "BossPads",
+      "plane": "xy",
+      "offset": "wall",
+      "entities": [
+        {
+          "type": "circle",
+          "center": [
+            "(box_w - 2 * boss_inset) / 2",
+            "(box_d - 2 * boss_inset) / 2"
+          ],
+          "diameter": "boss_d"
+        },
+        {
+          "type": "circle",
+          "center": [
+            "(box_w - 2 * boss_inset) / 2",
+            "-(box_d - 2 * boss_inset) / 2"
+          ],
+          "diameter": "boss_d"
+        },
+        {
+          "type": "circle",
+          "center": [
+            "-(box_w - 2 * boss_inset) / 2",
+            "(box_d - 2 * boss_inset) / 2"
+          ],
+          "diameter": "boss_d"
+        },
+        {
+          "type": "circle",
+          "center": [
+            "-(box_w - 2 * boss_inset) / 2",
+            "-(box_d - 2 * boss_inset) / 2"
+          ],
+          "diameter": "boss_d"
+        }
+      ]
+    },
+    {
+      "op": "extrude",
       "name": "Bosses",
+      "sketch": "BossPads",
+      "distance": "boss_h",
+      "operation": "join"
+    },
+    {
+      "op": "sketch",
+      "name": "BossCentres",
       "plane": "xy",
       "entities": [
         {
           "type": "point_grid",
-          "center": [0, 0],
+          "center": [
+            0,
+            0
+          ],
           "columns": 2,
           "rows": 2,
           "x_spacing": "box_w - 2 * boss_inset",
@@ -51,9 +161,9 @@
     {
       "op": "hole",
       "name": "BossHoles",
-      "sketch": "Bosses",
+      "sketch": "BossCentres",
       "diameter": "boss_hole_d",
-      "depth": "box_h - wall - 2"
+      "depth": "boss_h + wall - 2"
     },
     {
       "op": "sketch",
@@ -62,7 +172,10 @@
       "entities": [
         {
           "type": "rectangle",
-          "center": [0, "box_h - cable_h / 2 - wall"],
+          "center": [
+            0,
+            "box_h - cable_h / 2 - wall"
+          ],
           "width": "cable_w",
           "height": "cable_h"
         }

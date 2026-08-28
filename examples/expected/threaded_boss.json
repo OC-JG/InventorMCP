@@ -1,0 +1,5 @@
+{
+  "volume_cm3": 70.855424,
+  "span_mm": [120.0, 40.0, 33.0],
+  "checked": "120x40x8 plate = 38.400000, plus two bosses of pi*1.5^2*2.5 = 17.671459 each, less two tapped holes of pi*(1.0105625/2)^2*1.8 = 1.443747 each. The tap bore is the M12x1.75 minor diameter, 12 - 1.0825*1.75 = 10.105625 mm, which is what Inventor cuts. Derived by hand and confirmed by the simulator to six figures."
+}

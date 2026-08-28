@@ -1,0 +1,411 @@
+"""Ask Inventor what its hole methods actually take, one style at a time.
+
+Every hole style is now built through Inventor's own hole feature, and the
+argument order for those methods was taken from another project's field notes
+rather than measured here. A wrong order can still *build* -- Inventor coerces
+what it can -- so the backend reads the style back off the finished feature and
+refuses to report a counterbore it cannot see. When that refusal fires, this is
+the script that settles why:
+
+    python scripts/probe_hole_styles.py
+    python scripts/probe_hole_styles.py --only counterbore tap
+
+It builds one 60x60x12 block and puts one hole of each style through it,
+reporting for each:
+
+* the method called and whether named arguments were accepted;
+* the ``HoleTypeEnum`` value Inventor reports, against the value the constants
+  table expects;
+* the volume removed, against what the geometry says it should be -- which is
+  what catches a counterbore that built as a plain hole *and* read back with the
+  right enum;
+* for a tap, the drill diameter Inventor chose from its thread table.
+
+Nothing is saved. Paste the output into the issue or the commit message; the
+numbers are the useful part.
+"""
+
+from __future__ import annotations
+
+import argparse
+import math
+import sys
+import traceback
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from inventor_mcp.backend.base import Driven, HoleRequest  # noqa: E402
+from inventor_mcp.backend.com import holes  # noqa: E402
+from inventor_mcp.builder import apply_operation  # noqa: E402
+from inventor_mcp.schema import ExtrudeOp, SketchOp  # noqa: E402
+from inventor_mcp.session import Session  # noqa: E402
+
+#: The block every hole goes through, in mm. Big enough that no seat reaches its
+#: neighbour: the first version laid seven cases across 60 mm, which is 7.5 mm
+#: apart, and a 16 mm spotface spans 8 mm either side. Every seat overlapped the
+#: holes beside it and removed less material than an isolated one would, so all
+#: three seat cases read short -- by amounts that scaled with their diameter,
+#: which is what finally gave it away. The probe was measuring its own layout.
+BLOCK = 160.0
+THICK = 12.0
+
+#: Centre-to-centre spacing, and the widest thing any case cuts. Asserted below
+#: rather than trusted, because this is exactly the mistake that cost a live run.
+SPACING = 20.0
+WIDEST = 16.0
+
+#: One case per style, with the volume the geometry says it should remove, in
+#: cm^3. Written out rather than computed in a loop so each number can be read
+#: and disagreed with.
+BORE = 6.6
+CASES = [
+    {
+        "name": "drilled_through",
+        "style": "drilled",
+        "through_all": True,
+        "removes": math.pi * (BORE / 20) ** 2 * (THICK / 10),
+    },
+    {
+        "name": "drilled_blind",
+        "style": "drilled",
+        "through_all": False,
+        "depth": 6.0,
+        "removes": math.pi * (BORE / 20) ** 2 * 0.6,
+    },
+    {
+        "name": "drilled_blind_pointed",
+        "style": "drilled",
+        "through_all": False,
+        "depth": 6.0,
+        "bottom_angle": 118.0,
+        # Inventor measures a blind hole's depth to the *shoulder* -- where the
+        # bore reaches full diameter -- and the drill point goes beyond it. So a
+        # pointed hole removes the flat-bottomed cylinder *plus* the cone, not
+        # less. The first version of this expectation had it the other way round
+        # and read 0.1827 where Inventor gives 0.2279; the measured value agrees
+        # with the cylinder-plus-cone to five figures, which is what settles it.
+        "removes": math.pi * (BORE / 20) ** 2 * 0.6
+        + math.pi * (BORE / 20) ** 2 * ((BORE / 20) / math.tan(math.radians(59))) / 3,
+    },
+    {
+        "name": "counterbore_through",
+        "style": "counterbore",
+        "through_all": True,
+        "cbore_diameter": 11.0,
+        "cbore_depth": 6.6,
+        "removes": math.pi * (BORE / 20) ** 2 * (THICK / 10)
+        + math.pi * ((1.1 / 2) ** 2 - (BORE / 20) ** 2) * 0.66,
+    },
+    {
+        "name": "spotface_through",
+        "style": "spotface",
+        "through_all": True,
+        "cbore_diameter": 16.0,
+        "cbore_depth": 1.0,
+        "removes": math.pi * (BORE / 20) ** 2 * (THICK / 10)
+        + math.pi * ((1.6 / 2) ** 2 - (BORE / 20) ** 2) * 0.1,
+    },
+    {
+        "name": "countersink_through",
+        "style": "countersink",
+        "through_all": True,
+        "csink_diameter": 13.2,
+        "csink_angle": 90.0,
+        # 90 degrees included, so the cone is as deep as (R - r).
+        "removes": math.pi * (BORE / 20) ** 2 * (THICK / 10)
+        + (
+            math.pi * ((1.32 / 2) - (BORE / 20)) / 3
+            * ((1.32 / 2) ** 2 + (1.32 / 2) * (BORE / 20) + (BORE / 20) ** 2)
+            - math.pi * (BORE / 20) ** 2 * ((1.32 / 2) - (BORE / 20))
+        ),
+    },
+    {
+        "name": "tapped_through",
+        "style": "drilled",
+        "through_all": True,
+        "tap": "M8x1.25",
+        # Inventor models the *thread's minor diameter*, not the tapping drill:
+        # D - 1.0825*P = 8 - 1.0825*1.25 = 6.6469 mm, which is what the removed
+        # volume gives to four decimal places. The tapping drill for M8x1.25 is
+        # 6.75, and using that here read 0.013 cm^3 short.
+        "diameter": 8 - 1.0825 * 1.25,
+        "removes": math.pi * ((8 - 1.0825 * 1.25) / 20) ** 2 * (THICK / 10),
+    },
+]
+
+#: How far the removed volume may differ before it counts as the wrong shape,
+#: in cm^3. A counterbore built as a plain hole is out by 0.24, so this is loose
+#: enough for a thread's helix and tight enough to catch that.
+TOLERANCE = 0.02
+
+
+def block(session, backend):
+    """A fresh 60 x 60 x 12 block for the holes to go through."""
+    document = backend.new_part("HoleProbe", units="mm")
+    context = session.register(document, "mm", "deg")
+    apply_operation(session, context, SketchOp(
+        name="Block", plane="xy",
+        entities=[{"type": "rectangle", "center": [0, 0],
+                   "width": BLOCK, "height": BLOCK}],
+    ))
+    apply_operation(session, context, ExtrudeOp(
+        name="Body", sketch="Block", distance=THICK))
+    return context
+
+
+def request_for(case: dict, index: int) -> HoleRequest:
+    """One case as a request, with the hole placed clear of the others."""
+    def mm(value: float | None) -> Driven | None:
+        return None if value is None else Driven(f"{value} mm", value / 10)
+
+    def deg(value: float | None) -> Driven | None:
+        return None if value is None else Driven(f"{value} deg", math.radians(value))
+
+    return HoleRequest(
+        sketch=f"Centre{index}",
+        diameter=mm(case.get("diameter", BORE)),
+        depth=mm(case.get("depth")),
+        through_all=bool(case["through_all"]),
+        style=case["style"],
+        cbore_diameter=mm(case.get("cbore_diameter")),
+        cbore_depth=mm(case.get("cbore_depth")),
+        csink_diameter=mm(case.get("csink_diameter")),
+        csink_angle=deg(case.get("csink_angle")),
+        bottom_angle=deg(case.get("bottom_angle")),
+        tap=case.get("tap"),
+        name=case["name"],
+    )
+
+
+def check_the_layout() -> None:
+    """Refuse to run if the cases could interfere with each other.
+
+    A hole that overlaps its neighbour removes less than an isolated one, and the
+    shortfall looks exactly like a wrong argument. Better to fail here than to
+    spend a live run and a morning on it.
+    """
+    span = SPACING * (len(CASES) - 1) + WIDEST
+    if SPACING <= WIDEST:
+        raise SystemExit(f"The cases are {SPACING} mm apart and cut up to "
+                         f"{WIDEST} mm wide: they would overlap.")
+    if span > BLOCK:
+        raise SystemExit(f"{len(CASES)} cases at {SPACING} mm need {span} mm; "
+                         f"the block is {BLOCK} mm.")
+
+
+def volume(session, context) -> float | None:
+    """The current volume in cm^3, or None if it cannot be read."""
+    try:
+        return float(session.backend.mass_properties(context.doc_id).volume)
+    except Exception:
+        return None
+
+
+def probe(session, backend, context, case: dict, index: int) -> bool:
+    """Build one hole and report what Inventor made of it."""
+    print(f"\n--- {case['name']}")
+    if case.get("bottom_angle") and backend.name == "mock":
+        print("  skipped: the simulator does not model a drill point's cone")
+        return True
+    # Each hole gets its own centre sketch, laid out along X so they do not
+    # overlap: a hole that fails is easier to look at than a hole that merged.
+    offset = (index - len(CASES) / 2 + 0.5) * SPACING
+    apply_operation(session, context, SketchOp(
+        name=f"Centre{index}", plane="xy",
+        entities=[{"type": "point", "position": [offset, 0], "hole_center": True}],
+    ))
+
+    request = request_for(case, index)
+    before = volume(session, context)
+    try:
+        info = backend.hole(context.doc_id, request)
+    except Exception as exc:
+        print(f"  FAILED: {type(exc).__name__}: {exc}")
+        hint = getattr(exc, "hint", None)
+        if hint:
+            print(f"  hint: {hint}")
+        return False
+
+    detail = info.detail or {}
+    print(f"  method   {detail.get('method') or 'n/a (the simulator calls nothing)'}")
+    after = volume(session, context)
+    removed = None if before is None or after is None else before - after
+    wanted = case["removes"]
+    if removed is None:
+        print("  volume   could not be measured")
+        ok = False
+    else:
+        drift = removed - wanted
+        verdict = "ok" if abs(drift) <= TOLERANCE else "WRONG SHAPE"
+        print(f"  removed  {removed:.4f} cm^3   expected {wanted:.4f}   "
+              f"({drift:+.4f})  {verdict}")
+        ok = abs(drift) <= TOLERANCE
+
+    # What Inventor made, in its own words. The volumes said every seat came out
+    # shallower than asked -- a counterbore 6.22 mm deep where 6.6 was requested,
+    # a spotface 0.6 where 1.0 was -- and no arithmetic settles which argument
+    # landed where. These properties do.
+    #
+    # Asked of the backend rather than read here: it is pinned to one COM
+    # apartment, and reaching into a feature from this thread fails with "the
+    # application called an interface that was marshalled for a different
+    # thread", which is how the first attempt at this died.
+    try:
+        described = backend.describe_feature(context.doc_id, case["name"])
+    except Exception as exc:
+        described = {}
+        print(f"  (could not describe the feature: {type(exc).__name__}: {exc})")
+    for name, value in described.items():
+        if name in ("name", "kind"):
+            continue
+        print(f"  {name:<22} {_show(name, value)}")
+
+    for note in detail.get("notes") or []:
+        print(f"  note     {note}")
+    return ok
+
+
+#: Key fragments that say what unit a number is in. Everything internal is
+#: centimetres and radians; every expectation in this script is millimetres and
+#: degrees, so a raw value alone leaves the reader doing the conversion that the
+#: mistake is hiding in. Guessing from the name is better than converting a
+#: volume into millimetres, which the first version cheerfully did.
+LENGTHS = ("diameter", "depth", "distance", "radius", "thickness", "offset")
+ANGLES = ("angle",)
+
+
+def _show(name: str, value) -> str:
+    """One property, with its own unit beside it where the unit is knowable."""
+    if isinstance(value, dict):
+        parts = []
+        if "expression" in value:
+            parts.append(f"{value['expression']!r}")
+        if "value" in value:
+            parts.append(f"= {_scaled(name, value['value'])}")
+        return "  ".join(parts) or str(value)
+    return _scaled(name, value)
+
+
+def _scaled(name: str, value) -> str:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, int):
+        return str(value)
+    lowered = name.lower()
+    if any(part in lowered for part in LENGTHS):
+        return f"{value:.6f} cm   ({value * 10:.4f} mm)"
+    if any(part in lowered for part in ANGLES):
+        return f"{value:.6f} rad  ({math.degrees(value):.3f} deg)"
+    return f"{value:.6f}"
+
+
+def thread_tables(backend, context) -> None:
+    """Which thread tables and designations this installation will accept.
+
+    The whole probe runs on the backend's own COM thread, in one submitted
+    callable. Anything else fails with "the application called an interface that
+    was marshalled for a different thread" -- a live COM object cannot leave the
+    apartment that made it, and `HoleFeatures` is a live COM object.
+    """
+    print("\n--- CreateTapInfo")
+    if backend.name == "mock":
+        print("  skipped: the simulator has no thread table")
+        return
+
+    cases = [
+        ("ANSI Metric M Profile", "M8x1.25", "6H"),
+        ("ANSI Metric M Profile", "M8", "6H"),
+        ("ISO Metric profile", "M8x1.25", "6H"),
+        ("ANSI Unified Screw Threads", "1/4-20 UNC", "2B"),
+        ("NPT", "1/8", "-"),
+        ("BSP", "G1/4", "-"),
+    ]
+
+    def attempt() -> list[tuple[bool, str, str, str, str]]:
+        raw = backend.unmarshalled if hasattr(backend, "unmarshalled") else backend
+        features = raw._doc(context.doc_id).ComponentDefinition.Features.HoleFeatures
+        answers = []
+        for thread_type, designation, thread_class in cases:
+            try:
+                # The measured order: handedness first, the depth flag last.
+                features.CreateTapInfo(True, thread_type, designation, thread_class, True)
+                answers.append((True, thread_type, designation, thread_class, ""))
+            except Exception as exc:
+                answers.append((False, thread_type, designation, thread_class,
+                                str(exc).splitlines()[0][:90]))
+        return answers
+
+    worker = getattr(backend, "marshalling_thread", None)
+    try:
+        answers = worker.call(attempt) if worker is not None else attempt()
+    except Exception as exc:
+        print(f"  could not probe the thread tables: {type(exc).__name__}: {exc}")
+        return
+    for ok, thread_type, designation, thread_class, why in answers:
+        mark = "ok     " if ok else "refused"
+        print(f"  {mark} {thread_type!r:32} {designation!r:14} {thread_class!r}")
+        if why:
+            print(f"            {why}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--only", nargs="*", default=[],
+                        help="Run only cases whose name contains one of these. "
+                             "'tap' also selects the thread-table probe.")
+    parser.add_argument("--keep-open", action="store_true")
+    parser.add_argument("--backend", default="inventor", choices=["inventor", "mock"],
+                        help="'mock' exercises this script's plumbing and case "
+                             "set-up without Inventor, which is worth doing before "
+                             "spending a live run on a typo. It does not check the "
+                             "geometry: the simulator computes these volumes from "
+                             "the same reasoning the expectations do.")
+    args = parser.parse_args(argv)
+
+    def wanted(name: str) -> bool:
+        return not args.only or any(part.lower() in name.lower() for part in args.only)
+
+    session = Session(backend_kind=args.backend)
+    backend = session.ensure_backend()
+    try:
+        info = backend.connect(visible=True, create=True)
+    except Exception as exc:
+        print(f"Could not reach Inventor: {exc}")
+        return 1
+    print(f"Inventor {info.version} via the {backend.name} backend")
+    print(f"Block {BLOCK:.0f} x {BLOCK:.0f} x {THICK:.0f} mm, bore {BORE} mm")
+
+    check_the_layout()
+    context = block(session, backend)
+    results: list[tuple[str, bool]] = []
+    for index, case in enumerate(CASES):
+        if not wanted(case["name"]):
+            continue
+        try:
+            results.append((case["name"], probe(session, backend, context, case, index)))
+        except Exception:
+            results.append((case["name"], False))
+            traceback.print_exc(limit=4)
+
+    if wanted("tap"):
+        try:
+            thread_tables(backend, context)
+        except Exception:
+            traceback.print_exc(limit=3)
+
+    print("\n" + "=" * 70)
+    for name, ok in results:
+        print(f"  {'ok  ' if ok else 'FAIL'}  {name}")
+    print("=" * 70)
+    if not args.keep_open:
+        try:
+            backend.close_document(context.doc_id, save=False)
+        except Exception:
+            pass
+    return 0 if all(ok for _, ok in results) else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

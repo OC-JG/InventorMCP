@@ -13,6 +13,7 @@ from typing import Any
 
 from .backend import create_backend
 from .backend.base import Backend, DocInfo
+from .dfm.freeze import FreezeGuard
 from .errors import DocumentError, NotConnectedError
 from .plan import SketchPlan
 from .resolve import Resolver
@@ -33,6 +34,13 @@ class DocumentContext:
     last_sketch: str | None = None
     last_feature: str | None = None
     recipe: dict[str, Any] | None = None
+    #: Which parameters are key geometry and may not be changed automatically.
+    #: Built from the recipe once its parameters are declared; ``None`` until
+    #: then, which reads as "nothing is protected here".
+    frozen: FreezeGuard | None = None
+    #: What the part measured after the last operation, so the next one can
+    #: report what it changed rather than only that it ran.
+    last_measurement: dict[str, Any] | None = None
 
     def remember_sketch(self, name: str, plan: SketchPlan) -> None:
         self.plans[name] = plan
@@ -98,6 +106,25 @@ class Session:
 
     # -- documents ---------------------------------------------------------
     def register(self, info: DocInfo, units: str, angle_units: str) -> DocumentContext:
+        """Take note of a document, keeping anything already known about it.
+
+        Re-registering happens more than it looks: opening a file that is already
+        open, re-reading one after a save, handing a path to a tool for a part
+        that is on screen. Replacing the context outright was silently throwing
+        away the recipe, the sketch plans, the feature names and -- worst -- the
+        freeze guard protecting the part's key geometry, so a second open turned
+        a protected part into an unprotected one and said nothing.
+        """
+        existing = self.contexts.get(info.id)
+        if existing is not None:
+            existing.name = info.name
+            existing.units = units
+            existing.angle_units = angle_units
+            existing.resolver.length_unit = units
+            existing.resolver.angle_unit = angle_units
+            self.active = info.id
+            return existing
+
         context = DocumentContext(
             doc_id=info.id,
             name=info.name,

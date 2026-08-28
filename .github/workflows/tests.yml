@@ -1,0 +1,100 @@
+name: tests
+
+# The recipe layer, the expression evaluator, the geometry expansion, the
+# selectors and the simulator all run without Autodesk Inventor, which is most
+# of the project. Only the COM backend needs a CAD seat, and that half is
+# proved by scripts/live_smoke.py on a Windows machine by hand.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  offline:
+    name: pytest (no Inventor needed)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Test
+        run: pytest -q
+      - name: Every example still builds against the simulator
+        run: |
+          for recipe in examples/*.json; do
+            echo "--- $recipe"
+            python scripts/live_smoke.py "$recipe" --backend mock
+          done
+
+  importable-on-windows:
+    name: imports on Windows without Inventor
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: The server starts and the COM backend degrades cleanly
+        run: |
+          python -m inventor_mcp --help
+          python -c "from inventor_mcp.backend import create_backend; b = create_backend('auto'); print('fell back to', b.name)"
+
+  dfm:
+    name: the manufacturability loop
+    runs-on: ubuntu-latest
+    env:
+      # The analyser is a separate, private repository. Without a token these
+      # tests skip, and this job says so rather than reporting a pass it did not
+      # earn -- see docs/DFM.md.
+      DFM_TOKEN: ${{ secrets.DFM_REPO_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Is the analyser reachable?
+        id: gate
+        run: |
+          if [ -z "$DFM_TOKEN" ]; then
+            echo "have=no" >> "$GITHUB_OUTPUT"
+            echo "::notice::No DFM_REPO_TOKEN secret, so the DFM tests skip. They check that the targets in inventor_mcp/dfm/remedy.py still satisfy the analyser's own rules -- the alarm for the one duplication in that integration. Add a token with read access to the DFM repository to run them. See docs/DFM.md."
+          else
+            echo "have=yes" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.have == 'yes'
+        with:
+          repository: OC-JG/DFM
+          token: ${{ secrets.DFM_REPO_TOKEN }}
+          path: .dfm-analyser
+      - uses: actions/setup-python@v5
+        if: steps.gate.outputs.have == 'yes'
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        if: steps.gate.outputs.have == 'yes'
+        with:
+          node-version: "22"
+      - name: Install
+        if: steps.gate.outputs.have == 'yes'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: The targets still satisfy the analyser's own rules
+        if: steps.gate.outputs.have == 'yes'
+        env:
+          INVENTOR_MCP_DFM_ROOT: ${{ github.workspace }}/.dfm-analyser
+        run: |
+          # -rs so a skip is visible: a test that passes because it did not run
+          # is worse than no test, and this job exists to notice that.
+          pytest -q -rs tests/test_dfm_targets.py tests/test_dfm_end_to_end.py

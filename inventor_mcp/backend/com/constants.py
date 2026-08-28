@@ -14,9 +14,12 @@ diagnosable rather than mysterious.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from ...errors import BackendUnavailableError
+
+logger = logging.getLogger(__name__)
 
 #: Best-effort fallback values, used only when the type library is unreadable.
 FALLBACK: dict[str, int] = {
@@ -36,56 +39,77 @@ FALLBACK: dict[str, int] = {
     "kNegativeExtentDirection": 20994,
     "kSymmetricExtentDirection": 20995,
     # DimensionOrientationEnum
-    "kAlignedDim": 34561,
-    "kHorizontalDim": 34562,
-    "kVerticalDim": 34563,
+    "kAlignedDim": 19203,
+    "kHorizontalDim": 19201,
+    "kVerticalDim": 19202,
     # PartFeatureExtentEnum
     "kDistanceExtent": 20737,
-    "kThroughAllExtent": 20740,
-    "kToNextExtent": 20739,
+    "kThroughAllExtent": 20743,
+    "kToNextExtent": 20740,
     # ShellDirectionEnum
-    "kInsideShellDirection": 41985,
-    "kOutsideShellDirection": 41986,
+    "kInsideShellDirection": 41217,
+    "kOutsideShellDirection": 41218,
     "kBothShellDirection": 41987,
     # PatternComputeTypeEnum
-    "kIdenticalCompute": 107265,
-    "kAdjustToModelCompute": 107266,
-    "kOptimizedCompute": 107267,
+    "kIdenticalCompute": 47361,
+    "kAdjustToModelCompute": 47362,
+    "kOptimizedCompute": 47363,
     # ViewOrientationTypeEnum
-    "kIsoTopRightViewOrientation": 10758,
-    "kFrontViewOrientation": 10753,
-    "kTopViewOrientation": 10755,
-    "kRightViewOrientation": 10757,
-    "kBackViewOrientation": 10754,
+    "kIsoTopRightViewOrientation": 10759,
+    "kFrontViewOrientation": 10764,
+    "kTopViewOrientation": 10754,
+    "kRightViewOrientation": 10755,
+    "kBackViewOrientation": 10756,
     # DisplayModeEnum / RenderStyle
-    "kShadedRendering": 9985,
+    "kShadedRendering": 8708,
     "kHiddenLineRendering": 9986,
-    "kWireframeRendering": 9987,
+    "kWireframeRendering": 8706,
     # SelectionFilterEnum (used for view fitting)
-    "kPartFaceFilter": 8449,
-    "kPartEdgeFilter": 8450,
+    "kPartFaceFilter": 15877,
+    "kPartEdgeFilter": 15873,
     # CurveTypeEnum
-    "kLineSegmentCurve": 5378,
-    "kCircularArcCurve": 5379,
-    "kCircleCurve": 5380,
-    "kEllipseFullCurve": 5381,
-    "kEllipticalArcCurve": 5382,
-    "kBSplineCurve": 5383,
+    "kLineSegmentCurve": 5123,
+    "kCircularArcCurve": 5125,
+    "kCircleCurve": 5124,
+    "kEllipseFullCurve": 5126,
+    "kEllipticalArcCurve": 5127,
+    "kBSplineCurve": 5128,
     # SurfaceTypeEnum
     "kPlaneSurface": 5890,
     "kCylinderSurface": 5891,
-    "kConeSurface": 5892,
-    "kSphereSurface": 5893,
-    "kTorusSurface": 5894,
+    "kConeSurface": 5893,
+    "kSphereSurface": 5896,
+    "kTorusSurface": 5895,
     # HoleTypeEnum / HoleBottomTypeEnum
-    "kDrilledHole": 39169,
-    "kCounterBoreHole": 39170,
-    "kSpotFaceHole": 39171,
-    "kCounterSinkHole": 39172,
+    "kDrilledHole": 21505,
+    "kCounterBoreHole": 21507,
+    "kSpotFaceHole": 21508,
+    "kCounterSinkHole": 21506,
     "kFlatHoleBottom": 39425,
     "kAngleHoleBottom": 39426,
     # WeldBeadReliefShapeEnum placeholder kept out; add values here as needed.
 }
+
+#: Fallback values that were once disputed, and are now measured.  Every entry
+#: in :data:`FALLBACK` was checked against Inventor 2027.1's own type library on
+#: 2026-08-21 by ``scripts/dump_constants.py``, and thirty-two of the fifty-one
+#: were wrong -- most of them not slightly wrong but from a different numbering
+#: family altogether: ``kDrilledHole`` is 21505, not 39169.
+#:
+#: One of those was the quiet kind of dangerous. The table's
+#: ``kThroughAllExtent`` (20740) is Inventor's real ``kToNextExtent``, so a
+#: through-all extrude would have become a to-next one -- building a part that
+#: is wrong in a way no error reports. It never fired only because the type
+#: library has been readable on every machine this has run on.
+#:
+#: The disputes recorded here before are settled: NeonGlay's field notes were
+#: right about the dimension-orientation values (19201/19202/19203) and about
+#: ``kTorusSurface``, and the sphere is 5896 rather than either guess.
+#:
+#: Nothing is disputed now, so nothing refuses. Re-run
+#: ``scripts/dump_constants.py`` on any release that is not 2027.1: these
+#: numbers are a measurement of one version, not a fact about the API.
+SUSPECT: dict[str, str] = {}
 
 
 class Constants:
@@ -95,6 +119,7 @@ class Constants:
         self._module = module
         self._sources: dict[str, str] = {}
         self._cache: dict[str, int] = {}
+        self._warned: set[str] = set()
 
     def resolve(self, name: str) -> int:
         if name in self._cache:
@@ -116,6 +141,24 @@ class Constants:
                 hint="Add it to inventor_mcp/backend/com/constants.py, or repair the "
                 "pywin32 type-library cache so values can be read from Inventor itself.",
             )
+        if source == "fallback":
+            if name in SUSPECT:
+                raise BackendUnavailableError(
+                    f"The fallback value for {name!r} is disputed: this table says "
+                    f"{value}, and {SUSPECT[name]}. It has never been verified here, "
+                    "because the type library has always been readable.",
+                    hint="Repair the pywin32 type-library cache so the value comes "
+                    "from Inventor itself: delete %LOCALAPPDATA%\\Temp\\gen_py and "
+                    "re-run. Or run scripts/dump_constants.py on a machine where the "
+                    "cache works and correct the table from what it prints.",
+                )
+            if name not in self._warned:
+                self._warned.add(name)
+                logger.warning(
+                    "Using the unverified fallback value %d for %s: the type library "
+                    "could not be read, so this is a table entry rather than a "
+                    "measurement. Run scripts/dump_constants.py to check it.",
+                    value, name)
         self._cache[name] = value
         self._sources[name] = source
         return value

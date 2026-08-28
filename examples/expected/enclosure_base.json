@@ -1,0 +1,5 @@
+{
+  "volume_cm3": 46.896177,
+  "span_mm": [100.0, 70.0, 35.0],
+  "checked": "Derived by hand, never seen live. 100x70x35 block = 245.000000; four r6 vertical fillets take 1.081593; the shell removes a cavity 32.5 mm deep over the outline inset by 2.5 mm (95x65 with r3.5 corners, 6164.4845 mm2) = 200.345747, leaving 43.572660. Four bosses of pi*0.35^2*2.75 add 4.233296; their 2.5 mm pilot holes, 28 mm deep through floor and boss, take 0.549779; the cable entry cuts one 12x6x2.5 slab out of each end wall, 0.360000. The simulator says 41.87 for this part and both numbers are right for what they are: it has no booleans, so its cable cut removes the whole 12x6x70 prism rather than the two walls the prism meets."
+}

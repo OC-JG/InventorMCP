@@ -1,0 +1,133 @@
+{
+  "name": "ThreadedBoss",
+  "description": "A plate with two tapped bosses, patterned. Exercises a real tapped hole and a rectangular pattern of two features at once.",
+  "units": "mm",
+  "material": "Aluminum",
+  "parameters": [
+    {
+      "name": "plate_l",
+      "value": 120
+    },
+    {
+      "name": "plate_w",
+      "value": 40
+    },
+    {
+      "name": "plate_t",
+      "value": 8
+    },
+    {
+      "name": "boss_d",
+      "value": 30
+    },
+    {
+      "name": "boss_h",
+      "value": 25,
+      "comment": "above the plate"
+    },
+    {
+      "name": "grid_pitch",
+      "value": 45,
+      "comment": "boss centres"
+    },
+    {
+      "name": "thread_d",
+      "value": 12
+    },
+    {
+      "name": "thread_pitch",
+      "value": 1.75,
+      "comment": "M12 coarse"
+    },
+    {
+      "name": "tap_minor",
+      "value": "thread_d - 1.0825 * thread_pitch",
+      "comment": "Inventor cuts a tapped hole to the thread's minor diameter, not the tapping drill"
+    },
+    {
+      "name": "tap_depth",
+      "value": 18,
+      "comment": "stops inside the boss"
+    }
+  ],
+  "operations": [
+    {
+      "op": "sketch",
+      "name": "Base",
+      "plane": "xy",
+      "entities": [
+        {
+          "type": "rectangle",
+          "center": [
+            0,
+            0
+          ],
+          "width": "plate_l",
+          "height": "plate_w"
+        }
+      ]
+    },
+    {
+      "op": "extrude",
+      "name": "Plate",
+      "sketch": "Base",
+      "distance": "plate_t"
+    },
+    {
+      "op": "sketch",
+      "name": "Round",
+      "plane": "xy",
+      "offset": "plate_t",
+      "entities": [
+        {
+          "type": "circle",
+          "center": [
+            "-grid_pitch / 2",
+            0
+          ],
+          "diameter": "boss_d"
+        }
+      ]
+    },
+    {
+      "op": "extrude",
+      "name": "Boss",
+      "sketch": "Round",
+      "distance": "boss_h"
+    },
+    {
+      "op": "sketch",
+      "name": "Centre",
+      "plane": "xy",
+      "offset": "plate_t",
+      "entities": [
+        {
+          "type": "point",
+          "position": [
+            "-grid_pitch / 2",
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "op": "hole",
+      "name": "TapHole",
+      "sketch": "Centre",
+      "diameter": "tap_minor",
+      "depth": "tap_depth",
+      "tap": "M12x1.75"
+    },
+    {
+      "op": "rectangular_pattern",
+      "name": "BossPair",
+      "features": [
+        "Boss",
+        "TapHole"
+      ],
+      "axis1": "x",
+      "count1": 2,
+      "spacing1": "grid_pitch"
+    }
+  ]
+}

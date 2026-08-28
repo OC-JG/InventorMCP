@@ -6,7 +6,7 @@ import pytest
 
 from inventor_mcp.errors import SketchError
 from inventor_mcp.geometry import loop_area, plan_bounds, plan_sketch, profile_loops
-from inventor_mcp.plan import PArc, PCircle, PLine, PPoint
+from inventor_mcp.plan import ORIGIN, PArc, PCircle, PLine, PPoint
 from inventor_mcp.schema import SketchOp
 
 
@@ -35,10 +35,10 @@ class TestRectangle:
         counts = {}
         for constraint in plan.constraints:
             counts[constraint.kind] = counts.get(constraint.kind, 0) + 1
-        assert counts["coincident"] == 6  # four corners plus the construction diagonal
+        assert counts["coincident"] == 7  # four corners, the diagonal's ends, the centre
         assert counts["horizontal"] == 2
         assert counts["vertical"] == 2
-        assert counts["midpoint"] == 1  # the diagonal's midpoint pins the centre
+        assert counts["midpoint"] == 1  # the diagonal's midpoint pins the centre point
 
     def test_dimensions_carry_the_expression_not_the_number(self):
         from inventor_mcp.resolve import Resolver
@@ -61,6 +61,20 @@ class TestRectangle:
     def test_corner_anchor_positions_the_geometry(self):
         plan = build([{"type": "rectangle", "corner": [0, 0], "width": 40, "height": 20}])
         assert plan_bounds(plan) == pytest.approx((0.0, 0.0, 4.0, 2.0))
+
+    def test_the_centre_point_is_the_thing_constrained_not_the_origin(self):
+        """A midpoint constraint moves the point onto the line.
+
+        The sketch origin is grounded and cannot move, so it must never be the
+        point in a midpoint constraint -- Inventor rejects that outright.
+        """
+        plan = build([{"type": "rectangle", "center": [0, 0], "width": 40, "height": 20}])
+        midpoints = [c for c in plan.constraints if c.kind == "midpoint"]
+        assert len(midpoints) == 1
+        assert midpoints[0].refs[0] != ORIGIN
+        assert any(
+            c.kind == "coincident" and ORIGIN in c.refs for c in plan.constraints
+        )
 
     def test_centre_away_from_the_origin_is_dimensioned(self):
         plan = build([{"type": "rectangle", "center": [30, 0], "width": 40, "height": 20}])
@@ -115,7 +129,15 @@ class TestSlot:
         lines = [p for p in plan.primitives if isinstance(p, PLine) and not p.construction]
         assert len(arcs) == 2 and len(lines) == 2
         assert sum(1 for c in plan.constraints if c.kind == "tangent") == 4
-        assert any(c.kind == "equal" for c in plan.constraints)
+        # The end arcs match on radius, which is a different constraint to length.
+        assert any(c.kind == "equal_radius" for c in plan.constraints)
+        assert not any(c.kind == "equal_length" for c in plan.constraints)
+
+    def test_the_origin_is_never_the_moved_point(self):
+        plan = build([{"type": "slot", "center": [0, 0], "length": 30, "width": 8}])
+        for constraint in plan.constraints:
+            if constraint.kind == "midpoint":
+                assert constraint.refs[0] != ORIGIN
 
     def test_it_closes_into_one_profile(self):
         plan = build([{"type": "slot", "center": [0, 0], "length": 30, "width": 8}])
@@ -140,8 +162,28 @@ class TestPolygon:
 
     def test_equal_constraints_leave_only_rotation_free(self):
         plan = build([{"type": "polygon", "sides": 6, "size": 20}])
-        equal = [c for c in plan.constraints if c.kind == "equal"]
+        equal = [c for c in plan.constraints if c.kind == "equal_length"]
         assert len(equal) == 5  # sides - 1
+
+    def test_edges_are_measured_against_the_first_not_chained(self):
+        """Chaining round the loop puts a constraint on the closing pair.
+
+        Inventor's redundancy detection objects to that one; measuring every
+        edge against the first is the same count and avoids it.
+        """
+        plan = build([{"type": "polygon", "sides": 6, "size": 20}])
+        equal = [c for c in plan.constraints if c.kind == "equal_length"]
+        assert len(equal) == 5
+        assert {c.refs[0].entity for c in equal} == {"line1"}
+        assert {c.refs[1].entity for c in equal} == {"line2", "line3", "line4", "line5", "line6"}
+
+    def test_edges_are_equal_by_length_not_radius(self):
+        """Inventor has no single 'equal': lines match on length, curves on radius."""
+        plan = build([{"type": "polygon", "sides": 5, "size": 20}])
+        kinds = {c.kind for c in plan.constraints}
+        assert "equal_length" in kinds
+        assert "equal_radius" not in kinds
+        assert "equal" not in kinds
 
     def test_polygon_closes(self):
         plan = build([{"type": "polygon", "sides": 5, "size": 20}])
@@ -196,6 +238,25 @@ class TestNamingAndProfiles:
         ])
         assert len(profile_loops(plan)) == 2
 
+    def test_a_recipe_equal_resolves_by_entity_type(self):
+        lines = build(
+            [
+                {"type": "line", "start": [0, 0], "end": [40, 0], "name": "a", "locate": "none"},
+                {"type": "line", "start": [0, 10], "end": [40, 10], "name": "b", "locate": "none"},
+            ],
+            constraints=[{"type": "equal", "entities": ["a", "b"]}],
+        )
+        assert any(c.kind == "equal_length" for c in lines.constraints)
+
+        circles = build(
+            [
+                {"type": "circle", "center": [0, 0], "diameter": 10, "name": "a", "locate": "none"},
+                {"type": "circle", "center": [30, 0], "diameter": 10, "name": "b", "locate": "none"},
+            ],
+            constraints=[{"type": "equal", "entities": ["a", "b"]}],
+        )
+        assert any(c.kind == "equal_radius" for c in circles.constraints)
+
     def test_explicit_constraints_reference_names(self):
         plan = build(
             [
@@ -216,3 +277,279 @@ class TestNamingAndProfiles:
     def test_polyline_rejects_zero_length_segments(self):
         with pytest.raises(SketchError, match="zero-length"):
             build([{"type": "polyline", "points": [[0, 0], [0, 0], [10, 10]], "closed": False}])
+
+
+class TestSharedPoints:
+    """Coincident endpoints are built as one point, not two plus a constraint.
+
+    Inventor infers coincidence from the coordinates as geometry is created and
+    then rejects an explicit duplicate, so the backend needs to know which
+    endpoints are meant to be the same point before it creates them.
+    """
+
+    def test_a_rectangle_has_four_corner_groups(self):
+        plan = build([{"type": "rectangle", "center": [0, 0], "width": 40, "height": 20}])
+        groups = plan.shared_point_groups()
+        # Eight line endpoints plus the diagonal's two, collapsing to four corners.
+        assert len(set(groups.values())) == 4
+        assert len(groups) == 10
+
+    def test_each_corner_joins_the_lines_that_meet_there(self):
+        plan = build([{"type": "rectangle", "center": [0, 0], "width": 40, "height": 20}])
+        groups = plan.shared_point_groups()
+        assert groups[("line1", "end")] == groups[("line2", "start")]
+        assert groups[("line4", "end")] == groups[("line1", "start")]
+
+    def test_the_construction_diagonal_reuses_two_of_them(self):
+        plan = build([{"type": "rectangle", "center": [0, 0], "width": 40, "height": 20}])
+        groups = plan.shared_point_groups()
+        assert groups[("cline1", "start")] == groups[("line1", "start")]
+        assert groups[("cline1", "end")] == groups[("line3", "start")]
+
+    def test_the_origin_is_never_grouped(self):
+        """The origin is a projected point; it cannot be shared as an endpoint."""
+        plan = build([{"type": "rectangle", "center": [0, 0], "width": 40, "height": 20}])
+        groups = plan.shared_point_groups()
+        assert not any(entity == "__origin__" for entity, _ in groups)
+
+    def test_a_slot_joins_its_lines_to_its_arcs(self):
+        plan = build([{"type": "slot", "center": [0, 0], "length": 30, "width": 8}])
+        groups = plan.shared_point_groups()
+        assert len(set(groups.values())) == 4  # two per end arc
+
+    def test_a_lone_circle_needs_no_groups(self):
+        plan = build([{"type": "circle", "diameter": 20}])
+        assert plan.shared_point_groups() == {}
+
+    def test_a_polyline_chains_through_every_vertex(self):
+        plan = build([{"type": "polyline", "closed": True,
+                       "points": [[0, 0], [40, 0], [40, 20], [0, 20]]}])
+        groups = plan.shared_point_groups()
+        assert len(set(groups.values())) == 4
+
+
+class TestPolylineDimensions:
+    """An outline has to be driven by the expressions it was written with.
+
+    A polyline used to emit constraints and no dimensions, so an L-section's
+    base_len and upright_h were evaluated once and discarded: the profile could
+    not be revised, which is the only thing a parametric model is for.
+
+    The count has to be exact. A dimension per vertex repeats what the
+    horizontal and vertical constraints already say, and Inventor refuses a
+    redundant dimension -- which used to kill the whole sketch. So the rule
+    counts what is genuinely free: a *rail* is a set of vertices that
+    constraints already force to share a coordinate, and every rail after the
+    first on each axis is one free coordinate and gets one dimension.
+    """
+
+    def plan_for(self, points, closed=True, locate="origin", parameters=None, **extra):
+        from inventor_mcp.geometry import plan_sketch
+        from inventor_mcp.resolve import Resolver
+        from inventor_mcp.schema import SketchOp
+        from inventor_mcp.units import to_internal
+
+        resolver = Resolver("mm", "deg")
+        for name, value in (parameters or {}).items():
+            resolver.declare(name, to_internal(value, "mm"))
+        entity = {"type": "polyline", "points": points, "closed": closed,
+                  "locate": locate, **extra}
+        return plan_sketch(
+            SketchOp.model_validate({"op": "sketch", "name": "S", "plane": "xy",
+                                     "entities": [entity]}), resolver)
+
+    BRACKET = [[0, 0], ["base_len", 0], ["base_len", "thk"],
+               ["thk", "thk"], ["thk", "upright_h"], [0, "upright_h"]]
+    BRACKET_PARAMS = {"base_len": 90, "upright_h": 70, "thk": 6}
+
+    def test_the_bracket_section_gets_four_driving_dimensions(self):
+        plan = self.plan_for(self.BRACKET, parameters=self.BRACKET_PARAMS)
+        assert len(plan.dimensions) == 4
+
+    def test_each_one_carries_the_recipe_expression_verbatim(self):
+        """Verbatim, because that is what makes a parameter edit work."""
+        plan = self.plan_for(self.BRACKET, parameters=self.BRACKET_PARAMS)
+        assert [(d.kind, d.expression) for d in plan.dimensions] == [
+            ("horizontal", "base_len"),
+            ("horizontal", "thk"),
+            ("vertical", "thk"),
+            ("vertical", "upright_h"),
+        ]
+
+    def test_the_values_are_right_too(self):
+        plan = self.plan_for(self.BRACKET, parameters=self.BRACKET_PARAMS)
+        assert [d.value for d in plan.dimensions] == pytest.approx([9.0, 0.6, 0.6, 7.0])
+
+    def test_every_parameter_reaches_a_dimension(self):
+        from inventor_mcp.expressions import referenced_parameters
+
+        plan = self.plan_for(self.BRACKET, parameters=self.BRACKET_PARAMS)
+        driven = set()
+        for dimension in plan.dimensions:
+            driven |= referenced_parameters(dimension.expression)
+        assert driven == {"base_len", "upright_h", "thk"}
+
+    def test_thk_drives_two_dimensions_because_an_l_section_means_that(self):
+        plan = self.plan_for(self.BRACKET, parameters=self.BRACKET_PARAMS)
+        assert [d.expression for d in plan.dimensions].count("thk") == 2
+
+    def test_they_are_measured_along_a_single_lines_own_axis(self):
+        """The shape _plan_rectangle already ships, which Inventor accepts."""
+        plan = self.plan_for(self.BRACKET, parameters=self.BRACKET_PARAMS)
+        for dimension in plan.dimensions:
+            entities = {ref.entity for ref in dimension.refs}
+            assert len(entities) == 1, f"{dimension.expression} spans two entities"
+
+    def test_they_are_all_optional(self):
+        """So Inventor refusing one leaves the sketch, not kills it."""
+        plan = self.plan_for(self.BRACKET, parameters=self.BRACKET_PARAMS)
+        assert all(d.optional for d in plan.dimensions)
+
+    def test_the_recipes_own_dimensions_are_not_optional(self):
+        from inventor_mcp.geometry import plan_sketch
+        from inventor_mcp.resolve import Resolver
+        from inventor_mcp.schema import SketchOp
+
+        plan = plan_sketch(SketchOp.model_validate({
+            "op": "sketch", "name": "S", "plane": "xy",
+            "entities": [{"type": "rectangle", "center": [0, 0],
+                          "width": 40, "height": 20}]}), Resolver("mm", "deg"))
+        assert plan.dimensions and not any(d.optional for d in plan.dimensions)
+
+    @pytest.mark.parametrize("points,closed,expected", [
+        # A rectangle: 2 X rails, 2 Y rails -> 1 + 1.
+        ([[0, 0], [40, 0], [40, 20], [0, 20]], True, 2),
+        # The L: 3 X rails, 3 Y rails -> 2 + 2.
+        ([[0, 0], [90, 0], [90, 6], [6, 6], [6, 70], [0, 70]], True, 4),
+        # An open three-point L: 2 X rails, 2 Y rails.
+        ([[0, 0], [40, 0], [40, 20]], False, 2),
+        # A C-channel: 4 X rails, 4 Y rails -> 3 + 3.
+        ([[0, 0], [40, 0], [40, 10], [10, 10], [10, 30], [40, 30],
+          [40, 40], [0, 40]], True, 6),
+        # A right triangle: the hypotenuse is oblique so it frees nothing.
+        ([[0, 0], [40, 0], [0, 20]], True, 2),
+    ])
+    def test_the_count_matches_the_free_coordinates(self, points, closed, expected):
+        plan = self.plan_for(points, closed=closed)
+        emitted = len(plan.dimensions) + sum(
+            1 for c in plan.constraints
+            if c.kind in ("horizontal_align", "vertical_align")
+            and all(r.entity != "__origin__" for r in c.refs))
+        assert emitted == expected
+
+    def test_the_simulator_calls_the_bracket_fully_constrained(self):
+        from inventor_mcp.builder import build_part
+        from inventor_mcp.schema import PartRecipe
+        from inventor_mcp.session import Session
+
+        session = Session(backend_kind="mock")
+        session.ensure_backend().connect()
+        build_part(session, PartRecipe.model_validate({
+            "name": "L", "units": "mm",
+            "parameters": [{"name": k, "value": v} for k, v in self.BRACKET_PARAMS.items()],
+            "operations": [
+                {"op": "sketch", "name": "S", "plane": "xy", "entities": [
+                    {"type": "polyline", "points": self.BRACKET, "closed": True}]},
+                {"op": "extrude", "sketch": "S", "distance": 50},
+            ]}))
+        [info] = [s for s in session.backend.list_sketches(session.active)]
+        assert info.degrees_of_freedom == 0
+        assert sorted(info.driven_parameters) == ["base_len", "thk", "upright_h"]
+
+    def test_a_centred_outline_subtracts_signed_coordinates(self):
+        """The sign trap: -w/2 must not become +w/2 on the way to a dimension."""
+        from inventor_mcp.expressions import UnitContext, evaluate
+        from inventor_mcp.units import to_internal
+
+        plan = self.plan_for(
+            [["-w/2", "-h/2"], ["w/2", "-h/2"], ["w/2", "h/2"], ["-w/2", "h/2"]],
+            parameters={"w": 40, "h": 20})
+        table = {"w": to_internal(40, "mm"), "h": to_internal(20, "mm")}
+        units = UnitContext(length="mm", angle="deg")
+        for dimension in plan.dimensions:
+            assert evaluate(dimension.expression, table, units).value == pytest.approx(
+                dimension.value), f"{dimension.expression!r} does not mean {dimension.value}"
+        # Four in total: two rails spanning the outline, and the two `_locate`
+        # emits to position a first vertex that is not at the origin.
+        rails = [d for d in plan.dimensions if d.optional]
+        assert [(d.kind, d.expression, round(d.value, 6)) for d in rails] == [
+            ("horizontal", "w/2 - (-w/2)", 4.0),
+            ("vertical", "h/2 - (-h/2)", 2.0),
+        ]
+
+    def test_a_rail_at_the_datum_coordinate_is_aligned_not_dimensioned_to_zero(self):
+        """A comb: the far teeth return to the datum's own X."""
+        plan = self.plan_for(
+            [[0, 0], [0, 10], [20, 10], [20, 0], [40, 0], [40, 10],
+             [60, 10], [60, 0]], closed=True)
+        assert all(d.value > 1e-4 for d in plan.dimensions), "no zero dimensions"
+
+    def test_a_dependent_direction_constraint_frees_nothing(self):
+        """Three collinear vertical points: one X rail, so no X dimension.
+
+        The two vertical constraints put all three vertices on one X rail, so
+        that axis is fully determined and contributes nothing. The three Y
+        coordinates are genuinely independent, so two of them are dimensioned.
+        """
+        plan = self.plan_for([[0, 0], [0, 10], [0, 20]], closed=False)
+        rails = [d for d in plan.dimensions if d.optional]
+        assert [d.kind for d in rails] == ["vertical", "vertical"]
+        assert [round(d.value, 6) for d in rails] == [1.0, 2.0]
+
+    def test_locate_none_leaves_the_outline_free_to_move(self):
+        plan = self.plan_for(self.BRACKET, locate="none",
+                             parameters=self.BRACKET_PARAMS)
+        assert len(plan.dimensions) == 4
+        assert not any(r.entity == "__origin__"
+                       for c in plan.constraints for r in c.refs)
+
+    def test_asking_for_no_dimensions_still_means_no_dimensions(self):
+        plan = self.plan_for(self.BRACKET, parameters=self.BRACKET_PARAMS,
+                             dimension=False)
+        assert plan.dimensions == []
+
+
+class TestArcBounds:
+    """An arc is not its circle, and treating it as one loosens every bound.
+
+    `plan_bounds` feeds the rehearsal's "does this cut reach the part" check, so
+    a loose bound is a missed warning. A quarter arc of radius 45 was measuring
+    90 across.
+    """
+
+    def arc(self, start_deg, end_deg, radius=4.5, center=(0.0, 0.0)):
+        from inventor_mcp.plan import PArc
+
+        return PArc("a", center=center, radius=radius,
+                    start_angle=math.radians(start_deg), end_angle=math.radians(end_deg))
+
+    def bounds(self, arc):
+        from inventor_mcp.geometry import _arc_extremes
+
+        points = _arc_extremes(arc)
+        xs, ys = [p[0] for p in points], [p[1] for p in points]
+        return (min(xs), min(ys), max(xs), max(ys))
+
+    def test_a_quarter_arc_spans_one_quadrant(self):
+        assert self.bounds(self.arc(0, 90)) == pytest.approx((0.0, 0.0, 4.5, 4.5))
+
+    def test_a_half_arc_spans_a_half(self):
+        assert self.bounds(self.arc(0, 180)) == pytest.approx((-4.5, 0.0, 4.5, 4.5))
+
+    def test_a_full_circle_still_spans_everything(self):
+        assert self.bounds(self.arc(0, 360)) == pytest.approx((-4.5, -4.5, 4.5, 4.5))
+
+    def test_an_arc_over_the_top_includes_the_top(self):
+        """45 to 135 passes 90, so the maximum y is the radius, not the ends."""
+        low_x, low_y, high_x, high_y = self.bounds(self.arc(45, 135))
+        assert high_y == pytest.approx(4.5)
+        assert high_x == pytest.approx(4.5 * math.cos(math.radians(45)))
+
+    def test_an_arc_that_touches_no_extreme_is_bounded_by_its_ends(self):
+        low_x, low_y, high_x, high_y = self.bounds(self.arc(10, 80))
+        assert high_x == pytest.approx(4.5 * math.cos(math.radians(10)))
+        assert high_y == pytest.approx(4.5 * math.sin(math.radians(80)))
+
+    def test_an_off_centre_arc_moves_with_its_centre(self):
+        shifted = self.bounds(self.arc(0, 90, center=(10.0, 5.0)))
+        assert shifted == pytest.approx((10.0, 5.0, 14.5, 9.5))
