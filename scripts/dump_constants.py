@@ -26,6 +26,28 @@ sys.path.insert(0, str(ROOT))
 from inventor_mcp.backend.com.constants import FALLBACK, SUSPECT, load  # noqa: E402
 
 
+def every_name(module) -> dict[str, int]:
+    """Every integer constant in the type library, by name.
+
+    Not ``vars(module)``. ``win32com.client.constants`` is not a module: it is
+    an object holding a *list* of dictionaries, one per generated type-library
+    module, and its ``__getattr__`` walks that list. So ``getattr`` finds
+    everything and ``vars`` finds nothing -- its ``__dict__`` contains the single
+    key ``__dicts__``.
+
+    That is why ``--find Shell`` printed "0 name(s)" on a machine that had just
+    read ``kInsideShellDirection`` from the same object two commands earlier. An
+    empty search result read as "this release does not have it", which is a much
+    stronger claim than "I looked in the wrong place".
+    """
+    found: dict[str, int] = {}
+    for source in getattr(module, "__dicts__", None) or [vars(module)]:
+        for name, value in source.items():
+            if isinstance(value, int) and not name.startswith("_"):
+                found.setdefault(name, value)
+    return found
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--only", nargs="*", default=[],
@@ -67,8 +89,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.value:
         wanted = set(args.value)
         found = sorted(
-            (value, name) for name, value in vars(constants._module).items()
-            if isinstance(value, int) and value in wanted and not name.startswith("_")
+            (value, name) for name, value in every_name(constants._module).items()
+            if value in wanted
         )
         for number in args.value:
             names = [name for value, name in found if value == number]
@@ -80,10 +102,10 @@ def main(argv: list[str] | None = None) -> int:
         # `--find Health` reported "0 names" on a library that certainly has a
         # HealthStatusEnum. A search that can only find what it expects is not a
         # search.
+        every = every_name(constants._module)
         found = sorted(
-            (name, value) for name, value in vars(constants._module).items()
-            if isinstance(value, int) and not name.startswith("_")
-            and any(part.lower() in name.lower() for part in args.find)
+            (name, value) for name, value in every.items()
+            if any(part.lower() in name.lower() for part in args.find)
         )
         print(f"Every enum matching {args.find} in Inventor's own type library:\n")
         for name, value in found:
@@ -92,7 +114,20 @@ def main(argv: list[str] | None = None) -> int:
                 "   # the table agrees" if known == value
                 else f"   # THE TABLE SAYS {known}")
             print(f'    "{name}": {value},{note}')
-        print(f"\n{len(found)} name(s).")
+        # How many were searched, not only how many matched. "0 name(s)" alone
+        # cannot distinguish "this release has no such enum" from "nothing was
+        # searched", and those call for opposite conclusions.
+        print(f"\n{len(found)} of {len(every)} name(s) in the library matched.")
+        if not found:
+            if not every:
+                print("Nothing was searched: the type library read as empty, which is a "
+                      "fault here rather than a fact about Inventor.\n"
+                      "Repair the pywin32 cache: delete %LOCALAPPDATA%\\Temp\\gen_py "
+                      "and re-run.")
+            else:
+                print(f"{len(every)} names were searched and none contains "
+                      f"{' or '.join(args.find)}. That is an answer: this release has no "
+                      "such enum under a name spelled that way.")
         return 0
 
     names = sorted(FALLBACK)
