@@ -5,6 +5,31 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 ## Unreleased
 
 ### Added
+- **Draft, combine, split and boss.** Four more operations, and one that could not
+  be built at all.
+
+  * `draft` tapers existing faces about a parting plane. The DFM subsystem has
+    always been able to measure draft and complain about it; until now nothing
+    could add any. Verified against Inventor: 0.1505 cm^3 off a plate's four walls
+    at 2 degrees, where the simulator predicts 0.1508.
+  * `combine` booleans one body into another, and `split` cuts the part with a
+    plane -- `trim` to throw a side away, `split` to keep both, `faces` to divide
+    only the faces it crosses.
+  * `boss` places a mounting post with a pilot down it. **Inventor's own Boss
+    cannot be created through the API** -- `BossFeatures` exposes no `Add` and no
+    `Create` -- so this expands in the recipe into a sketch, a join extrude and a
+    hole. Same geometry, still parametric, but it is not a Boss in the browser.
+    Expanding at recipe level rather than in the builder means `validate_recipe`
+    rehearses exactly what gets built.
+
+  **`rib` is deliberately not here.** `RibFeatures.CreateDefinition` succeeds and
+  `RibFeatures.Add` then refuses with `E_INVALIDARG` across every combination of
+  profile geometry, direction, extent, thickness type and `AffectedBody` tried --
+  fourteen and counting. Shipping an operation that always fails would be worse
+  than not shipping one, so it is written up in `docs/FEATURE_COVERAGE.md` with
+  everything that was ruled out.
+
+### Added
 - **Text and emboss.** A `text` sketch entity and an `emboss` operation, so a
   part can carry a real font-rendered name rather than an approximation of one.
   `{"type":"text","text":"OnlyCat","height":8,"font":"Arial","bold":true}` in a

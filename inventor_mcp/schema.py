@@ -592,6 +592,87 @@ class EmbossOp(OpBase):
     )
 
 
+class DraftOp(OpBase):
+    """Taper faces away from a parting plane so a moulded part can leave the tool.
+
+    This is the standalone draft feature, as opposed to the `taper` on an extrude:
+    it can be applied to faces that already exist, which is what makes it useful
+    on a part whose walls were built before anyone thought about the tooling.
+    """
+
+    op: Literal["draft"] = "draft"
+    faces: Selector = Field(
+        default_factory=lambda: Selector(kind="face"),
+        description="Faces to draft. Usually the vertical walls.",
+    )
+    plane: PlaneRef = Field(
+        "xy", description="The parting plane. Faces are tapered about their edge on it."
+    )
+    angle: ValueSpec = Field("1 deg", description="Draft angle. Moulding usually wants 1-3 deg.")
+    flip: bool = Field(False, description="Reverse the pull direction.")
+
+
+class CombineOp(OpBase):
+    """Boolean one solid body into another.
+
+    Needs more than one body, which means an earlier `extrude` with
+    `operation: "new_body"`. Bodies are numbered in creation order, 1-based.
+    """
+
+    op: Literal["combine"] = "combine"
+    base: int = Field(1, description="Body to keep, 1-based in creation order.", ge=1)
+    tools: list[int] = Field(
+        default_factory=lambda: [2], description="Bodies to combine into the base."
+    )
+    operation: Literal["join", "cut", "intersect"] = "join"
+    keep_tools: bool = Field(False, description="Leave the tool bodies in place afterwards.")
+
+
+class SplitOp(OpBase):
+    """Cut the part with a plane -- to open it up, or to make a lid from a base.
+
+    `trim` throws one side away and is how a tray and its lid come from one solid.
+    `split` keeps both halves as separate bodies. `faces` only divides the faces it
+    crosses, leaving one solid, which is what you want before drafting each side of
+    a parting line differently.
+    """
+
+    op: Literal["split"] = "split"
+    tool: PlaneRef = Field("xy", description="Plane to cut with. A work plane name also works.")
+    style: Literal["trim", "split", "faces"] = "trim"
+    remove_positive: bool = Field(
+        True, description="For `trim`, discard the side the plane's normal points at."
+    )
+
+
+class BossOp(OpBase):
+    """A mounting post with a hole down it, at one or more positions.
+
+    Inventor's own Boss feature cannot be created through the API -- the
+    `BossFeatures` collection is read-only -- so this builds the same geometry from
+    a circle, a join extrude and a hole. That means it appears in the browser as
+    those features rather than as a Boss, and it is not editable as one.
+    """
+
+    op: Literal["boss"] = "boss"
+    positions: list[Point2D] = Field(
+        default_factory=lambda: [[0.0, 0.0]], description="Boss centres on `plane`."
+    )
+    plane: PlaneRef = Field("xy", description="Plane the bosses stand on.")
+    diameter: ValueSpec = Field(6.0, description="Outside diameter of the post.")
+    height: ValueSpec = Field(10.0, description="How far the post stands off the plane.")
+    hole_diameter: ValueSpec | None = Field(
+        None, description="Pilot hole diameter. Omit for a solid post."
+    )
+    hole_depth: ValueSpec | None = Field(
+        None, description="Pilot depth. Defaults to 80% of the height."
+    )
+    tap: str | None = Field(
+        None, description="Thread designation, e.g. 'M3x0.5'. Give the tapping drill as "
+        "`hole_diameter`."
+    )
+
+
 Operation = Annotated[
     Union[
         SketchOp,
@@ -609,6 +690,10 @@ Operation = Annotated[
         WorkPlaneOp,
         ThreadOp,
         EmbossOp,
+        DraftOp,
+        CombineOp,
+        SplitOp,
+        BossOp,
         MaterialOp,
     ],
     Field(discriminator="op"),
@@ -663,6 +748,19 @@ class DfmSpec(Base):
         return value
 
 
+def _boss_depth(op: "BossOp") -> ValueSpec:
+    """How deep a boss's pilot goes when the recipe does not say.
+
+    Four fifths of the post, which leaves a floor under the hole rather than
+    breaking through into whatever the boss is standing on.
+    """
+    if op.hole_depth is not None:
+        return op.hole_depth
+    if isinstance(op.height, (int, float)):
+        return float(op.height) * 0.8
+    return f"({op.height}) * 0.8"
+
+
 class PartRecipe(Base):
     """A complete, replayable description of a parametric part."""
 
@@ -678,6 +776,49 @@ class PartRecipe(Base):
         description="Manufacturability: which parameter means what, and which are "
         "key geometry that must not be changed automatically.",
     )
+
+    @model_validator(mode="after")
+    def _expand_bosses(self) -> "PartRecipe":
+        """Turn every `boss` into the features that actually build one.
+
+        Inventor's Boss cannot be created through the API, so a boss is a post,
+        a join extrude and a hole. Expanding here rather than in the builder means
+        `validate_recipe` rehearses exactly what will be built, and the operation
+        list a caller gets back is the truth about what went into the part.
+        """
+        if not any(isinstance(op, BossOp) for op in self.operations):
+            return self
+        expanded: list[Operation] = []
+        for index, op in enumerate(self.operations):
+            if not isinstance(op, BossOp):
+                expanded.append(op)
+                continue
+            stem = op.name or f"Boss{index + 1}"
+            expanded.append(SketchOp(
+                name=f"{stem}Profiles", plane=op.plane,
+                entities=[CircleEntity(center=list(point), diameter=op.diameter)
+                          for point in op.positions],
+            ))
+            expanded.append(ExtrudeOp(
+                name=stem, sketch=f"{stem}Profiles", distance=op.height,
+                operation="join", direction="positive",
+            ))
+            if op.hole_diameter is None:
+                continue
+            expanded.append(WorkPlaneOp(
+                name=f"{stem}Top", kind="offset", base=op.plane, offset=op.height,
+            ))
+            expanded.append(SketchOp(
+                name=f"{stem}Pilots", plane=f"{stem}Top",
+                entities=[PointEntity(position=list(point)) for point in op.positions],
+            ))
+            expanded.append(HoleOp(
+                name=f"{stem}Holes", sketch=f"{stem}Pilots",
+                diameter=op.hole_diameter, depth=_boss_depth(op),
+                direction="negative", tap=op.tap,
+            ))
+        object.__setattr__(self, "operations", expanded)
+        return self
 
     @model_validator(mode="after")
     def _unique_parameter_names(self) -> "PartRecipe":

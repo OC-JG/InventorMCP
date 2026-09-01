@@ -59,8 +59,11 @@ from ..base import (
     ResolvedSelector,
     RevolveRequest,
     ScreenshotRequest,
+    CombineRequest,
+    DraftRequest,
     EmbossRequest,
     ShellRequest,
+    SplitRequest,
     SketchInfo,
     SweepRequest,
     ThreadRequest,
@@ -253,6 +256,10 @@ class _Document:
     #: are recorded -- enough to answer "how thick is the part here", which is
     #: what a through-all cut has to know.
     slabs: list[_Slab] = field(default_factory=list)
+    #: Volume of each solid body, in creation order. Only a `new_body` extrude
+    #: starts a new one; everything else lands on the body it joined. This is
+    #: the least the simulator can know and still answer `combine` honestly.
+    bodies: list[float] = field(default_factory=list)
 
     def find_sketch(self, name: str) -> _Sketch:
         for sketch in self.sketches:
@@ -735,6 +742,15 @@ class MockBackend(Backend):
         else:
             document.volume += signed
         moved = document.volume - was
+
+        # Bodies are tracked only well enough for `combine` to mean something:
+        # a `new_body` extrude starts one, anything else lands on the first.
+        if not document.bodies and was > 0:
+            document.bodies = [was]
+        if request.operation == "new_body":
+            document.bodies.append(signed)
+        elif document.bodies:
+            document.bodies[0] = max(document.bodies[0] + moved, 0.0)
 
         self._synthesise_extrude_topology(document, sketch, loops, plane, distance,
                                           request.direction, name,
@@ -1258,6 +1274,149 @@ class MockBackend(Backend):
         document.modified = True
         self._record("emboss", name=name, sketch=sketch.name, style=request.style)
         return _feature_info(feature)
+
+
+    _PLANE_AXIS = {"xy": 2, "xz": 1, "yz": 0}
+
+    def _pull_extent(self, document: _Document, plane: str) -> float:
+        """How far the part runs along a plane's normal -- the height a draft acts over."""
+        axis = self._PLANE_AXIS.get(plane.split(":")[0], 2)
+        if not document.bounds:
+            return 0.0
+        return abs(document.bounds[axis + 3] - document.bounds[axis])
+
+    def draft(self, doc_id: str, request: DraftRequest) -> FeatureInfo:
+        document = self._doc(doc_id)
+        if document.volume <= 0:
+            raise FeatureError("Nothing to draft: the part has no solid body yet.")
+        faces = self._match(document, request.faces)
+        if not faces:
+            raise FeatureError(
+                "No faces matched, so there is nothing to draft.",
+                hint="Run `select_topology` with the same selector to see what it matches.",
+            )
+        # A face of area A tilted by theta about its edge on the parting plane
+        # gives up a wedge of about A*h*tan(theta)/2, where h is how far the part
+        # runs along the pull direction.
+        # ponytail: assumes every drafted face spans the full pull height, which is
+        # true of a wall and not of a boss. Enough to catch draft applied to the
+        # wrong faces; not a mass.
+        height = self._pull_extent(document, request.plane)
+        area = sum(topo.area or 0.0 for topo in faces)
+        removed = 0.5 * area * height * abs(math.tan(request.angle.value))
+        was = document.volume
+        document.volume = max(document.volume - removed, 0.0)
+        name = self._feature_name(document, request.name, "draft")
+        feature = _Feature(
+            id=self._next("feat"),
+            name=name,
+            kind="draft",
+            volume_delta=document.volume - was,
+            detail={
+                "faces": len(faces),
+                "plane": request.plane,
+                "angle": request.angle.as_dict(),
+                "flip": request.flip,
+                "volume_from": "estimated from face area and pull height",
+            },
+        )
+        document.features.append(feature)
+        document.modified = True
+        self._record("draft", name=name, faces=len(faces))
+        return _feature_info(feature)
+
+    def combine(self, doc_id: str, request: CombineRequest) -> FeatureInfo:
+        document = self._doc(doc_id)
+        bodies = document.bodies or [document.volume]
+        for index in [request.base, *request.tools]:
+            if index < 1 or index > len(bodies):
+                raise FeatureError(
+                    f"There is no body {index}: the part has {len(bodies)}.",
+                    hint="A second body comes from an `extrude` with "
+                    "operation 'new_body'.",
+                )
+        base = bodies[request.base - 1]
+        tools = [bodies[i - 1] for i in request.tools]
+        if request.operation == "join":
+            result = base + sum(tools)
+        elif request.operation == "cut":
+            result = max(base - sum(tools), 0.0)
+        else:
+            result = min([base, *tools]) if tools else base
+        was = document.volume
+        keep = list(bodies)
+        keep[request.base - 1] = result
+        if not request.keep_tools:
+            keep = [v for i, v in enumerate(keep, start=1) if i not in request.tools]
+        document.bodies = keep
+        document.volume = sum(keep)
+        name = self._feature_name(document, request.name, "combine")
+        feature = _Feature(
+            id=self._next("feat"),
+            name=name,
+            kind="combine",
+            volume_delta=document.volume - was,
+            detail={
+                "base": request.base,
+                "tools": list(request.tools),
+                "operation": request.operation,
+                "keep_tools": request.keep_tools,
+                "bodies_now": len(keep),
+                "volume_from": "exact where the bodies do not overlap",
+            },
+        )
+        document.features.append(feature)
+        document.modified = True
+        self._record("combine", name=name, operation=request.operation)
+        return _feature_info(feature)
+
+    def split(self, doc_id: str, request: SplitRequest) -> FeatureInfo:
+        document = self._doc(doc_id)
+        if document.volume <= 0:
+            raise FeatureError("Nothing to split: the part has no solid body yet.")
+        was = document.volume
+        if request.style == "trim":
+            # Where the plane falls inside the bounding box is the only cheap
+            # estimate of how much goes away.
+            # ponytail: assumes the part is spread evenly either side of the cut,
+            # which a tray is not. Directional, not dimensional.
+            kept = self._trim_fraction(document, request)
+            document.volume = document.volume * kept
+            document.bodies = [document.volume] if document.bodies else []
+        elif request.style == "split":
+            bodies = document.bodies or [document.volume]
+            half = bodies[0] / 2
+            document.bodies = [half, half, *bodies[1:]]
+        name = self._feature_name(document, request.name, "split")
+        feature = _Feature(
+            id=self._next("feat"),
+            name=name,
+            kind="split",
+            volume_delta=document.volume - was,
+            detail={
+                "tool": request.tool,
+                "style": request.style,
+                "remove_positive": request.remove_positive,
+                "volume_from": "estimated from where the plane falls in the bounding box",
+            },
+        )
+        document.features.append(feature)
+        document.modified = True
+        self._record("split", name=name, style=request.style)
+        return _feature_info(feature)
+
+    def _trim_fraction(self, document: _Document, request: SplitRequest) -> float:
+        """What share of the volume a trim keeps."""
+        axis = self._PLANE_AXIS.get(request.tool.split(":")[0], 2)
+        offset = document.work_planes.get(request.tool, (None, 0.0))[1]
+        if not document.bounds:
+            return 0.5
+        low, high = document.bounds[axis], document.bounds[axis + 3]
+        span = high - low
+        if span <= 0:
+            return 0.5
+        below = min(max((offset - low) / span, 0.0), 1.0)
+        return below if request.remove_positive else 1.0 - below
 
 
     def _repeat(self, document: _Document, targets: Sequence[_Feature],

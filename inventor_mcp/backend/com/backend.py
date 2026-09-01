@@ -57,8 +57,11 @@ from ..base import (
     ResolvedSelector,
     RevolveRequest,
     ScreenshotRequest,
+    CombineRequest,
+    DraftRequest,
     EmbossRequest,
     ShellRequest,
+    SplitRequest,
     SketchInfo,
     SweepRequest,
     ThreadRequest,
@@ -2372,6 +2375,124 @@ class ComBackend(Backend):
                 hint=f"It contains {_describe_sketch(sketch)}. Add text or a closed profile.",
             )
         return profile
+
+
+    def draft(self, doc_id: str, request: DraftRequest) -> FeatureInfo:  # pragma: no cover
+        """Taper faces about their edge on a parting plane.
+
+        The definition is built and then handed over, rather than passed as
+        arguments, which is Inventor's usual shape for anything with options.
+        """
+        document = self._doc(doc_id)
+        faces = self._topology_collection(doc_id, request.faces)
+        if int(faces.Count) == 0:
+            raise FeatureError(
+                "No faces matched, so there is nothing to draft.",
+                hint="Run `select_topology` with the same selector to see what it matches.",
+            )
+        plane = self._resolve_plane(document, request.plane, None)
+        features = document.ComponentDefinition.Features.FaceDraftFeatures
+        with self._batch(document), self._translate_errors("Draft"):
+            definition = features.CreateFaceDraftDefinition()
+            definition.SetFixedPlane(faces, plane, request.angle.expression)
+            if request.flip:
+                try:
+                    definition.PullDirectionReversed = True
+                except Exception:  # pragma: no cover - version-specific
+                    logger.info("Could not reverse the draft pull direction.")
+            try:
+                feature = features.Add(definition)
+            except Exception as exc:
+                raise FeatureError(
+                    f"Draft failed: {self._explain(exc)}",
+                    hint=f"{int(faces.Count)} face(s) at {request.angle.expression!r} about "
+                    f"{request.plane!r}. A face that does not meet the parting plane, or one "
+                    "already tapered the other way, will refuse.",
+                ) from exc
+            if request.name:
+                feature.Name = request.name
+        return _feature_info(feature, "draft", {
+            "faces": int(faces.Count),
+            "plane": request.plane,
+            "angle": request.angle.as_dict(),
+        })
+
+    def combine(self, doc_id: str, request: CombineRequest) -> FeatureInfo:  # pragma: no cover
+        document = self._doc(doc_id)
+        component = document.ComponentDefinition
+        app = self._require_app()
+        available = int(component.SurfaceBodies.Count)
+        for index in [request.base, *request.tools]:
+            if index < 1 or index > available:
+                raise FeatureError(
+                    f"There is no body {index}: the part has {available}.",
+                    hint="A second body comes from an `extrude` with "
+                    "operation 'new_body'.",
+                )
+        tools = app.TransientObjects.CreateObjectCollection()
+        for index in request.tools:
+            tools.Add(component.SurfaceBodies.Item(index))
+        features = component.Features.CombineFeatures
+        with self._batch(document), self._translate_errors("Combine"):
+            try:
+                feature = features.Add(
+                    component.SurfaceBodies.Item(request.base),
+                    tools,
+                    self._k(BOOLEAN_OPERATIONS[request.operation]),
+                    request.keep_tools,
+                )
+            except Exception as exc:
+                raise FeatureError(
+                    f"Combine failed: {self._explain(exc)}",
+                    hint=f"Body {request.base} {request.operation} "
+                    f"{list(request.tools)}. Bodies that do not touch cannot be cut or "
+                    "intersected, only joined.",
+                ) from exc
+            if request.name:
+                feature.Name = request.name
+        return _feature_info(feature, "combine", {
+            "base": request.base,
+            "tools": list(request.tools),
+            "operation": request.operation,
+            "bodies_now": int(component.SurfaceBodies.Count),
+        })
+
+    def split(self, doc_id: str, request: SplitRequest) -> FeatureInfo:  # pragma: no cover
+        """Cut the part with a plane.
+
+        Inventor has a separate call per outcome rather than a mode flag, so the
+        style picks the call: `trim` throws a side away, `split` leaves two
+        bodies, `faces` only divides the faces the plane crosses.
+        """
+        document = self._doc(doc_id)
+        component = document.ComponentDefinition
+        tool = self._resolve_plane(document, request.tool, None)
+        features = component.Features.SplitFeatures
+        with self._batch(document), self._translate_errors("Split"):
+            try:
+                if request.style == "trim":
+                    feature = features.SplitPart(tool, request.remove_positive)
+                elif request.style == "split":
+                    feature = features.SplitBody(tool, component.SurfaceBodies.Item(1))
+                else:
+                    feature = features.SplitFaces(tool, True)
+            except Exception as exc:
+                raise FeatureError(
+                    f"Split failed: {self._explain(exc)}",
+                    hint=f"Style {request.style!r} with {request.tool!r}. The plane has to "
+                    "pass through the part; one that misses it entirely refuses.",
+                ) from exc
+            if request.name:
+                try:
+                    feature.Name = request.name
+                except Exception:  # pragma: no cover - SplitFaces returns no namable feature
+                    pass
+        return _feature_info(feature, "split", {
+            "tool": request.tool,
+            "style": request.style,
+            "remove_positive": request.remove_positive,
+            "bodies_now": int(component.SurfaceBodies.Count),
+        })
 
 
     def _feature_collection(self, doc_id: str, names: Sequence[str]) -> Any:  # pragma: no cover

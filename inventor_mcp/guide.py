@@ -118,6 +118,25 @@ emboss      {"op":"emboss","sketch":"Name","depth":0.5,"style":"engrave|raise"}
              overrunning the edge is refused with no explanation. No draft angle --
              use a tapered extrude cut if drafted lettering is needed.
 shell       {"op":"shell","faces":{"kind":"face","filter":"top"},"thickness":"wall"}
+draft       {"op":"draft","faces":{"filter":"vertical"},"plane":"xy","angle":"2 deg"}
+             Tapers faces about their edge on a parting plane, so a moulded part can
+             leave the tool. Unlike an extrude's `taper` this works on faces that
+             already exist, which is what you want on walls built before the tooling
+             was thought about.
+boss        {"op":"boss","positions":[[20,0],[-20,0]],"plane":"Top","diameter":6,
+             "height":10,"hole_diameter":2.5,"tap":"M3x0.5"}
+             A mounting post with a pilot down it. Inventor's own Boss cannot be made
+             through the API, so this expands into a sketch, a join extrude and a
+             hole -- it appears in the browser as those, not as a Boss. The pilot
+             defaults to 4/5 of the height so it does not break through.
+combine     {"op":"combine","base":1,"tools":[2],"operation":"join|cut|intersect"}
+             Booleans one body into another. Needs a second body, which means an
+             earlier extrude with "operation":"new_body". Bodies are 1-based in
+             creation order.
+split       {"op":"split","tool":"Mid","style":"trim|split|faces","remove_positive":true}
+             Cuts the part with a plane. `trim` throws a side away -- this is how a
+             lid comes off a tray. `split` keeps both halves as bodies. `faces` only
+             divides the faces the plane crosses.
 patterns    {"op":"rectangular_pattern","features":["Hole1"],"axis1":"x","count1":4,"spacing1":25}
             {"op":"circular_pattern","features":["Hole1"],"axis":"z","count":6}
             {"op":"mirror","features":["Rib"],"plane":"yz"}

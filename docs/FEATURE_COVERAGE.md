@@ -13,9 +13,11 @@ Revolve Rib RuleFillet RuledSurface Sculpt Shell Simplify SketchDrivenPattern
 Slot SnapFit Split Sweep Thicken Thread Trim Unwrap iFeatures
 ```
 
-**Covered today (14):** Extrude, Revolve, Sweep, Loft, Hole, Fillet, Chamfer,
-Shell, RectangularPattern, CircularPattern, Mirror, Thread, Emboss, plus work
-planes and material, which are not `Features` collections.
+**Covered today (17):** Extrude, Revolve, Sweep, Loft, Hole, Fillet, Chamfer,
+Shell, RectangularPattern, CircularPattern, Mirror, Thread, Emboss, FaceDraft,
+Combine, Split, plus work planes and material, which are not `Features`
+collections. `boss` exists as an operation but is built from primitives -- see
+below.
 
 That is 14 of 53 by count, but the count flatters the gap in one direction and
 overstates it in the other: the covered ones are the high-frequency core of solid
@@ -28,32 +30,53 @@ Ranked by how often the feature is reached for on the kind of part this server
 already builds -- moulded enclosures and machined brackets -- not by how often it
 appears across all of Inventor.
 
-### Tier 1 -- the coherence gaps
+### Tier 1 -- done, except one
 
-These are the ones where the server can already *measure* or *imply* something it
-cannot *build*, which is the worst kind of gap.
+1. **FaceDraft.** *Added.* `{"op":"draft","faces":{...},"plane":"xy","angle":"2 deg"}`.
+   Inventor builds this from a definition object rather than arguments:
+   `CreateFaceDraftDefinition()`, then `SetFixedPlane(faces, plane, angle)`, then
+   `Add`. This closes the gap where the DFM subsystem could measure draft and
+   report it as a finding but nothing could add it.
 
-1. **FaceDraft.** The DFM subsystem measures draft, reports insufficient draft as
-   a finding, and can drive a `draft` parameter -- but there is no way to add a
-   draft feature. Today the only draft available is the `taper` on an extrude,
-   which means draft has to be designed in from the first operation or not at all.
-   This is the single largest inconsistency in the tool.
+2. **Rib.** **Not added -- Inventor refuses it and I could not find the shape it
+   wants.** `RibFeatures.CreateDefinition(curves, isRib, reversed, thickness)`
+   succeeds and returns a `RibDefinition`; `RibFeatures.Add(definition)` then fails
+   with `E_INVALIDARG` for every combination tried. What was ruled out:
 
-2. **Rib.** Close to every moulded part has ribs. Building one by hand today means
-   a sketch, an extrude, and getting the thickness-to-wall ratio right yourself --
-   exactly the ratio the DFM analyser then complains about.
+   * `ProfileCurves` is an `ObjectCollection` of sketch curves, not a `Profile` --
+     passing a `Profile` gives a type mismatch, passing the collection does not, so
+     the type is right.
+   * Profile geometry: a line above the part, a line crossing it, a vertical line,
+     and a diagonal touching it. Verified in 3D that the line really was where it
+     was meant to be (Z=2 above a plate spanning Z=0..0.6), so this is not a
+     sketch-plane axis mix-up.
+   * `DirectionReversed` both ways; `ExtendProfile` on; `SetToNextExtent()`,
+     `SetFiniteExtent(...)`, and leaving the default (`kToNextRibExtent`) alone.
+   * `Thickness` as a number and as an expression string.
+   * `AffectedBody`, which defaults to `None` and looked like the answer, set to the
+     part's only body.
 
-3. **Boss.** Inventor's plastic-part boss places the post, the hole, the fillet and
-   optional stiffening ribs as one feature. The PCB enclosure built in this
-   session hand-rolled five bosses as circles, a join extrude and a hole; a `boss`
-   op would have been one line and would have carried the moulding intent with it.
+   Fourteen-plus combinations, all `E_INVALIDARG`. Whatever the missing piece is,
+   it is not in the parameter list or the obvious definition properties. Next thing
+   to try is recording the Inventor UI creating a rib and reading back what the
+   resulting `RibDefinition` differs in.
 
-4. **Combine and Split.** Booleans between solid bodies. Needed for the obvious
-   next thing anyone asks for after a tray -- a matching lid -- and for cutting a
-   part in half to look inside it. Currently there is no way to make a second body
-   interact with the first.
+3. **Boss.** *Added as a composite, because it cannot be added any other way.*
+   `BossFeatures` is a read-only collection on this build -- it exposes only
+   `Type`, `Application`, `Item`, `Count` and `_NewEnum`, with no `Add` and no
+   `Create`. So `{"op":"boss",...}` expands, in the recipe, into a sketch of
+   circles, a join extrude and a hole. It builds identical geometry and stays
+   parametric; it simply is not a Boss feature in the browser and cannot be edited
+   as one.
+
+4. **Combine and Split.** *Added.* `combine` needs a second body, which comes from
+   an extrude with `operation: "new_body"` -- note `kNewBodyOperation` is 20485.
+   `split` maps a style onto Inventor's separate calls: `trim` to `SplitPart`,
+   `split` to `SplitBody`, `faces` to `SplitFaces`.
 
 ### Tier 2 -- frequently wanted, no current workaround
+
+Rib from tier 1 belongs here too until the `Add` refusal is understood.
 
 5. **SketchDrivenPattern.** Pattern by sketch points. Rectangular and circular
    patterns cover the regular cases; anything irregular currently has to be
