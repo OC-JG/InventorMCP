@@ -100,3 +100,17 @@ class TestEmboss:
         out = marked(session, [{"type": "line", "start": [0, 0], "end": [10, 0]}])
         assert out["ok"] is False
         assert "nothing to emboss" in out["errors"][0]["error"]
+
+
+class TestMeasuredAgainstInventor:
+    """Numbers taken off a part Inventor actually built, so a drift in the
+    heuristic or a change of anchor convention shows up as a failing test."""
+
+    def test_the_anchor_is_the_top_of_the_text(self):
+        """Measured on PcbEnclosure-rev6: anchored at Z=12.6 with height 8, the
+        engraved glyphs ran from Z=2.11 (the y descender) up to Z=12.60, with the
+        baseline at 4.34. The anchor is the top, and the box is ~1.3x the height."""
+        anchor, height = 12.6, 8.0
+        top, bottom = 12.60, 2.11
+        assert top == pytest.approx(anchor, abs=0.05)
+        assert (top - bottom) == pytest.approx(1.31 * height, rel=0.05)

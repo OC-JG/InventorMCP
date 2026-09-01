@@ -87,6 +87,8 @@ sketch      {"op":"sketch","name":"Base","plane":"xy","offset":null,"entities":[
     {"type":"bolt_circle","center":[0,0],"diameter":"pcd","count":6}
     {"type":"text","text":"OnlyCat","position":[0,0],"height":8,"font":"Arial",
      "bold":false,"align":"center","rotation":0}      // feed this to `emboss`
+       // `position` is the TOP of the text, not the baseline -- it hangs below by
+       // about 1.3 x height. Text must fit inside the face or the emboss is refused.
   Entities are auto-constrained and driven by dimensions built from your
   expressions; "locate":"none" leaves an entity floating if you want to
   constrain it yourself with the optional "constraints" and "dimensions" lists.

@@ -215,7 +215,11 @@ class TextEntity(EntityBase):
 
     type: Literal["text"] = "text"
     text: str = Field(description="The string to write. Single line.", min_length=1)
-    position: Point2D = [0.0, 0.0]
+    position: Point2D = Field(
+        [0.0, 0.0],
+        description="Anchor. This is the TOP of the text, not its baseline: text hangs "
+        "below it by roughly 1.3 x `height`.",
+    )
     height: ValueSpec = Field(
         5.0,
         description="Font size, which is roughly the cap height. The rendered box is taller.",
