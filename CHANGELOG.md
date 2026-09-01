@@ -5,6 +5,70 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 ## Unreleased
 
 ### Added
+- **Draft, combine, split and boss.** Four more operations, and one that could not
+  be built at all.
+
+  * `draft` tapers existing faces about a parting plane. The DFM subsystem has
+    always been able to measure draft and complain about it; until now nothing
+    could add any. Verified against Inventor: 0.1505 cm^3 off a plate's four walls
+    at 2 degrees, where the simulator predicts 0.1508.
+  * `combine` booleans one body into another, and `split` cuts the part with a
+    plane -- `trim` to throw a side away, `split` to keep both, `faces` to divide
+    only the faces it crosses.
+  * `boss` places a mounting post with a pilot down it. **Inventor's own Boss
+    cannot be created through the API** -- `BossFeatures` exposes no `Add` and no
+    `Create` -- so this expands in the recipe into a sketch, a join extrude and a
+    hole. Same geometry, still parametric, but it is not a Boss in the browser.
+    Expanding at recipe level rather than in the builder means `validate_recipe`
+    rehearses exactly what gets built.
+
+  * `rib` is built by hand for the same reason: `RibFeatures.CreateDefinition`
+    succeeds and `RibFeatures.Add` then refuses with `E_INVALIDARG` across every
+    combination of profile geometry, direction, extent, thickness type and
+    `AffectedBody` tried -- fourteen and counting, all written up in
+    `docs/FEATURE_COVERAGE.md`. So a rib is its silhouette -- the top edge from
+    `start` to `end`, dropped to `root` -- extruded symmetrically about its plane.
+    Exact against Inventor at 20.88000 cm^3 flat-topped and 20.40000 sloped.
+
+    It has no draft knob. A moulded rib should thin as it rises, which a planar
+    silhouette and a linear extrude cannot do; an extrude's `taper` drafts across
+    the thickness instead and measurably *added* 0.00154 cm^3 rather than releasing
+    the rib, so the knob was removed rather than left to mislead.
+
+### Added
+- **Text and emboss.** A `text` sketch entity and an `emboss` operation, so a
+  part can carry a real font-rendered name rather than an approximation of one.
+  `{"type":"text","text":"OnlyCat","height":8,"font":"Arial","bold":true}` in a
+  sketch on the face to be marked, then
+  `{"op":"emboss","sketch":"Name","depth":0.5,"style":"engrave"}`.
+
+  Three things worth knowing, all learned from Inventor refusing them first:
+
+  * `TextBoxes.AddFitted` takes exactly two arguments on this build. Rotation and
+    justification are properties set afterwards, not arguments.
+  * Inventor defaults text to left-justified from its anchor, so a centred-looking
+    recipe ran the text off the edge of the face. The default here is `center`.
+  * An emboss whose profile leaves the face is refused with a bare "Exception
+    occurred". That is now caught and reported as what it actually is, quoting the
+    rendered size of the text in millimetres.
+
+  `AddEmbossFromFace`/`AddEngraveFromFace` take a `TopFaceColor` where a taper
+  angle might be expected, so there is deliberately no draft on an emboss. A
+  moulded part that needs drafted lettering wants a tapered extrude cut.
+
+  The simulator charges text a share of the font size squared, calibrated against
+  what Inventor really removed at three sizes -- within about 3% for Arial, and
+  frankly approximate for anything else.
+
+### Fixed
+- The cheatsheet said `slot.length` without saying it is measured centre to
+  centre, so a "20 x 9 slot" built 29 long. The schema always said so; the
+  cheatsheet, which is what gets read, did not.
+- The cheatsheet recommended the `concave` edge filter for rounding an inside
+  corner without mentioning that it also matches the wall of every slot and
+  pocket cut so far. On a bracket with two slots it matched five edges, not one.
+
+### Added
 - **A closed manufacturability loop.** The OnlyCat DFM tool measures a mesh and
   says what is wrong with the part for injection moulding; this takes that
   verdict, enacts the parts of it that really are parameter changes, rebuilds,

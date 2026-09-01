@@ -78,11 +78,17 @@ sketch      {"op":"sketch","name":"Base","plane":"xy","offset":null,"entities":[
     {"type":"polyline","points":[[0,0],[40,0],[40,10],[0,25]],"closed":true}
     {"type":"arc","center":[0,0],"radius":12,"start_angle":0,"end_angle":180}
     {"type":"slot","center":[0,0],"length":30,"width":8,"angle":0}
+       // `length` is CENTRE-TO-CENTRE, so that slot is 38 long overall.
+       // For an overall length L, give length = L - width.
     {"type":"polygon","center":[0,0],"sides":6,"size":"af","fit":"circumscribed"}
     {"type":"point","position":[20,0]}                          // a hole centre
     {"type":"point_grid","center":[0,0],"columns":3,"rows":2,"x_spacing":30,"y_spacing":20}
     {"type":"ellipse","center":[0,0],"major":40,"minor":20}
     {"type":"bolt_circle","center":[0,0],"diameter":"pcd","count":6}
+    {"type":"text","text":"OnlyCat","position":[0,0],"height":8,"font":"Arial",
+     "bold":false,"align":"center","rotation":0}      // feed this to `emboss`
+       // `position` is the TOP of the text, not the baseline -- it hangs below by
+       // about 1.3 x height. Text must fit inside the face or the emboss is refused.
   Entities are auto-constrained and driven by dimensions built from your
   expressions; "locate":"none" leaves an entity floating if you want to
   constrain it yourself with the optional "constraints" and "dimensions" lists.
@@ -105,7 +111,41 @@ hole        {"op":"hole","sketch":"Holes","diameter":"hole_d","through_all":true
              table, so give `diameter` as the tapping drill.
 fillet      {"op":"fillet","edges":{"filter":"vertical"},"radius":"corner_r"}
 chamfer     {"op":"chamfer","edges":{"filter":"top"},"distance":1}
+emboss      {"op":"emboss","sketch":"Name","depth":0.5,"style":"engrave|raise"}
+             Marks a face with text or a closed profile. Put the sketch on the face
+             being marked -- depth is measured from the sketch plane. `engrave` cuts
+             in, `raise` stands proud. The profile must fit INSIDE that face: text
+             overrunning the edge is refused with no explanation. No draft angle --
+             use a tapered extrude cut if drafted lettering is needed.
 shell       {"op":"shell","faces":{"kind":"face","filter":"top"},"thickness":"wall"}
+draft       {"op":"draft","faces":{"filter":"vertical"},"plane":"xy","angle":"2 deg"}
+             Tapers faces about their edge on a parting plane, so a moulded part can
+             leave the tool. Unlike an extrude's `taper` this works on faces that
+             already exist, which is what you want on walls built before the tooling
+             was thought about.
+boss        {"op":"boss","positions":[[20,0],[-20,0]],"plane":"Top","diameter":6,
+             "height":10,"hole_diameter":2.5,"tap":"M3x0.5"}
+             A mounting post with a pilot down it. Inventor's own Boss cannot be made
+             through the API, so this expands into a sketch, a join extrude and a
+             hole -- it appears in the browser as those, not as a Boss. The pilot
+             defaults to 4/5 of the height so it does not break through.
+rib         {"op":"rib","plane":"xz","start":[-30,20],"end":[30,20],"root":6,
+             "thickness":2}
+             A web standing on the part. Inventor's Rib feature refuses every
+             definition the API can build, so this is the silhouette -- the top edge
+             from `start` to `end`, dropped to `root` -- thickened symmetrically
+             about the plane. Not a Rib in the browser, same geometry. Keep it under
+             about 0.6 of the wall it meets or the wall will sink opposite it. No
+             draft: a rib should thin as it rises, which a silhouette plus a linear
+             extrude cannot do -- narrow the silhouette instead.
+combine     {"op":"combine","base":1,"tools":[2],"operation":"join|cut|intersect"}
+             Booleans one body into another. Needs a second body, which means an
+             earlier extrude with "operation":"new_body". Bodies are 1-based in
+             creation order.
+split       {"op":"split","tool":"Mid","style":"trim|split|faces","remove_positive":true}
+             Cuts the part with a plane. `trim` throws a side away -- this is how a
+             lid comes off a tray. `split` keeps both halves as bodies. `faces` only
+             divides the faces the plane crosses.
 patterns    {"op":"rectangular_pattern","features":["Hole1"],"axis1":"x","count1":4,"spacing1":25}
             {"op":"circular_pattern","features":["Hole1"],"axis":"z","count":6}
             {"op":"mirror","features":["Rib"],"plane":"yz"}
@@ -118,6 +158,9 @@ SELECTORS pick edges and faces without magic indices:
   filters: all, top, bottom, front, back, left, right, vertical, horizontal,
            circular, linear, planar, cylindrical, largest, smallest,
            concave (an inside corner), convex (an outside one)
+  `concave` matches EVERY inside edge, which after a cut includes the walls of
+  every slot and pocket, not just the corner you meant. Round before you cut, or
+  narrow the selector -- and run `select_topology` first to see the real count.
   Prefer `concave` over guessing a `near` point for "round the inside corner":
   it does not depend on which way a sketch plane happens to face.
   Run `select_topology` with a selector first to see exactly what it matches.

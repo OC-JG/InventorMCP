@@ -205,6 +205,34 @@ class BoltCircleEntity(EntityBase):
     start_angle: float = 0.0
 
 
+class TextEntity(EntityBase):
+    """A run of text, for embossing or engraving a name onto a face.
+
+    Inventor renders this with a real font, so it is not a set of curves the
+    planner can constrain: it is positioned and sized, and that is all. Feed the
+    sketch to an `emboss` operation to turn it into geometry.
+    """
+
+    type: Literal["text"] = "text"
+    text: str = Field(description="The string to write. Single line.", min_length=1)
+    position: Point2D = Field(
+        [0.0, 0.0],
+        description="Anchor. This is the TOP of the text, not its baseline: text hangs "
+        "below it by roughly 1.3 x `height`.",
+    )
+    height: ValueSpec = Field(
+        5.0,
+        description="Font size, which is roughly the cap height. The rendered box is taller.",
+    )
+    font: str = Field("Arial", description="Font family name as installed on this machine.")
+    bold: bool = False
+    italic: bool = False
+    align: Literal["left", "center", "right"] = Field(
+        "center", description="Which end of the text `position` refers to."
+    )
+    rotation: float = Field(0.0, description="Rotation in degrees, anticlockwise from +X.")
+
+
 SketchEntity = Annotated[
     Union[
         LineEntity,
@@ -218,6 +246,7 @@ SketchEntity = Annotated[
         PointEntity,
         GridEntity,
         BoltCircleEntity,
+        TextEntity,
     ],
     Field(discriminator="type"),
 ]
@@ -543,6 +572,136 @@ class MaterialOp(OpBase):
     appearance: str | None = None
 
 
+class EmbossOp(OpBase):
+    """Raise or sink a sketch profile -- usually text -- on a face.
+
+    `engrave` cuts into the part, `raise` adds material standing off it. Depth is
+    measured from the sketch plane, so put the sketch on the face being marked.
+    The profile must fit inside that face: text running off the edge is refused.
+
+    Inventor's emboss-from-face takes no draft angle, so there is no `taper` here;
+    a moulded part that needs drafted lettering wants a tapered extrude cut instead.
+    """
+
+    op: Literal["emboss"] = "emboss"
+    sketch: str = Field(description="Sketch holding the profile or text to emboss.")
+    depth: ValueSpec = Field(0.5, description="How deep to engrave, or how far to raise.")
+    style: Literal["engrave", "raise"] = "engrave"
+    flip: bool = Field(
+        False, description="Reverse which side of the sketch plane the emboss goes."
+    )
+
+
+class DraftOp(OpBase):
+    """Taper faces away from a parting plane so a moulded part can leave the tool.
+
+    This is the standalone draft feature, as opposed to the `taper` on an extrude:
+    it can be applied to faces that already exist, which is what makes it useful
+    on a part whose walls were built before anyone thought about the tooling.
+    """
+
+    op: Literal["draft"] = "draft"
+    faces: Selector = Field(
+        default_factory=lambda: Selector(kind="face"),
+        description="Faces to draft. Usually the vertical walls.",
+    )
+    plane: PlaneRef = Field(
+        "xy", description="The parting plane. Faces are tapered about their edge on it."
+    )
+    angle: ValueSpec = Field("1 deg", description="Draft angle. Moulding usually wants 1-3 deg.")
+    flip: bool = Field(False, description="Reverse the pull direction.")
+
+
+class RibOp(OpBase):
+    """A rib: a thin web standing on the part, in a plane you choose.
+
+    Inventor's own Rib feature will not take a definition through the API --
+    `RibFeatures.Add` refuses every one `CreateDefinition` produces -- so this is
+    built by hand from the rib's silhouette and a symmetric extrude. It is the
+    same geometry and stays parametric; it is simply not a Rib in the browser.
+
+    The rib is described by its top edge (`start` to `end`, in the sketch plane's
+    coordinates) and the level its foot sits at (`root`). Those four corners are
+    the silhouette, which is then thickened either side of the plane. A sloped
+    top is fine -- give `start` and `end` different heights.
+
+    There is no draft here. A moulded rib should thin as it rises, and a single
+    silhouette pushed through a linear extrude cannot express that -- an extrude's
+    `taper` drafts across the thickness instead, which measurably *adds* material
+    rather than releasing the rib. Narrow the silhouette if you need the effect.
+    """
+
+    op: Literal["rib"] = "rib"
+    plane: PlaneRef = Field("xz", description="The plane the rib lies in.")
+    start: Point2D = Field(description="One end of the rib's top edge, in plane coordinates.")
+    end: Point2D = Field(description="The other end of the top edge.")
+    root: ValueSpec = Field(
+        0.0, description="Height of the rib's foot, where it meets the part."
+    )
+    thickness: ValueSpec = Field(2.0, description="Total thickness, centred on the plane.")
+
+
+class CombineOp(OpBase):
+    """Boolean one solid body into another.
+
+    Needs more than one body, which means an earlier `extrude` with
+    `operation: "new_body"`. Bodies are numbered in creation order, 1-based.
+    """
+
+    op: Literal["combine"] = "combine"
+    base: int = Field(1, description="Body to keep, 1-based in creation order.", ge=1)
+    tools: list[int] = Field(
+        default_factory=lambda: [2], description="Bodies to combine into the base."
+    )
+    operation: Literal["join", "cut", "intersect"] = "join"
+    keep_tools: bool = Field(False, description="Leave the tool bodies in place afterwards.")
+
+
+class SplitOp(OpBase):
+    """Cut the part with a plane -- to open it up, or to make a lid from a base.
+
+    `trim` throws one side away and is how a tray and its lid come from one solid.
+    `split` keeps both halves as separate bodies. `faces` only divides the faces it
+    crosses, leaving one solid, which is what you want before drafting each side of
+    a parting line differently.
+    """
+
+    op: Literal["split"] = "split"
+    tool: PlaneRef = Field("xy", description="Plane to cut with. A work plane name also works.")
+    style: Literal["trim", "split", "faces"] = "trim"
+    remove_positive: bool = Field(
+        True, description="For `trim`, discard the side the plane's normal points at."
+    )
+
+
+class BossOp(OpBase):
+    """A mounting post with a hole down it, at one or more positions.
+
+    Inventor's own Boss feature cannot be created through the API -- the
+    `BossFeatures` collection is read-only -- so this builds the same geometry from
+    a circle, a join extrude and a hole. That means it appears in the browser as
+    those features rather than as a Boss, and it is not editable as one.
+    """
+
+    op: Literal["boss"] = "boss"
+    positions: list[Point2D] = Field(
+        default_factory=lambda: [[0.0, 0.0]], description="Boss centres on `plane`."
+    )
+    plane: PlaneRef = Field("xy", description="Plane the bosses stand on.")
+    diameter: ValueSpec = Field(6.0, description="Outside diameter of the post.")
+    height: ValueSpec = Field(10.0, description="How far the post stands off the plane.")
+    hole_diameter: ValueSpec | None = Field(
+        None, description="Pilot hole diameter. Omit for a solid post."
+    )
+    hole_depth: ValueSpec | None = Field(
+        None, description="Pilot depth. Defaults to 80% of the height."
+    )
+    tap: str | None = Field(
+        None, description="Thread designation, e.g. 'M3x0.5'. Give the tapping drill as "
+        "`hole_diameter`."
+    )
+
+
 Operation = Annotated[
     Union[
         SketchOp,
@@ -559,6 +718,12 @@ Operation = Annotated[
         MirrorOp,
         WorkPlaneOp,
         ThreadOp,
+        EmbossOp,
+        DraftOp,
+        RibOp,
+        CombineOp,
+        SplitOp,
+        BossOp,
         MaterialOp,
     ],
     Field(discriminator="op"),
@@ -613,6 +778,19 @@ class DfmSpec(Base):
         return value
 
 
+def _boss_depth(op: "BossOp") -> ValueSpec:
+    """How deep a boss's pilot goes when the recipe does not say.
+
+    Four fifths of the post, which leaves a floor under the hole rather than
+    breaking through into whatever the boss is standing on.
+    """
+    if op.hole_depth is not None:
+        return op.hole_depth
+    if isinstance(op.height, (int, float)):
+        return float(op.height) * 0.8
+    return f"({op.height}) * 0.8"
+
+
 class PartRecipe(Base):
     """A complete, replayable description of a parametric part."""
 
@@ -628,6 +806,65 @@ class PartRecipe(Base):
         description="Manufacturability: which parameter means what, and which are "
         "key geometry that must not be changed automatically.",
     )
+
+    @model_validator(mode="after")
+    def _expand_bosses(self) -> "PartRecipe":
+        """Turn every `boss` and `rib` into the features that actually build one.
+
+        Neither can be created through Inventor's API -- `BossFeatures` has no
+        `Add` at all, and `RibFeatures.Add` refuses every definition it is given --
+        so a boss is a post, a join extrude and a hole, and a rib is a silhouette
+        and a symmetric extrude. Expanding here rather than in the builder means
+        `validate_recipe` rehearses exactly what will be built, and the operation
+        list a caller gets back is the truth about what went into the part.
+        """
+        if not any(isinstance(op, (BossOp, RibOp)) for op in self.operations):
+            return self
+        expanded: list[Operation] = []
+        for index, op in enumerate(self.operations):
+            if isinstance(op, RibOp):
+                stem = op.name or f"Rib{index + 1}"
+                expanded.append(SketchOp(
+                    name=f"{stem}Profile", plane=op.plane,
+                    entities=[PolylineEntity(points=[
+                        list(op.start), list(op.end),
+                        [op.end[0], op.root], [op.start[0], op.root],
+                    ], closed=True)],
+                ))
+                expanded.append(ExtrudeOp(
+                    name=stem, sketch=f"{stem}Profile", distance=op.thickness,
+                    operation="join", direction="symmetric",
+                ))
+                continue
+            if not isinstance(op, BossOp):
+                expanded.append(op)
+                continue
+            stem = op.name or f"Boss{index + 1}"
+            expanded.append(SketchOp(
+                name=f"{stem}Profiles", plane=op.plane,
+                entities=[CircleEntity(center=list(point), diameter=op.diameter)
+                          for point in op.positions],
+            ))
+            expanded.append(ExtrudeOp(
+                name=stem, sketch=f"{stem}Profiles", distance=op.height,
+                operation="join", direction="positive",
+            ))
+            if op.hole_diameter is None:
+                continue
+            expanded.append(WorkPlaneOp(
+                name=f"{stem}Top", kind="offset", base=op.plane, offset=op.height,
+            ))
+            expanded.append(SketchOp(
+                name=f"{stem}Pilots", plane=f"{stem}Top",
+                entities=[PointEntity(position=list(point)) for point in op.positions],
+            ))
+            expanded.append(HoleOp(
+                name=f"{stem}Holes", sketch=f"{stem}Pilots",
+                diameter=op.hole_diameter, depth=_boss_depth(op),
+                direction="negative", tap=op.tap,
+            ))
+        object.__setattr__(self, "operations", expanded)
+        return self
 
     @model_validator(mode="after")
     def _unique_parameter_names(self) -> "PartRecipe":

@@ -244,6 +244,12 @@ SHELL_DIRECTIONS = {
     "both": "kBothShellDirection",
 }
 
+TEXT_ALIGNMENT = {
+    "left": "kAlignTextLeft",
+    "center": "kAlignTextCenter",
+    "right": "kAlignTextRight",
+}
+
 VIEW_ORIENTATIONS = {
     "iso": "kIsoTopRightViewOrientation",
     "front": "kFrontViewOrientation",

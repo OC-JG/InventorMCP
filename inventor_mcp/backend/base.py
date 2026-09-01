@@ -295,6 +295,41 @@ class ShellRequest:
 
 
 @dataclass
+class EmbossRequest:
+    sketch: str
+    depth: Driven
+    style: str = "engrave"          # "engrave" cuts in, "raise" stands proud
+    flip: bool = False
+    name: str | None = None
+
+
+@dataclass
+class DraftRequest:
+    faces: ResolvedSelector
+    plane: str
+    angle: Driven
+    flip: bool = False
+    name: str | None = None
+
+
+@dataclass
+class CombineRequest:
+    base: int
+    tools: Sequence[int]
+    operation: str = "join"
+    keep_tools: bool = False
+    name: str | None = None
+
+
+@dataclass
+class SplitRequest:
+    tool: str
+    style: str = "trim"
+    remove_positive: bool = True
+    name: str | None = None
+
+
+@dataclass
 class RectangularPatternRequest:
     features: Sequence[str]
     axis1: AxisSpec
@@ -468,6 +503,18 @@ class Backend(ABC):
 
     @abstractmethod
     def work_plane(self, doc_id: str, request: WorkPlaneRequest) -> FeatureInfo: ...
+
+    @abstractmethod
+    def draft(self, doc_id: str, request: DraftRequest) -> FeatureInfo: ...
+
+    @abstractmethod
+    def combine(self, doc_id: str, request: CombineRequest) -> FeatureInfo: ...
+
+    @abstractmethod
+    def split(self, doc_id: str, request: SplitRequest) -> FeatureInfo: ...
+
+    @abstractmethod
+    def emboss(self, doc_id: str, request: EmbossRequest) -> FeatureInfo: ...
 
     @abstractmethod
     def thread(self, doc_id: str, request: ThreadRequest) -> FeatureInfo: ...

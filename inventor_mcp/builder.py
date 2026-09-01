@@ -16,6 +16,9 @@ from .backend.base import (
     ChamferRequest,
     CircularPatternRequest,
     Driven,
+    CombineRequest,
+    DraftRequest,
+    EmbossRequest,
     ExtrudeRequest,
     FeatureInfo,
     FilletRequest,
@@ -26,6 +29,7 @@ from .backend.base import (
     ResolvedSelector,
     RevolveRequest,
     ShellRequest,
+    SplitRequest,
     SweepRequest,
     ThreadRequest,
     WorkPlaneRequest,
@@ -39,6 +43,10 @@ from .resolve import Resolved, Resolver
 from .schema import (
     ChamferOp,
     CircularPatternOp,
+    BossOp,
+    CombineOp,
+    DraftOp,
+    EmbossOp,
     ExtrudeOp,
     FilletOp,
     HoleOp,
@@ -52,6 +60,7 @@ from .schema import (
     RevolveOp,
     Selector,
     ShellOp,
+    SplitOp,
     SketchOp,
     SweepOp,
     ThreadOp,
@@ -390,6 +399,45 @@ def _apply_one(session: Session, context: DocumentContext, op: Operation) -> dic
             name=op.name,
         )
         return _record(context, backend.thread(context.doc_id, request), "thread")
+
+    if isinstance(op, EmbossOp):
+        request = EmbossRequest(
+            sketch=op.sketch,
+            depth=_driven(resolver.length(op.depth, "emboss depth", positive=True)),  # type: ignore[arg-type]
+            style=op.style,
+            flip=op.flip,
+            name=op.name,
+        )
+        return _record(context, backend.emboss(context.doc_id, request), "emboss")
+
+    if isinstance(op, DraftOp):
+        request = DraftRequest(
+            faces=resolve_selector(op.faces, resolver, kind="face"),
+            plane=op.plane,
+            angle=_driven(resolver.angle(op.angle, "draft angle")),  # type: ignore[arg-type]
+            flip=op.flip,
+            name=op.name,
+        )
+        return _record(context, backend.draft(context.doc_id, request), "draft")
+
+    if isinstance(op, CombineOp):
+        request = CombineRequest(
+            base=op.base,
+            tools=list(op.tools),
+            operation=op.operation,
+            keep_tools=op.keep_tools,
+            name=op.name,
+        )
+        return _record(context, backend.combine(context.doc_id, request), "combine")
+
+    if isinstance(op, SplitOp):
+        request = SplitRequest(
+            tool=op.tool,
+            style=op.style,
+            remove_positive=op.remove_positive,
+            name=op.name,
+        )
+        return _record(context, backend.split(context.doc_id, request), "split")
 
     if isinstance(op, MaterialOp):
         info = backend.set_material(context.doc_id, op.material, op.appearance)
