@@ -138,3 +138,46 @@ class TestBoss:
             {"op": "boss", "name": "Post", "positions": [[-20, 0], [20, 0]], "plane": "Top",
              "diameter": 6, "height": 10, "hole_diameter": 2.5, "tap": "M3x0.5"}])
         assert volume(out) == pytest.approx(19.6895, abs=0.02)
+
+
+class TestRib:
+    """A rib is not Inventor's Rib feature either -- `RibFeatures.Add` refuses
+    every definition the API can build -- so it is a silhouette and a symmetric
+    extrude. The volumes are what Inventor produced for these exact recipes."""
+
+    def _ops(self, **rib):
+        return [{"op": "rib", "name": "Web", "plane": "xz", "root": 6,
+                 "thickness": 2, **rib}]
+
+    def test_it_expands_into_a_silhouette_and_an_extrude(self):
+        recipe = PartRecipe.model_validate({
+            "name": "T", "units": "mm",
+            "operations": PLATE + self._ops(start=[-30, 20], end=[30, 20]),
+        })
+        assert [(op.op, getattr(op, "name", None)) for op in recipe.operations][2:] == [
+            ("sketch", "WebProfile"), ("extrude", "Web"),
+        ]
+
+    def test_the_extrude_is_symmetric_about_the_plane(self):
+        recipe = PartRecipe.model_validate({
+            "name": "T", "units": "mm",
+            "operations": PLATE + self._ops(start=[-30, 20], end=[30, 20]),
+        })
+        assert recipe.operations[-1].direction == "symmetric"
+
+    def test_a_flat_topped_rib_is_its_silhouette_times_its_thickness(self, session):
+        """Inventor measured 20.88000 cm^3: 60 x 14 mm silhouette, 2 mm thick."""
+        out = build(session, self._ops(start=[-30, 20], end=[30, 20]))
+        assert volume(out) == pytest.approx(19.2 + 1.68, rel=1e-4)
+
+    def test_a_sloped_top_gives_a_trapezoid(self, session):
+        """Inventor measured 20.40000 cm^3 for a top falling from 20 to 12."""
+        out = build(session, self._ops(start=[-30, 20], end=[30, 12]))
+        expected = 19.2 + (60 * (14 + 6) / 2) * 2 / 1000
+        assert volume(out) == pytest.approx(expected, rel=1e-4)
+
+    def test_there_is_no_draft_knob(self):
+        """An extrude's taper drafts across the rib's thickness, which measurably
+        adds material instead of releasing the rib, so it is deliberately absent."""
+        from inventor_mcp.schema import RibOp
+        assert "taper" not in RibOp.model_fields

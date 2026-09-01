@@ -16,8 +16,8 @@ Slot SnapFit Split Sweep Thicken Thread Trim Unwrap iFeatures
 **Covered today (17):** Extrude, Revolve, Sweep, Loft, Hole, Fillet, Chamfer,
 Shell, RectangularPattern, CircularPattern, Mirror, Thread, Emboss, FaceDraft,
 Combine, Split, plus work planes and material, which are not `Features`
-collections. `boss` exists as an operation but is built from primitives -- see
-below.
+collections. `boss` and `rib` exist as operations but are built from primitives,
+because neither Inventor feature can be created through the API -- see below.
 
 That is 14 of 53 by count, but the count flatters the gap in one direction and
 overstates it in the other: the covered ones are the high-frequency core of solid
@@ -30,7 +30,7 @@ Ranked by how often the feature is reached for on the kind of part this server
 already builds -- moulded enclosures and machined brackets -- not by how often it
 appears across all of Inventor.
 
-### Tier 1 -- done, except one
+### Tier 1 -- done, two of them by hand
 
 1. **FaceDraft.** *Added.* `{"op":"draft","faces":{...},"plane":"xy","angle":"2 deg"}`.
    Inventor builds this from a definition object rather than arguments:
@@ -38,8 +38,7 @@ appears across all of Inventor.
    `Add`. This closes the gap where the DFM subsystem could measure draft and
    report it as a finding but nothing could add it.
 
-2. **Rib.** **Not added -- Inventor refuses it and I could not find the shape it
-   wants.** `RibFeatures.CreateDefinition(curves, isRib, reversed, thickness)`
+2. **Rib.** *Added as a composite, because it cannot be added any other way.* `RibFeatures.CreateDefinition(curves, isRib, reversed, thickness)`
    succeeds and returns a `RibDefinition`; `RibFeatures.Add(definition)` then fails
    with `E_INVALIDARG` for every combination tried. What was ruled out:
 
@@ -61,6 +60,19 @@ appears across all of Inventor.
    to try is recording the Inventor UI creating a rib and reading back what the
    resulting `RibDefinition` differs in.
 
+   So `{"op":"rib",...}` is built by hand instead: the rib's silhouette -- its top
+   edge from `start` to `end`, dropped to `root` -- as a closed profile, extruded
+   symmetrically about its plane by `thickness`. Exact against Inventor: 20.88000
+   cm^3 for a 60 x 14 mm silhouette 2 mm thick, and 20.40000 for the same with the
+   top falling from 20 to 12.
+
+   **It has no draft, deliberately.** A moulded rib should thin as it rises, and a
+   single planar silhouette pushed through a linear extrude cannot express that. An
+   extrude's `taper` drafts across the *thickness* instead, which measurably *added*
+   0.00154 cm^3 rather than releasing the rib -- so the knob was removed rather than
+   left to mislead. Narrow the silhouette if the effect is needed, or wait for the
+   real Rib feature.
+
 3. **Boss.** *Added as a composite, because it cannot be added any other way.*
    `BossFeatures` is a read-only collection on this build -- it exposes only
    `Type`, `Application`, `Item`, `Count` and `_NewEnum`, with no `Add` and no
@@ -75,8 +87,6 @@ appears across all of Inventor.
    `split` to `SplitBody`, `faces` to `SplitFaces`.
 
 ### Tier 2 -- frequently wanted, no current workaround
-
-Rib from tier 1 belongs here too until the `Add` refusal is understood.
 
 5. **SketchDrivenPattern.** Pattern by sketch points. Rectangular and circular
    patterns cover the regular cases; anything irregular currently has to be

@@ -22,12 +22,18 @@ Notable changes, newest first. Dates are when the work landed, not a release.
     Expanding at recipe level rather than in the builder means `validate_recipe`
     rehearses exactly what gets built.
 
-  **`rib` is deliberately not here.** `RibFeatures.CreateDefinition` succeeds and
-  `RibFeatures.Add` then refuses with `E_INVALIDARG` across every combination of
-  profile geometry, direction, extent, thickness type and `AffectedBody` tried --
-  fourteen and counting. Shipping an operation that always fails would be worse
-  than not shipping one, so it is written up in `docs/FEATURE_COVERAGE.md` with
-  everything that was ruled out.
+  * `rib` is built by hand for the same reason: `RibFeatures.CreateDefinition`
+    succeeds and `RibFeatures.Add` then refuses with `E_INVALIDARG` across every
+    combination of profile geometry, direction, extent, thickness type and
+    `AffectedBody` tried -- fourteen and counting, all written up in
+    `docs/FEATURE_COVERAGE.md`. So a rib is its silhouette -- the top edge from
+    `start` to `end`, dropped to `root` -- extruded symmetrically about its plane.
+    Exact against Inventor at 20.88000 cm^3 flat-topped and 20.40000 sloped.
+
+    It has no draft knob. A moulded rib should thin as it rises, which a planar
+    silhouette and a linear extrude cannot do; an extrude's `taper` drafts across
+    the thickness instead and measurably *added* 0.00154 cm^3 rather than releasing
+    the rib, so the knob was removed rather than left to mislead.
 
 ### Added
 - **Text and emboss.** A `text` sketch entity and an `emboss` operation, so a

@@ -612,6 +612,35 @@ class DraftOp(OpBase):
     flip: bool = Field(False, description="Reverse the pull direction.")
 
 
+class RibOp(OpBase):
+    """A rib: a thin web standing on the part, in a plane you choose.
+
+    Inventor's own Rib feature will not take a definition through the API --
+    `RibFeatures.Add` refuses every one `CreateDefinition` produces -- so this is
+    built by hand from the rib's silhouette and a symmetric extrude. It is the
+    same geometry and stays parametric; it is simply not a Rib in the browser.
+
+    The rib is described by its top edge (`start` to `end`, in the sketch plane's
+    coordinates) and the level its foot sits at (`root`). Those four corners are
+    the silhouette, which is then thickened either side of the plane. A sloped
+    top is fine -- give `start` and `end` different heights.
+
+    There is no draft here. A moulded rib should thin as it rises, and a single
+    silhouette pushed through a linear extrude cannot express that -- an extrude's
+    `taper` drafts across the thickness instead, which measurably *adds* material
+    rather than releasing the rib. Narrow the silhouette if you need the effect.
+    """
+
+    op: Literal["rib"] = "rib"
+    plane: PlaneRef = Field("xz", description="The plane the rib lies in.")
+    start: Point2D = Field(description="One end of the rib's top edge, in plane coordinates.")
+    end: Point2D = Field(description="The other end of the top edge.")
+    root: ValueSpec = Field(
+        0.0, description="Height of the rib's foot, where it meets the part."
+    )
+    thickness: ValueSpec = Field(2.0, description="Total thickness, centred on the plane.")
+
+
 class CombineOp(OpBase):
     """Boolean one solid body into another.
 
@@ -691,6 +720,7 @@ Operation = Annotated[
         ThreadOp,
         EmbossOp,
         DraftOp,
+        RibOp,
         CombineOp,
         SplitOp,
         BossOp,
@@ -779,17 +809,33 @@ class PartRecipe(Base):
 
     @model_validator(mode="after")
     def _expand_bosses(self) -> "PartRecipe":
-        """Turn every `boss` into the features that actually build one.
+        """Turn every `boss` and `rib` into the features that actually build one.
 
-        Inventor's Boss cannot be created through the API, so a boss is a post,
-        a join extrude and a hole. Expanding here rather than in the builder means
+        Neither can be created through Inventor's API -- `BossFeatures` has no
+        `Add` at all, and `RibFeatures.Add` refuses every definition it is given --
+        so a boss is a post, a join extrude and a hole, and a rib is a silhouette
+        and a symmetric extrude. Expanding here rather than in the builder means
         `validate_recipe` rehearses exactly what will be built, and the operation
         list a caller gets back is the truth about what went into the part.
         """
-        if not any(isinstance(op, BossOp) for op in self.operations):
+        if not any(isinstance(op, (BossOp, RibOp)) for op in self.operations):
             return self
         expanded: list[Operation] = []
         for index, op in enumerate(self.operations):
+            if isinstance(op, RibOp):
+                stem = op.name or f"Rib{index + 1}"
+                expanded.append(SketchOp(
+                    name=f"{stem}Profile", plane=op.plane,
+                    entities=[PolylineEntity(points=[
+                        list(op.start), list(op.end),
+                        [op.end[0], op.root], [op.start[0], op.root],
+                    ], closed=True)],
+                ))
+                expanded.append(ExtrudeOp(
+                    name=stem, sketch=f"{stem}Profile", distance=op.thickness,
+                    operation="join", direction="symmetric",
+                ))
+                continue
             if not isinstance(op, BossOp):
                 expanded.append(op)
                 continue

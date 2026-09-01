@@ -129,6 +129,15 @@ boss        {"op":"boss","positions":[[20,0],[-20,0]],"plane":"Top","diameter":6
              through the API, so this expands into a sketch, a join extrude and a
              hole -- it appears in the browser as those, not as a Boss. The pilot
              defaults to 4/5 of the height so it does not break through.
+rib         {"op":"rib","plane":"xz","start":[-30,20],"end":[30,20],"root":6,
+             "thickness":2}
+             A web standing on the part. Inventor's Rib feature refuses every
+             definition the API can build, so this is the silhouette -- the top edge
+             from `start` to `end`, dropped to `root` -- thickened symmetrically
+             about the plane. Not a Rib in the browser, same geometry. Keep it under
+             about 0.6 of the wall it meets or the wall will sink opposite it. No
+             draft: a rib should thin as it rises, which a silhouette plus a linear
+             extrude cannot do -- narrow the silhouette instead.
 combine     {"op":"combine","base":1,"tools":[2],"operation":"join|cut|intersect"}
              Booleans one body into another. Needs a second body, which means an
              earlier extrude with "operation":"new_body". Bodies are 1-based in
