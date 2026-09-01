@@ -92,6 +92,27 @@ class PPoint(Primitive):
     hole_center: bool = False
 
 
+@dataclass
+class PText(Primitive):
+    """A run of font-rendered text.
+
+    Unlike every other primitive this is not curves the planner can constrain or
+    dimension -- Inventor owns the glyph outlines. It carries its own size rather
+    than getting one from a driving dimension, so ``height_expression`` is kept
+    only so a rebuild can re-evaluate it against the parameter table.
+    """
+
+    position: tuple[float, float] = (0.0, 0.0)
+    text: str = ""
+    height: float = 0.5  # database units (cm)
+    height_expression: str = "5 mm"
+    font: str = "Arial"
+    bold: bool = False
+    italic: bool = False
+    align: str = "center"
+    rotation: float = 0.0  # radians
+
+
 ConstraintKind = Literal[
     "horizontal",
     "vertical",

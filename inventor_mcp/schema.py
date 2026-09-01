@@ -205,6 +205,30 @@ class BoltCircleEntity(EntityBase):
     start_angle: float = 0.0
 
 
+class TextEntity(EntityBase):
+    """A run of text, for embossing or engraving a name onto a face.
+
+    Inventor renders this with a real font, so it is not a set of curves the
+    planner can constrain: it is positioned and sized, and that is all. Feed the
+    sketch to an `emboss` operation to turn it into geometry.
+    """
+
+    type: Literal["text"] = "text"
+    text: str = Field(description="The string to write. Single line.", min_length=1)
+    position: Point2D = [0.0, 0.0]
+    height: ValueSpec = Field(
+        5.0,
+        description="Font size, which is roughly the cap height. The rendered box is taller.",
+    )
+    font: str = Field("Arial", description="Font family name as installed on this machine.")
+    bold: bool = False
+    italic: bool = False
+    align: Literal["left", "center", "right"] = Field(
+        "center", description="Which end of the text `position` refers to."
+    )
+    rotation: float = Field(0.0, description="Rotation in degrees, anticlockwise from +X.")
+
+
 SketchEntity = Annotated[
     Union[
         LineEntity,
@@ -218,6 +242,7 @@ SketchEntity = Annotated[
         PointEntity,
         GridEntity,
         BoltCircleEntity,
+        TextEntity,
     ],
     Field(discriminator="type"),
 ]
@@ -543,6 +568,26 @@ class MaterialOp(OpBase):
     appearance: str | None = None
 
 
+class EmbossOp(OpBase):
+    """Raise or sink a sketch profile -- usually text -- on a face.
+
+    `engrave` cuts into the part, `raise` adds material standing off it. Depth is
+    measured from the sketch plane, so put the sketch on the face being marked.
+    The profile must fit inside that face: text running off the edge is refused.
+
+    Inventor's emboss-from-face takes no draft angle, so there is no `taper` here;
+    a moulded part that needs drafted lettering wants a tapered extrude cut instead.
+    """
+
+    op: Literal["emboss"] = "emboss"
+    sketch: str = Field(description="Sketch holding the profile or text to emboss.")
+    depth: ValueSpec = Field(0.5, description="How deep to engrave, or how far to raise.")
+    style: Literal["engrave", "raise"] = "engrave"
+    flip: bool = Field(
+        False, description="Reverse which side of the sketch plane the emboss goes."
+    )
+
+
 Operation = Annotated[
     Union[
         SketchOp,
@@ -559,6 +604,7 @@ Operation = Annotated[
         MirrorOp,
         WorkPlaneOp,
         ThreadOp,
+        EmbossOp,
         MaterialOp,
     ],
     Field(discriminator="op"),

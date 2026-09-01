@@ -16,6 +16,7 @@ from .backend.base import (
     ChamferRequest,
     CircularPatternRequest,
     Driven,
+    EmbossRequest,
     ExtrudeRequest,
     FeatureInfo,
     FilletRequest,
@@ -39,6 +40,7 @@ from .resolve import Resolved, Resolver
 from .schema import (
     ChamferOp,
     CircularPatternOp,
+    EmbossOp,
     ExtrudeOp,
     FilletOp,
     HoleOp,
@@ -390,6 +392,16 @@ def _apply_one(session: Session, context: DocumentContext, op: Operation) -> dic
             name=op.name,
         )
         return _record(context, backend.thread(context.doc_id, request), "thread")
+
+    if isinstance(op, EmbossOp):
+        request = EmbossRequest(
+            sketch=op.sketch,
+            depth=_driven(resolver.length(op.depth, "emboss depth", positive=True)),  # type: ignore[arg-type]
+            style=op.style,
+            flip=op.flip,
+            name=op.name,
+        )
+        return _record(context, backend.emboss(context.doc_id, request), "emboss")
 
     if isinstance(op, MaterialOp):
         info = backend.set_material(context.doc_id, op.material, op.appearance)

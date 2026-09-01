@@ -28,6 +28,7 @@ from .plan import (
     PEllipse,
     PLine,
     PPoint,
+    PText,
     PointRef,
     Ref,
     SketchPlan,
@@ -48,6 +49,7 @@ from .schema import (
     RectangleEntity,
     SketchOp,
     SlotEntity,
+    TextEntity,
 )
 
 #: Coordinates closer than this (in cm) are treated as the same point.
@@ -815,6 +817,33 @@ def _plan_bolt_circle(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: Bol
             )
 
 
+def _plan_text(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: TextEntity) -> None:
+    """Place a run of text.
+
+    No constraints and no dimensions: Inventor renders the glyphs from a font, so
+    there is no curve here for a dimension to drive. `locate` is honoured only in
+    so far as the anchor point is where the recipe asked for it.
+    """
+    height = resolver.length(spec.height, "text height", positive=True)
+    position = resolver.point2d(spec.position)
+    plan.add(
+        PText(
+            ids.next("text"),
+            spec.construction,
+            position=position,
+            text=spec.text,
+            height=height.value,
+            height_expression=height.expression,
+            font=spec.font,
+            bold=spec.bold,
+            italic=spec.italic,
+            align=spec.align,
+            rotation=math.radians(spec.rotation),
+        ),
+        spec.name,
+    )
+
+
 _PLANNERS = {
     LineEntity: _plan_line,
     PolylineEntity: _plan_polyline,
@@ -827,6 +856,7 @@ _PLANNERS = {
     PointEntity: _plan_point,
     GridEntity: _plan_grid,
     BoltCircleEntity: _plan_bolt_circle,
+    TextEntity: _plan_text,
 }
 
 

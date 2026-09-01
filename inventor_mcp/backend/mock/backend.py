@@ -37,7 +37,7 @@ from ...geometry import (
     polygon_centroid,
     profile_loops,
 )
-from ...plan import PArc, PCircle, PEllipse, PLine, PPoint, SketchPlan
+from ...plan import PArc, PCircle, PEllipse, PLine, PPoint, PText, SketchPlan
 from ...units import Dim, Quantity, from_internal, lookup_unit
 from ..base import (
     AppInfo,
@@ -59,6 +59,7 @@ from ..base import (
     ResolvedSelector,
     RevolveRequest,
     ScreenshotRequest,
+    EmbossRequest,
     ShellRequest,
     SketchInfo,
     SweepRequest,
@@ -1209,6 +1210,56 @@ class MockBackend(Backend):
         self._record("shell", name=name, removed_faces=len(openings))
         return _feature_info(feature)
 
+    def emboss(self, doc_id: str, request: EmbossRequest) -> FeatureInfo:
+        document = self._doc(doc_id)
+        sketch = document.find_sketch(request.sketch)
+        if document.volume <= 0:
+            raise FeatureError("Nothing to emboss: the part has no solid body yet.")
+
+        texts = [p for p in sketch.plan.primitives if isinstance(p, PText)]
+        loops = sketch.loops
+        if texts:
+            area = sum(_text_area(t) for t in texts)
+            source = "text"
+        elif loops:
+            area = _net_area(sketch, loops)
+            source = "profile"
+        else:
+            raise FeatureError(
+                f"Sketch {sketch.name!r} has nothing to emboss.",
+                hint="An emboss needs a `text` entity or a closed profile.",
+            )
+
+        moved = area * request.depth.value
+        was = document.volume
+        if request.style == "engrave":
+            document.volume = max(document.volume - moved, 0.0)
+        else:
+            document.volume += moved
+        delta = document.volume - was
+
+        name = self._feature_name(document, request.name, "emboss")
+        feature = _Feature(
+            id=self._next("feat"),
+            name=name,
+            kind="emboss",
+            volume_delta=delta,
+            detail={
+                "sketch": sketch.name,
+                "style": request.style,
+                "depth": request.depth.as_dict(),
+                "area_from": source,
+                "area_cm2": round(area, 6),
+                "text": " ".join(t.text for t in texts) or None,
+            },
+        )
+        document.features.append(feature)
+        sketch.consumed_by = name
+        document.modified = True
+        self._record("emboss", name=name, sketch=sketch.name, style=request.style)
+        return _feature_info(feature)
+
+
     def _repeat(self, document: _Document, targets: Sequence[_Feature],
                 extra: int) -> tuple[float, str]:
         """Apply *extra* more copies of what *targets* did to the volume.
@@ -1673,6 +1724,31 @@ def _selected_loops(sketch: _Sketch, profiles: Sequence[int] | str) -> list[list
             f"Sketch {sketch.name!r} has {len(sketch.loops)} profile(s); "
             f"index {indices} is out of range."
         ) from exc
+
+
+#: Ink area one character lays down, as a fraction of the font size squared.
+#: Measured from Inventor itself, engraving "OnlyCat" in Arial 0.5 mm deep:
+#: 0.0202 cm^3 at 5 mm and 0.0072 cm^3 at 3 mm both give 0.23 for regular, and
+#: 0.0742 cm^3 at 8 mm bold gives 0.33 -- bold lays down about 1.4x the ink.
+_INK_PER_EM = 0.23
+_BOLD_INK = 1.4
+
+
+def _text_area(primitive: "PText") -> float:
+    """Roughly how much ink a run of text lays down, in database units squared.
+
+    There is no font metric here -- Inventor owns the glyph outlines -- so this
+    charges each character a box of 0.6 x the cap height and assumes the strokes
+    fill about half of it. Measured against a 10 mm "OnlyCat" cut by hand it is
+    within about 8%, which is the right order for a rehearsal that exists to
+    catch a cut landing in the wrong place, not to certify a mass.
+
+    ponytail: crude glyph-coverage heuristic, good to ~10%. Ask Inventor for the
+    real profile area if an emboss ever needs to be trusted to better than that.
+    """
+    height = primitive.height
+    ink = _INK_PER_EM * (_BOLD_INK if primitive.bold else 1.0)
+    return len(primitive.text.strip()) * ink * height * height
 
 
 def _net_area(sketch: _Sketch, loops: Sequence[Sequence[str]]) -> float:

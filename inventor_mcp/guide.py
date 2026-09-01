@@ -78,11 +78,15 @@ sketch      {"op":"sketch","name":"Base","plane":"xy","offset":null,"entities":[
     {"type":"polyline","points":[[0,0],[40,0],[40,10],[0,25]],"closed":true}
     {"type":"arc","center":[0,0],"radius":12,"start_angle":0,"end_angle":180}
     {"type":"slot","center":[0,0],"length":30,"width":8,"angle":0}
+       // `length` is CENTRE-TO-CENTRE, so that slot is 38 long overall.
+       // For an overall length L, give length = L - width.
     {"type":"polygon","center":[0,0],"sides":6,"size":"af","fit":"circumscribed"}
     {"type":"point","position":[20,0]}                          // a hole centre
     {"type":"point_grid","center":[0,0],"columns":3,"rows":2,"x_spacing":30,"y_spacing":20}
     {"type":"ellipse","center":[0,0],"major":40,"minor":20}
     {"type":"bolt_circle","center":[0,0],"diameter":"pcd","count":6}
+    {"type":"text","text":"OnlyCat","position":[0,0],"height":8,"font":"Arial",
+     "bold":false,"align":"center","rotation":0}      // feed this to `emboss`
   Entities are auto-constrained and driven by dimensions built from your
   expressions; "locate":"none" leaves an entity floating if you want to
   constrain it yourself with the optional "constraints" and "dimensions" lists.
@@ -105,6 +109,12 @@ hole        {"op":"hole","sketch":"Holes","diameter":"hole_d","through_all":true
              table, so give `diameter` as the tapping drill.
 fillet      {"op":"fillet","edges":{"filter":"vertical"},"radius":"corner_r"}
 chamfer     {"op":"chamfer","edges":{"filter":"top"},"distance":1}
+emboss      {"op":"emboss","sketch":"Name","depth":0.5,"style":"engrave|raise"}
+             Marks a face with text or a closed profile. Put the sketch on the face
+             being marked -- depth is measured from the sketch plane. `engrave` cuts
+             in, `raise` stands proud. The profile must fit INSIDE that face: text
+             overrunning the edge is refused with no explanation. No draft angle --
+             use a tapered extrude cut if drafted lettering is needed.
 shell       {"op":"shell","faces":{"kind":"face","filter":"top"},"thickness":"wall"}
 patterns    {"op":"rectangular_pattern","features":["Hole1"],"axis1":"x","count1":4,"spacing1":25}
             {"op":"circular_pattern","features":["Hole1"],"axis":"z","count":6}
@@ -118,6 +128,9 @@ SELECTORS pick edges and faces without magic indices:
   filters: all, top, bottom, front, back, left, right, vertical, horizontal,
            circular, linear, planar, cylindrical, largest, smallest,
            concave (an inside corner), convex (an outside one)
+  `concave` matches EVERY inside edge, which after a cut includes the walls of
+  every slot and pocket, not just the corner you meant. Round before you cut, or
+  narrow the selector -- and run `select_topology` first to see the real count.
   Prefer `concave` over guessing a `near` point for "round the inside corner":
   it does not depend on which way a sketch plane happens to face.
   Run `select_topology` with a selector first to see exactly what it matches.

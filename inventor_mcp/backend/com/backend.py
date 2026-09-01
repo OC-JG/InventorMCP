@@ -35,7 +35,7 @@ from ...errors import (
 )
 from ...expressions import referenced_parameters
 from ...geometry import profile_loops
-from ...plan import PArc, PCircle, PEllipse, PLine, PPoint, PointRef, Ref, SketchPlan
+from ...plan import PArc, PCircle, PEllipse, PLine, PPoint, PText, PointRef, Ref, SketchPlan
 from ...units import from_internal, inventor_symbol, unit_from_inventor
 from ..base import (
     AppInfo,
@@ -57,6 +57,7 @@ from ..base import (
     ResolvedSelector,
     RevolveRequest,
     ScreenshotRequest,
+    EmbossRequest,
     ShellRequest,
     SketchInfo,
     SweepRequest,
@@ -70,6 +71,7 @@ from .constants import (
     DISPLAY_MODES,
     EXTENT_DIRECTIONS,
     SHELL_DIRECTIONS,
+    TEXT_ALIGNMENT,
     VIEW_ORIENTATIONS,
     Constants,
     load,
@@ -1422,6 +1424,42 @@ class ComBackend(Backend):
                 primitive.major_radius,
                 primitive.minor_radius,
             )
+        elif isinstance(primitive, PText):
+            # Inventor owns the glyph outlines, so this is placed and styled
+            # rather than constrained. The style override is how font, size and
+            # weight travel -- FontSize is in database units, like everything else.
+            escaped = (primitive.text.replace("&", "&amp;")
+                       .replace("<", "&lt;").replace(">", "&gt;"))
+            styled = (
+                f'<StyleOverride Font="{primitive.font}" FontSize="{primitive.height}"'
+                f'{" Bold=\"True\"" if primitive.bold else ""}'
+                f'{" Italic=\"True\"" if primitive.italic else ""}'
+                f">{escaped}</StyleOverride>"
+            )
+            try:
+                # AddFitted takes exactly two arguments on this build -- passing a
+                # rotation as a third is refused, so it is set as a property after.
+                entity = sketch.TextBoxes.AddFitted(
+                    transient.CreatePoint2d(*primitive.position), styled
+                )
+            except Exception as exc:
+                raise SketchError(
+                    f"Could not place the text {primitive.text!r}: {_com_message(exc)}",
+                    hint=f"Font {primitive.font!r} must be installed on this machine.",
+                ) from exc
+            # Both are set after the fact: AddFitted takes neither, and Inventor
+            # defaults to left-justified, which runs the text off the face.
+            for prop, resolve in (
+                ("HorizontalJustification",
+                 lambda: self._k(TEXT_ALIGNMENT[primitive.align])),
+                ("Rotation", lambda: primitive.rotation),
+            ):
+                if prop == "Rotation" and not primitive.rotation:
+                    continue
+                try:
+                    setattr(entity, prop, resolve())
+                except Exception:  # pragma: no cover - version-specific
+                    logger.info("Could not set %s on text %s.", prop, primitive.id)
         elif isinstance(primitive, PPoint):
             # A standalone point can be the shared point of a group, which is
             # how a bolt circle's construction lines meet their hole centres.
@@ -2247,6 +2285,94 @@ class ComBackend(Backend):
         return _feature_info(feature, "shell", {
             "removed_faces": int(faces.Count), "thickness": request.thickness.as_dict()
         })
+
+    def emboss(self, doc_id: str, request: EmbossRequest) -> FeatureInfo:  # pragma: no cover
+        """Raise or sink a sketch -- text or a closed profile -- on the part.
+
+        Inventor exposes this as two separate calls rather than one with a flag,
+        and the optional trailing arguments are not marshalled consistently
+        across builds, so each shape is tried in turn and every refusal is kept
+        for the error message.
+        """
+        document = self._doc(doc_id)
+        sketch = self._sketch(doc_id, request.sketch)
+        features = document.ComponentDefinition.Features.EmbossFeatures
+        depth = request.depth.expression
+        direction = self._k(
+            EXTENT_DIRECTIONS["negative" if request.flip else "positive"]
+        )
+        with self._batch(document), self._translate_errors("Emboss"):
+            profile = self._emboss_profile(sketch)
+            add = (
+                features.AddEngraveFromFace
+                if request.style == "engrave"
+                else features.AddEmbossFromFace
+            )
+            try:
+                feature = add(profile, depth, direction)
+            except Exception as exc:
+                raise FeatureError(
+                    f"Emboss failed: {self._explain(exc)}",
+                    hint=self._emboss_hint(sketch, request),
+                ) from exc
+            if request.name:
+                feature.Name = request.name
+        return _feature_info(feature, "emboss", {
+            "sketch": request.sketch,
+            "style": request.style,
+            "depth": request.depth.as_dict(),
+        })
+
+    def _emboss_hint(self, sketch: Any, request: EmbossRequest) -> str:  # pragma: no cover
+        """Why an emboss usually refuses, said in terms of this sketch.
+
+        Overwhelmingly it is that the text does not fit on the face it is being
+        written on: Inventor reports that as a bare "Exception occurred", which
+        sends you looking at the depth or the profile instead of the one thing
+        that is actually wrong. The fitted extent is measurable, so it is quoted.
+        """
+        parts = [f"Sketch {sketch.Name!r}, style {request.style!r}, depth "
+                 f"{request.depth.expression!r}."]
+        try:
+            boxes = sketch.TextBoxes
+            for index in range(1, int(boxes.Count) + 1):
+                box = boxes.Item(index)
+                parts.append(
+                    f"Text {box.Text!r} renders {float(box.FittedTextWidth) * 10:.1f} x "
+                    f"{float(box.FittedTextHeight) * 10:.1f} mm from its anchor."
+                )
+        except Exception:
+            pass
+        parts.append(
+            "An emboss whose profile runs off the edge of the face it is on is "
+            "refused with no further explanation, so check the text fits before "
+            "reaching for anything else -- shrink `height`, or move `position`."
+        )
+        return " ".join(parts)
+
+    def _emboss_profile(self, sketch: Any) -> Any:  # pragma: no cover
+        """A profile for an emboss, which unlike a solid feature may be text.
+
+        ``AddForSolid`` returns an empty profile for a sketch whose only content
+        is a text box -- there is no closed loop of curves in it -- and that empty
+        profile is exactly what the emboss wants, so an empty result is accepted
+        here where a solid feature would reject it.
+        """
+        has_text = int(getattr(sketch.TextBoxes, "Count", 0) or 0) > 0
+        try:
+            profile = sketch.Profiles.AddForSolid()
+        except Exception as exc:
+            raise FeatureError(
+                f"No usable profile in sketch {sketch.Name!r}: {self._explain_text(_com_message(exc))}",
+                hint="An emboss needs a text box or a closed profile.",
+            ) from exc
+        if int(profile.Count) == 0 and not has_text:
+            raise FeatureError(
+                f"Sketch {sketch.Name!r} has nothing to emboss.",
+                hint=f"It contains {_describe_sketch(sketch)}. Add text or a closed profile.",
+            )
+        return profile
+
 
     def _feature_collection(self, doc_id: str, names: Sequence[str]) -> Any:  # pragma: no cover
         document = self._doc(doc_id)

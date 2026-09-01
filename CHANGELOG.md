@@ -5,6 +5,39 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 ## Unreleased
 
 ### Added
+- **Text and emboss.** A `text` sketch entity and an `emboss` operation, so a
+  part can carry a real font-rendered name rather than an approximation of one.
+  `{"type":"text","text":"OnlyCat","height":8,"font":"Arial","bold":true}` in a
+  sketch on the face to be marked, then
+  `{"op":"emboss","sketch":"Name","depth":0.5,"style":"engrave"}`.
+
+  Three things worth knowing, all learned from Inventor refusing them first:
+
+  * `TextBoxes.AddFitted` takes exactly two arguments on this build. Rotation and
+    justification are properties set afterwards, not arguments.
+  * Inventor defaults text to left-justified from its anchor, so a centred-looking
+    recipe ran the text off the edge of the face. The default here is `center`.
+  * An emboss whose profile leaves the face is refused with a bare "Exception
+    occurred". That is now caught and reported as what it actually is, quoting the
+    rendered size of the text in millimetres.
+
+  `AddEmbossFromFace`/`AddEngraveFromFace` take a `TopFaceColor` where a taper
+  angle might be expected, so there is deliberately no draft on an emboss. A
+  moulded part that needs drafted lettering wants a tapered extrude cut.
+
+  The simulator charges text a share of the font size squared, calibrated against
+  what Inventor really removed at three sizes -- within about 3% for Arial, and
+  frankly approximate for anything else.
+
+### Fixed
+- The cheatsheet said `slot.length` without saying it is measured centre to
+  centre, so a "20 x 9 slot" built 29 long. The schema always said so; the
+  cheatsheet, which is what gets read, did not.
+- The cheatsheet recommended the `concave` edge filter for rounding an inside
+  corner without mentioning that it also matches the wall of every slot and
+  pocket cut so far. On a bracket with two slots it matched five edges, not one.
+
+### Added
 - **A closed manufacturability loop.** The OnlyCat DFM tool measures a mesh and
   says what is wrong with the part for injection moulding; this takes that
   verdict, enacts the parts of it that really are parameter changes, rebuilds,
