@@ -6,7 +6,7 @@ that *are* parameter changes into parameter changes, rebuilds, and asks the tool
 again -- so a finding is closed by a measurement rather than by an assertion
 that it has been addressed.
 
-Four things live here, in dependency order:
+Eight things live here, in dependency order:
 
 ``report``   reading the tool's JSON, tolerantly.
 ``declaration`` which parameter means what, and what may not change.

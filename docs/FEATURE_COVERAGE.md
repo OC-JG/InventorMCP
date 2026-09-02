@@ -13,14 +13,15 @@ Revolve Rib RuleFillet RuledSurface Sculpt Shell Simplify SketchDrivenPattern
 Slot SnapFit Split Sweep Thicken Thread Trim Unwrap iFeatures
 ```
 
-**Covered today (17):** Extrude, Revolve, Sweep, Loft, Hole, Fillet, Chamfer,
-Shell, RectangularPattern, CircularPattern, Mirror, Thread, Emboss, FaceDraft,
-Combine, Split, plus work planes and material, which are not `Features`
-collections. `boss` and `rib` exist as operations but are built from primitives,
-because neither Inventor feature can be created through the API -- see below.
+**Covered today, 17 of the 53 collections:** Extrude, Revolve, Sweep, Loft,
+Coil, Hole, Fillet, Chamfer, Shell, RectangularPattern, CircularPattern, Mirror,
+Thread, Emboss, FaceDraft, Combine, Split. Work planes and material are covered
+too and are not `Features` collections, so they sit outside the count. `boss` and
+`rib` exist as recipe operations but are built from primitives, because neither
+Inventor feature can be created through the API -- see below.
 
-That is 14 of 53 by count, but the count flatters the gap in one direction and
-overstates it in the other: the covered ones are the high-frequency core of solid
+Seventeen of fifty-three flatters the gap in one direction and overstates it in
+the other: the covered ones are the high-frequency core of solid
 modelling, and a good half of what is missing is surfacing and repair work that a
 text-to-part server has no business doing.
 
@@ -115,11 +116,10 @@ also passes the simulator rehearsal.
 5. **SketchDrivenPattern.** Pattern by sketch points. Rectangular and circular
    patterns cover the regular cases; anything irregular currently has to be
    enumerated by hand.
-6. **Coil.** Springs and helical forms. No approximation exists.
-7. **Thicken.** Turning a surface into a wall. `ThickenFeatures.Add` is public.
+6. **Thicken.** Turning a surface into a wall. `ThickenFeatures.Add` is public.
    `FaceOffsetFeatures` only exposes `_Add`, and Inventor's leading underscore
    means internal, so plain face offset is not on the table.
-8. **MoveFace.** `MoveFaceFeatures` has `Add` and `CreateDefinition`, so this is
+7. **MoveFace.** `MoveFaceFeatures` has `Add` and `CreateDefinition`, so this is
    buildable, and it is the only route to changing imported geometry -- the
    server reads STEP for DFM analysis and can then alter nothing, because
    translated geometry has no parameters.

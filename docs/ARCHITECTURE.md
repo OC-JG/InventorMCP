@@ -129,9 +129,11 @@ the thickness rather than the length.
 
 ### `tools/` — the MCP surface
 
-Nineteen tools rather than one per feature type. Feature creation goes through
-`apply_operations` with the same operation objects a recipe uses, which keeps the
-tool list small and means there is one syntax to learn instead of two.
+Thirty tools rather than one per feature type -- thirty-one when the escape
+hatch is on. Feature creation goes through `apply_operations` with the same
+operation objects a recipe uses, which keeps the tool list small and means there
+is one syntax to learn instead of two. Most of the count is not modelling: seven
+document-lifecycle tools and eleven manufacturability ones.
 
 Every tool is wrapped by `guard`, which turns exceptions into
 `{"ok": false, "error": ..., "message": ..., "hint": ...}`. A caller that gets a
@@ -141,11 +143,26 @@ The recipe cheat-sheet is embedded in the descriptions of the three tools that t
 recipes, rather than only in a resource. A model that has to fetch a schema before
 it can write anything will often guess instead.
 
+That has a price worth knowing: the three copies are 98% identical and come to
+27 kB, about 8,400 tokens of the tool list, of which roughly 4,600 is the
+duplication. It is paid on every request to a client that has this server
+enabled, whether or not the conversation is about CAD. Since the cheat-sheet was
+written, `skills/inventor-parametric-modelling/` has come to carry the same
+material and loads only when it is relevant, so the argument for paying it three
+times is weaker than when the decision was made. Left alone for now, because the
+Skill is a Claude-specific mechanism and the tool descriptions are not.
+
 ## Things deliberately left out
 
 - **Assemblies.** Parts first. The recipe schema has no `iam` concept and adding one
   properly means constraints between components, which is a second design problem.
-- **Drawings.** Same reasoning.
+- **Producing drawings.** No drawing views, no sheets, no title blocks -- the
+  same reasoning as assemblies. *Reading* one is a different thing and is
+  supported: `check_against_drawing` compares a `DrawingReading` against a
+  recipe, and `drawing.py` holds the schema for it. The distinction is the point
+  of the design, and `docs/DECISIONS.md` argues it under "A drawing is read, not
+  traced": tracing a drawing's outlines gives exact geometry and no parameters,
+  which is the one thing this project exists not to produce.
 - **Sheet metal.** A different feature set with its own rules, and none of it is
   reachable from the recipe schema.
 - **A real geometry kernel in the mock.** The point of the mock is fast feedback on
