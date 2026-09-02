@@ -10,6 +10,7 @@ Usage
     python datasheet.py sections <file.pdf>        # where the dimensions live
     python datasheet.py dims     <file.pdf>        # dimension rows, located pages only
     python datasheet.py find     <file.pdf> 0603   # every visual row containing a key
+    python datasheet.py drawing  <file.pdf>        # which page is the CAD drawing
     python datasheet.py render   <file.pdf> 3      # render page 3 to PNG
     python datasheet.py crop     <file.pdf> 1 x0 y0 x1 y1 [zoom]
 
@@ -30,12 +31,17 @@ import pymupdf
 
 # --- what a heading and a dimension row look like ---------------------------
 
+#: Headings worth landing on. "mechanical" is deliberately included even though
+#: it is a false friend on connector sheets -- it means retention forces there --
+#: because `dims` checks the page for dimension-shaped rows anyway.
 HEADING = re.compile(
     r"(package\s+dimensions|dimensions?|outline|mechanical|physical|"
     r"absolute\s+maximum|ratings?|recommended\s+land|land\s+pattern|footprint|"
     r"marking|ordering|soldering|taping|packaging)", re.I)
 
-DECIMAL = re.compile(r"\d+\.\d+")
+#: Both separators: some sheets use the European decimal comma (11,1) and a
+#: dot-only pattern skips those dimensions without complaining.
+DECIMAL = re.compile(r"\d+[.,]\d+")
 
 #: A visual row needs this many decimals to be worth showing. Three is what
 #: separates a dimension row from a sentence with a version number in it.
@@ -161,6 +167,23 @@ def find(path: str, needle: str) -> None:
     doc.close()
 
 
+def drawing(path: str) -> None:
+    """Rank pages by how little text they hold -- the drawing is usually the least.
+
+    A connector sheet said "CONNECTOR DIMENSIONS SEE ATTACHED DRAWING" and put
+    every dimension on a page carrying 57 characters of title block. Sorting by
+    text length finds that page without reading any of them.
+    """
+    doc = pymupdf.open(path)
+    pages = [(len(doc[n].get_text().strip()), n + 1) for n in range(doc.page_count)]
+    doc.close()
+    pages.sort()
+    print("least text first -- render the top of this list:")
+    for chars, page in pages[:5]:
+        note = "  <- image-only or a drawing" if chars < 200 else ""
+        print("   p%-4d %6d chars%s" % (page, chars, note))
+
+
 def render(path: str, page: int, zoom: float = 3.0) -> None:
     doc = pymupdf.open(path)
     pix = doc[page - 1].get_pixmap(matrix=pymupdf.Matrix(zoom, zoom))
@@ -196,6 +219,8 @@ def main(argv) -> int:
         dims(target, everywhere="--all" in argv)
     elif cmd == "find":
         find(target, argv[3])
+    elif cmd == "drawing":
+        drawing(target)
     elif cmd == "render":
         render(target, int(argv[3]), float(argv[4]) if len(argv) > 4 else 3.0)
     elif cmd == "crop":

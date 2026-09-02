@@ -120,6 +120,28 @@ comments — `"comment": "DERIVED: tail thickness is not dimensioned"` — and s
 plainly which features were left out. A fit-check envelope presented as a
 manufacturing model is the failure mode here.
 
+## Four traps found extending this to ICs and connectors
+
+* **A letter-table row does not start with its letter.** Clustering by y glues a
+  drawing's callout labels onto the table row -- `e D 2.80 2.90 3.04 ...` -- so a
+  regex anchored at the start of the line misses the row entirely. Anchor at the
+  **end**: the key is the last letter before the numeric run. Fixing this took the
+  corpus from 14 docs with a readable D/E table to 19.
+
+* **"Mechanical characteristics" is a false friend.** On a connector datasheet it
+  means retention forces and durability cycles, not dimensions. The heading
+  vocabulary will land you on the wrong page; confirm the page actually carries
+  dimension-shaped rows before trusting the hit.
+
+* **"See attached drawing" means the near-empty page.** A connector sheet said
+  `CONNECTOR DIMENSIONS SEE ATTACHED DRAWING` and the dimensions were on the last
+  page, which held **57 characters** of text -- a title block, with every dimension
+  as vector graphics. In a multi-page datasheet, the page with almost no text is
+  usually the drawing. Sort pages by text length ascending and render the bottom.
+
+* **Decimal commas.** Some sheets use the European convention (`11,1`, `24,0`), so
+  a `\d+\.\d+` pattern silently skips those dimensions. Match both separators.
+
 ## Gotchas that cost time
 
 * **`get_drawings()` and `get_images()` are O(vector content)** and will hang a

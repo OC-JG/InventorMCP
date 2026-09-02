@@ -60,7 +60,7 @@ class TestItIsAWellFormedSkill:
 
 class TestTheScriptOffersWhatTheSkillDescribes:
     def test_every_rung_of_the_ladder_has_a_subcommand(self, datasheet_module):
-        for name in ("survey", "sections", "dims", "find", "render", "crop"):
+        for name in ("survey", "sections", "dims", "find", "drawing", "render", "crop"):
             assert hasattr(datasheet_module, name), name
 
     def test_a_bare_call_explains_itself_rather_than_crashing(self, datasheet_module):
@@ -131,3 +131,8 @@ class TestTheFactsItQuotes:
 
     def test_it_warns_about_the_expensive_calls(self, skill):
         assert "get_drawings()" in skill and "get_images()" in skill
+
+    def test_it_records_the_traps_from_the_ic_and_connector_pass(self, skill_flat):
+        for claim in ("does not start with its letter", "false friend",
+                      "57 characters", "Decimal commas"):
+            assert claim in skill_flat, claim
