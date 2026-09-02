@@ -266,3 +266,55 @@ class TestTheShellItself:
         document = session.backend._doc(result["document"])
         shell = [f for f in document.features if f.kind == "shell"][0]
         assert "not a single prism" in shell.detail["volume_from"]
+
+
+class TestTheGuardCoversWhatIsGuessedAt:
+    """A ponytail with no tolerance beside it is an estimate nothing watches.
+
+    The simulator marks its roughest approximations with a `ponytail:` comment.
+    All three of them -- the draft wedge, the split fraction, the emboss ink
+    heuristic -- were missing from PREDICTED when this was written, so the
+    divergence check, whose whole job is to notice when Inventor did something
+    the estimate did not expect, was silent in exactly the places the author had
+    flagged as least trustworthy. The coil's helix arc length was missing too.
+    """
+
+    def marked_operations(self):
+        """Which mock features carry a ponytail, read out of the source."""
+        import pathlib
+        import re
+
+        source = (pathlib.Path(__file__).resolve().parent.parent
+                  / "inventor_mcp/backend/mock/backend.py").read_text()
+        lines = source.splitlines()
+        found = set()
+        for index, line in enumerate(lines):
+            if "ponytail:" not in line:
+                continue
+            # The enclosing `def`, which for a helper is the helper's own name.
+            for above in range(index, -1, -1):
+                match = re.match(r"\s*def (\w+)\(", lines[above])
+                if match:
+                    found.add(match.group(1))
+                    break
+        return found
+
+    def test_the_source_still_marks_its_approximations(self):
+        """If this goes empty the convention has been dropped, not satisfied."""
+        assert self.marked_operations()
+
+    @pytest.mark.parametrize("op", ["draft", "split", "emboss", "coil"])
+    def test_the_estimated_features_are_compared_against_the_live_build(self, op):
+        assert op in PREDICTED, (
+            f"{op!r} moves the volume by an estimate and nothing compares it "
+            "with what Inventor did. Give it a tolerance in PREDICTED.")
+
+    def test_a_loose_tolerance_still_catches_a_sign_flip(self):
+        """Which is why half is enough for something never measured live."""
+        assert compare_to_rehearsal([step(0, "draft", +1.0)], [step(0, "draft", -1.0)])
+
+    def test_and_a_change_that_did_not_happen(self):
+        assert compare_to_rehearsal([step(0, "emboss", 0.0)], [step(0, "emboss", -1.0)])
+
+    def test_but_not_a_coarse_estimate_of_the_right_thing(self):
+        assert compare_to_rehearsal([step(0, "emboss", -1.3)], [step(0, "emboss", -1.0)]) == []

@@ -682,9 +682,24 @@ def build_part(
 #:
 #: The tight entries are arithmetic the simulator does exactly: a prism is an
 #: area times a length, a hole is a cylinder, an occurrence repeats its seed. The
-#: loose ones are estimates -- Pappus for a revolve, a mean section for a loft, a
-#: corner prism for a fillet -- and are here to catch a feature that did
+#: loose ones are estimates -- Pappus for a revolve, the frustum rule for a loft,
+#: a corner prism for a fillet -- and are here to catch a feature that did
 #: something else entirely rather than to check the arithmetic.
+#:
+#: The last four are the ones worth explaining. Sweeping the simulator's marked
+#: approximations turned up that all three of them -- the draft wedge, the split
+#: fraction, the emboss ink heuristic -- were absent from this table, and so was
+#: the coil's arc length. The guard had holes in exactly the places their author
+#: had written "this is approximate". Half tolerates a coarse estimate and still
+#: catches both classes that matter, because `_divergence_reason` keys on a sign
+#: flip and on a change where none was predicted, and any tolerance under 1.0
+#: catches both. None of the four has run against live Inventor, so half is a
+#: place to start measuring from, not a measurement.
+#:
+#: Nothing already here was retuned. The chamfer and the loft became much more
+#: accurate in the same pass and their entries stayed put: one live datapoint
+#: each is not a basis for a tolerance, and tightening on a hunch is the mistake
+#: this table exists to catch.
 PREDICTED = {
     "extrude": 0.02,
     "hole": 0.02,
@@ -697,6 +712,10 @@ PREDICTED = {
     "shell": 0.35,
     "fillet": 0.30,
     "chamfer": 0.30,
+    "coil": 0.50,
+    "draft": 0.50,
+    "emboss": 0.50,
+    "split": 0.50,
 }
 
 #: Below this, in cm^3, a difference is not worth reporting whatever the

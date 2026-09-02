@@ -1025,6 +1025,12 @@ class MockBackend(Backend):
                 feature=name,
                 geometry="cylindrical",
                 midpoint=(0.0, 0.0, 0.0),
+                # ponytail: a stand-in, not a surface area -- the circumference
+                # at the profile's radius times the square root of its area,
+                # which has the right units and no better claim than that. It
+                # exists so a revolve contributes *a* face to selectors and to
+                # the shell fallback's surface total; nothing should read it as
+                # a measurement.
                 area=2 * math.pi * radius * math.sqrt(max(area, 0.0)),
             )
         )
@@ -1033,6 +1039,20 @@ class MockBackend(Backend):
         return _feature_info(feature)
 
     def sweep(self, doc_id: str, request: SweepRequest) -> FeatureInfo:
+        """Pappus: the section's area times how far it travels.
+
+        ponytail: exact only while the profile's centroid sits on the path and
+        the path's radius of curvature stays comfortably above the profile's
+        own size. A tube swept round a bend tighter than its own diameter
+        overlaps itself on the inside, and this charges that material twice.
+
+        ponytail: and there is no overlap test at all. A cut sweep whose path
+        runs nowhere near the material still subtracts a full area x length --
+        the simulator has no booleans, so it cannot see the miss. The guard for
+        that is `_profile_reaches_the_part` in the builder, which checks both
+        of a sweep's sketches; this function will happily eat a quarter of the
+        part on its own.
+        """
         document = self._doc(doc_id)
         profile = document.find_sketch(request.profile_sketch)
         path = document.find_sketch(request.path_sketch)
@@ -1061,6 +1081,13 @@ class MockBackend(Backend):
 
         Like every estimate here it ignores what happens where consecutive turns
         meet, so a coil whose pitch barely clears its profile will read high.
+
+        ponytail: the radius is read as the profile centroid's offset along the
+        sketch's *u* axis, which assumes the axis of revolution passes through
+        u = 0 and lies in the sketch plane. That is how a spring is drawn and it
+        is not enforced anywhere, so a profile sketched off to one side of its
+        axis, or on a plane the axis only crosses, gets a radius that is simply
+        the wrong number.
         """
         document = self._doc(doc_id)
         sketch = document.find_sketch(request.sketch)
@@ -1149,6 +1176,11 @@ class MockBackend(Backend):
         if request.depth:
             depth = request.depth.value
         else:
+            # ponytail: measured over the *first* centre and then charged to
+            # every one of them. Right for a grid of holes through a plate,
+            # wrong for a sketch whose holes straddle a step or a rib -- and the
+            # holes that most want checking are the ones through varying
+            # material.
             first = centers[0]
             depth = _through_all_distance(
                 document, plane, over=map3d(plane, first[0], first[1], sketch.offset))
@@ -1570,6 +1602,16 @@ class MockBackend(Backend):
         Anything else falls back to the old estimate -- the surface area times the
         thickness -- and says so, because a shell of a revolved or swept body is
         not a prism and pretending otherwise would be worse than approximating.
+
+        ponytail: whichever branch runs, `document.slabs` is left alone. Slabs
+        record the prisms an extrude added and are what `_through_all_distance`
+        measures thickness against, so every through-cut *after* a shell is
+        charged against the solid the part was before it. The PCB enclosure's
+        cable bore was costed at the full 105 mm box length instead of two 2 mm
+        walls, a 26x over-count. `rehearse` knows to stop trusting itself here
+        -- it marks every later step `predictable: false` -- but the numbers
+        themselves are still wrong, and anything reading them directly inherits
+        that.
         """
         thickness = request.thickness.value
         if len(document.slabs) == 1 and request.direction == "inside":
@@ -1700,6 +1742,11 @@ class MockBackend(Backend):
         corners = [map3d(plane, u, v, 0.0)
                    for u in (low_u, high_u) for v in (low_v, high_v)]
         if turning is None:  # a sketch line or an edge: no cheap answer
+            # ponytail: and this does the cube anyway. Revolving about a sketch
+            # line is exactly the case the docstring above says makes a pulley
+            # look like a ball -- the named-axis path was fixed and this one was
+            # left. It over-states the bounds, which loses the "does this cut
+            # reach the part" warning rather than raising a false one.
             reach = max(abs(value) for corner in corners for value in corner)
             self._expand_bounds(document, [
                 (x, y, z) for x in (-reach, reach)
@@ -2017,6 +2064,9 @@ def _text_area(primitive: "PText") -> float:
     """
     height = primitive.height
     ink = _INK_PER_EM * (_BOLD_INK if primitive.bold else 1.0)
+    # ponytail: every character is charged the same ink, spaces included, so a
+    # run of several words reads high by roughly one character per gap. Below
+    # the ~10% the heuristic is good to anyway, which is why it stands.
     return len(primitive.text.strip()) * ink * height * height
 
 
@@ -2553,6 +2603,15 @@ def _degrees_of_freedom(plan: SketchPlan) -> int:
     Each primitive contributes its free parameters, each constraint removes
     its usual count, and each dimension removes one.  It is an estimate, not a
     solver -- Inventor is the authority once connected.
+
+    ponytail: it can come out negative, and `_sketch_info` clamps that to zero
+    and calls the sketch fully constrained. So an over-constrained sketch and a
+    perfectly constrained one are the same answer here, while the live backend
+    would strip the excess dimensions and report `refused_dimensions`. Acting
+    on the negative would mean trusting the estimate to be exact, which it is
+    not -- text contributes nothing, and every constraint kind not in the table
+    below is assumed to remove one -- so this stays a known blind spot rather
+    than becoming a guess.
     """
     dof = 0
     for primitive in plan.primitives:
