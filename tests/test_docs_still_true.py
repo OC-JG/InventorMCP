@@ -79,3 +79,65 @@ def test_the_examples_directory_and_the_claim_about_it_agree():
                "nine": 9, "eight": 8}.get(match.group(1).lower())
     assert claimed is not None, f"unrecognised number word {match.group(1)!r}"
     assert claimed == len(list((ROOT / "examples").glob("*.json")))
+
+
+class TestAnOperationCannotBeAddedInvisibly:
+    """The recipe cheat-sheet is the only place most callers will ever look.
+
+    Adding an operation touches five files and the abstract base class forces
+    two of them -- a `Backend` missing a method will not instantiate, so the
+    live and simulated implementations cannot drift apart. Nothing forces the
+    sixth. `coil` was implemented in both backends, given a schema, verified
+    against a live spring to 0.2%, tested, and then mentioned in neither
+    `guide.py` nor the Skill: an operation that worked and that nothing told
+    anyone about.
+
+    So the same rule the ABC gives the backends, written down for the guide.
+    """
+
+    def schema_operations(self) -> set[str]:
+        import inspect
+
+        from inventor_mcp import schema
+
+        return {
+            cls.model_fields["op"].default
+            for _, cls in inspect.getmembers(schema, inspect.isclass)
+            if cls.__name__.endswith("Op") and "op" in getattr(cls, "model_fields", {})
+        }
+
+    def test_every_operation_the_schema_accepts_is_in_the_cheat_sheet(self):
+        from inventor_mcp.guide import RECIPE_CHEATSHEET
+
+        # `thread` is the deliberate exception: `builder._KNOWN_BROKEN` refuses
+        # it before it reaches Inventor, so promoting it would be advertising a
+        # feature the server declines to run.
+        expected = self.schema_operations() - {"thread"}
+        missing = sorted(op for op in expected if f'"{op}"' not in RECIPE_CHEATSHEET)
+        assert not missing, (
+            f"in the schema and not in the cheat-sheet: {missing}. A caller reads "
+            "the cheat-sheet, not the JSON schema.")
+
+    def test_the_one_exception_is_still_the_one_the_builder_refuses(self):
+        """Otherwise the exemption above is protecting something else by accident."""
+        from inventor_mcp.builder import _KNOWN_BROKEN
+        from inventor_mcp.guide import RECIPE_CHEATSHEET
+
+        for op in _KNOWN_BROKEN:
+            assert f'"{op}"' not in RECIPE_CHEATSHEET, (
+                f"{op} is refused by the builder and offered by the cheat-sheet")
+
+    def test_every_sketch_entity_is_in_the_cheat_sheet_too(self):
+        import inspect
+
+        from inventor_mcp import schema
+        from inventor_mcp.guide import RECIPE_CHEATSHEET
+
+        entities = {
+            cls.model_fields["type"].default
+            for _, cls in inspect.getmembers(schema, inspect.isclass)
+            if cls.__name__.endswith("Entity") and "type" in getattr(cls, "model_fields", {})
+        }
+        missing = sorted(name for name in entities
+                         if f'"{name}"' not in RECIPE_CHEATSHEET)
+        assert not missing, f"in the schema and not in the cheat-sheet: {missing}"

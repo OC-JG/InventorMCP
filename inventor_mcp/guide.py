@@ -100,6 +100,13 @@ revolve     {"op":"revolve","sketch":"Profile","axis":"axis","angle":"180 deg"}
              axis: "x"|"y"|"z" or the name of a sketch line
 sweep       {"op":"sweep","profile_sketch":"P","path_sketch":"Path"}
 loft        {"op":"loft","sketches":["S1","S2"]}
+coil        {"op":"coil","sketch":"Wire","axis":"z","pitch":10,"revolutions":8}
+             A helix: springs, a moulded thread, a drill's flutes. Sketch the
+             section in a plane containing the axis, offset from it by the coil
+             radius. Give exactly two of `pitch`, `height` and `revolutions` --
+             Inventor has a separate call per pair and the third is derived.
+             `spiral:true` gives a flat spiral instead. `operation:"cut"` cuts
+             the helix out, which is how a thread form is made.
 hole        {"op":"hole","sketch":"Holes","diameter":"hole_d","through_all":true,
              "style":"drilled|counterbore|spotface|countersink","tap":"M6x1"}
              counterbore/spotface need cbore_diameter and cbore_depth;
