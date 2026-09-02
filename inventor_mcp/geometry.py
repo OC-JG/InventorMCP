@@ -1321,8 +1321,32 @@ def _arc_extremes(arc: PArc) -> list[tuple[float, float]]:
     return points
 
 
+#: How wide one character runs, as a fraction of the cap height, and how far the
+#: rendered box falls below its anchor. The drop is measured -- see
+#: ``tests/test_text_and_emboss.py``, where a run anchored at Z=12.6 with height
+#: 8 reached down to Z=2.11, so 1.31 x the height. The advance is the same 0.6
+#: the ink heuristic in the simulator assumes, and is not measured.
+_TEXT_ADVANCE_PER_EM = 0.6
+_TEXT_DROP_PER_EM = 1.31
+
+
 def plan_bounds(plan: SketchPlan) -> tuple[float, float, float, float]:
-    """Axis-aligned bounds of the model geometry, in cm."""
+    """Axis-aligned bounds of the model geometry, in cm.
+
+    Text is included as a box around its anchor, which is the whole reason this
+    note exists: it used to be skipped entirely, so a sketch holding nothing but
+    text reported bounds of ``(0, 0, 0, 0)``. Everything reading this function
+    then believed the text sat on the origin -- and the cut-reaches-the-part
+    check, whose entire job is to catch a feature aimed at empty air, could not
+    see an engrave placed anywhere at all.
+
+    ponytail: the anchor is exact and the drop below it was measured on a real
+    part; the run's *width* is modelled at 0.6 x the cap height per character,
+    and which side of the anchor it grows from was never measured. So the box
+    spreads that width both ways. Generous is the right direction here -- the
+    callers use these bounds to report a *certain* miss, and a box that is too
+    big turns a false alarm into silence rather than the other way round.
+    """
     xs: list[float] = []
     ys: list[float] = []
     for primitive in plan.primitives:
@@ -1344,6 +1368,12 @@ def plan_bounds(plan: SketchPlan) -> tuple[float, float, float, float]:
         elif isinstance(primitive, PPoint):
             xs.append(primitive.position[0])
             ys.append(primitive.position[1])
+        elif isinstance(primitive, PText):
+            reach = (_TEXT_ADVANCE_PER_EM * primitive.height
+                     * max(len(primitive.text.strip()), 1))
+            xs.extend([primitive.position[0] - reach, primitive.position[0] + reach])
+            ys.extend([primitive.position[1] - _TEXT_DROP_PER_EM * primitive.height,
+                       primitive.position[1]])
     if not xs:
         return (0.0, 0.0, 0.0, 0.0)
     return (min(xs), min(ys), max(xs), max(ys))

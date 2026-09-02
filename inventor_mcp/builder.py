@@ -983,25 +983,67 @@ def rehearse(recipe: PartRecipe) -> dict[str, Any]:
         steps.append(step)
         _warn_about(report["warnings"], where, op, outcome)
 
-        target = getattr(op, "sketch", None) or context.last_sketch
-        subtractive = op.op in _SUBTRACTIVE or getattr(op, "operation", None) == "cut"
         box = [value / 10 for value in was["at_mm"]] if "at_mm" in was else None
-        if subtractive and target in context.plans and not _profile_reaches_the_part(
-                context.plans[target], box):
-            report["warnings"].append({
-                "where": where,
-                "warning": f"sketch {target!r} does not reach the part",
-                "why": "Its geometry lies entirely outside the part's bounding box "
-                       "in its own plane, so this will cut empty air. The simulator "
-                       "cannot see this -- it has no booleans -- but the bounding "
-                       "boxes can.",
-            })
+        if _removes_material(op):
+            for target in _sketches_that_cut(op, context):
+                if target in context.plans and not _profile_reaches_the_part(
+                        context.plans[target], box):
+                    report["warnings"].append({
+                        "where": where,
+                        "warning": f"sketch {target!r} does not reach the part",
+                        "why": "Its geometry lies entirely outside the part's bounding "
+                               "box in its own plane, so this will cut empty air. The "
+                               "simulator cannot see this -- it has no booleans -- but "
+                               "the bounding boxes can.",
+                    })
 
     report["steps"] = steps
     report["rehearsed"] = True
     report["result"] = measure(session, context)
     report["warnings"].extend(_undriven_parameters(recipe, context))
     return report
+
+
+def _removes_material(op: Operation) -> bool:
+    """Whether this operation is meant to take material away.
+
+    ``operation: "cut"`` covers most of it; the two that say it another way are
+    a hole, which is always a cut, and an engraved emboss, whose knob is
+    ``style`` -- so an engrave that missed the part was the one cut nothing
+    checked. ``shell`` removes material too and is deliberately absent: it has no
+    profile to miss with.
+    """
+    if getattr(op, "operation", None) == "cut":
+        return True
+    if op.op == "hole":
+        return True
+    return op.op == "emboss" and getattr(op, "style", None) == "engrave"
+
+
+def _sketches_that_cut(op: Operation, context: DocumentContext) -> list[str]:
+    """Which sketches' geometry decides where *op* takes material from.
+
+    Only sketches the operation actually consumes. It used to be
+    ``getattr(op, "sketch", None) or context.last_sketch`` for everything, and
+    an operation with no sketch of its own fell through to whichever one
+    happened to be last -- so a shell was reported as "sketch 'Unrelated' does
+    not reach the part", naming a sketch it has nothing to do with. A warning
+    that fires on a correct recipe is worse than no warning; the reader learns
+    to skip the field.
+
+    A sweep contributes both of its sketches. The profile decides the section
+    and the path decides where it goes, and either one placed away from the
+    material is a cut through air.
+    """
+    if op.op == "sweep":
+        return [name for name in (getattr(op, "profile_sketch", None),
+                                  getattr(op, "path_sketch", None)) if name]
+    if op.op == "loft":
+        return [name for name in getattr(op, "sketches", ()) or () if name]
+    if "sketch" in type(op).model_fields:
+        named = getattr(op, "sketch", None) or context.last_sketch
+        return [named] if named else []
+    return []
 
 
 def _profile_reaches_the_part(plan: Any, box: Sequence[float] | None) -> bool:
