@@ -142,7 +142,7 @@ a part that looks right and cannot be changed.
      "direction": "symmetric"},
     {"op": "sketch", "name": "Slots", "plane": "xy", "entities": [
       {"type": "slot", "center": ["base_len - 25", "slot_pitch / 2"],
-       "length": "slot_len", "width": "slot_w", "angle": 0}]},
+       "length": "slot_len - slot_w", "width": "slot_w", "angle": 0}]},
     {"op": "extrude", "name": "SlotCut", "sketch": "Slots", "extent": "through_all",
      "operation": "cut", "direction": "positive"},
     {"op": "mirror", "name": "SlotPair", "features": ["SlotCut"], "plane": "xz"},
@@ -161,6 +161,9 @@ Three choices worth copying:
   keeping in step by hand; a mirror keeps them symmetric by construction.
 - **The inside corner is selected by `concave`**, not by a point. `min_length: 40`
   excludes the 20 mm slot edges, and `limit: 1` takes the one that remains.
+- **`slot.length` is centre-to-centre, not overall**, so a 20 mm slot 9 wide is
+  `"length": "slot_len - slot_w"`. Writing `"length": "slot_len"` builds a 29 mm
+  slot that still passes validation and still looks like a slot.
 
 ### Revising it
 
@@ -273,6 +276,34 @@ sketch axes: u->-X v->+Z, u reversed
 ```
 
 If that line says something unexpected, believe it over your mental model.
+
+## A loop drawn from separate arcs and lines
+
+Write the pieces so they end where the next one starts and the server joins them
+for you -- endpoints that agree to within a rounding error are made coincident,
+which is what turns four loose curves into one profile. A gap you actually drew
+stays a gap, so if the extrude reports no profile, check the coordinates rather
+than the tolerance.
+
+**An arc runs from `start_angle` to `end_angle` in the direction of the sign.**
+`start_angle: 90, end_angle: -90` sweeps clockwise, through 0 degrees, so it
+bulges towards +x; swapping them bulges the other way. Get this backwards and the
+loop self-intersects -- which shows up as a feature failure, not a sketch one.
+
+```json
+{"type": "line", "start": [-10, 5],  "end": [10, 5]},
+{"type": "arc",  "center": [10, 0],  "radius": 5, "start_angle": 90,  "end_angle": -90},
+{"type": "line", "start": [10, -5],  "end": [-10, -5]},
+{"type": "arc",  "center": [-10, 0], "radius": 5, "start_angle": -90, "end_angle": -270}
+```
+
+Expect `refused` to be non-zero in the sketch result for a loop like this, and
+that is correct: each entity's planner dimensioned it as though it stood alone,
+and joining the loop makes some of those dimensions redundant. Inventor accepts a
+redundant dimension without complaining and is then unable to build anything from
+the sketch, so the server solves after each one and takes back the ones that
+over-constrain it. Dimension the loop yourself, in the sketch's own `dimensions`,
+if you need it to be parameter-driven.
 
 ## What makes a sketch parametric
 
@@ -428,6 +459,18 @@ fastener rather than deriving one.
   yet been built against a live Inventor — the read-back is what makes
   that survivable rather than silent, so treat a first success with the same
   suspicion as the operations below.
+- **`radius_end` on a fillet makes it variable**, running from `radius` at one
+  end of each edge to `radius_end` at the other. Which end is which is Inventor's
+  choice and it does not report it, so check the result and swap the two if it
+  came out the wrong way round. The radius moves on a smooth cubic rather than a
+  straight ramp, so the material removed per unit length works out at
+  `(1 - pi/4)(a^2 + a(b-a) + 13/35 (b-a)^2)` -- measured, not assumed: 3 to 8
+  over a 10 mm edge removes 0.071420 cm^3 and that predicts 0.071432.
+- **A cut aimed at a second body needs `bodies` on the `extrude`.** Inventor
+  points a new feature at the first body only, so without it the cut lands on
+  body 1, finds no material where the profile is, and the server reports that the
+  volume did not change. Bodies are numbered 1-based in creation order, the same
+  as `combine`. `hole` has no equivalent yet -- use an `extrude` cut.
 - **Read `divergence` if the build reports it.** Every build is rehearsed in the
   simulator first, and an operation whose live volume change disagrees with the
   prediction is listed there with both numbers. The simulator predicts an

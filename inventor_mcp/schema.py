@@ -392,6 +392,12 @@ class ExtrudeOp(OpBase):
     direction: Direction = "positive"
     operation: BooleanOp = "join"
     taper: ValueSpec | None = Field(None, description="Draft angle, e.g. '3 deg'.")
+    bodies: list[int] | None = Field(
+        None,
+        description="Bodies this feature may affect, 1-based in creation order. "
+        "Omit to leave Inventor's default, which is the first body only -- so a "
+        "cut aimed at a second body needs this.",
+    )
 
     @model_validator(mode="after")
     def _distance_required(self) -> "ExtrudeOp":
@@ -493,6 +499,13 @@ class FilletOp(OpBase):
     op: Literal["fillet"] = "fillet"
     edges: Selector = Field(default_factory=lambda: Selector(kind="edge"))
     radius: ValueSpec
+    radius_end: ValueSpec | None = Field(
+        None,
+        description="Radius at the far end of each edge, for a variable fillet. "
+        "Omit for a constant radius. Which end is which follows the edge's own "
+        "direction, which is Inventor's to decide -- check the result and swap "
+        "the two radii if it came out the other way round.",
+    )
 
 
 class ChamferOp(OpBase):

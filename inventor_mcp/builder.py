@@ -256,6 +256,7 @@ def _apply_one(session: Session, context: DocumentContext, op: Operation) -> dic
             direction=op.direction,
             operation=op.operation,
             taper=_driven(resolver.angle(op.taper, "extrude taper")) if op.taper else None,
+            bodies=tuple(op.bodies or ()),
             name=op.name,
         )
         return _record(context, backend.extrude(context.doc_id, request), "extrude")
@@ -320,6 +321,9 @@ def _apply_one(session: Session, context: DocumentContext, op: Operation) -> dic
         request = FilletRequest(
             edges=resolve_selector(op.edges, resolver, kind="edge"),
             radius=_driven(resolver.length(op.radius, "fillet radius", positive=True)),  # type: ignore[arg-type]
+            radius_end=_driven(resolver.length(op.radius_end, "fillet end radius", positive=True))  # type: ignore[arg-type]
+            if op.radius_end is not None
+            else None,
             name=op.name,
         )
         return _record(context, backend.fillet(context.doc_id, request), "fillet")

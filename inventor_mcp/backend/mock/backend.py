@@ -747,10 +747,23 @@ class MockBackend(Backend):
         # a `new_body` extrude starts one, anything else lands on the first.
         if not document.bodies and was > 0:
             document.bodies = [was]
+        if request.bodies:
+            available = len(document.bodies)
+            for index in request.bodies:
+                if index < 1 or index > available:
+                    raise FeatureError(
+                        f"There is no body {index}: the part has {available}.",
+                        hint="A second body comes from an `extrude` with "
+                        "operation 'new_body'.",
+                    )
         if request.operation == "new_body":
             document.bodies.append(signed)
         elif document.bodies:
-            document.bodies[0] = max(document.bodies[0] + moved, 0.0)
+            # Inventor lands a feature on the first body unless it is aimed
+            # somewhere else, and a cut aimed at the wrong body removes nothing
+            # -- which is the mistake the rehearsal exists to catch.
+            target = request.bodies[0] - 1 if request.bodies else 0
+            document.bodies[target] = max(document.bodies[target] + moved, 0.0)
 
         self._synthesise_extrude_topology(document, sketch, loops, plane, distance,
                                           request.direction, name,
@@ -772,6 +785,7 @@ class MockBackend(Backend):
                 # says which parameter drives the draft, and role discovery on a
                 # part nobody described reads exactly that.
                 "taper": request.taper.as_dict() if request.taper else None,
+                "bodies": list(request.bodies) or None,
                 "profiles": len(loops),
                 "profile_area_cm2": round(area, 6),
             },
@@ -1144,8 +1158,21 @@ class MockBackend(Backend):
         return _feature_info(feature)
 
     def fillet(self, doc_id: str, request: FilletRequest) -> FeatureInfo:
-        return self._edge_treatment(doc_id, "fillet", request.edges, request.radius.value,
-                                    request.name, {"radius": request.radius.as_dict()})
+        detail: dict[str, Any] = {"radius": request.radius.as_dict()}
+        size = request.radius.value
+        if request.radius_end is not None:
+            detail["radius_end"] = request.radius_end.as_dict()
+            # _edge_treatment removes r^2 (1 - pi/4) per unit length, so what is
+            # wanted is the mean of r^2 along the edge.  Inventor's variable
+            # fillet moves the radius on a smooth cubic rather than a straight
+            # ramp -- r(t) = a + (b - a)(3t^2 - 2t^3) -- and integrating that
+            # gives a^2 + a(b - a) + 13/35 (b - a)^2.  Measured against Inventor:
+            # 3 mm to 8 mm over a 10 mm edge removes 0.071420 cm^3 and this
+            # predicts 0.071432, while a straight ramp would say 0.069388.
+            a, b = size, request.radius_end.value
+            size = math.sqrt(a * a + a * (b - a) + 13.0 / 35.0 * (b - a) ** 2)
+        return self._edge_treatment(doc_id, "fillet", request.edges, size,
+                                    request.name, detail)
 
     def chamfer(self, doc_id: str, request: ChamferRequest) -> FeatureInfo:
         return self._edge_treatment(doc_id, "chamfer", request.edges, request.distance.value,

@@ -211,6 +211,7 @@ class ExtrudeRequest:
     direction: str = "positive"
     operation: str = "join"
     taper: Driven | None = None
+    bodies: Sequence[int] = ()
     name: str | None = None
 
 
@@ -274,6 +275,7 @@ class HoleRequest:
 class FilletRequest:
     edges: ResolvedSelector
     radius: Driven
+    radius_end: Driven | None = None
     name: str | None = None
 
 

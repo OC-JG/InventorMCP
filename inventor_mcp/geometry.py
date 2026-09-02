@@ -14,6 +14,7 @@ from __future__ import annotations
 import ast
 import logging
 import math
+from dataclasses import replace
 from itertools import count
 from typing import Iterable, Sequence
 
@@ -54,6 +55,8 @@ from .schema import (
 
 #: Coordinates closer than this (in cm) are treated as the same point.
 TOL = 1.0e-7
+# What counts as "the same point" when walking loops and stitching ends (cm).
+STITCH_TOL = 1.0e-5
 
 #: A gap smaller than this is aligned rather than dimensioned.  TOL is a
 #: nanometre: the right test for "is this segment axis-aligned", and the wrong
@@ -958,9 +961,80 @@ def plan_sketch(spec: SketchOp, resolver: Resolver) -> SketchPlan:
             raise SketchError(f"Unsupported sketch entity type {type(entity).__name__}.")
         planner(plan, ids, resolver, entity)  # type: ignore[operator]
 
+    stitched = _stitch_endpoints(plan)
+    if stitched:
+        # These entities were drawn as separate pieces of one loop, so their
+        # planners each dimensioned them as though they stood alone.  Stitching
+        # the loop together takes those degrees of freedom away and leaves some
+        # of the dimensions redundant -- and Inventor accepts a redundant
+        # dimension rather than refusing it, then declines to build anything
+        # from the sketch.  Which ones are spare depends on the loop, so they
+        # are marked as able to yield and the backend asks Inventor which.
+        plan.dimensions = [
+            replace(dimension, optional=True)
+            if any(ref.entity in stitched for ref in dimension.refs) else dimension
+            for dimension in plan.dimensions
+        ]
     _apply_constraints(plan, spec.constraints)
     _apply_dimensions(plan, resolver, spec.dimensions)
     return plan
+
+
+def _segments(plan: SketchPlan) -> list[tuple[str, tuple[float, float], tuple[float, float]]]:
+    """Every open-ended primitive as (id, start, end).  Construction is skipped."""
+    segments = []
+    for primitive in plan.primitives:
+        if primitive.construction or primitive.centerline:
+            continue
+        if isinstance(primitive, PLine):
+            segments.append((primitive.id, primitive.start, primitive.end))
+        elif isinstance(primitive, PArc):
+            segments.append((
+                primitive.id,
+                (primitive.center[0] + primitive.radius * math.cos(primitive.start_angle),
+                 primitive.center[1] + primitive.radius * math.sin(primitive.start_angle)),
+                (primitive.center[0] + primitive.radius * math.cos(primitive.end_angle),
+                 primitive.center[1] + primitive.radius * math.sin(primitive.end_angle)),
+            ))
+    return segments
+
+
+def _stitch_endpoints(plan: SketchPlan) -> set[str]:
+    """Make separate entities that touch coincident, so they form a profile.
+
+    A polyline constrains its own corners, but a recipe that mixes `line` and
+    `arc` entities gets primitives that meet only by coordinate.  Inventor then
+    sees micro-gaps and offers no profile -- "closed loops in the recipe but no
+    profile".  `shared_point_groups` already turns a coincident constraint into a
+    structurally shared point, so recording the coincidence is the whole fix.
+
+    Only ends that already agree to within STITCH_TOL are joined, so nothing
+    moves: a real gap in the recipe stays a real gap.  Returns the primitives
+    that were joined.
+    """
+    stitched: set[str] = set()
+    ends = [
+        (segment_id, point_ref, position)
+        for segment_id, start, end in _segments(plan)
+        for point_ref, position in ((PointRef.START, start), (PointRef.END, end))
+    ]
+    seen = {
+        frozenset(str(ref) for ref in constraint.refs[:2])
+        for constraint in plan.constraints
+        if constraint.kind == "coincident" and len(constraint.refs) >= 2
+    }
+    for index, (id_a, ref_a, pos_a) in enumerate(ends):
+        for id_b, ref_b, pos_b in ends[index + 1:]:
+            if id_a == id_b or math.dist(pos_a, pos_b) > STITCH_TOL:
+                continue
+            a, b = Ref(id_a, ref_a), Ref(id_b, ref_b)
+            key = frozenset((str(a), str(b)))
+            if key in seen:
+                continue
+            seen.add(key)
+            stitched.update((id_a, id_b))
+            plan.constrain("coincident", a, b)
+    return stitched
 
 
 def profile_loops(plan: SketchPlan) -> list[list[str]]:
@@ -970,26 +1044,13 @@ def profile_loops(plan: SketchPlan) -> list[list[str]]:
     the mock backend to estimate areas.  Loops are found by walking shared
     endpoints; a circle or ellipse is a loop on its own.
     """
-    loops: list[list[str]] = []
-    segments: list[tuple[str, tuple[float, float], tuple[float, float]]] = []
-
-    for primitive in plan.primitives:
-        if primitive.construction or primitive.centerline:
-            continue
-        if isinstance(primitive, (PCircle, PEllipse)):
-            loops.append([primitive.id])
-        elif isinstance(primitive, PLine):
-            segments.append((primitive.id, primitive.start, primitive.end))
-        elif isinstance(primitive, PArc):
-            start = (
-                primitive.center[0] + primitive.radius * math.cos(primitive.start_angle),
-                primitive.center[1] + primitive.radius * math.sin(primitive.start_angle),
-            )
-            end = (
-                primitive.center[0] + primitive.radius * math.cos(primitive.end_angle),
-                primitive.center[1] + primitive.radius * math.sin(primitive.end_angle),
-            )
-            segments.append((primitive.id, start, end))
+    loops: list[list[str]] = [
+        [primitive.id]
+        for primitive in plan.primitives
+        if isinstance(primitive, (PCircle, PEllipse))
+        and not (primitive.construction or primitive.centerline)
+    ]
+    segments = _segments(plan)
 
     remaining = {segment[0]: segment for segment in segments}
     while remaining:
@@ -997,13 +1058,13 @@ def profile_loops(plan: SketchPlan) -> list[list[str]]:
         _, start, end = remaining.pop(first_id)
         loop = [first_id]
         current = end
-        while math.dist(current, start) > 1e-5:
+        while math.dist(current, start) > STITCH_TOL:
             for candidate_id, (_, c_start, c_end) in list(
                 (key, value) for key, value in remaining.items()
             ):
-                if math.dist(current, c_start) <= 1e-5:
+                if math.dist(current, c_start) <= STITCH_TOL:
                     current = c_end
-                elif math.dist(current, c_end) <= 1e-5:
+                elif math.dist(current, c_end) <= STITCH_TOL:
                     current = c_start
                 else:
                     continue
