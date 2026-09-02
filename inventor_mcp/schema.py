@@ -508,6 +508,47 @@ class FilletOp(OpBase):
     )
 
 
+class CoilOp(OpBase):
+    """A helical sweep of a sketch profile about an axis: springs, threads, flutes.
+
+    Inventor takes the extent three ways -- pitch and height, pitch and
+    revolutions, or revolutions and height -- so give exactly two of the three
+    and the server picks the matching call.
+    """
+
+    op: Literal["coil"] = "coil"
+    sketch: str | None = Field(None, description="Sketch name; defaults to the most recent.")
+    profiles: list[int] | Literal["all", "outer"] = "all"
+    axis: AxisRef = Field("z", description="'x'|'y'|'z', or the name of a sketch line.")
+    pitch: ValueSpec | None = Field(None, description="Rise per revolution.")
+    height: ValueSpec | None = Field(None, description="Overall rise.")
+    revolutions: CountSpec | float | None = Field(None, description="Number of turns.")
+    taper: ValueSpec | None = Field(None, description="Taper angle, e.g. '2 deg'.")
+    operation: BooleanOp = "join"
+    clockwise: bool = Field(True, description="Right-hand helix when true.")
+    reverse_axis: bool = Field(False, description="Run the coil the other way along the axis.")
+    spiral: bool = Field(
+        False,
+        description="A flat spiral in the profile's plane rather than a helix. "
+        "Needs pitch and revolutions.",
+    )
+
+    @model_validator(mode="after")
+    def _two_of_three(self) -> "CoilOp":
+        given = [n for n, v in (("pitch", self.pitch), ("height", self.height),
+                                ("revolutions", self.revolutions)) if v is not None]
+        if self.spiral:
+            if self.pitch is None or self.revolutions is None:
+                raise ValueError("A spiral needs `pitch` and `revolutions`.")
+            return self
+        if len(given) != 2:
+            raise ValueError(
+                "Give exactly two of `pitch`, `height` and `revolutions`; "
+                f"got {given or 'none'}."
+            )
+        return self
+
+
 class ChamferOp(OpBase):
     op: Literal["chamfer"] = "chamfer"
     edges: Selector = Field(default_factory=lambda: Selector(kind="edge"))
@@ -721,6 +762,7 @@ Operation = Annotated[
         ExtrudeOp,
         RevolveOp,
         SweepOp,
+        CoilOp,
         LoftOp,
         HoleOp,
         FilletOp,

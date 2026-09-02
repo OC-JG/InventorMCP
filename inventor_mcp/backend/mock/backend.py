@@ -44,6 +44,7 @@ from ..base import (
     AxisSpec,
     Backend,
     ChamferRequest,
+    CoilRequest,
     CircularPatternRequest,
     DocInfo,
     ExportRequest,
@@ -1046,6 +1047,56 @@ class MockBackend(Backend):
         name = self._feature_name(document, request.name, "sweep")
         feature = _Feature(self._next("feat"), name, "sweep", volume_delta=moved,
                            detail={"profile": profile.name, "path": path.name})
+        document.features.append(feature)
+        return _feature_info(feature)
+
+    def coil(self, doc_id: str, request: CoilRequest) -> FeatureInfo:
+        """Profile area times the helix's arc length.
+
+        A helix of radius r and pitch p covers sqrt((2*pi*r)^2 + p^2) per turn,
+        so the swept volume is the profile's area times that times the number of
+        turns. r is taken from the profile's centroid: the sketch is drawn in a
+        plane containing the axis, so the centroid's offset across that plane IS
+        the helix radius.
+
+        Like every estimate here it ignores what happens where consecutive turns
+        meet, so a coil whose pitch barely clears its profile will read high.
+        """
+        document = self._doc(doc_id)
+        sketch = document.find_sketch(request.sketch)
+        area = _net_area(sketch, sketch.loops)
+        centre = _loop_center(sketch.plan, sketch.loops[0]) if sketch.loops else (0.0, 0.0)
+        radius = abs(centre[0])
+        pitch = request.pitch.value if request.pitch else None
+        height = request.height.value if request.height else None
+        turns = (request.revolutions.value if request.revolutions
+                 else (height / pitch if pitch else 0.0))
+        if pitch is None and height is not None and turns:
+            pitch = height / turns
+        per_turn = math.hypot(2.0 * math.pi * radius, pitch or 0.0)
+        estimate = area * per_turn * turns
+
+        was = document.volume
+        if request.operation == "cut":
+            document.volume = max(document.volume - estimate, 0.0)
+        else:
+            document.volume += estimate
+        moved = document.volume - was
+        name = self._feature_name(document, request.name, "coil")
+        feature = _Feature(self._next("feat"), name, "coil", volume_delta=moved,
+                           detail={"sketch": sketch.name,
+                                   "operation": request.operation,
+                                   # the same keys the live backend reports, so
+                                   # a recipe reads the same either way
+                                   "pitch": request.pitch.as_dict()
+                                   if request.pitch else None,
+                                   "height": request.height.as_dict()
+                                   if request.height else None,
+                                   "revolutions": request.revolutions.as_dict()
+                                   if request.revolutions else None,
+                                   "turns": round(turns, 4),
+                                   "helix_radius": round(radius, 4),
+                                   "path_length": round(per_turn * turns, 4)})
         document.features.append(feature)
         return _feature_info(feature)
 

@@ -14,6 +14,7 @@ from .backend.base import (
     AxisSpec,
     Backend,
     ChamferRequest,
+    CoilRequest,
     CircularPatternRequest,
     Driven,
     CombineRequest,
@@ -42,6 +43,7 @@ from .plan import PLine
 from .resolve import Resolved, Resolver
 from .schema import (
     ChamferOp,
+    CoilOp,
     CircularPatternOp,
     BossOp,
     CombineOp,
@@ -273,6 +275,30 @@ def _apply_one(session: Session, context: DocumentContext, op: Operation) -> dic
             name=op.name,
         )
         return _record(context, backend.revolve(context.doc_id, request), "revolve")
+
+    if isinstance(op, CoilOp):
+        sketch_name, _ = context.sketch_plan(op.sketch)
+        request = CoilRequest(
+            sketch=sketch_name,
+            axis=resolve_axis(context, op.axis, sketch_name),
+            profiles=op.profiles,
+            pitch=_driven(resolver.length(op.pitch, "coil pitch", positive=True))
+            if op.pitch is not None else None,
+            height=_driven(resolver.length(op.height, "coil height", positive=True))
+            if op.height is not None else None,
+            # unitless, not count: a coil of 1.75 turns is ordinary, and
+            # `count` refuses a fraction on purpose.
+            revolutions=_driven(resolver.unitless(op.revolutions, "coil revolutions"))
+            if op.revolutions is not None else None,
+            taper=_driven(resolver.angle(op.taper, "coil taper"))
+            if op.taper is not None else None,
+            operation=op.operation,
+            clockwise=op.clockwise,
+            reverse_axis=op.reverse_axis,
+            spiral=op.spiral,
+            name=op.name,
+        )
+        return _record(context, backend.coil(context.doc_id, request), "coil")
 
     if isinstance(op, SweepOp):
         profile_name, _ = context.sketch_plan(op.profile_sketch)

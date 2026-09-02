@@ -42,6 +42,7 @@ from ..base import (
     AxisSpec,
     Backend,
     ChamferRequest,
+    CoilRequest,
     CircularPatternRequest,
     DocInfo,
     ExportRequest,
@@ -1978,6 +1979,92 @@ class ComBackend(Backend):
             if request.name:
                 feature.Name = request.name
         return _feature_info(feature, "revolve", {"sketch": request.sketch, "axis": request.axis.value})
+
+    def coil(self, doc_id: str, request: CoilRequest) -> FeatureInfo:  # pragma: no cover
+        """A helical sweep: springs, threads, and a drill's flutes.
+
+        Inventor exposes the extent three ways and the recipe gives two of the
+        three, so the matching call is chosen rather than converted -- pitch and
+        height stays pitch and height, and Inventor does its own arithmetic.
+
+        The trailing options are optional-with-a-default, which pywin32 sends as
+        a missing variant that Inventor sometimes rejects; so they are passed
+        explicitly first and dropped only if that fails, the same fallback the
+        fillet uses.
+        """
+        document = self._doc(doc_id)
+        sketch = self._sketch(doc_id, request.sketch)
+        axis = self._resolve_axis(doc_id, request.axis)
+        features = document.ComponentDefinition.Features.CoilFeatures
+        operation = self._k(BOOLEAN_OPERATIONS[request.operation])
+        before = _solid_volume(document) if request.operation == "cut" else None
+
+        with self._batch(document), self._translate_errors("Coil"):
+            profile = self._profiles(sketch, request.profiles)
+            taper = request.taper.expression if request.taper else "0 deg"
+            if request.spiral:
+                calls = [("AddSpiral", (profile, axis, request.pitch.expression,
+                                        request.revolutions.expression))]
+            elif request.pitch is not None and request.height is not None:
+                calls = [("AddByPitchAndHeight", (profile, axis,
+                                                  request.pitch.expression,
+                                                  request.height.expression))]
+            elif request.pitch is not None:
+                calls = [("AddByPitchAndRevolution", (profile, axis,
+                                                      request.pitch.expression,
+                                                      request.revolutions.expression))]
+            else:
+                calls = [("AddByRevolutionAndHeight", (profile, axis,
+                                                       request.revolutions.expression,
+                                                       request.height.expression))]
+
+            failures: list[str] = []
+            feature = None
+            for name, head in calls:
+                method = getattr(features, name, None)
+                if method is None:
+                    failures.append(f"{name} is not available on this build")
+                    continue
+                tails = ([(operation, request.reverse_axis, request.clockwise)]
+                         if request.spiral else
+                         [(operation, request.reverse_axis, request.clockwise, taper),
+                          (operation, request.reverse_axis, request.clockwise),
+                          (operation,)])
+                for tail in tails:
+                    try:
+                        feature = method(*head, *tail)
+                    except Exception as exc:
+                        failures.append("%s with %d options: %s"
+                                        % (name, len(tail), _com_message(exc)))
+                        continue
+                    break
+                if feature is not None:
+                    break
+            if feature is None:
+                raise FeatureError(
+                    f"Could not create the coil: {self._explain_text(failures[0])}",
+                    hint="A coil's profile must not touch or cross its axis, and "
+                    "consecutive turns must not run into each other -- a pitch "
+                    "smaller than the profile is the usual cause. " +
+                    "; ".join(failures[:3]),
+                )
+            if request.operation == "cut" and not _removed_material(document, before):
+                _delete_quietly(feature)
+                raise FeatureError(
+                    f"The coil cut from sketch {request.sketch!r} removed no material.",
+                    hint="Its helix does not pass through the part. Check the axis, "
+                    "the profile's distance from it, and the height.",
+                )
+            if request.name:
+                feature.Name = request.name
+        return _feature_info(feature, "coil", {
+            "sketch": request.sketch,
+            "axis": request.axis.value,
+            "operation": request.operation,
+            "pitch": request.pitch.as_dict() if request.pitch else None,
+            "height": request.height.as_dict() if request.height else None,
+            "revolutions": request.revolutions.as_dict() if request.revolutions else None,
+        })
 
     def sweep(self, doc_id: str, request: SweepRequest) -> FeatureInfo:  # pragma: no cover
         document = self._doc(doc_id)

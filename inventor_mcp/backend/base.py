@@ -280,6 +280,22 @@ class FilletRequest:
 
 
 @dataclass
+class CoilRequest:
+    sketch: str
+    axis: AxisSpec
+    profiles: Sequence[int] | str = "all"
+    pitch: Driven | None = None
+    height: Driven | None = None
+    revolutions: Driven | None = None
+    taper: Driven | None = None
+    operation: str = "join"
+    clockwise: bool = True
+    reverse_axis: bool = False
+    spiral: bool = False
+    name: str | None = None
+
+
+@dataclass
 class ChamferRequest:
     edges: ResolvedSelector
     distance: Driven
@@ -478,6 +494,9 @@ class Backend(ABC):
 
     @abstractmethod
     def sweep(self, doc_id: str, request: SweepRequest) -> FeatureInfo: ...
+
+    @abstractmethod
+    def coil(self, doc_id: str, request: CoilRequest) -> FeatureInfo: ...
 
     @abstractmethod
     def loft(self, doc_id: str, request: LoftRequest) -> FeatureInfo: ...
