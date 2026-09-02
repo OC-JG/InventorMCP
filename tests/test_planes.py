@@ -547,7 +547,14 @@ class TestSimulatorFidelity:
         assert properties.volume == pytest.approx(wanted, rel=1e-9)
 
     def test_a_loft_has_a_volume_and_not_an_area(self):
-        """The mean area was being added as if it were a volume."""
+        """The mean area was being added as if it were a volume.
+
+        The mean area *times the span* was the fix, and it was still wrong: it
+        over-charges every loft whose sections differ in size, by 15% on the
+        30-to-10 cone below. The frustum rule replaced it, so the number here
+        moved -- what the test is actually for, that a loft yields a volume and
+        the units agree, is unchanged.
+        """
         properties = self.build({
             "name": "Duct", "units": "mm",
             "operations": [
@@ -559,8 +566,51 @@ class TestSimulatorFidelity:
                     {"type": "rectangle", "center": [0, 0], "width": 50, "height": 50}]},
                 {"op": "loft", "sketches": ["Lower", "Upper"]},
             ]})
-        mean_area = (math.pi * 30 ** 2 + 50 * 50) / 2
-        assert properties.volume == pytest.approx(mean_area * 70 / 1000, rel=1e-9)
+        lower, upper = math.pi * 30 ** 2, 50.0 * 50.0
+        frustum = 70 / 3 * (lower + upper + math.sqrt(lower * upper))
+        assert properties.volume == pytest.approx(frustum / 1000, rel=1e-9)
+
+    def test_a_cone_matches_what_inventor_built(self):
+        """A 30-to-10 loft over 40 mm measured 13.6136 cm^3 -- see
+        docs/FEATURE_COVERAGE.md, tier 1b. The mean-area rule said 15.7080."""
+        properties = self.build({
+            "name": "Cone", "units": "mm",
+            "operations": [
+                {"op": "sketch", "name": "Big", "plane": "xy", "entities": [
+                    {"type": "circle", "diameter": 30}]},
+                {"op": "work_plane", "name": "Top", "kind": "offset",
+                 "base": "xy", "offset": 40},
+                {"op": "sketch", "name": "Small", "plane": "Top", "entities": [
+                    {"type": "circle", "diameter": 10}]},
+                {"op": "loft", "sketches": ["Big", "Small"]},
+            ]})
+        assert properties.volume == pytest.approx(13.6136, abs=1e-4)
+
+    def test_three_sections_are_two_frusta_and_not_one_average(self):
+        """A waist is the reason to reach for a third section, and averaging
+        every section together is exactly what loses it."""
+        waisted = self.build({
+            "name": "Waisted", "units": "mm",
+            "operations": [
+                {"op": "sketch", "name": "A", "plane": "xy", "entities": [
+                    {"type": "circle", "diameter": 40}]},
+                {"op": "work_plane", "name": "Mid", "kind": "offset",
+                 "base": "xy", "offset": 20},
+                {"op": "sketch", "name": "B", "plane": "Mid", "entities": [
+                    {"type": "circle", "diameter": 10}]},
+                {"op": "work_plane", "name": "High", "kind": "offset",
+                 "base": "xy", "offset": 40},
+                {"op": "sketch", "name": "C", "plane": "High", "entities": [
+                    {"type": "circle", "diameter": 40}]},
+                {"op": "loft", "sketches": ["A", "B", "C"]},
+            ]})
+        big, small = math.pi * 20 ** 2, math.pi * 5 ** 2
+        one_frustum = 20 / 3 * (big + small + math.sqrt(big * small))
+        assert waisted.volume == pytest.approx(2 * one_frustum / 1000, rel=1e-9)
+        # The old rule averaged all three sections over the whole 40 mm, which
+        # made the waist almost invisible.
+        averaged = (big + small + big) / 3 * 40 / 1000
+        assert waisted.volume < averaged
 
     def test_a_revolved_ring_is_not_a_ball(self):
         """The bounds were expanded to a cube of the profile's reach."""

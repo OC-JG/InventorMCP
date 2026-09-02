@@ -1104,13 +1104,9 @@ class MockBackend(Backend):
         document = self._doc(doc_id)
         sketches = [document.find_sketch(name) for name in request.sketches]
         areas = [_net_area(sketch, sketch.loops) for sketch in sketches]
-        # The mean area times the distance between the outermost sections. The
-        # mean area on its own was being added as if it were a volume, so a
-        # 70 mm duct came out at a quarter of its size and the units did not
-        # even agree.
         offsets = [sketch.offset for sketch in sketches]
         span = abs(max(offsets) - min(offsets))
-        estimate = (sum(areas) / max(len(areas), 1)) * span
+        estimate = _loft_volume(areas, offsets)
         was = document.volume
         # The estimate is the same either way; which SIGN it carries is the
         # operation. This used to add a cut loft's volume -- a duct's cut bore
@@ -1209,35 +1205,66 @@ class MockBackend(Backend):
         return _feature_info(feature)
 
     def fillet(self, doc_id: str, request: FilletRequest) -> FeatureInfo:
+        """A quarter-round takes away the corner outside it: r^2 (1 - pi/4)."""
         detail: dict[str, Any] = {"radius": request.radius.as_dict()}
-        size = request.radius.value
+        mean_squared = request.radius.value ** 2
         if request.radius_end is not None:
             detail["radius_end"] = request.radius_end.as_dict()
-            # _edge_treatment removes r^2 (1 - pi/4) per unit length, so what is
-            # wanted is the mean of r^2 along the edge.  Inventor's variable
-            # fillet moves the radius on a smooth cubic rather than a straight
-            # ramp -- r(t) = a + (b - a)(3t^2 - 2t^3) -- and integrating that
-            # gives a^2 + a(b - a) + 13/35 (b - a)^2.  Measured against Inventor:
+            # The cross-section goes as r^2, so what is wanted is the mean of
+            # r^2 along the edge.  Inventor's variable fillet moves the radius on
+            # a smooth cubic rather than a straight ramp -- r(t) = a + (b - a)
+            # (3t^2 - 2t^3) -- and integrating that gives
+            # a^2 + a(b - a) + 13/35 (b - a)^2.  Measured against Inventor:
             # 3 mm to 8 mm over a 10 mm edge removes 0.071420 cm^3 and this
             # predicts 0.071432, while a straight ramp would say 0.069388.
-            a, b = size, request.radius_end.value
-            size = math.sqrt(a * a + a * (b - a) + 13.0 / 35.0 * (b - a) ** 2)
-        return self._edge_treatment(doc_id, "fillet", request.edges, size,
-                                    request.name, detail)
+            a, b = request.radius.value, request.radius_end.value
+            mean_squared = a * a + a * (b - a) + 13.0 / 35.0 * (b - a) ** 2
+        return self._edge_treatment(
+            doc_id, "fillet", request.edges, mean_squared * (1.0 - math.pi / 4.0),
+            request.name, detail)
 
     def chamfer(self, doc_id: str, request: ChamferRequest) -> FeatureInfo:
-        return self._edge_treatment(doc_id, "chamfer", request.edges, request.distance.value,
-                                    request.name, {"distance": request.distance.as_dict()})
+        """A flat cut takes away a triangle, which is not what a fillet takes.
+
+        This used to hand ``_edge_treatment`` the chamfer distance and let it
+        apply the *fillet* formula, r^2 (1 - pi/4) = 0.2146 d^2, where a 45
+        degree chamfer removes d^2 / 2 -- a 57% under-estimate on every chamfer
+        the simulator ever rehearsed. Nothing pinned the number, so nothing said;
+        and since the divergence check allows a chamfer 30%, a live run would
+        have reported the *recipe* as suspect ("a selector catching more edges
+        than the one that was meant") for a recipe that was right.
+
+        Three styles, three triangles: legs d and d, legs d and d2, or leg d and
+        d * tan(angle) where the angle is measured off the first face.
+        """
+        first = request.distance.value
+        detail: dict[str, Any] = {"distance": request.distance.as_dict()}
+        if request.distance2 is not None:
+            detail["distance2"] = request.distance2.as_dict()
+            second = request.distance2.value
+        elif request.angle is not None:
+            detail["angle_deg"] = round(math.degrees(request.angle.value), 4)
+            second = first * math.tan(request.angle.value)
+        else:
+            second = first
+        return self._edge_treatment(doc_id, "chamfer", request.edges,
+                                    0.5 * first * second, request.name, detail)
 
     def _edge_treatment(
         self,
         doc_id: str,
         kind: str,
         selector: ResolvedSelector,
-        size: float,
+        per_length: float,
         requested_name: str | None,
         detail: dict[str, Any],
     ) -> FeatureInfo:
+        """Move the volume by *per_length* of cross-section along every match.
+
+        The caller works out the cross-section, because a fillet's and a
+        chamfer's are different shapes and squashing both into one "size" is how
+        the chamfer came to be charged a fillet's price.
+        """
         document = self._doc(doc_id)
         matches = self._match(document, selector)
         if not matches:
@@ -1248,19 +1275,24 @@ class MockBackend(Backend):
             )
         name = self._feature_name(document, requested_name, kind)
         total_length = sum(match.length or 0.0 for match in matches)
-        # r^2 (1 - pi/4) per unit length: the corner left outside a quarter
-        # circle inscribed in a square. On an outside corner that material goes
-        # away; on an inside corner the same amount is added, and the simulator
-        # subtracted either way -- which is why the angle bracket read 1.4 cm^3
-        # light with a correct fillet in it.
+        # On an outside corner that material goes away; on an inside corner the
+        # same amount is added, and the simulator subtracted either way -- which
+        # is why the angle bracket read 1.4 cm^3 light with a correct fillet in
+        # it.
         #
         # The sign comes from the selector rather than from the shape: the
         # simulator synthesises topology from sketch loops and genuinely cannot
         # see which side the material is on, so it takes the recipe's word. A
         # recipe that asks for "concave" and gets a convex edge is a mistake only
         # Inventor can catch.
+        #
+        # ponytail: every match is charged its full length, so where two treated
+        # edges meet the corner they share is counted twice. On a block filleted
+        # all round that is an over-estimate of order r^3 per corner against a
+        # total of order r^2 * L, which is why it has not mattered; it would on a
+        # part whose edges are shorter than the radius is large.
         adds = selector.filter == "concave"
-        corner = total_length * size * size * 0.2146
+        corner = total_length * per_length
         was = document.volume
         document.volume = max(document.volume + (corner if adds else -corner), 0.0)
         for match in matches:
@@ -1986,6 +2018,34 @@ def _text_area(primitive: "PText") -> float:
     height = primitive.height
     ink = _INK_PER_EM * (_BOLD_INK if primitive.bold else 1.0)
     return len(primitive.text.strip()) * ink * height * height
+
+
+def _loft_volume(areas: Sequence[float], offsets: Sequence[float]) -> float:
+    """The frustum rule, section to section: h/3 (A1 + A2 + sqrt(A1 A2)).
+
+    Exact whenever consecutive sections are scaled copies of each other, which
+    is what a loft between two circles or two similar rectangles is, and the
+    standard prismatoid estimate when they are not.
+
+    This used to be the mean area times the whole span, which is a real
+    over-estimate rather than a rounding one: the 30-to-10 loft over 40 mm that
+    ``docs/FEATURE_COVERAGE.md`` records Inventor building at 13.6136 cm^3 came
+    out here at 15.7080, 15% high. The divergence check allows a loft 35%, so
+    nothing said, and the number that was 15% wrong was the one a rehearsal
+    offered as the prediction. The frustum rule gives 13.613568.
+
+    Pairwise, so a three-section loft is two frusta and not one average -- the
+    mean over all sections loses the shape entirely once there are more than
+    two, and a waisted duct is exactly where somebody would reach for a third.
+    """
+    if len(areas) < 2:
+        return 0.0
+    ordered = sorted(zip(offsets, areas))
+    total = 0.0
+    for (near, first), (far, second) in zip(ordered, ordered[1:]):
+        gap = abs(far - near)
+        total += gap / 3.0 * (first + second + math.sqrt(max(first * second, 0.0)))
+    return total
 
 
 def _net_area(sketch: _Sketch, loops: Sequence[Sequence[str]]) -> float:

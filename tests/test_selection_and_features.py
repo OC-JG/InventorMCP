@@ -374,3 +374,85 @@ class TestEveryOperationReportsWhatItDid:
         session.backend.mass_properties = lambda doc_id: (_ for _ in ()).throw(
             RuntimeError("no solid"))
         assert measure(session, block) is None
+
+
+class TestWhatAnEdgeTreatmentCostsInVolume:
+    """A fillet and a chamfer take away different shapes.
+
+    They shared one formula until this file was written: ``_edge_treatment`` was
+    handed a "size" and squared it against r^2 (1 - pi/4), which is the corner
+    outside a quarter round. A chamfer takes a triangle. So every rehearsed
+    chamfer was charged 0.2146 d^2 where the answer is d^2 / 2 -- 57% light, on a
+    number nothing pinned. Worse than the error was where it pointed: the
+    divergence check allows a chamfer 30%, so a live run would have accused a
+    correct recipe of catching more edges than it meant to.
+
+    The block is 40 x 40 x 20, so its four vertical edges are 2 cm each: 8 cm of
+    edge, and every figure below is 8 cm times one cross-section.
+    """
+
+    EDGE_CM = 8.0
+    #: `measured` rounds to six places, so that is the resolution to compare at.
+    ROUNDING = 1e-6
+
+    def moved(self, session, block, op):
+        [result] = apply(session, block, [op])
+        return result["measured"]["volume_change_cm3"]
+
+    def test_an_equal_chamfer_takes_a_right_isoceles_triangle(self, session, block):
+        got = self.moved(session, block, {
+            "op": "chamfer", "edges": {"filter": "vertical"}, "distance": 2})
+        assert got == pytest.approx(-self.EDGE_CM * 0.5 * 0.2 * 0.2, abs=self.ROUNDING)
+
+    def test_two_distances_take_the_triangle_they_describe(self, session, block):
+        got = self.moved(session, block, {
+            "op": "chamfer", "edges": {"filter": "vertical"},
+            "distance": 2, "distance2": 4})
+        assert got == pytest.approx(-self.EDGE_CM * 0.5 * 0.2 * 0.4, abs=self.ROUNDING)
+
+    def test_an_angled_chamfer_uses_the_angle_it_was_given(self, session, block):
+        """Both were ignored before: the same number came back either way."""
+        got = self.moved(session, block, {
+            "op": "chamfer", "edges": {"filter": "vertical"},
+            "distance": 2, "angle": 30})
+        assert got == pytest.approx(
+            -self.EDGE_CM * 0.5 * 0.2 * 0.2 * math.tan(math.radians(30)),
+            abs=self.ROUNDING)
+
+    def test_a_chamfer_is_not_a_fillet_of_the_same_size(self):
+        """The regression itself: these must not come back equal.
+
+        A fresh part each time -- an edge treatment consumes the edges it
+        matched, so the second selector on one block finds nothing.
+        """
+        from inventor_mcp.session import Session
+
+        def treat(op):
+            fresh = Session(backend_kind="mock")
+            fresh.ensure_backend().connect()
+            build_part(fresh, PartRecipe.model_validate(BLOCK))
+            return abs(self.moved(fresh, fresh.context(), op))
+
+        cut = treat({"op": "chamfer", "edges": {"filter": "vertical"}, "distance": 3})
+        rounded = treat({"op": "fillet", "edges": {"filter": "vertical"}, "radius": 3})
+        assert cut > rounded
+        assert cut / rounded == pytest.approx(0.5 / (1 - math.pi / 4), rel=1e-4)
+
+    def test_a_constant_fillet_still_takes_the_corner_outside_the_round(self, session, block):
+        got = self.moved(session, block, {
+            "op": "fillet", "edges": {"filter": "vertical"}, "radius": 3})
+        assert got == pytest.approx(-self.EDGE_CM * 0.09 * (1 - math.pi / 4),
+                                    abs=self.ROUNDING)
+
+    def test_a_variable_fillet_still_matches_what_inventor_removed(self, session, block):
+        """3 mm to 8 mm over a 10 mm edge measured 0.071420 cm^3 in Inventor.
+
+        Pinned here because the refactor above moved the mean-of-r-squared out
+        of ``_edge_treatment`` and into ``fillet``, and this is the one number in
+        the file that came off a real part.
+        """
+        [result] = apply(session, block, [{
+            "op": "fillet", "edges": {"filter": "vertical", "limit": 1},
+            "radius": 3, "radius_end": 8}])
+        per_cm = result["measured"]["volume_change_cm3"] / 2.0  # the edge is 2 cm
+        assert per_cm * 1.0 == pytest.approx(-0.071420, abs=5e-5)
