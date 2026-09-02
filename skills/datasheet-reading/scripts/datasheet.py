@@ -39,6 +39,12 @@ HEADING = re.compile(
     r"absolute\s+maximum|ratings?|recommended\s+land|land\s+pattern|footprint|"
     r"marking|ordering|soldering|taping|packaging)", re.I)
 
+#: Pages that are drawing-heavy but are not the part: tape, reel and carrier
+#: drawings score as high on vector content as an outline does.
+NOT_THE_PART = re.compile(
+    r"(embossed\s+carrier|carrier\s+tape|reel\s+dimension|packaging\s+specification|"
+    r"tape\s+(?:and|&)\s+reel|unreeling|packing)", re.I)
+
 #: Both separators: some sheets use the European decimal comma (11,1) and a
 #: dot-only pattern skips those dimensions without complaining.
 DECIMAL = re.compile(r"\d+[.,]\d+")
@@ -176,12 +182,31 @@ def drawing(path: str) -> None:
     """
     doc = pymupdf.open(path)
     pages = [(len(doc[n].get_text().strip()), n + 1) for n in range(doc.page_count)]
-    doc.close()
     pages.sort()
-    print("least text first -- render the top of this list:")
-    for chars, page in pages[:5]:
-        note = "  <- image-only or a drawing" if chars < 200 else ""
-        print("   p%-4d %6d chars%s" % (page, chars, note))
+    # Least text alone is not enough: a blank "MEMO" page scores best and holds
+    # nothing. Confirm with vector content -- expensive in a sweep, trivial on
+    # three candidate pages.
+    print("least text first, with vector content to tell a drawing from a blank page:")
+    for chars, page in pages[:8]:
+        try:
+            strokes = len(doc[page - 1].get_drawings())
+        except Exception:
+            strokes = -1
+        body = doc[page - 1].get_text()
+        if NOT_THE_PART.search(body):
+            print("   p%-4d %6d chars %6d strokes  <- packaging/tape, not the part"
+                  % (page, chars, strokes))
+            continue
+        if strokes > 200:
+            note = "  <- DRAWING"
+        elif chars == 0 and strokes <= 0:
+            note = "  <- image-only, render it"
+        elif strokes < 40:
+            note = "  <- blank or filler, skip"
+        else:
+            note = ""
+        print("   p%-4d %6d chars %6d strokes%s" % (page, chars, strokes, note))
+    doc.close()
 
 
 def render(path: str, page: int, zoom: float = 3.0) -> None:
