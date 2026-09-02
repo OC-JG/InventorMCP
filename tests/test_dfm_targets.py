@@ -29,7 +29,9 @@ import pytest
 from inventor_mcp.dfm.freeze import FreezeGuard
 from inventor_mcp.dfm.remedy import propose
 from inventor_mcp.dfm.report import read_report
-from inventor_mcp.dfm.runner import BRIDGE, DfmUnavailable, analyse_stl, find_dfm_root
+from inventor_mcp.dfm.runner import BRIDGE, analyse_stl
+
+from conftest import skip_without_analyser
 
 FIXTURES = Path(__file__).parent / "fixtures" / "dfm"
 SHAPES = Path(__file__).parent / "dfm_shapes.mjs"
@@ -45,13 +47,7 @@ VALUES = {"wall_t": 2.0, "draft_a": 0.2, "rib_t": 1.9, "rib_h": 9.0,
 
 @pytest.fixture(scope="module")
 def analyser() -> Path:
-    import shutil
-    if shutil.which("node") is None:
-        pytest.skip("no node, so the DFM analyser cannot run")
-    try:
-        return find_dfm_root()
-    except DfmUnavailable as exc:
-        pytest.skip(f"{exc.message} {exc.hint or ''}")
+    return skip_without_analyser()
 
 
 @pytest.fixture(scope="module")
@@ -262,3 +258,47 @@ class TestTheSinkCapIsAFindingNotATarget:
             "ribRadius": 0.75, "bossOD": 5.5, "bossWall": 1.5, **only("ribs"),
         })
         assert deduction(report, "ribs") == 0, report.check("ribs").detail
+
+
+class TestTheSkipCiKeysOn:
+    """CI decides whether this job checked anything by reading the skip reason.
+
+    The manufacturability job exists for one thing: catching the targets in
+    `inventor_mcp.dfm.remedy` drifting out of agreement with the rules they
+    duplicate. Every test that can do that skips when the analyser is absent,
+    and a fully skipped pytest run exits 0 -- so with a token present and the
+    analyser unreachable, the job reported green having checked nothing.
+
+    It now fails on a skip carrying `conftest.DFM_UNAVAILABLE`. Which only works
+    while every such skip goes through the helper, so that is checked here
+    rather than trusted. A test skipping past the sentinel would restore exactly
+    the silence the guard was added to end.
+    """
+
+    FILES = ("test_dfm_targets.py", "test_dfm_end_to_end.py")
+
+    def test_the_sentinel_is_what_the_workflow_looks_for(self):
+        from conftest import DFM_UNAVAILABLE
+
+        workflow = (Path(__file__).resolve().parent.parent
+                    / ".github/workflows/tests.yml").read_text()
+        assert f'"{DFM_UNAVAILABLE}"' in workflow, (
+            "the workflow and tests/conftest.py disagree about the sentinel, so "
+            "the guard matches nothing and the job is green again")
+
+    @pytest.mark.parametrize("name", FILES)
+    def test_nothing_skips_around_the_helper(self, name):
+        """`pytest.skip` here without the sentinel is invisible to CI."""
+        import ast
+
+        source = (Path(__file__).resolve().parent / name).read_text()
+        loose = [
+            node.lineno for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute) and node.func.attr == "skip"
+            and isinstance(node.func.value, ast.Name) and node.func.value.id == "pytest"
+        ]
+        assert not loose, (
+            f"{name} calls pytest.skip directly at line(s) {loose}. Use "
+            "conftest.skip_without_analyser so CI can tell a skipped check from "
+            "a passed one.")
