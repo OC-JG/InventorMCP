@@ -1506,14 +1506,7 @@ class ComBackend(Backend):
             # Inventor owns the glyph outlines, so this is placed and styled
             # rather than constrained. The style override is how font, size and
             # weight travel -- FontSize is in database units, like everything else.
-            escaped = (primitive.text.replace("&", "&amp;")
-                       .replace("<", "&lt;").replace(">", "&gt;"))
-            styled = (
-                f'<StyleOverride Font="{primitive.font}" FontSize="{primitive.height}"'
-                f'{" Bold=\"True\"" if primitive.bold else ""}'
-                f'{" Italic=\"True\"" if primitive.italic else ""}'
-                f">{escaped}</StyleOverride>"
-            )
+            styled = _style_override(primitive)
             try:
                 # AddFitted takes exactly two arguments on this build -- passing a
                 # rotation as a third is refused, so it is set as a property after.
@@ -3301,6 +3294,24 @@ class ComBackend(Backend):
 def _iterate(collection: Any) -> Iterator[Any]:  # pragma: no cover - Windows only
     for index in range(1, int(collection.Count) + 1):
         yield collection.Item(index)
+
+
+def _style_override(primitive: PText) -> str:
+    """The formatted-text markup Inventor's ``TextBoxes.AddFitted`` takes.
+
+    A module-level function so it can be tested off Windows.  It was written
+    inline, with the attribute quotes escaped inside the f-string, and a
+    backslash in an f-string expression is a syntax error before Python 3.12 --
+    so this module did not *parse* on the oldest interpreter ``pyproject``
+    claims, and ``--backend auto`` raised ``SyntaxError`` there instead of
+    falling back to the simulator.  Concatenation avoids the escape entirely.
+    """
+    escaped = (primitive.text.replace("&", "&amp;")
+               .replace("<", "&lt;").replace(">", "&gt;"))
+    weight = ' Bold="True"' if primitive.bold else ""
+    slant = ' Italic="True"' if primitive.italic else ""
+    return (f'<StyleOverride Font="{primitive.font}" FontSize="{primitive.height}"'
+            + weight + slant + f">{escaped}</StyleOverride>")
 
 
 def _polar(center: tuple[float, float], radius: float, angle: float) -> tuple[float, float]:
