@@ -732,8 +732,6 @@ class MockBackend(Backend):
         document.sketches.append(sketch)
         document.modified = True
         self._record("build_sketch", name=name, plane=plan.plane, **plan.summary())
-
-        free = _degrees_of_freedom(plan)
         return _sketch_info(sketch)
 
     def _plane_and_offset(self, document: _Document,
