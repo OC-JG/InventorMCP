@@ -56,9 +56,11 @@ three are hygiene the code had earned the right to skip until it stopped being
 able to.
 
 **1. The simulator's volume model becomes a per-body ledger.** This is the only
-real redesign. Thirteen of the fourteen `ponytail:` markers (the repository's
-word for a deliberate approximation) live in `backend/mock/`, and the worst of
-them is structural rather than local: `document.volume` is one scalar,
+real redesign. Fifteen of the sixteen `ponytail:` markers (the repository's
+word for a deliberate approximation) live in `backend/mock/` — it was thirteen
+of fourteen when this was written, and the sentence said so until 2026-09-03,
+which is what put this file under `test_roadmap_still_true.py` — and the worst
+of them was structural rather than local: `document.volume` is one scalar,
 `document.slabs` is a list that only `extrude` appends to and nothing ever
 subtracts from, and every operation's estimate was bolted on separately. So a
 through-cut after a shell is charged against the pre-shell solid — a 26×
@@ -238,7 +240,8 @@ reading the numbers.
       trimmed revolve is excluded from the comparison rather than covered by a
       loose number, because the ledger cannot answer there and says so.
 - [x] **Give the divergence check a sense of direction** — defect 6, found on
-      the way and fixed the same day. It compared volumes moved and nothing
+      the way to the calibration above and fixed the same day *(2026-09-03)*.
+      It compared volumes moved and nothing
       else, so a cut that took the right amount off the wrong side read as a
       pass: the run that exposed the split inversion was 1.2% apart while
       keeping the opposite half of the part. Every operation now records where
@@ -248,8 +251,18 @@ reading the numbers.
       simulator's box is approximate for a revolve and exact only for prisms.
 - [x] **Drift tests are the rule** (restructure 2). *(2026-09-03.)* Written
       down in `DECISIONS.md` as "a fact stated twice needs a test that the two
-      agree", with the six drifts that earned it and the corollary that the
+      agree", with the drifts that earned it and the corollary that the
       answer is usually the test rather than removing the duplication.
+
+      **Including this file, which was the last one exempt from it**
+      *(2026-09-03)*. The rule was written here and not applied here, and the
+      file had drifted in three ways: the `ponytail:` count above, four
+      calibrated tolerances quoted with nothing holding them against
+      `PREDICTED`, and a ticked item dated "the same day" without saying which.
+      `tests/test_roadmap_still_true.py` now holds the countable claims, and
+      says in its own docstring which claims it deliberately leaves alone —
+      dated measurements, the landscape section, and the phase count, which is a
+      framing choice rather than a fact.
 
 ### Phase 2 — the coil-shaped additions
 

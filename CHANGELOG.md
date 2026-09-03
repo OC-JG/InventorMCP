@@ -4,6 +4,28 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
 ## Unreleased
 
+### Fixed
+- **The roadmap is under the drift rule it was written in.** `DECISIONS.md`'s
+  rule is that a fact stated in two places does not merge without a test that
+  they agree. `ROADMAP.md` is where that rule was written down, and was the last
+  document exempt from it — and it had drifted three ways: it said thirteen of
+  fourteen `ponytail:` markers lived in `backend/mock/` when there were sixteen,
+  fifteen of them there; it quoted four calibrated tolerances with nothing
+  holding them against `PREDICTED`; and one ticked item was dated "the same day"
+  without saying which. Found by going looking, not by anything failing.
+
+  `tests/test_roadmap_still_true.py` holds the countable claims, and its
+  docstring says which claims it deliberately leaves alone — dated
+  measurements, the landscape section, and the phase count, which is a framing
+  choice rather than a fact.
+
+  Each claim was then mutated to check the test could actually fail, and each
+  mutation was caught by exactly one test. Three of the tests were wrong when
+  first written — one called five sound entries undated by reading line by line
+  where an item spans several — which is the same false-positive habit the run
+  warnings are written to avoid, and is now recorded in `DECISIONS.md` as what a
+  drift test has to earn.
+
 ### Added
 - **A through hole that will drill the near wall only is warned about** —
   defect 1, open since it cost the PCB enclosure a cable route. Inventor's
