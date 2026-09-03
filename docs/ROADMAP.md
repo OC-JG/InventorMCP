@@ -212,11 +212,10 @@ by running against a real Inventor.
       compared with Inventor. Run `scripts/live_acceptance.py` on a Windows
       machine with Inventor, record the deltas, set tolerances from evidence.
       *Needs the owner's machine; cannot be done from a Linux container.*
-- [ ] **Drift tests are the rule** (restructure 2): recorded in
-      `DECISIONS.md` so the next duplication is caught in review, not in an
-      audit. Four are in place — the cheat-sheet, the Python floor, the DFM
-      sentinel, the snapshot policy against defect 4 — but the rule itself is
-      not written down yet.
+- [x] **Drift tests are the rule** (restructure 2). *(2026-09-03.)* Written
+      down in `DECISIONS.md` as "a fact stated twice needs a test that the two
+      agree", with the six drifts that earned it and the corollary that the
+      answer is usually the test rather than removing the duplication.
 
 ### Phase 2 — the coil-shaped additions
 
