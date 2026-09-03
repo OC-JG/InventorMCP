@@ -412,10 +412,11 @@ inventor_mcp/
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for why it is split that way,
 [docs/INVENTOR_SETUP.md](docs/INVENTOR_SETUP.md) for the Windows/COM specifics,
 [docs/DFM.md](docs/DFM.md) for the manufacturability loop and how key geometry
-is protected, and [docs/DECISIONS.md](docs/DECISIONS.md) for the choices that
+is protected, [docs/DECISIONS.md](docs/DECISIONS.md) for the choices that
 surprise people — why a failed build is left where it stopped, why the
 simulator counts as a real implementation, and why an honest "unknown" beats a
-heuristic.
+heuristic — and [docs/ROADMAP.md](docs/ROADMAP.md) for what comes next, in
+what order, and why it is not a rebuild.
 
 ## Development
 
