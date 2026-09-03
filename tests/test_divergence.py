@@ -321,3 +321,116 @@ class TestTheGuardCoversWhatIsGuessedAt:
 
     def test_but_not_a_coarse_estimate_of_the_right_thing(self):
         assert compare_to_rehearsal([step(0, "emboss", -1.3)], [step(0, "emboss", -1.0)]) == []
+
+
+class TestACutOnTheWrongSide:
+    """The failure a comparison of volumes cannot see, and now does.
+
+    A `trim` split kept the wrong half of every part for as long as the feature
+    existed. The run that eventually exposed it reported the simulator at
+    19.4286 cm^3 removed and Inventor at 19.2 -- 1.2% apart, inside every
+    tolerance in `PREDICTED` -- while the two were keeping *opposite halves of
+    the part*. Volume says how much an operation moved and cannot say which side
+    it moved it from, so when the two sides are near enough in size there is
+    nothing in the number to notice.
+
+    The centre of the bounding box has a direction, and the two halves send it
+    opposite ways. Defect 6 in `docs/FEATURE_COVERAGE.md`.
+    """
+
+    def split(self, change: float, shift: list[float]) -> list[dict]:
+        return [{"index": 0, "op": "split", "name": "Trim", "measured": {
+            "volume_cm3": 10.0, "volume_change_cm3": change,
+            "centre_shift_mm": shift}}]
+
+    def test_the_historical_case_is_caught_with_the_volumes_agreeing(self):
+        """1.2% apart, which passes, and opposite halves, which no longer does."""
+        [finding] = compare_to_rehearsal(
+            self.split(-19.2, [0, 0, 4.0]),          # Inventor kept the top
+            self.split(-19.4286, [0, 0, -10.0]),     # the simulator kept the bottom
+        )
+        assert "off_by_cm3" not in finding, "the volumes agreed; only the side did not"
+        assert finding["axis"] == "z"
+        assert finding["rehearsed_shift_mm"] == -10.0
+        assert finding["measured_shift_mm"] == 4.0
+        assert "opposite way along Z" in finding["why"]
+
+    def test_moving_the_same_way_is_silent(self):
+        assert compare_to_rehearsal(self.split(-19.2, [0, 0, -9.5]),
+                                    self.split(-19.2, [0, 0, -10.0])) == []
+
+    def test_a_shift_too_small_to_mean_anything_is_ignored(self):
+        """A fillet barely moves a centre, and the sign of that is noise.
+
+        Both sides have to clear `SHIFTED` before the direction counts, because
+        the simulator's bounding box is synthesised from sketch extents and is
+        only approximate for a revolve, a sweep or a loft.
+        """
+        from inventor_mcp.rehearsal import SHIFTED
+
+        tiny = SHIFTED / 2
+        assert compare_to_rehearsal(self.split(-19.2, [0, 0, tiny]),
+                                    self.split(-19.2, [0, 0, -tiny])) == []
+
+    def test_one_side_moving_alone_is_not_enough(self):
+        """It detects a mirror, not every positional disagreement.
+
+        A wider rule would need calibrating the way the volume tolerances were,
+        and nothing has measured one yet -- so this stays narrow and says so.
+        """
+        assert compare_to_rehearsal(self.split(-19.2, [0, 0, 8.0]),
+                                    self.split(-19.2, [0, 0, 0.0])) == []
+
+    def test_both_kinds_of_evidence_land_in_one_finding(self):
+        """An operation that is wrong twice should not be reported twice."""
+        [finding] = compare_to_rehearsal(self.split(+19.2, [0, 0, 4.0]),
+                                         self.split(-19.4286, [0, 0, -10.0]))
+        assert "off_by_cm3" in finding and "axis" in finding
+        assert "the other way" in finding["why"]
+        assert "opposite way along Z" in finding["why"]
+
+    def test_a_step_with_no_box_is_not_guessed_at(self):
+        without = [{"index": 0, "op": "split", "name": "Trim",
+                    "measured": {"volume_cm3": 10.0, "volume_change_cm3": -19.2}}]
+        assert compare_to_rehearsal(without, self.split(-19.2, [0, 0, -10.0])) == []
+
+
+class TestTheTrimmedPartIsSmallerAfterwards:
+    """Which is what gives the check above anything to read.
+
+    The simulator's bounds were left alone by a trim, so a part measured the
+    size it had been before the cut -- and with the box unchanged its centre
+    could not move, which is the only signal that distinguishes keeping this
+    half from keeping the other.
+    """
+
+    @pytest.fixture
+    def session(self) -> Session:
+        session = Session(backend_kind="mock")
+        session.ensure_backend().connect()
+        return session
+
+    def trim(self, session: Session, remove_positive: bool) -> dict:
+        from inventor_mcp.builder import build_part
+
+        result = build_part(session, PartRecipe.model_validate({
+            "name": "T", "units": "mm", "operations": [
+                {"op": "sketch", "name": "B", "plane": "xy", "entities": [
+                    {"type": "rectangle", "center": [0, 0], "width": 60, "height": 40}]},
+                {"op": "extrude", "name": "Slab", "sketch": "B", "distance": 20},
+                {"op": "work_plane", "name": "Cut", "kind": "offset",
+                 "base": "xy", "offset": 12},
+                {"op": "split", "name": "Trim", "tool": "Cut", "style": "trim",
+                 "remove_positive": remove_positive},
+            ]}))
+        assert result["ok"], result["errors"]
+        return session.backend.mass_properties(result["document"]).as_dict()
+
+    def test_keeping_the_lower_half_leaves_a_part_12_mm_tall(self, session):
+        box = self.trim(session, remove_positive=True)["bounding_box"]
+        assert (box[5] - box[2]) * 10 == pytest.approx(12.0)
+
+    def test_keeping_the_upper_half_leaves_one_8_mm_tall(self, session):
+        box = self.trim(session, remove_positive=False)["bounding_box"]
+        assert (box[5] - box[2]) * 10 == pytest.approx(8.0)
+        assert box[2] * 10 == pytest.approx(12.0), "it starts at the cut"

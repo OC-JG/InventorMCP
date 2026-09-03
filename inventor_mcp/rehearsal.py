@@ -15,7 +15,8 @@ other in a circle.
 
 from __future__ import annotations
 
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from .builder import apply_operation, apply_parameter, measure
 from .checks import _undriven_parameters, check_recipe
@@ -138,6 +139,14 @@ def compare_to_rehearsal(built: Sequence[dict[str, Any]],
 
     Deltas are compared rather than totals, so an error in one operation does not
     then flag every operation after it.
+
+    Volume alone was not enough. A `trim` split kept the wrong half of a part
+    for as long as the feature existed, and one of the runs that found it was
+    1.2% apart -- inside every tolerance in the table -- because the two halves
+    happened to be near enough in size. An operation that takes the right amount
+    off the wrong side is invisible to a comparison of amounts, so the centre of
+    the bounding box is compared too: it has a direction, and the two halves send
+    it opposite ways. See defect 6 in `docs/FEATURE_COVERAGE.md`.
     """
     findings: list[dict[str, Any]] = []
     expected = {step["index"]: step for step in rehearsed}
@@ -150,23 +159,74 @@ def compare_to_rehearsal(built: Sequence[dict[str, Any]],
             continue
         want = (counterpart.get("measured") or {})
         got = step.get("measured") or {}
-        predicted, actual = want.get("volume_change_cm3"), got.get("volume_change_cm3")
-        if predicted is None or actual is None:
-            continue
-        off = actual - predicted
-        allowed = max(abs(predicted) * tolerance, NOTICEABLE)
-        if abs(off) <= allowed:
-            continue
-        findings.append({
+        finding: dict[str, Any] = {
             "index": step["index"],
             "op": step.get("op"),
             "name": step.get("name"),
-            "rehearsed_cm3": round(predicted, 6),
-            "measured_cm3": round(actual, 6),
-            "off_by_cm3": round(off, 6),
-            "why": _divergence_reason(step.get("op") or "", predicted, actual),
-        })
+        }
+        reasons: list[str] = []
+
+        predicted, actual = want.get("volume_change_cm3"), got.get("volume_change_cm3")
+        if predicted is not None and actual is not None:
+            off = actual - predicted
+            if abs(off) > max(abs(predicted) * tolerance, NOTICEABLE):
+                finding["rehearsed_cm3"] = round(predicted, 6)
+                finding["measured_cm3"] = round(actual, 6)
+                finding["off_by_cm3"] = round(off, 6)
+                reasons.append(
+                    _divergence_reason(step.get("op") or "", predicted, actual))
+
+        mirrored = _mirrored_axis(want.get("centre_shift_mm"),
+                                  got.get("centre_shift_mm"))
+        if mirrored is not None:
+            axis, rehearsed_shift, measured_shift = mirrored
+            finding["axis"] = "xyz"[axis]
+            finding["rehearsed_shift_mm"] = rehearsed_shift
+            finding["measured_shift_mm"] = measured_shift
+            reasons.append(
+                f"The part moved the opposite way along {'xyz'[axis].upper()}: the "
+                f"simulator's centre went {rehearsed_shift:+.3f} mm and Inventor's "
+                f"went {measured_shift:+.3f}. Whatever this operation chose between "
+                "two sides, the two chose differently -- which a comparison of "
+                "volumes cannot see when the sides are near enough in size.")
+
+        if reasons:
+            finding["why"] = " ".join(reasons)
+            findings.append(finding)
     return findings
+
+
+#: How far a part's centre has to move before the direction it moved in means
+#: anything, in mm. Below this it is rounding: a fillet barely shifts a centre,
+#: and the sign of a shift that small is noise on both sides.
+SHIFTED = 1.0
+
+
+def _mirrored_axis(rehearsed: Sequence[float] | None,
+                   measured: Sequence[float] | None
+                   ) -> tuple[int, float, float] | None:
+    """The axis along which the two runs moved the part opposite ways, if any.
+
+    Deliberately narrow. It asks for a sign flip with both sides past
+    :data:`SHIFTED`, rather than for the two shifts to agree within a
+    tolerance, because the simulator's bounding box is synthesised from sketch
+    extents and is only approximate for a revolve, a sweep or a loft -- close
+    enough that a disagreement of a millimetre or two says nothing, and never
+    so wrong that it reverses the direction a part's centre travelled.
+
+    So this catches the mirrored outcome and not every positional disagreement.
+    A wider rule would have to be calibrated the way the volume tolerances were,
+    and nothing has measured it yet.
+    """
+    if not rehearsed or not measured:
+        return None
+    for axis in range(3):
+        first, second = rehearsed[axis], measured[axis]
+        if abs(first) < SHIFTED or abs(second) < SHIFTED:
+            continue
+        if (first < 0) != (second < 0):
+            return axis, round(first, 3), round(second, 3)
+    return None
 
 
 def _divergence_reason(op: str, predicted: float, actual: float) -> str:

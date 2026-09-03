@@ -183,16 +183,24 @@ and this file is updated in the same commit.
       accumulates. This is a repository setting, not a file; it cannot be
       verified from the tree and is recorded here on the owner's word.
 
-### Phase 1 — foundations *(in progress)*
+### Phase 1 — foundations *(done, 2026-09-03)*
 
 The four restructures, plus the two debts that were only ever going to be paid
-by running against a real Inventor. One of those has since been paid: an
+by running against a real Inventor. Both have since been paid: an
 acceptance run on Inventor 2027.1 (2026-09-03, 63 of 64 checks passing) put the
 simulator within 1% of a live build on all eleven shipped examples and confirmed
-the volume ledger's hand-derived figure for the enclosure. Its one failure was
-worth more than the passes — four enum names the table had were names Inventor
-has never had, one of which had been quietly refusing every `shell` with
-`direction: "both"` since it was written.
+the volume ledger's hand-derived figure for the enclosure, and a calibration run
+put a measured number on all four placeholder tolerances.
+
+Both runs were worth more for what they broke than for what they confirmed. The
+acceptance run's one failure was four enum names the table had that Inventor has
+never had, one of which had been quietly refusing every `shell` with
+`direction: "both"` since it was written. The calibration run found every `trim`
+split keeping the wrong half of the part — and then, in the course of proving
+that, found that the divergence check could not have caught it, because it
+compared how much an operation moved and never where. Three defects, none of
+which anybody was looking for, all from running the thing against reality and
+reading the numbers.
 
 - [x] **Cheat-sheet served once** (restructure 3), pinned by a test that the
       duplicate does not come back. *(2026-09-03; tool-list bytes 35,206 →
@@ -229,13 +237,15 @@ has never had, one of which had been quietly refusing every `shell` with
       the three fixtures then agreed to four decimal places, so it is 0.05. A
       trimmed revolve is excluded from the comparison rather than covered by a
       loose number, because the ledger cannot answer there and says so.
-- [ ] **Give the divergence check a sense of direction** — defect 6, found on
-      the way. It compares volumes moved and nothing else, so a cut that took
-      the right amount off the wrong side reads as a pass: the run that exposed
-      the split inversion was 1.2% apart while keeping the opposite half of the
-      part. `measure` already returns the centre of mass and the bounding box,
-      so the material is there. Worth doing before anything else leans on the
-      check for an operation that chooses a side.
+- [x] **Give the divergence check a sense of direction** — defect 6, found on
+      the way and fixed the same day. It compared volumes moved and nothing
+      else, so a cut that took the right amount off the wrong side read as a
+      pass: the run that exposed the split inversion was 1.2% apart while
+      keeping the opposite half of the part. Every operation now records where
+      the bounding box's centre went, and a pair of runs that sent it opposite
+      ways is reported whatever the volumes say. Narrow on purpose: a sign flip
+      past a millimetre, not an agreement within a tolerance, because the
+      simulator's box is approximate for a revolve and exact only for prisms.
 - [x] **Drift tests are the rule** (restructure 2). *(2026-09-03.)* Written
       down in `DECISIONS.md` as "a fact stated twice needs a test that the two
       agree", with the six drifts that earned it and the corollary that the

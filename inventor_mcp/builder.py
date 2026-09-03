@@ -229,6 +229,17 @@ def _changed(before: dict[str, Any] | None,
     if "span_mm" in after and "span_mm" in before and after["span_mm"] != before["span_mm"]:
         report["span_mm_was"] = before["span_mm"]
         report["span_mm"] = after["span_mm"]
+    # Where the part went, as well as how much of it there is. A volume says
+    # how much an operation moved and cannot say which side it moved it from:
+    # a trim that keeps the wrong half of a part removes a plausible amount and
+    # reports a plausible number. The bounding box's centre has a direction, and
+    # the two halves send it opposite ways.
+    if "at_mm" in after and "at_mm" in before:
+        shift = [round((after["at_mm"][axis] + after["at_mm"][axis + 3]) / 2
+                       - (before["at_mm"][axis] + before["at_mm"][axis + 3]) / 2, 3)
+                 for axis in range(3)]
+        if any(abs(value) > 1e-6 for value in shift):
+            report["centre_shift_mm"] = shift
     return report
 
 

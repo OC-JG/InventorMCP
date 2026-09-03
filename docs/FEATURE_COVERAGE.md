@@ -236,14 +236,28 @@ Each of these was hit while building real parts, and each passed
    its number is a fallback, and the rehearsal declines to compare a step that
    says so.
 
-6. **The divergence check cannot see a cut that took the right amount off the
-   wrong side.** Found while fixing defect 5, and worth more than it. On
-   `origin_plane_split` the simulator reported 19.4286 cm^3 removed and Inventor
-   19.2 -- 1.2% apart, while keeping *opposite halves of the part*. Every
-   tolerance in `PREDICTED` would have passed it, because the comparison is of
-   volumes moved and nothing else. It catches a cut that missed and a fillet on
-   the wrong edge; it is blind to a mirrored outcome whenever the two halves are
-   near enough in size. Fixing it means comparing something that has a
-   direction -- the centre of mass, or the bounding box -- and `measure` already
-   returns both. No fix yet: worth doing before anything else relies on the
-   check for an operation that chooses a side.
+6. **The divergence check could not see a cut that took the right amount off
+   the wrong side.** *Fixed 2026-09-03.* Found while fixing defect 5 and worth
+   more than it. On `origin_plane_split` the simulator reported 19.4286 cm^3
+   removed and Inventor 19.2 -- 1.2% apart, while keeping *opposite halves of
+   the part*. Every tolerance in `PREDICTED` passed it, because the comparison
+   was of volumes moved and nothing else: it catches a cut that missed and a
+   fillet on the wrong edge, and was blind to a mirrored outcome whenever the
+   two halves were near enough in size.
+
+   Every operation now records `centre_shift_mm`, where the bounding box's
+   centre moved, and `compare_to_rehearsal` reports an operation whose two runs
+   sent it opposite ways. The rule is deliberately narrow -- a sign flip with
+   both sides past a millimetre, rather than the two shifts agreeing within a
+   tolerance -- because the simulator's box is synthesised from sketch extents
+   and is only approximate for a revolve, a sweep or a loft. Approximate enough
+   that a millimetre or two says nothing; never so wrong that it reverses the
+   direction a part's centre travelled. So it catches the mirror and not every
+   positional disagreement, and a wider rule would need calibrating against a
+   live Inventor the way the volume tolerances were.
+
+   A second thing had to be fixed to make it work at all: the simulator's trim
+   left `document.bounds` alone, so a trimmed part measured the size it had been
+   before the cut -- and with the box unchanged its centre could not move, which
+   is the only signal that distinguishes keeping this half from keeping the
+   other.

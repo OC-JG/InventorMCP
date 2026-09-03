@@ -1752,6 +1752,16 @@ class MockBackend(Backend):
                                for index, volume in enumerate(document.bodies)]
             self._clip_slabs(document, axis, offset,
                              keep_below=request.remove_positive)
+            # And the part is smaller now, which the bounds have to say. They
+            # did not, so a trimmed part still measured as the size it was
+            # before the cut -- and with the box unchanged the centre of it
+            # could not move, which is the one signal that distinguishes
+            # keeping this half from keeping the other one.
+            if document.bounds:
+                if request.remove_positive:
+                    document.bounds[axis + 3] = min(document.bounds[axis + 3], offset)
+                else:
+                    document.bounds[axis] = max(document.bounds[axis], offset)
         elif request.style == "split" and document.bodies:
             half = document.bodies[0] / 2
             document.bodies = [half, half, *document.bodies[1:]]
