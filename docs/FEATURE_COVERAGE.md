@@ -163,12 +163,23 @@ Each of these was hit while building real parts, and each passed
    Fix: support a both-directions extent on holes, or warn when a through hole's
    axis re-enters material it did not cut.
 
-2. **The simulator's `shell` does not update `document.slabs`.** Slabs record the
-   prisms an extrude added and are what `_through_all_distance` measures against,
-   so after a shell every through-cut is charged against the pre-shell solid. The
-   enclosure's cable bore was costed at the full 105 mm box length instead of two
-   2 mm walls -- a 26x over-count on that feature. Anything reasoning from a
-   rehearsal of a hollow part inherits this.
+   *Easier to see now.* The simulator's ledger counts material in pieces, so it
+   predicts both walls where Inventor drills one. The divergence check reports
+   that as a disagreement instead of the two errors cancelling into a plausible
+   number.
+
+2. ~~**The simulator's `shell` does not update `document.slabs`.**~~ *Fixed.* The
+   slab list is now a signed ledger: a shell records the cavity it hollowed out,
+   a cut records the prism it swept, a hole records its bore, and the list is read
+   in creation order so material put back into a void counts again. A cut is
+   charged the material it meets rather than its whole swept shape -- the
+   enclosure's cable entry costs 0.36 cm^3 against the 5.04 it used to, which is
+   what the hand calculation in `examples/expected/enclosure_base.json` says it
+   should be. The same feature also rounds a filleted prism's recorded outline,
+   because a shell measures that outline and square corners made the cavity
+   10.5 mm^2 too big. The part went from 10.7% below the hand-derived volume to
+   0.002% above it, the remainder being the polygon that stands in for an arc.
+   `tests/test_volume_ledger.py` holds it there.
 
 3. **`save_part` fails with a bare "Exception occurred" when that path is already
    open** in Inventor from an earlier build. Since each rebuild leaves another

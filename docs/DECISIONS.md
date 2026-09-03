@@ -72,7 +72,15 @@ exact confusion the volume reporting exists to prevent.
 
 Where the simulator genuinely cannot answer, it declines: a revolve records no
 prism, so a through-cut through one falls back to the span rather than inventing
-a thickness.
+a thickness, and a shell whose cavity it could not compute records no cavity at
+all rather than one of about the right size in about the right place.
+
+The same rule decides where a volume is *kept*. It is kept per body and added up
+only to report the part, because a total is exactly what hides the error: a cut
+that removes more than the body it was aimed at holds used to be paid for out of
+another body's material, and the sum stayed plausible. Each body now stops at
+nothing on its own, and the difference between what an operation asked to remove
+and what it actually removed is what the operation reports moving.
 
 ## A drawing is read, not traced
 

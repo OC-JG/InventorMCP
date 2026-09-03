@@ -191,12 +191,13 @@ by running against a real Inventor.
 - [x] **Cheat-sheet served once** (restructure 3), pinned by a test that the
       duplicate does not come back. *(2026-09-03; tool-list bytes 35,206 →
       17,040.)*
-- [ ] **Per-body volume ledger in the simulator** (restructure 1). Acceptance:
-      the enclosure example's simulated volume moves from 41.87 cm³ toward the
-      hand-derived 46.896177 cm³ in `examples/expected/enclosure_base.json`;
-      every other example with a recorded expectation holds it; defect 2 in
-      `FEATURE_COVERAGE.md` is closed; `examples/expected/` changes only where
-      a fixture had encoded the bug, and says so.
+- [x] **Per-body volume ledger in the simulator** (restructure 1). *(2026-09-03.)*
+      The enclosure went from 41.874424 cm³ to 46.897289 against the hand-derived
+      46.896177, so from 10.7% below to 0.002% above; every other example held
+      its recorded expectation to the digit; defect 2 in `FEATURE_COVERAGE.md`
+      is closed and defect 1 is now visible rather than cancelling out. No
+      expected volume changed — only the note in
+      `examples/expected/enclosure_base.json` that had described the bug.
 - [ ] **`builder.py` split** (restructure 4) into checks, rehearsal and
       building, with `builder.py` re-exporting so no import changes. Zero
       behaviour change; the existing suite is the proof.

@@ -141,7 +141,7 @@ class TestRollingBackAScript:
     def test_a_failed_script_is_undone_by_default(self, hatch, session):
         was = session.backend.mass_properties(session.active).volume
         result = hatch(
-            code="document.volume = 500.0\nraise RuntimeError('too late')",
+            code="document.bodies = [500.0]\nraise RuntimeError('too late')",
             i_understand_this_is_unsandboxed=True,
         )
         assert result["ok"] is False
@@ -150,14 +150,14 @@ class TestRollingBackAScript:
 
     def test_the_default_is_the_opposite_of_the_recipe_tools(self, hatch, session):
         """Stated as a test because the asymmetry is a decision, not an accident."""
-        result = hatch(code="document.volume = 500.0\nraise RuntimeError('x')",
+        result = hatch(code="document.bodies = [500.0]\nraise RuntimeError('x')",
                        i_understand_this_is_unsandboxed=True, rollback_on_error=False)
         assert "rolled_back" not in result
         assert "not attempted" in result["rollback"]
         assert session.backend.mass_properties(session.active).volume == 500.0
 
     def test_a_script_that_works_is_kept(self, hatch, session):
-        result = hatch(code="document.volume = 42.0",
+        result = hatch(code="document.bodies = [42.0]",
                        i_understand_this_is_unsandboxed=True)
         assert result["ok"] is True
         assert session.backend.mass_properties(session.active).volume == 42.0

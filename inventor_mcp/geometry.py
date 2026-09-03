@@ -1232,6 +1232,149 @@ def inset_area(points: Sequence[tuple[float, float]], distance: float) -> float 
     return inner if inner > 0 else None
 
 
+#: Radians between samples along a rounded corner. Half the step the sketch
+#: sampler uses, because this polygon is measured against rather than drawn: the
+#: enclosure's shell cavity is computed from it, and a coarser arc costs about
+#: 0.004 cm^3 there where this costs 0.001.
+_CORNER_STEP = 0.05
+
+
+def treat_polygon_corner(points: Sequence[tuple[float, float]], index: int,
+                         *, radius: float | None = None,
+                         setbacks: tuple[float, float] | None = None
+                         ) -> list[tuple[float, float]] | None:
+    """The polygon with one vertex replaced by a fillet arc or a chamfer chord.
+
+    A prism's recorded outline is what "how thick is the part here" is answered
+    from, and a fillet on the edges running along that prism changes it: the
+    enclosure is a 100 x 70 box with 6 mm corners, and shelling it as though the
+    corners were square makes the cavity 10.5 mm^2 too big -- 0.34 cm^3, which
+    is three quarters of a percent of the finished part.
+
+    Which way the treatment goes is read off the corner's own turn, so an inside
+    corner gains material and an outside corner loses it, exactly as the volume
+    estimate for the same feature does.
+
+    Returns None where the treatment does not fit: a radius that would eat past
+    the middle of either neighbouring edge has to be refused, because the
+    polygon it would produce is not the shape the feature makes.
+    """
+    count = len(points)
+    if count < 3 or not (0 <= index < count):
+        return None
+    previous, here, following = points[index - 1], points[index], points[(index + 1) % count]
+    back = (here[0] - previous[0], here[1] - previous[1])
+    ahead = (following[0] - here[0], following[1] - here[1])
+    back_length, ahead_length = math.hypot(*back), math.hypot(*ahead)
+    if back_length < 1e-12 or ahead_length < 1e-12:
+        return None
+    back = (back[0] / back_length, back[1] / back_length)
+    ahead = (ahead[0] / ahead_length, ahead[1] / ahead_length)
+    cross = back[0] * ahead[1] - back[1] * ahead[0]
+    dot = back[0] * ahead[0] + back[1] * ahead[1]
+    turn = math.atan2(cross, dot)
+    if abs(turn) < 1e-9 or abs(abs(turn) - math.pi) < 1e-9:
+        return None  # straight, or doubling back: no corner to treat
+
+    if setbacks is not None:
+        first, second = setbacks
+    else:
+        if radius is None or radius <= 0:
+            return None
+        first = second = radius * math.tan(abs(turn) / 2)
+    if first > back_length / 2 or second > ahead_length / 2:
+        return None
+
+    start = (here[0] - back[0] * first, here[1] - back[1] * first)
+    end = (here[0] + ahead[0] * second, here[1] + ahead[1] * second)
+    if radius is None:
+        arc = [start, end]
+    else:
+        # The centre sits off the incoming edge, on the side the corner turns.
+        side = 1.0 if turn > 0 else -1.0
+        centre = (start[0] - back[1] * side * radius, start[1] + back[0] * side * radius)
+        begin = math.atan2(start[1] - centre[1], start[0] - centre[0])
+        finish = math.atan2(end[1] - centre[1], end[0] - centre[0])
+        sweep = finish - begin
+        while sweep > math.pi:
+            sweep -= 2 * math.pi
+        while sweep < -math.pi:
+            sweep += 2 * math.pi
+        steps = max(2, int(abs(sweep) / _CORNER_STEP))
+        arc = [
+            (centre[0] + radius * math.cos(begin + sweep * step / steps),
+             centre[1] + radius * math.sin(begin + sweep * step / steps))
+            for step in range(steps + 1)
+        ]
+    return [*points[:index], *arc, *points[index + 1:]]
+
+
+def inset_polygon(points: Sequence[tuple[float, float]],
+                  distance: float) -> list[tuple[float, float]] | None:
+    """The polygon offset inward by *distance*, or None where that is not safe.
+
+    :func:`inset_area` says how much area a shell's cavity has; this says where
+    it is, which is what the simulator needs to answer "is there material here"
+    after a part has been hollowed out. Each edge moves inward by *distance* and
+    consecutive edges are extended to meet, which is exact while no corner
+    collapses and no part of the offset crosses another.
+
+    Deciding whether that happened is the difficulty, and the answer is not
+    guessed at: the area of the polygon this builds is compared with the area
+    the analytic identity gives, and a disagreement means the offset folded over
+    itself somewhere. Then this returns None and the caller records nothing,
+    rather than a cavity in the wrong place.
+    """
+    count = len(points)
+    if count < 3 or distance <= 0:
+        return None
+    exact = inset_area(points, distance)
+    if exact is None:
+        return None
+
+    signed = 0.0
+    for index in range(count):
+        here, following = points[index], points[(index + 1) % count]
+        signed += here[0] * following[1] - following[0] * here[1]
+    if abs(signed) < 1e-12:
+        return None
+    # Inward is to the left of each edge for a counter-clockwise polygon.
+    turn = 1.0 if signed > 0 else -1.0
+
+    lines: list[tuple[float, float, float]] = []  # a*u + b*v = c, offset inward
+    for index in range(count):
+        here, following = points[index], points[(index + 1) % count]
+        run, rise = following[0] - here[0], following[1] - here[1]
+        length = math.hypot(run, rise)
+        if length < 1e-12:
+            return None
+        normal = (-rise / length * turn, run / length * turn)
+        lines.append((normal[0], normal[1],
+                      normal[0] * here[0] + normal[1] * here[1] + distance))
+
+    inset: list[tuple[float, float]] = []
+    for index in range(count):
+        (a1, b1, c1) = lines[index - 1]
+        (a2, b2, c2) = lines[index]
+        cross = a1 * b2 - a2 * b1
+        if abs(cross) < 1e-9:
+            # Collinear edges: the offset line is the same one, so any point on
+            # it will do and the vertex simply moves straight inward.
+            inset.append((points[index][0] + a1 * distance,
+                          points[index][1] + b1 * distance))
+            continue
+        inset.append(((c1 * b2 - c2 * b1) / cross, (a1 * c2 - a2 * c1) / cross))
+
+    area = 0.0
+    for index in range(count):
+        here, following = inset[index], inset[(index + 1) % count]
+        area += here[0] * following[1] - following[0] * here[1]
+    area = abs(area) / 2
+    if abs(area - exact) > 1e-6 * max(1.0, exact):
+        return None
+    return inset
+
+
 def clip_to_box(points: Sequence[tuple[float, float]],
                 low_u: float, high_u: float,
                 low_v: float, high_v: float) -> list[tuple[float, float]]:

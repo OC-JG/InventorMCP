@@ -127,6 +127,18 @@ useful precisely because it models the things that are easy to get wrong — pro
 closure, how many vertical edges a fillet will catch, whether a through-hole crosses
 the thickness rather than the length.
 
+Its volume model is a **ledger of signed prisms**, one per body. An extrude records
+the prism it added; a cut, a shell and a hole record the region they emptied; a
+fillet moves the corners of the profile it rounded. Asking "how much material is
+there along this line" then walks that ledger in creation order, and the answer is
+a list rather than a number, because through the wall of a hollow box there are two
+pieces of material with air between them. That is what lets a cut be charged what
+it meets instead of what it sweeps, and it replaced a single scalar volume beside
+an append-only list that only extrudes wrote to. Volume is kept per body and summed
+only to report it: a cut that removes more than the body it was aimed at contains
+now stops at nothing and says so, where before the surplus came quietly off another
+body's total.
+
 ### `tools/` — the MCP surface
 
 Thirty tools rather than one per feature type -- thirty-one when the escape

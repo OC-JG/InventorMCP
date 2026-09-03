@@ -718,6 +718,16 @@ PREDICTED = {
     "split": 0.50,
 }
 
+#: Operations that measure themselves against the simulator's ledger of prisms
+#: rather than being charged their whole swept shape. An `extrude` cut asks how
+#: much material lies inside its sweep, which is what makes the enclosure's cable
+#: entry 0.36 cm^3 of wall instead of 5.04 cm^3 of box, so a hollow part does not
+#: put it beyond prediction. A hole is charged its full depth, a draft its whole
+#: face, an emboss its whole area; on a hollow part those are over-estimates and
+#: the rehearsal says so rather than letting the divergence check fault a correct
+#: recipe.
+_MEASURES_MATERIAL = {"extrude"}
+
 #: Below this, in cm^3, a difference is not worth reporting whatever the
 #: fraction says: a 2 mm chamfer moves about a thousandth of a cm^3, and a
 #: percentage of nearly nothing is noise.
@@ -956,10 +966,12 @@ def rehearse(recipe: PartRecipe) -> dict[str, Any]:
             return report
 
     steps: list[dict[str, Any]] = []
-    #: A shell makes the part hollow, and the simulator has no booleans -- so
-    #: every later cut removes a whole prism here where Inventor removes only the
-    #: walls it meets. Those steps are marked so nothing downstream compares them
-    #: and calls a correct model wrong.
+    #: A shell makes the part hollow, and the simulator has no booleans. An
+    #: `extrude` copes: it asks the simulator's ledger of prisms how much
+    #: material lies inside its sweep, so a cut through the wall of a shelled box
+    #: is charged the wall. Nothing else does, and every other feature on a
+    #: hollow part is charged its whole shape. Those steps are marked so nothing
+    #: downstream compares them and calls a correct model wrong.
     hollow = False
     for index, op in enumerate(recipe.operations):
         where = f"operation {index} ({op.op}" + (f", {op.name}" if op.name else "") + ")"
@@ -988,11 +1000,11 @@ def rehearse(recipe: PartRecipe) -> dict[str, Any]:
         step: dict[str, Any] = {"index": index, "op": op.op, "name": op.name}
         if "measured" in outcome:
             step["measured"] = outcome["measured"]
-        if hollow:
+        if hollow and op.op not in _MEASURES_MATERIAL:
             step["predictable"] = False
             step["why_not"] = ("the part is hollow and the simulator has no "
-                               "booleans, so this removes a whole prism here "
-                               "where Inventor removes only the walls it meets")
+                               "booleans, so this is charged its whole shape "
+                               "where Inventor takes only the material it meets")
         # A cut loft hollows a part as surely as a shell does -- the duct
         # transition is the pattern -- and the simulator has no booleans either
         # way, so a later cut on the hollowed body gets the same "predicted

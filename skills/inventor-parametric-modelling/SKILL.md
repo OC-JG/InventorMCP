@@ -45,7 +45,12 @@ something else, work out why before spending a CAD seat on it.
 Two things the rehearsal cannot tell you, because the simulator has no
 booleans and no notion of which side the material is on:
 
-- whether a cut that *overlaps* the part removes the right amount;
+- **how much a feature other than an extrude takes out of a hollow part.** An
+  `extrude` cut asks how much material lies inside its sweep, so a slot through
+  the wall of a shelled box is charged the wall. A hole is charged its full
+  depth, a draft its whole face, an emboss its whole area. On a hollow part
+  those are over-estimates, and the rehearsal marks the step `predictable:
+  false` rather than letting you compare it;
 - which way a fillet or chamfer will move the volume. It models every fillet as
   subtractive, so an inside-corner fillet looks wrong here and is not.
 

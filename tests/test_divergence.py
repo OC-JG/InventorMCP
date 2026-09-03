@@ -144,9 +144,9 @@ class TestThroughTheBuild:
         def lazy_hole(doc_id, request):
             """Drill nothing, exactly as a hole over empty air does."""
             document = backend._doc(doc_id)
-            before = document.volume
+            before = list(document.bodies)
             info = real_hole(doc_id, request)
-            document.volume = before
+            document.bodies = before
             return info
 
         monkeypatch.setattr(backend, "name", "inventor")

@@ -45,3 +45,12 @@ volumes captured live, and none is analytically tractable here -- a loft's
 cross-section does not interpolate linearly in area, so its volume is not the
 mean section times the span. The first run seeds them; **check the arithmetic before trusting the number**, or
 it becomes a regression test for whatever it happened to build.
+
+`enclosure_base` is the exception that proves the point. Its 46.896177 cm^3 was
+derived term by term and the simulator disagreed by 10.7%, which is how the worst
+error in the simulator's volume model was found rather than argued about: a cut
+after a shell was charged against the solid the part had been before it was
+hollowed. The simulator now says 46.897289 -- 0.002% above the hand figure, the
+difference being the polygon it keeps where a filleted corner is an arc -- and the
+number here is still the hand calculation, because that is the one a live run has
+to be checked against.

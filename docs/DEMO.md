@@ -393,12 +393,13 @@ build_part_from_recipe(recipe=<same>, rollback_on_error=true)
   → 16 parameters, 13 operations
 ```
 
-**Do not quote a volume for this part.** The rehearsal reports 39.098969 cm³ and that is
-not a prediction of what Inventor will measure: the simulator has no booleans, so its
-cable cut removes the whole 12 × 6 × 100 mm prism where Inventor removes only the two end
-walls it passes through, and it ignores the draft taper on the outer walls. Both numbers
-are right for what they are. The rehearsal's job on this part is the empty `warnings`
-list, not the volume.
+**Do not quote a volume for this part.** The rehearsal reports 46.229078 cm³ and that is
+still not a prediction of what Inventor will measure: the simulator ignores the draft
+taper on the outer walls, and this part is drafted throughout. Its cable cut is right
+now — 0.36 cm³, the two 2.5 mm end walls the slot passes through, measured off the
+ledger of prisms rather than charged the whole 12 × 6 × 100 mm sweep, which is where
+7.2 cm³ of the old number came from. The rehearsal's job on this part is the empty
+`warnings` list, not the volume.
 
 The build also installs the recipe's own freeze. `boss_hole_d`, `cable_w` and `cable_h`
 are declared frozen in the recipe's `dfm` block, and from this moment `set_parameters`
@@ -996,10 +997,11 @@ above were checked against the source.
    recipe, but by arithmetic rather than by the fillet being the seventh operation — it is
    the eighth.
 
-6. **The housing's rehearsal volume is not a prediction.** 39.098969 cm³ was computed
-   offline; the simulator ignores the draft taper and has no booleans, so its cable cut
-   removes 7.2 cm³ where Inventor removes about 0.36. Step 8 now says not to quote a volume
-   for this part and gives the reason.
+6. **The housing's rehearsal volume is not a prediction.** 46.229078 cm³ was computed
+   offline, and the simulator ignores the draft taper, which this part has on every outer
+   wall. The cable cut is no longer part of the discrepancy: it now removes 0.36 cm³, the
+   two end walls, where it used to remove 7.2. Step 8 says not to quote a volume for this
+   part and gives the reason.
 
 7. **The bracket's upright hole spacing is a literal.** `±15` in the `UprightHoles` sketch
    is not driven by any parameter, so the "30 apart" in the spoken description is not
