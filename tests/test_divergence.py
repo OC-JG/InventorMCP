@@ -269,7 +269,10 @@ class TestTheShellItself:
         assert result["ok"], result["errors"]
         document = session.backend._doc(result["document"])
         shell = [f for f in document.features if f.kind == "shell"][0]
-        assert "not a single prism" in shell.detail["volume_from"]
+        assert "not a prism" in shell.detail["volume_from"]
+        assert shell.detail["estimated"] is True, (
+            "and the rehearsal has to be told, or the tolerance has to be wide "
+            "enough to cover an estimate nobody measured")
 
 
 class TestTheGuardCoversWhatIsGuessedAt:
@@ -512,3 +515,83 @@ class TestTheOtherTwoWallDirections:
         assert max(widths) == pytest.approx(3.2), "60 mm grown 2 mm each side"
         voids = [s for s in document.slabs if s.sign < 0]
         assert len(voids) == 1 and voids[0].source == "shell"
+
+
+class TestWhatTheShellWillAndWillNotBeJudgedOn:
+    """`PREDICTED["shell"]` is 0.02, which only holds if the fallback opts out.
+
+    The tolerance was 0.35 for as long as one number had to cover both a
+    shelled prism, which is exact arithmetic, and everything the exact branch
+    could not do. Splitting those apart is what lets it be the 0.02 an extrude
+    gets: the cases that cannot be computed say so, and the rehearsal leaves
+    them out of the comparison rather than the tolerance being stretched to
+    hide them.
+
+    Which is the difference between a tolerance and an excuse. A shell 30%
+    adrift from Inventor is now either reported or explicitly not measured, and
+    never quietly within bounds.
+    """
+
+    @pytest.fixture
+    def session(self) -> Session:
+        session = Session(backend_kind="mock")
+        session.ensure_backend().connect()
+        return session
+
+    BOX = [
+        {"op": "sketch", "name": "B", "plane": "xy", "entities": [
+            {"type": "rectangle", "center": [0, 0], "width": 60, "height": 40}]},
+        {"op": "extrude", "name": "Block", "sketch": "B", "distance": 20},
+    ]
+    ROUND = [
+        {"op": "sketch", "name": "P", "plane": "xz", "entities": [
+            {"type": "rectangle", "corner": [0, 0], "width": 20, "height": 30}]},
+        {"op": "revolve", "name": "Blank", "sketch": "P", "axis": "z"},
+    ]
+
+    def shell_step(self, faces: dict, body: list[dict] | None = None) -> dict:
+        from inventor_mcp.rehearsal import rehearse
+
+        report = rehearse(PartRecipe.model_validate({
+            "name": "S", "units": "mm",
+            "operations": (body or self.BOX) + [
+                {"op": "shell", "name": "C", "thickness": 2, "faces": faces}]}))
+        assert report["ok"], report["findings"]
+        return [s for s in report["steps"] if s["op"] == "shell"][0]
+
+    def test_the_tolerance_is_an_exact_operations_tolerance(self):
+        from inventor_mcp.rehearsal import PREDICTED
+
+        assert PREDICTED["shell"] == PREDICTED["extrude"] == 0.02
+
+    def test_a_prism_opened_through_an_end_is_judged(self):
+        step = self.shell_step({"kind": "face", "filter": "top"})
+        assert step.get("predictable") is not False
+
+    def test_a_prism_opened_through_a_side_is_not(self):
+        """The cavity there is inset on some edges and flush with others.
+
+        An inset area cannot say that, and this used to treat the open face as
+        closed -- over-stating the wall and under-stating the cavity, with
+        nothing to show for it.
+        """
+        step = self.shell_step({"kind": "face", "filter": "front"})
+        assert step["predictable"] is False
+        assert "fell back" in step["why_not"]
+
+    def test_a_body_that_is_not_a_prism_is_not_either(self):
+        step = self.shell_step({"kind": "face", "filter": "top"}, body=self.ROUND)
+        assert step["predictable"] is False
+
+    def test_the_two_fallbacks_would_fail_the_new_tolerance_if_judged(self, session):
+        """Which is the point: they are excluded, not covered.
+
+        The side-opened box estimates 30.4 cm^3 where the exact answer for the
+        cavity it describes is 36.288 -- 16% out, eight times the tolerance. A
+        number like that inside the bounds would make the bounds meaningless.
+        """
+        side = self.shell_step({"kind": "face", "filter": "front"})
+        end = self.shell_step({"kind": "face", "filter": "top"})
+        adrift = abs(side["measured"]["volume_change_cm3"]
+                     - end["measured"]["volume_change_cm3"])
+        assert adrift / abs(end["measured"]["volume_change_cm3"]) > 0.02 * 8

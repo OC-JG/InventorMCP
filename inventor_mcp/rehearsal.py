@@ -80,6 +80,25 @@ from .session import DocumentContext
 #: and not compared at all, because a tolerance loose enough to cover a fallback
 #: is loose enough to cover a fault.
 #:
+#: `shell` went from 0.35 to 0.02 the same way, and for the same reason as
+#: `split`: what was wide about it was not the arithmetic but the fallback it
+#: had to cover. A shelled prism is two offset outlines swept over their own
+#: extents, which is exact -- Inventor removed 35.1920 cm^3 from
+#: `shelled_both_ways` and the simulator now says 35.1920, and the enclosure's
+#: shell, the largest single operation in any shipped example at 200 cm^3, is
+#: inside the 0.0005 cm^3 the acceptance run compares whole parts at. The only
+#: residual is the polygon the ledger keeps where a filleted corner is an arc,
+#: worth 0.002% on that part.
+#:
+#: What made 0.35 necessary was everything the exact branch could not do, and
+#: the answer is the same seam again: a body that is not a single prism, and a
+#: shell opened through a *side* rather than an end -- where the cavity is the
+#: outline inset on some edges and flush with others, which an inset area cannot
+#: say -- both now fall to the surface-area estimate, declare themselves, and
+#: are left out of the comparison. The side case is the one worth noting: it
+#: used to be treated as closed, so the answer was wrong in a way that looked
+#: exact.
+#:
 #: Worth knowing while reading any of these: the comparison is of volumes moved,
 #: so it is blind to an operation that moved the right amount on the wrong side.
 #: That is defect 6, and it is how the split inversion survived -- one of its
@@ -95,6 +114,7 @@ PREDICTED = {
     "mirror": 0.02,
     "rectangular_pattern": 0.02,
     "circular_pattern": 0.02,
+    "shell": 0.02,
     "split": 0.05,
     "revolve": 0.15,
     "coil": 0.15,
@@ -103,7 +123,6 @@ PREDICTED = {
     "fillet": 0.30,
     "chamfer": 0.30,
     "loft": 0.35,
-    "shell": 0.35,
     "emboss": 0.40,
 }
 

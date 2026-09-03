@@ -1573,7 +1573,7 @@ class MockBackend(Backend):
         if document.volume <= 0:
             raise FeatureError("Nothing to shell: the part has no solid body yet.")
         openings = self._match(document, request.faces) if request.faces.ids or request.faces.filter != "all" else []
-        removed, how = self._hollow_out(document, request, openings)
+        removed, how, estimated = self._hollow_out(document, request, openings)
         moved = document.charge(-removed)
         name = self._feature_name(document, request.name, "shell")
         feature = _Feature(
@@ -1586,6 +1586,9 @@ class MockBackend(Backend):
                 "direction": request.direction,
                 "removed_faces": len(openings),
                 "volume_from": how,
+                # Read by the rehearsal, which will not compare a step whose
+                # number is a fallback rather than a measurement.
+                "estimated": estimated,
             },
         )
         document.features.append(feature)
@@ -1896,7 +1899,7 @@ class MockBackend(Backend):
     _WALL_SPLIT = {"inside": (0.0, 1.0), "both": (0.5, 0.5), "outside": (1.0, 0.0)}
 
     def _hollow_out(self, document: _Document, request: ShellRequest,
-                    openings: Sequence[_Topo]) -> tuple[float, str]:
+                    openings: Sequence[_Topo]) -> tuple[float, str, bool]:
         """How much a shell takes out, exactly where that is knowable.
 
         A shelled prism is the outline offset by the wall, swept: both surfaces
@@ -1914,10 +1917,19 @@ class MockBackend(Backend):
         take a negative distance -- so the two that grow the part fell back to
         an estimate, and one of them was 13.6% out.
 
-        Anything that is not a single prism still falls back to the surface area
-        times the thickness, and says so, because a shell of a revolved or swept
-        body is not a prism and pretending otherwise would be worse than
-        approximating.
+        Anything that is not a single prism falls back to the surface area times
+        the thickness, and *says so* -- the third return value is what the
+        rehearsal reads to leave the step out of the comparison entirely, the
+        same seam the trim uses. That is what lets the tolerance be the one the
+        exact branch deserves rather than one wide enough to hide a fallback.
+
+        An opening that is not perpendicular to the sweep takes the same route.
+        The cavity there is the outline inset on some sides and flush with the
+        others, which is not something an inset area can say, and the exact
+        branch used to quietly treat that face as closed -- over-stating the
+        wall and under-stating the cavity, with nothing to indicate it. An
+        estimate that admits itself is better than an exact-looking answer to a
+        question that was not asked.
 
         Both surfaces are also *recorded* -- the cavity as a void, and the grown
         boundary in place of the one it replaces. The cavity used not to be, and
@@ -1927,18 +1939,18 @@ class MockBackend(Backend):
         removes. Nothing is recorded where an offset could not be built, because
         a boundary whose shape is unknown is worse in the ledger than absent.
 
-        ponytail: an opening is counted as a cap by its normal, so a shell whose
-        open face is not perpendicular to the sweep is treated as closed.
         """
         thickness = request.thickness.value
         split = self._WALL_SPLIT.get(request.direction)
         if len(document.slabs) == 1 and split is not None:
             exact = self._shell_a_prism(document, thickness, split, openings)
             if exact is not None:
-                return exact
+                removed, how = exact
+                return removed, how, False
         surface = sum(match.area or 0.0 for match in document.topology if match.kind == "face")
         return (max(document.volume - surface * thickness, 0.0),
-                "estimated from the surface area: this body is not a single prism")
+                "estimated from the surface area: this is not a prism shelled "
+                "through its ends", True)
 
     def _shell_a_prism(self, document: _Document, thickness: float,
                        split: tuple[float, float],
@@ -1956,6 +1968,13 @@ class MockBackend(Backend):
         along = [sum(a * b for a, b in zip(face.normal, normal))
                  for face in openings if face.normal is not None]
         caps = sum(1 for value in along if abs(value) > 0.9)
+        # An opening in a *side* is a hole in the wall, not a cap, and the
+        # cavity is then the outline inset on some edges and flush with others
+        # -- which an inset area cannot express. This used to be ignored and the
+        # face treated as closed, so the volume was wrong in a way that looked
+        # exact. Hand it to the estimate, which says what it is.
+        if len(openings) > caps:
+            return None
         open_high = caps == 2 or any(value > 0.9 for value in along)
         open_low = caps == 2 or any(value < -0.9 for value in along)
 

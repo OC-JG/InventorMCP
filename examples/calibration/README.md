@@ -143,9 +143,14 @@ one thing missing. `outside` puts the whole wall beyond the face, so the
 original solid becomes the void; `both` straddles it.
 
 Worth noting what that 13.6% did while it lasted. It sat inside the 0.35 a shell
-is allowed, so nothing was ever reported — the right outcome for an
+was allowed, so nothing was ever reported — the right outcome for an
 approximation that admits it is one, and also the reason a case nobody could run
 stayed wrong without anybody noticing.
+
+That tolerance is 0.02 now, the same as an extrude's, because what made it wide
+was never the arithmetic but the fallback it had to cover. A body that is not a
+single prism, and a shell opened through a side rather than an end, both declare
+themselves estimates and are left out of the comparison instead.
 
 The other unreachable path was `capture_view` in hidden-line mode, which asked
 for `kHiddenLineRendering`, another name no release has. That one did not
