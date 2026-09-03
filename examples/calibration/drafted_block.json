@@ -1,0 +1,59 @@
+{
+  "name": "CalibrationDraftedBlock",
+  "description": "A rectangular block with its four sides drafted, so the draft is the only thing to measure. Derivable: the drafted solid is a frustum, and integrating its section from the parting plane gives 72 - 45k + 9k^2 cm^3 for k = 2 tan(3 deg), which is 67.381 against the 72 it started at. The simulator's wedge estimate takes 4.717 where the true figure is 4.618, so it should read about 2% high.",
+  "units": "mm",
+  "parameters": [
+    {
+      "name": "block_w",
+      "value": 60
+    },
+    {
+      "name": "block_d",
+      "value": 40
+    },
+    {
+      "name": "block_h",
+      "value": 30
+    },
+    {
+      "name": "pull",
+      "value": 3,
+      "unit": "deg",
+      "comment": "draft angle"
+    }
+  ],
+  "operations": [
+    {
+      "op": "sketch",
+      "name": "Base",
+      "plane": "xy",
+      "entities": [
+        {
+          "type": "rectangle",
+          "center": [
+            0,
+            0
+          ],
+          "width": "block_w",
+          "height": "block_d"
+        }
+      ]
+    },
+    {
+      "op": "extrude",
+      "name": "Block",
+      "sketch": "Base",
+      "distance": "block_h"
+    },
+    {
+      "op": "draft",
+      "name": "Sides",
+      "faces": {
+        "kind": "face",
+        "filter": "vertical"
+      },
+      "plane": "xy",
+      "angle": "pull"
+    }
+  ]
+}

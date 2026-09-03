@@ -186,7 +186,13 @@ and this file is updated in the same commit.
 ### Phase 1 — foundations *(in progress)*
 
 The four restructures, plus the two debts that were only ever going to be paid
-by running against a real Inventor.
+by running against a real Inventor. One of those has since been paid: an
+acceptance run on Inventor 2027.1 (2026-09-03, 63 of 64 checks passing) put the
+simulator within 1% of a live build on all eleven shipped examples and confirmed
+the volume ledger's hand-derived figure for the enclosure. Its one failure was
+worth more than the passes — four enum names the table had were names Inventor
+has never had, one of which had been quietly refusing every `shell` with
+`direction: "both"` since it was written.
 
 - [x] **Cheat-sheet served once** (restructure 3), pinned by a test that the
       duplicate does not come back. *(2026-09-03; tool-list bytes 35,206 →
@@ -209,9 +215,15 @@ by running against a real Inventor.
       if that defect is marked fixed and the policy still works around it.
 - [ ] **Live calibration of `PREDICTED`.** Four entries — `coil`, `draft`,
       `emboss`, `split` — sit at a placeholder 0.5 because they have never been
-      compared with Inventor. Run `scripts/live_acceptance.py` on a Windows
-      machine with Inventor, record the deltas, set tolerances from evidence.
-      *Needs the owner's machine; cannot be done from a Linux container.*
+      compared with Inventor. *Half done (2026-09-03): the acceptance run could
+      not reach them at all, because no shipped example uses those operations.
+      `examples/calibration/` now holds one recipe per operation, each isolating
+      it as the last step, and `live_acceptance.py --only calibration` prints
+      what the simulator predicted beside what Inventor did. Two of the four are
+      derivable, so they are predictions rather than curiosities: the draft
+      estimate should read about 2% high and the split about 44% low.* What
+      remains is running it and setting the tolerances from what comes back.
+      **Needs the owner's machine; cannot be done from a Linux container.**
 - [x] **Drift tests are the rule** (restructure 2). *(2026-09-03.)* Written
       down in `DECISIONS.md` as "a fact stated twice needs a test that the two
       agree", with the six drifts that earned it and the corollary that the

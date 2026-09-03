@@ -1,0 +1,52 @@
+{
+  "name": "CalibrationCoilSpring",
+  "description": "A plain helical spring, and nothing else, so the whole part is one coil. The simulator estimates the profile's area times the helix's arc length; Inventor sweeps the real helix. The difference between those two numbers is the only thing this part exists to produce.",
+  "units": "mm",
+  "parameters": [
+    {
+      "name": "wire_d",
+      "value": 3,
+      "comment": "wire diameter"
+    },
+    {
+      "name": "coil_r",
+      "value": 15,
+      "comment": "helix radius, centre of wire"
+    },
+    {
+      "name": "pitch",
+      "value": 6,
+      "comment": "clear of the wire, so turns do not touch"
+    },
+    {
+      "name": "turns",
+      "value": 5,
+      "unit": "ul"
+    }
+  ],
+  "operations": [
+    {
+      "op": "sketch",
+      "name": "Wire",
+      "plane": "xz",
+      "entities": [
+        {
+          "type": "circle",
+          "center": [
+            "coil_r",
+            0
+          ],
+          "diameter": "wire_d"
+        }
+      ]
+    },
+    {
+      "op": "coil",
+      "name": "Spring",
+      "sketch": "Wire",
+      "axis": "z",
+      "pitch": "pitch",
+      "revolutions": "turns"
+    }
+  ]
+}

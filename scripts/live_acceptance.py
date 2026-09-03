@@ -22,6 +22,7 @@ import json
 import shutil
 import sys
 import traceback
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -39,6 +40,10 @@ from inventor_mcp.schema import ExtrudeOp, PartRecipe, SketchOp  # noqa: E402
 from inventor_mcp.session import Session  # noqa: E402
 
 EXPECTED = ROOT / "examples" / "expected"
+
+#: Recipes that exist only to put a number on an estimate nobody has measured.
+#: Kept out of `examples/` proper: they are instruments, not parts anybody wants.
+CALIBRATION = ROOT / "examples" / "calibration"
 
 #: Volumes measured live and checked by hand. The rest are seeded by --record.
 KNOWN = {
@@ -470,7 +475,7 @@ def check_constants(session: Session, report: Report) -> None:
         report.note("Paste those into FALLBACK in "
                     "inventor_mcp/backend/com/constants.py.")
     report.check(not absent,
-                 f"every fallback name exists in this release's type library",
+                 "every fallback name exists in this release's type library",
                  "this release has no such name, so the table value is what would "
                  "be used and it has never been verified here:\n         "
                  + ", ".join(absent)
@@ -787,6 +792,119 @@ def check_import(session: Session, report: Report) -> None:
     report.note(f"import: delete {step} when you are done")
 
 
+def check_calibration(session: Session, report: Report) -> None:
+    """Put a measured number on the four estimates that have never had one.
+
+    ``PREDICTED`` in ``inventor_mcp/rehearsal.py`` says how far each operation's
+    simulated volume is trusted, and four entries -- coil, draft, emboss and
+    split -- sit at a placeholder 0.5 because no shipped recipe uses them, so no
+    acceptance run has ever compared one against Inventor. A tolerance nobody
+    measured is not a tolerance; at 0.5 it would wave through a fillet applied to
+    the wrong edge.
+
+    Each recipe in ``examples/calibration/`` isolates one of them as its last
+    operation, with nothing before it but extrudes the simulator gets exactly
+    right, so the whole difference belongs to the operation under test. This
+    prints that difference. It does not pass or fail on it: the first run is the
+    measurement, and what it prints is what the table should then say.
+    """
+    from inventor_mcp.rehearsal import PREDICTED, rehearse
+
+    if session.backend.name == "mock":
+        # Otherwise this compares the simulator with itself, agrees to the digit,
+        # and prints a full set of 0.0% divergences -- which reads exactly like a
+        # calibration that went well.
+        report.skip("calibration: not run",
+                    "the simulator would only be comparing itself with itself. "
+                    "Use --backend inventor.")
+        return
+
+    recipes = sorted(CALIBRATION.glob("*.json"))
+    if not recipes:
+        report.skip("calibration: no recipes", f"nothing in {CALIBRATION}")
+        return
+
+    for path in recipes:
+        print(f"\n--- calibration: {path.stem}")
+        recipe = PartRecipe.model_validate(json.loads(path.read_text()))
+        predicted = rehearse(recipe)
+        if not predicted.get("ok"):
+            report.check(False, f"{path.stem}: the recipe rehearses",
+                         str(predicted.get("findings"))[:300])
+            continue
+
+        try:
+            live = _live_deltas(session, recipe)
+        except Exception as exc:
+            hint = getattr(exc, "hint", None)
+            report.check(False, f"{path.stem}: it builds in Inventor",
+                         f"{type(exc).__name__}: {exc}"
+                         + (f"\n         hint: {hint}" if hint else ""))
+            continue
+        report.check(True, f"{path.stem}: it builds in Inventor")
+
+        rehearsed = _rehearsed_deltas(predicted.get("steps") or [])
+        for index, op in enumerate(recipe.operations):
+            if op.op not in PREDICTED or index not in live or index not in rehearsed:
+                continue
+            want, got = rehearsed[index], live[index]
+            gap = got - want
+            # Measured against the live figure, because that is the true one: an
+            # estimate 44% below the truth is 44% wrong, not 79% wrong.
+            fraction = abs(gap) / abs(got) if got else float("inf")
+            suggested = max(round(fraction * 1.5, 2), 0.02)
+            report.note(
+                f"{op.op}: simulator {want:+.4f}, Inventor {got:+.4f} cm^3, "
+                f"{gap:+.4f} apart -- {fraction:.1%} of the live figure, against a "
+                f"PREDICTED entry of {PREDICTED[op.op]:.2f}, which would become "
+                f"{suggested:.2f} on this one run")
+
+
+def _rehearsed_deltas(steps: Sequence[dict]) -> dict[int, float]:
+    """Per-operation volume change, from a rehearsal's steps."""
+    deltas: dict[int, float] = {}
+    running = 0.0
+    for step in steps:
+        volume = (step.get("measured") or {}).get("volume_cm3")
+        if volume is None:
+            continue
+        deltas[step["index"]] = volume - running
+        running = volume
+    return deltas
+
+
+def _live_deltas(session: Session, recipe: PartRecipe) -> dict[int, float]:
+    """The same, measured in Inventor after every operation.
+
+    Differenced from a running total rather than read off the finished part,
+    because a total says nothing about which operation moved what -- and taken
+    the same way on both sides, so the two columns are the same quantity.
+
+    Unlike `build`, this lets the first failure raise. A calibration run wants
+    the operation under test or nothing: a part that half built produces a
+    difference belonging to no operation in particular.
+    """
+    deltas: dict[int, float] = {}
+    running = 0.0
+    document = session.backend.new_part(
+        recipe.name, units=recipe.units, angle_units=recipe.angle_units)
+    context = session.register(document, recipe.units, recipe.angle_units)
+    try:
+        for spec in recipe.parameters:
+            apply_parameter(session, context, spec)
+        for index, op in enumerate(recipe.operations):
+            apply_operation(session, context, op)
+            seen = measure(session, context)
+            if seen is None or "volume_cm3" not in seen:
+                continue
+            deltas[index] = seen["volume_cm3"] - running
+            running = seen["volume_cm3"]
+    finally:
+        session.backend.close_document(context.doc_id, save=False)
+        session.forget(context.doc_id)
+    return deltas
+
+
 CHECKS = {
     "examples": None,  # handled specially: one per recipe
     "parameter-edit": check_parameter_edit,
@@ -797,6 +915,7 @@ CHECKS = {
     "rollback": check_rollback,
     "threading": check_threading,
     "constants": check_constants,
+    "calibration": check_calibration,
 }
 
 
