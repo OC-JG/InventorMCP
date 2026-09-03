@@ -201,10 +201,12 @@ by running against a real Inventor.
 - [x] **`builder.py` split** (restructure 4) into `checks.py`, `rehearsal.py`
       and building, with `builder.py` re-exporting so no import changes.
       *(2026-09-03; 1,199 lines became 763 + 183 + 409, moved verbatim.)*
-- [ ] **Snapshot policy.** `MODELLING_NOTES` and the Skill say when
-      `capture_view` runs and what to look at, and prescribe the isometric
-      view until defect 4 in `FEATURE_COVERAGE.md` (orientation names do not
-      describe what you get) has been measured and fixed.
+- [x] **Snapshot policy.** *(2026-09-03.)* `MODELLING_NOTES`, the Skill, the
+      `capture_view` tool description and the `model_this_part` prompt all say
+      to render the part before reporting it finished, and to ask for the
+      isometric view until defect 4 in `FEATURE_COVERAGE.md` (orientation names
+      do not describe what you get) has been measured and fixed. A test fails
+      if that defect is marked fixed and the policy still works around it.
 - [ ] **Live calibration of `PREDICTED`.** Four entries — `coil`, `draft`,
       `emboss`, `split` — sit at a placeholder 0.5 because they have never been
       compared with Inventor. Run `scripts/live_acceptance.py` on a Windows
@@ -212,7 +214,9 @@ by running against a real Inventor.
       *Needs the owner's machine; cannot be done from a Linux container.*
 - [ ] **Drift tests are the rule** (restructure 2): recorded in
       `DECISIONS.md` so the next duplication is caught in review, not in an
-      audit.
+      audit. Four are in place — the cheat-sheet, the Python floor, the DFM
+      sentinel, the snapshot policy against defect 4 — but the rule itself is
+      not written down yet.
 
 ### Phase 2 — the coil-shaped additions
 

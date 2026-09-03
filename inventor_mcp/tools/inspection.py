@@ -138,8 +138,17 @@ def register(server: Any, session: Session) -> None:
         return {"document": context.doc_id, **result}
 
     @server.tool(
-        description="Render the part to a PNG so it can actually be looked at. Use after building "
-        "to confirm the shape matches the description.",
+        description="Render the part to a PNG so it can actually be looked at.\n\n"
+        "Run it after building, before reporting the part finished. The checks "
+        "passing is not a reason to skip it: a sketch on the wrong plane still "
+        "closes, a loft whose sections pair up wrongly still lofts, and a feature "
+        "of the right size in the wrong place still measures right. A render is "
+        "the only thing that catches those.\n\n"
+        "Leave `orientation` at `iso` unless you have a reason. The named views do "
+        "not describe what they return -- on a part built on \"xy\" and extruded "
+        "in +Z, `front` gives a top view and `top` gives a side elevation with Z "
+        "rendered inverted -- so read the shape off the picture and measure "
+        "coordinates with `measure_part` or `select_topology`.",
     )
     @guard
     def capture_view(
