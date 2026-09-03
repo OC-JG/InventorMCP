@@ -213,17 +213,20 @@ has never had, one of which had been quietly refusing every `shell` with
       isometric view until defect 4 in `FEATURE_COVERAGE.md` (orientation names
       do not describe what you get) has been measured and fixed. A test fails
       if that defect is marked fixed and the policy still works around it.
-- [ ] **Live calibration of `PREDICTED`.** Four entries — `coil`, `draft`,
-      `emboss`, `split` — sit at a placeholder 0.5 because they have never been
-      compared with Inventor. *Half done (2026-09-03): the acceptance run could
-      not reach them at all, because no shipped example uses those operations.
-      `examples/calibration/` now holds one recipe per operation, each isolating
-      it as the last step, and `live_acceptance.py --only calibration` prints
-      what the simulator predicted beside what Inventor did. Two of the four are
-      derivable, so they are predictions rather than curiosities: the draft
-      estimate should read about 2% high and the split about 44% low.* What
-      remains is running it and setting the tolerances from what comes back.
-      **Needs the owner's machine; cannot be done from a Linux container.**
+- [ ] **Live calibration of `PREDICTED`.** *Three of the four done
+      (2026-09-03).* The acceptance run could not reach these at all, because no
+      shipped example used those operations, so `examples/calibration/` now
+      holds an instrument for each and `live_acceptance.py --only calibration`
+      prints what the simulator predicted beside what Inventor did. Measured:
+      `coil` 0.2% out, `draft` 2.1%, `emboss` 17.5%. Tolerances set to 0.15,
+      0.20 and 0.40 — each looser than its run alone would justify, for the
+      reasons recorded beside the table. The drafted block was a prediction and
+      Inventor matched it to four decimals: 4.6178 against a derived 4.6179.
+      **`split` is not calibrated and should not be**: its run found Inventor
+      trimming the opposite side to the one the schema documents, which is
+      defect 5 in `FEATURE_COVERAGE.md`, and a tolerance drawn from it would
+      enshrine an inversion. Settling that needs one more run —
+      `stepped_split_negative` — on **the owner's machine**.
 - [x] **Drift tests are the rule** (restructure 2). *(2026-09-03.)* Written
       down in `DECISIONS.md` as "a fact stated twice needs a test that the two
       agree", with the six drifts that earned it and the corollary that the

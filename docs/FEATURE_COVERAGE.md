@@ -197,3 +197,22 @@ Each of these was hit while building real parts, and each passed
    and `top` returns a side elevation with **Z rendered inverted** -- which reads
    as upside-down text that is not upside down. Anything checking its own work
    from a render can be misled; coordinates must be measured instead.
+
+5. **A `trim` split throws away the opposite side to the one documented.** The
+   schema says `remove_positive` discards "the side the plane's normal points
+   at", and the simulator does that. Inventor does the reverse. Measured on
+   2026-09-03 with `examples/calibration/stepped_split.json`: a 27.2 cm^3 part
+   cut at z = 12 with `remove_positive: true` should lose the 6.4 cm^3 above the
+   plane and keep 20.8. Inventor removed 20.8 and kept 6.4. Anything that trims
+   a part keeps the wrong half, and the volume it reports is right for the half
+   it kept, so nothing raises.
+
+   The COM call is `SplitFeatures.SplitPart(tool, request.remove_positive)`, so
+   either Inventor's second argument means "keep" where this code reads it as
+   "remove", or the flag is not reaching it at all and the trim keeps a fixed
+   side. The two need telling apart before either is fixed:
+   `stepped_split_negative.json` is the same cut with the flag false, and which
+   side *it* keeps decides which bug this is. Until then `PREDICTED["split"]`
+   stays at its placeholder, because the 25.3% its run reported is the
+   simulator's wrong amount compounded with Inventor's wrong side and means
+   nothing on its own.

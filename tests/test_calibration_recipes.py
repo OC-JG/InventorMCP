@@ -78,15 +78,31 @@ class TestEachOneIsolatesWhatItMeasures:
                 "operation under test, so their errors add")
 
 
-def test_every_placeholder_tolerance_has_exactly_one_instrument():
-    """The point of the directory: no uncalibrated operation left unmeasured."""
+def test_every_placeholder_tolerance_has_an_instrument():
+    """The point of the directory: no uncalibrated operation left unmeasurable.
+
+    Not one recipe each, and not only placeholders. An operation whose tolerance
+    has since been set from a live run keeps its recipe, because that is what
+    re-measures it on the next Inventor release; and `split` has two, because
+    telling its two possible explanations apart needs the same cut made both
+    ways. What must hold is that nothing is left at the placeholder with no way
+    to measure it, which is the state this directory was created to end.
+    """
     placeholders = {op for op, value in PREDICTED.items() if value >= PLACEHOLDER}
     measured = {recipe_for(path).operations[-1].op for path in RECIPES}
-    assert placeholders == measured, (
-        f"uncalibrated and no recipe measures it: {sorted(placeholders - measured)}; "
-        f"measured but no longer a placeholder: {sorted(measured - placeholders)}. "
-        "If a tolerance has been set from a live run, retire its recipe or say "
-        "here why it is still needed.")
+    assert placeholders <= measured, (
+        "at the placeholder tolerance and no recipe measures it: "
+        f"{sorted(placeholders - measured)}. Add one to examples/calibration/, "
+        "isolating it as the last operation.")
+
+
+def test_no_instrument_measures_something_the_guard_ignores():
+    """A recipe whose last operation has no tolerance calibrates nothing."""
+    for path in RECIPES:
+        last = recipe_for(path).operations[-1].op
+        assert last in PREDICTED, (
+            f"{path.stem} ends with {last}, which the divergence check does not "
+            "compare at all, so nothing it measures reaches anything")
 
 
 class TestTheTwoThatCanBeWorkedOut:
@@ -137,10 +153,12 @@ def test_the_readme_quotes_the_numbers_the_simulator_produces():
     # The table is prose, so it uses a typographic minus (U+2212) rather than a
     # hyphen. Matching only the hyphen read every removal as an addition and the
     # sign error was in the test, not in the thing it was checking.
-    rows = re.findall(r"^\| `([a-z_]+)` \| `([a-z]+)` \|[^|]*?([\u2212-]?[\d.]+) cm³ \|",
+    rows = re.findall(r"^\| `([a-z_]+)` \| `([a-z]+)` \| ([\u2212+-]?[\d.]+) cm³ \|",
                       readme, re.MULTILINE)
-    assert len(rows) == len(RECIPES), (
-        f"the table describes {len(rows)} recipes and there are {len(RECIPES)}")
+    described = {stem for stem, _, _ in rows}
+    assert described == {path.stem for path in RECIPES}, (
+        f"the table describes {sorted(described)} and the directory holds "
+        f"{sorted(path.stem for path in RECIPES)}")
     for stem, op, quoted in rows:
         steps = rehearsal_of(CALIBRATION / f"{stem}.json")["steps"]
         volumes = [(s.get("measured") or {}).get("volume_cm3") for s in steps]

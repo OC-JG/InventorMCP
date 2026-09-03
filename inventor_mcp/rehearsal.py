@@ -36,11 +36,37 @@ from .session import DocumentContext
 #: approximations turned up that all three of them -- the draft wedge, the split
 #: fraction, the emboss ink heuristic -- were absent from this table, and so was
 #: the coil's arc length. The guard had holes in exactly the places their author
-#: had written "this is approximate". Half tolerates a coarse estimate and still
-#: catches both classes that matter, because `_divergence_reason` keys on a sign
-#: flip and on a change where none was predicted, and any tolerance under 1.0
-#: catches both. None of the four has run against live Inventor, so half is a
-#: place to start measuring from, not a measurement.
+#: had written "this is approximate". They were set to half: a placeholder that
+#: tolerates a coarse estimate and still catches both classes that matter,
+#: because `_divergence_reason` keys on a sign flip and on a change where none
+#: was predicted, and any tolerance under 1.0 catches those.
+#:
+#: Three of the four have since been measured, on Inventor 2027.1 on 2026-09-03,
+#: by the recipes in `examples/calibration/` -- one per operation, each isolating
+#: it as the last step so the whole difference belongs to it. What was measured,
+#: and what it was set to:
+#:
+#: * `coil` was 0.2% out on a spring whose pitch clears its wire twice over.
+#:   Set to 0.15, not 0.02: the estimate ignores what happens where consecutive
+#:   turns meet, so a spring wound tight will be worse and nobody has measured
+#:   one. 0.15 is what a revolve gets, which is the same kind of arithmetic.
+#: * `draft` was 2.1% out, and exactly so: the drafted block is a frustum, the
+#:   integral says 4.6179 cm^3 and Inventor said 4.6178. Set to 0.20 rather than
+#:   0.03, because the wedge assumes every drafted face spans the full pull
+#:   height -- true of the wall that was measured, and not of a boss.
+#: * `emboss` was 17.5% out on nine capitals of Arial at 8 mm. Set to 0.40: a
+#:   glyph's area is whatever the font says it is, and one string in one face at
+#:   one size says very little about the next one.
+#:
+#: Each is loosened deliberately beyond what its run showed. A tolerance is for
+#: catching a feature that did something else entirely, not for certifying the
+#: arithmetic, and a false alarm teaches the reader to ignore the field.
+#:
+#: `split` stays at the placeholder. Its run came back 25.3% apart, and that
+#: number is worth nothing: the simulator kept the wrong *amount* and Inventor
+#: kept the wrong *side*, so the figure is two unrelated errors compounding.
+#: See defect 5 in `docs/FEATURE_COVERAGE.md`. Setting a tolerance from it would
+#: enshrine an inversion.
 #:
 #: Nothing already here was retuned. The chamfer and the loft became much more
 #: accurate in the same pass and their entries stayed put: one live datapoint
@@ -53,14 +79,16 @@ PREDICTED = {
     "rectangular_pattern": 0.02,
     "circular_pattern": 0.02,
     "revolve": 0.15,
+    "coil": 0.15,
+    "draft": 0.20,
     "sweep": 0.25,
-    "loft": 0.35,
-    "shell": 0.35,
     "fillet": 0.30,
     "chamfer": 0.30,
-    "coil": 0.50,
-    "draft": 0.50,
-    "emboss": 0.50,
+    "loft": 0.35,
+    "shell": 0.35,
+    "emboss": 0.40,
+    # Not measured: see above. The one run that tried disagreed about which side
+    # a trim discards, which has to be settled before this number means anything.
     "split": 0.50,
 }
 

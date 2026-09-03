@@ -1,6 +1,6 @@
 {
-  "name": "CalibrationSteppedSplit",
-  "description": "A base slab with a tall boss on it, trimmed at a plane that cuts the boss. Deliberately not spread evenly either side of the cut, which is what the simulator's trim estimate assumes: it keeps a share of the volume equal to the share of the bounding box below the plane. Derivable: 19.2 cm^3 of base plus 1.6 of boss below z = 12 is 20.8 kept and 6.4 removed. Run against Inventor 2027.1 on 2026-09-03 it removed 20.8 instead -- the other side -- so this recipe now measures a disagreement about which side `remove_positive` discards, and its partner `stepped_split_negative` is what settles it.",
+  "name": "CalibrationSteppedSplitNegative",
+  "description": "The same part and the same cut with `remove_positive` false, which is the only way to tell two explanations apart. If this one removes 6.4 cm^3 where its partner removed 20.8, the flag does control the side and its sense is the opposite of what the schema promises -- 'discard the side the plane's normal points at' -- so the fix is one inversion in the COM backend. If instead this also removes 20.8, the flag is not reaching Inventor at all and the trim keeps whichever side it likes, which is a different bug with a different fix. Neither is guessable from the one run that found it.",
   "units": "mm",
   "parameters": [
     {
@@ -86,10 +86,10 @@
     },
     {
       "op": "split",
-      "name": "Trim",
+      "name": "TrimOther",
       "tool": "Cut",
       "style": "trim",
-      "remove_positive": true
+      "remove_positive": false
     }
   ]
 }
