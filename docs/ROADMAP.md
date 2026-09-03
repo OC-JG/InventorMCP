@@ -200,7 +200,7 @@ by running against a real Inventor.
       `examples/expected/enclosure_base.json` that had described the bug.
 - [x] **`builder.py` split** (restructure 4) into `checks.py`, `rehearsal.py`
       and building, with `builder.py` re-exporting so no import changes.
-      *(2026-09-03; 1,199 lines became 712 + 183 + 412, moved verbatim.)*
+      *(2026-09-03; 1,199 lines became 763 + 183 + 409, moved verbatim.)*
 - [ ] **Snapshot policy.** `MODELLING_NOTES` and the Skill say when
       `capture_view` runs and what to look at, and prescribe the isometric
       view until defect 4 in `FEATURE_COVERAGE.md` (orientation names do not
