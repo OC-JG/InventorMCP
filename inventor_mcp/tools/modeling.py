@@ -13,7 +13,7 @@ from ..builder import (
     check_recipe,
     rehearse,
 )
-from ..guide import MODELLING_NOTES, RECIPE_CHEATSHEET
+from ..guide import MODELLING_NOTES, RECIPE_CHEATSHEET, RECIPE_POINTER
 from ..schema import Operation, ParameterSpec, PartRecipe, recipe_json_schema
 from ..session import Session
 from ._common import display_box, guard
@@ -48,7 +48,7 @@ def register(server: Any, session: Session) -> None:
         "`steps` for the volume each operation moves, and check those numbers "
         "against what you intended -- a 9 mm hole 6 mm deep removes 0.382 cm3.\n\n"
         "Free and instant. Always run it before `build_part_from_recipe`.\n\n"
-        + RECIPE_CHEATSHEET,
+        + RECIPE_POINTER,
     )
     @guard
     def validate_recipe(
@@ -176,7 +176,7 @@ def register(server: Any, session: Session) -> None:
     @server.tool(
         description="Append operations to the part that is already open -- add a fillet, cut a "
         "pocket, pattern a feature. Uses exactly the same operation objects as a recipe.\n\n"
-        + RECIPE_CHEATSHEET,
+        + RECIPE_POINTER,
     )
     @guard
     def apply_operations(

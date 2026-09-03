@@ -193,6 +193,22 @@ WORKED EXAMPLE -- a bolted mounting plate:
 }
 """
 
+RECIPE_POINTER = (
+    "The recipe format -- parameters, every sketch entity, every operation and a "
+    "worked example -- is written out once, on `build_part_from_recipe`, and is "
+    "also the `inventor://recipe/guide` resource and what `part_recipe_schema` "
+    "returns. It is not repeated here."
+)
+"""The sentence the other recipe-taking tools carry instead of the cheat-sheet.
+
+The cheat-sheet used to be embedded in three tool descriptions, 98% identical,
+which cost about 4,600 tokens of every request to a client with this server
+enabled before the caller had said a word. A client sees every tool description
+at once, so one copy in the list is as visible as three; the copy that stays is
+on the tool a caller is looking for when it wants to make a part. This pointer
+is what the other two say so a reader of either knows where to look.
+"""
+
 MODELLING_NOTES = """\
 Practical notes that save a rebuild:
 

@@ -139,18 +139,22 @@ Every tool is wrapped by `guard`, which turns exceptions into
 `{"ok": false, "error": ..., "message": ..., "hint": ...}`. A caller that gets a
 structured error can fix its own input; one that gets a stack trace cannot.
 
-The recipe cheat-sheet is embedded in the descriptions of the three tools that take
-recipes, rather than only in a resource. A model that has to fetch a schema before
-it can write anything will often guess instead.
+The recipe cheat-sheet is embedded in a tool description rather than only in a
+resource. A model that has to fetch a schema before it can write anything will
+often guess instead, so the guide is in the tool list, where it is read without
+being asked for.
 
-That has a price worth knowing: the three copies are 98% identical and come to
-27 kB, about 8,400 tokens of the tool list, of which roughly 4,600 is the
-duplication. It is paid on every request to a client that has this server
-enabled, whether or not the conversation is about CAD. Since the cheat-sheet was
-written, `skills/inventor-parametric-modelling/` has come to carry the same
-material and loads only when it is relevant, so the argument for paying it three
-times is weaker than when the decision was made. Left alone for now, because the
-Skill is a Claude-specific mechanism and the tool descriptions are not.
+It is there once. It used to be in the descriptions of all three tools that take
+recipes, 98% identical, 27 kB together — about 8,400 tokens of the tool list, of
+which roughly 4,600 was the duplication, paid on every request to a client that
+had this server enabled whether or not the conversation was about CAD. A client
+sees every description at once, so one copy is as visible as three. The copy that
+stays is on `build_part_from_recipe`; `validate_recipe` and `apply_operations`
+carry one sentence saying so, and `tests/test_docs_still_true.py` fails if a
+second copy comes back. The Skill in `skills/inventor-parametric-modelling/`
+carries the same material and loads only when relevant, but it is a
+Claude-specific mechanism and the tool description is not, which is why the one
+copy stays in the list.
 
 ## Things deliberately left out
 

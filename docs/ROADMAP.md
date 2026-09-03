@@ -80,10 +80,11 @@ that they agree does not merge.
 **3. The recipe cheat-sheet is served once, not three times.** Three tool
 descriptions carry the same nine-kilobyte guide, 98% identical, at a cost of
 roughly 4,600 tokens on every request before the caller has said anything. One
-tool keeps the full text; the others, and the Skill, point at it and at the
+tool keeps the full text; the others point at it and at the
 `inventor://recipe/guide` resource. `ARCHITECTURE.md` records the trade-off —
-a model that has to fetch a schema will guess — so the copy that stays is on
-the tool a model reaches for first.
+a model that has to fetch a schema will guess — so the copy stays in the tool
+list rather than moving to the resource, on `build_part_from_recipe`, the tool
+a caller is looking for when it wants a part made.
 
 **4. `builder.py` is split along the seams it already has.** At 1,199 lines it
 does resolution, dispatch, static checks, rehearsal, divergence and warnings,
@@ -187,8 +188,9 @@ and this file is updated in the same commit.
 The four restructures, plus the two debts that were only ever going to be paid
 by running against a real Inventor.
 
-- [ ] **Cheat-sheet served once** (restructure 3), pinned by a test that the
-      duplicate does not come back.
+- [x] **Cheat-sheet served once** (restructure 3), pinned by a test that the
+      duplicate does not come back. *(2026-09-03; tool-list bytes 35,206 →
+      17,040.)*
 - [ ] **Per-body volume ledger in the simulator** (restructure 1). Acceptance:
       the enclosure example's simulated volume moves from 41.87 cm³ toward the
       hand-derived 46.896177 cm³ in `examples/expected/enclosure_base.json`;

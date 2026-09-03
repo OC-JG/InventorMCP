@@ -141,3 +141,54 @@ class TestAnOperationCannotBeAddedInvisibly:
         missing = sorted(name for name in entities
                          if f'"{name}"' not in RECIPE_CHEATSHEET)
         assert not missing, f"in the schema and not in the cheat-sheet: {missing}"
+
+
+class TestTheCheatSheetIsServedOnce:
+    """One copy of the recipe guide in the tool list, on the tool named for it.
+
+    It used to be three: `validate_recipe`, `build_part_from_recipe` and
+    `apply_operations` each carried the whole nine-kilobyte cheat-sheet, 98%
+    identical, which came to about 4,600 tokens of duplication on every request
+    to a client with this server enabled -- before the caller had said a word,
+    and whether or not the conversation was about CAD. A client sees every tool
+    description at once, so one copy is as visible as three.
+
+    The copy that stays is on `build_part_from_recipe`; the other two say where
+    it went. This test is the ABC's rule again: the thing that must not drift is
+    checked, not remembered.
+    """
+
+    @pytest.fixture(scope="class")
+    def tools(self):
+        from inventor_mcp.server import create_server
+
+        return {tool.name: tool for tool in asyncio.run(create_server("mock").list_tools())}
+
+    def test_exactly_one_tool_carries_the_cheat_sheet(self, tools):
+        from inventor_mcp.guide import RECIPE_CHEATSHEET
+
+        carriers = sorted(name for name, tool in tools.items()
+                          if RECIPE_CHEATSHEET in (tool.description or ""))
+        assert carriers == ["build_part_from_recipe"], (
+            f"the cheat-sheet is in {carriers}; it belongs in one description, "
+            "and the others point at it -- see RECIPE_POINTER in guide.py")
+
+    @pytest.mark.parametrize("name", ["validate_recipe", "apply_operations"])
+    def test_the_other_recipe_tools_say_where_it_went(self, tools, name):
+        description = tools[name].description or ""
+        assert "build_part_from_recipe" in description, f"{name} does not name the carrier"
+        assert "inventor://recipe/guide" in description, f"{name} does not name the resource"
+
+    def test_the_pointer_is_not_quietly_becoming_a_second_copy(self):
+        """A one-line pointer that grows an example at a time is the same bug, slower."""
+        from inventor_mcp.guide import RECIPE_CHEATSHEET, RECIPE_POINTER
+
+        assert len(RECIPE_POINTER) < len(RECIPE_CHEATSHEET) / 20
+        assert "WORKED EXAMPLE" not in RECIPE_POINTER
+
+    def test_the_resource_it_points_at_really_carries_it(self):
+        from inventor_mcp.guide import RECIPE_CHEATSHEET
+        from inventor_mcp.server import create_server
+
+        contents = asyncio.run(create_server("mock").read_resource("inventor://recipe/guide"))
+        assert RECIPE_CHEATSHEET in list(contents)[0].content
