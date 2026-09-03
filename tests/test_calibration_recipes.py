@@ -185,3 +185,53 @@ def test_the_readme_quotes_the_numbers_the_simulator_produces():
         assert float(quoted.replace("\u2212", "-")) == pytest.approx(delta, abs=5e-4), (
             f"the README says {stem}'s {op} moves {quoted} cm³ and the simulator "
             f"says {delta:.4f}")
+
+
+class TestTheTrimSaysWhenItIsGuessing:
+    """A tolerance covers an estimate's error; it must not cover a fallback.
+
+    The trim reads the ledger's prisms and clips them, which is exact for a
+    prismatic part -- all three split fixtures agree with Inventor to four
+    decimal places, so `PREDICTED["split"]` is 0.05 rather than the placeholder.
+
+    A revolve, a sweep and a loft put no prisms in the ledger, so there is
+    nothing to clip and the share of the volume falls back to where the plane
+    lands in the bounding box. That number is not wrong so much as unrelated,
+    and comparing it with Inventor would report the estimate rather than the
+    part. Loosening the tolerance to cover it would loosen it past every fault
+    it exists to catch, so the step is marked unpredictable instead and not
+    compared at all.
+    """
+
+    def split_step(self, operations: list[dict]) -> dict:
+        report = rehearse(PartRecipe.model_validate(
+            {"name": "T", "units": "mm", "operations": operations}))
+        assert report["ok"], report["findings"]
+        return [step for step in report["steps"] if step["op"] == "split"][0]
+
+    CUT = [
+        {"op": "work_plane", "name": "Cut", "kind": "offset", "base": "xy", "offset": 12},
+        {"op": "split", "name": "Trim", "tool": "Cut", "style": "trim"},
+    ]
+
+    def test_a_prismatic_trim_is_compared(self):
+        step = self.split_step([
+            {"op": "sketch", "name": "B", "plane": "xy", "entities": [
+                {"type": "rectangle", "center": [0, 0], "width": 60, "height": 40}]},
+            {"op": "extrude", "name": "Slab", "sketch": "B", "distance": 20},
+        ] + self.CUT)
+        assert step.get("predictable") is not False
+
+    def test_a_revolved_one_is_not(self):
+        step = self.split_step([
+            {"op": "sketch", "name": "P", "plane": "xz", "entities": [
+                {"type": "rectangle", "corner": [0, 0], "width": 20, "height": 30}]},
+            {"op": "revolve", "name": "Blank", "sketch": "P", "axis": "z"},
+        ] + self.CUT)
+        assert step["predictable"] is False
+        assert "fell back" in step["why_not"]
+
+    def test_the_tolerance_is_the_measured_one_and_not_the_placeholder(self):
+        """0.05, from three fixtures that came back exactly right."""
+        assert PREDICTED["split"] == 0.05
+        assert PREDICTED["split"] < PLACEHOLDER

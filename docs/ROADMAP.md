@@ -213,22 +213,22 @@ has never had, one of which had been quietly refusing every `shell` with
       isometric view until defect 4 in `FEATURE_COVERAGE.md` (orientation names
       do not describe what you get) has been measured and fixed. A test fails
       if that defect is marked fixed and the policy still works around it.
-- [ ] **Live calibration of `PREDICTED`.** *Three of the four done
-      (2026-09-03).* The acceptance run could not reach these at all, because no
-      shipped example used those operations, so `examples/calibration/` now
+- [x] **Live calibration of `PREDICTED`.** *Done 2026-09-03.* The acceptance
+      run could not reach these at all, because no shipped example used those
+      operations, so `examples/calibration/` now
       holds an instrument for each and `live_acceptance.py --only calibration`
       prints what the simulator predicted beside what Inventor did. Measured:
       `coil` 0.2% out, `draft` 2.1%, `emboss` 17.5%. Tolerances set to 0.15,
       0.20 and 0.40 — each looser than its run alone would justify, for the
       reasons recorded beside the table. The drafted block was a prediction and
       Inventor matched it to four decimals: 4.6178 against a derived 4.6179.
-      **`split` is not calibrated yet**, and the reason turned out to be a bug
-      rather than a missing number: Inventor was trimming the opposite side to
-      the one the schema documents, and the simulator was taking the right side
-      but the wrong amount. Three runs of one part narrowed it to the call site
-      and both halves are fixed — defect 5 in `FEATURE_COVERAGE.md`. One more
-      run on **the owner's machine** confirms the two now agree, and then this
-      entry can be as tight as an extrude's.
+      **`split` took three runs and two fixes**, because the reason it had no
+      number was a bug rather than an absence: Inventor was trimming the
+      opposite side to the one the schema documents, and the simulator was
+      taking the right side but the wrong amount. Both fixed — defect 5 — and
+      the three fixtures then agreed to four decimal places, so it is 0.05. A
+      trimmed revolve is excluded from the comparison rather than covered by a
+      loose number, because the ledger cannot answer there and says so.
 - [ ] **Give the divergence check a sense of direction** — defect 6, found on
       the way. It compares volumes moved and nothing else, so a cut that took
       the right amount off the wrong side reads as a pass: the run that exposed

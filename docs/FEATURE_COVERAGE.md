@@ -199,7 +199,8 @@ Each of these was hit while building real parts, and each passed
    from a render can be misled; coordinates must be measured instead.
 
 5. **A `trim` split threw away the opposite side to the one documented.**
-   *Fixed 2026-09-03, offline half verified, live half awaiting a run.* The
+   *Fixed and confirmed live, 2026-09-03: all three fixtures now agree with
+   Inventor to four decimal places, on the side and on the amount.* The
    schema says `remove_positive` discards "the side the plane's normal points
    at". Inventor did the reverse: a 27.2 cm^3 part cut at z = 12 with
    `remove_positive: true` should lose the 6.4 cm^3 above the plane, and it lost
@@ -229,8 +230,11 @@ Each of these was hit while building real parts, and each passed
    not called xy, xz or yz was treated as horizontal. A part trimmed at a plane
    offset from YZ was cut across Z instead of X.
 
-   `PREDICTED["split"]` stays at its placeholder until a live run confirms the
-   two now agree.
+   `PREDICTED["split"]` is 0.05 now, measured from those three. A trimmed
+   revolve, sweep or loft is excluded from the comparison rather than covered by
+   it: the ledger has no prisms to clip there, the simulator says outright that
+   its number is a fallback, and the rehearsal declines to compare a step that
+   says so.
 
 6. **The divergence check cannot see a cut that took the right amount off the
    wrong side.** Found while fixing defect 5, and worth more than it. On

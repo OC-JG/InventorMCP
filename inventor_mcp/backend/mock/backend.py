@@ -1736,6 +1736,7 @@ class MockBackend(Backend):
             raise FeatureError("Nothing to split: the part has no solid body yet.")
         was = document.volume
         how = "the ledger's prisms, clipped at the plane"
+        estimated = False
         if request.style == "trim":
             axis, offset = self._cut_axis_and_offset(document, request.tool)
             # The schema's promise: `remove_positive` discards the side the
@@ -1743,6 +1744,7 @@ class MockBackend(Backend):
             ratios = self._trim_ratios(document, axis, offset,
                                        keep_below=request.remove_positive)
             if ratios is None:
+                estimated = True
                 how = "estimated from where the plane falls in the bounding box"
                 kept = self._trim_fraction(document, request)
                 ratios = dict.fromkeys(range(len(document.bodies)), kept)
@@ -1764,6 +1766,10 @@ class MockBackend(Backend):
                 "style": request.style,
                 "remove_positive": request.remove_positive,
                 "volume_from": how,
+                # Read by the rehearsal, which will not compare a step whose
+                # number is a fallback. Prose says which branch ran; this says
+                # whether the answer can be checked against anything.
+                "estimated": estimated,
             },
         )
         document.features.append(feature)

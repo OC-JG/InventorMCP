@@ -38,14 +38,20 @@ the operation being measured.
 | `coil_spring` | `coil` | +3.3377 cm³ | +3.3310 cm³ | 0.2% |
 | `drafted_block` | `draft` | −4.7167 cm³ | −4.6178 cm³ | 2.1% |
 | `engraved_plate` | `emboss` | −0.0662 cm³ | −0.0803 cm³ | 17.5% |
-| `stepped_split` | `split` | −6.4000 cm³ | −20.8000 cm³ | *see below* |
-| `stepped_split_negative` | `split` | −20.8000 cm³ | −6.4000 cm³ | *see below* |
-| `origin_plane_split` | `split` | −8.0000 cm³ | −19.2000 cm³ | *see below* |
+| `stepped_split` | `split` | −6.4000 cm³ | −6.4000 cm³ | 0.0% |
+| `stepped_split_negative` | `split` | −20.8000 cm³ | −20.8000 cm³ | 0.0% |
+| `origin_plane_split` | `split` | −8.0000 cm³ | −8.0000 cm³ | 0.0% |
 
-Measured on Inventor 2027.1, 2026-09-03. Three of the four tolerances in
-`PREDICTED` were set from that run, each deliberately looser than the run alone
-would justify, for reasons recorded beside the table in
-`inventor_mcp/rehearsal.py`: `coil` 0.15, `draft` 0.20, `emboss` 0.40.
+Measured on Inventor 2027.1, 2026-09-03. All four tolerances in `PREDICTED`
+now come from that run rather than from a placeholder: `coil` 0.15, `draft`
+0.20, `emboss` 0.40, `split` 0.05. Each is deliberately looser than its own
+measurement, for reasons recorded beside the table in
+`inventor_mcp/rehearsal.py` — a tolerance is for catching a feature that did
+something else entirely, not for certifying arithmetic.
+
+The three split rows read 0.0% because both backends were fixed and then
+re-run. They disagreed on the side *and* the amount when this directory was
+created, and that history is below, because it is the useful part.
 
 ## What the run confirmed, and what it found
 
@@ -92,12 +98,18 @@ could break.
   true`, and Inventor removed the **19.2 below**. That exonerates the offset
   plane and puts the inversion at the call site: Inventor's second argument to
   `SplitPart` says which side to *keep*, where the code read it as which side to
-  remove. Both halves of the fault are now fixed — the flag is inverted where it
+  remove. Both halves of the fault are fixed — the flag is inverted where it
   reaches Inventor, and the simulator's share comes from the ledger instead of
-  the bounding box — and the numbers in the table above are what the run that
-  found all this reported, so **the next run should disagree with them**: the
-  simulator column is already the corrected one, and Inventor's should move to
-  match it.
+  the bounding box — and the run after that agreed to four decimal places on
+  all three fixtures, on the side and on the amount. `PREDICTED["split"]` is
+  0.05 now, from those three, with headroom for the fillet and draft
+  adjustments the ledger's share is applied to rather than for any error seen.
+
+  A trimmed revolve, sweep or loft is excluded rather than covered: the ledger
+  has no prisms to clip there, so the share falls back to the bounding box, the
+  simulator says outright that the number is an estimate, and the rehearsal
+  declines to compare it. A tolerance loose enough to cover that fallback would
+  be loose enough to cover a fault.
 
   The worst part of that run was not the bug. On `origin_plane_split` the
   simulator said 19.4286 and Inventor said 19.2 — **1.2% apart, while keeping

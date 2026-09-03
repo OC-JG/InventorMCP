@@ -62,14 +62,22 @@ from .session import DocumentContext
 #: catching a feature that did something else entirely, not for certifying the
 #: arithmetic, and a false alarm teaches the reader to ignore the field.
 #:
-#: `split` stays at the placeholder, for a different reason now. Its first run
-#: came back 25.3% apart and that number was worth nothing: the simulator kept
-#: the wrong *amount* and Inventor kept the wrong *side*, two unrelated errors
-#: compounding. Both are fixed -- defect 5 in `docs/FEATURE_COVERAGE.md` -- and
-#: the simulator is exact on a prismatic part now, so this should end up as tight
-#: as an extrude's. It stays at half until a live run says the two agree, because
-#: a tolerance set from a fix nobody has run is a guess wearing a measurement's
-#: clothes.
+#: `split` took three runs and two fixes to become measurable. The first came
+#: back 25.3% apart and that number was worth nothing: the simulator kept the
+#: wrong *amount* and Inventor kept the wrong *side*, two unrelated errors
+#: compounding -- defect 5 in `docs/FEATURE_COVERAGE.md`. With both fixed, the
+#: three split fixtures agree with Inventor to four decimal places, on the side
+#: and on the amount. Set to 0.05 rather than 0.02: the ledger is exact about
+#: prisms, and the share it computes is then applied to a total that includes
+#: fillet, chamfer and draft adjustments which are not distributed evenly
+#: through the part, so a trimmed part carrying any of those will be a little
+#: out.
+#:
+#: What is deliberately *not* covered by that number is the case where the
+#: ledger has no prisms to clip -- a trimmed revolve, sweep or loft -- and the
+#: share falls back to the bounding box. That step is now marked unpredictable
+#: and not compared at all, because a tolerance loose enough to cover a fallback
+#: is loose enough to cover a fault.
 #:
 #: Worth knowing while reading any of these: the comparison is of volumes moved,
 #: so it is blind to an operation that moved the right amount on the wrong side.
@@ -86,6 +94,7 @@ PREDICTED = {
     "mirror": 0.02,
     "rectangular_pattern": 0.02,
     "circular_pattern": 0.02,
+    "split": 0.05,
     "revolve": 0.15,
     "coil": 0.15,
     "draft": 0.20,
@@ -95,9 +104,6 @@ PREDICTED = {
     "loft": 0.35,
     "shell": 0.35,
     "emboss": 0.40,
-    # Not measured: see above. The one run that tried disagreed about which side
-    # a trim discards, which has to be settled before this number means anything.
-    "split": 0.50,
 }
 
 
@@ -295,6 +301,16 @@ def rehearse(recipe: PartRecipe) -> dict[str, Any]:
         step: dict[str, Any] = {"index": index, "op": op.op, "name": op.name}
         if "measured" in outcome:
             step["measured"] = outcome["measured"]
+        # A backend may say outright that a number is a fallback rather than a
+        # measurement -- a trim on a body the ledger has no prisms for, where
+        # the share of the volume comes from the bounding box. Comparing that
+        # against Inventor reports the estimate, not the part, and a tolerance
+        # loose enough to cover it would be loose enough to cover a real fault.
+        if (outcome.get("detail") or {}).get("estimated"):
+            step["predictable"] = False
+            step["why_not"] = ("the simulator fell back to an estimate for this "
+                               "one and says so, so there is nothing here to "
+                               "compare against")
         if hollow and op.op not in _MEASURES_MATERIAL:
             step["predictable"] = False
             step["why_not"] = ("the part is hollow and the simulator has no "
