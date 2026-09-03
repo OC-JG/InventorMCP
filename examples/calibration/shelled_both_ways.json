@@ -1,0 +1,58 @@
+{
+  "name": "CalibrationShellBothWays",
+  "description": "A box shelled with `direction: \"both\"`, which until 2026-09-03 could not be built at all: the wall thickness split either side of the original surface needs the kBothSidesShellDirection enum, and the constants table asked Inventor for kBothShellDirection, a name it has never had, so the server refused rather than guessing. That refusal was correct and it hid the fact that nothing had ever exercised this path. The simulator cannot do this one exactly either -- its exact branch is the inside case, a prism's outline inset and swept, so `both` falls to the surface-area estimate. What this measures is how far that estimate is from Inventor, and that the feature builds at all.",
+  "units": "mm",
+  "parameters": [
+    {
+      "name": "box_w",
+      "value": 60
+    },
+    {
+      "name": "box_d",
+      "value": 40
+    },
+    {
+      "name": "box_h",
+      "value": 20
+    },
+    {
+      "name": "wall",
+      "value": 2,
+      "comment": "split either side of the face"
+    }
+  ],
+  "operations": [
+    {
+      "op": "sketch",
+      "name": "Base",
+      "plane": "xy",
+      "entities": [
+        {
+          "type": "rectangle",
+          "center": [
+            0,
+            0
+          ],
+          "width": "box_w",
+          "height": "box_d"
+        }
+      ]
+    },
+    {
+      "op": "extrude",
+      "name": "Block",
+      "sketch": "Base",
+      "distance": "box_h"
+    },
+    {
+      "op": "shell",
+      "name": "Cavity",
+      "faces": {
+        "kind": "face",
+        "filter": "top"
+      },
+      "thickness": "wall",
+      "direction": "both"
+    }
+  ]
+}

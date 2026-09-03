@@ -905,6 +905,83 @@ def _live_deltas(session: Session, recipe: PartRecipe) -> dict[int, float]:
     return deltas
 
 
+def check_views(session: Session, report: Report) -> None:
+    """Every display mode and orientation `capture_view` offers, actually applied.
+
+    `hidden_line` asked Inventor for `kHiddenLineRendering`, a name no release
+    has, and `capture_view` caught the failure and rendered in whatever mode the
+    view was already in without saying so -- a picture in the wrong style, of
+    the right part, reported as a success. Both halves are fixed: the name is
+    `kWireframeWithHiddenEdgesRendering` and a refused mode now comes back as
+    `display_mode_applied: false`. This is what checks that on a real Inventor.
+
+    Orientations are captured too, but only reported. Defect 4 in
+    `docs/FEATURE_COVERAGE.md` records that their names do not describe what you
+    get -- `front` returns a top view -- and until somebody measures what each
+    one actually produces there is nothing here to assert. The file sizes are
+    printed because two orientations rendering byte-identical images would say
+    the camera never moved.
+    """
+    from inventor_mcp.backend.base import ScreenshotRequest
+
+    if session.backend.name == "mock":
+        report.skip("views: not run",
+                    "the simulator cannot render, and says so rather than "
+                    "writing a file. Use --backend inventor.")
+        return
+
+    recipe = PartRecipe.model_validate({
+        "name": "ViewCheck", "units": "mm", "operations": [
+            {"op": "sketch", "name": "Base", "plane": "xy", "entities": [
+                {"type": "rectangle", "center": [0, 0], "width": 60, "height": 40}]},
+            {"op": "extrude", "name": "Block", "sketch": "Base", "distance": 20},
+            {"op": "sketch", "name": "Pocket", "plane": "xy", "offset": 20, "entities": [
+                {"type": "circle", "center": [0, 0], "diameter": 20}]},
+            {"op": "extrude", "name": "Bore", "sketch": "Pocket", "distance": 10,
+             "direction": "negative", "operation": "cut"},
+        ]})
+    context, broken = build(session, recipe)
+    if broken:
+        report.check(False, "views: the test part builds", broken[0][:300])
+        return
+
+    into = ROOT / ".views"
+    into.mkdir(exist_ok=True)
+    sizes: dict[str, int] = {}
+    try:
+        for mode in ("shaded", "hidden_line", "wireframe"):
+            path = into / f"mode_{mode}.png"
+            outcome = session.backend.screenshot(context.doc_id, ScreenshotRequest(
+                path=str(path), orientation="iso", display_mode=mode))
+            report.check(
+                bool(outcome.get("display_mode_applied")),
+                f"views: display mode {mode!r} was applied",
+                str(outcome.get("note"))[:200])
+            report.check(bool(outcome.get("written")) and path.is_file(),
+                         f"views: {mode!r} wrote a file", str(path))
+            if path.is_file():
+                sizes[mode] = path.stat().st_size
+
+        # Two modes producing an identical file means one of them did nothing,
+        # which is exactly the failure the flag above is meant to have ended.
+        report.check(len(set(sizes.values())) == len(sizes),
+                     "views: each display mode rendered something different",
+                     f"file sizes: {sizes}")
+
+        for orientation in ("iso", "front", "top", "right", "back"):
+            path = into / f"view_{orientation}.png"
+            session.backend.screenshot(context.doc_id, ScreenshotRequest(
+                path=str(path), orientation=orientation, display_mode="shaded"))
+            if path.is_file():
+                report.note(f"views: {orientation} -> {path.stat().st_size} bytes")
+        report.note("views: look at them before trusting the orientation names -- "
+                    "defect 4 says they do not describe what you get")
+        report.note(f"views: delete {into} when you are done")
+    finally:
+        session.backend.close_document(context.doc_id, save=False)
+        session.forget(context.doc_id)
+
+
 CHECKS = {
     "examples": None,  # handled specially: one per recipe
     "parameter-edit": check_parameter_edit,
@@ -916,6 +993,7 @@ CHECKS = {
     "threading": check_threading,
     "constants": check_constants,
     "calibration": check_calibration,
+    "views": check_views,
 }
 
 

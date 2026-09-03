@@ -41,6 +41,7 @@ the operation being measured.
 | `stepped_split` | `split` | −6.4000 cm³ | −6.4000 cm³ | 0.0% |
 | `stepped_split_negative` | `split` | −20.8000 cm³ | −20.8000 cm³ | 0.0% |
 | `origin_plane_split` | `split` | −8.0000 cm³ | −8.0000 cm³ | 0.0% |
+| `shelled_both_ways` | `shell` | −30.4000 cm³ | not yet run | |
 
 Measured on Inventor 2027.1, 2026-09-03. All four tolerances in `PREDICTED`
 now come from that run rather than from a placeholder: `coil` 0.15, `draft`
@@ -117,6 +118,28 @@ could break.
   it. Comparing volumes catches a cut that missed and a fillet on the wrong
   edge, and is blind to a cut that took the right amount off the wrong side
   whenever the two halves are near enough in size.
+
+## The path that could not run at all
+
+`shelled_both_ways` is not calibrating an estimate so much as proving a feature
+exists. A shell with `direction: "both"` splits the wall either side of the
+original surface, and until 2026-09-03 it could not be built: the enum it needs
+is `kBothSidesShellDirection`, the constants table asked for
+`kBothShellDirection`, and Inventor has never had a name of that spelling, so
+the server refused rather than guessing. The refusal was right and it hid the
+fact that nothing had ever exercised the path.
+
+The simulator cannot do this one exactly either. Its exact branch is the inside
+case — a prism's outline inset and swept — so `both` falls to the surface-area
+estimate, and what the run measures is how far that is from Inventor.
+
+The other unreachable path was `capture_view` in hidden-line mode, which asked
+for `kHiddenLineRendering`, another name no release has. That one did not
+refuse: it caught the failure and rendered in whatever mode the view was
+already in, so the picture was in the wrong style and reported as a success.
+There is no recipe for it because it produces an image rather than a volume;
+`live_acceptance.py --only views` is the check, and it asserts that each mode
+was actually applied and that the three modes do not render identical files.
 
 `coil_spring` and `engraved_plate` are not tractable here: a helix's turns
 interfere in a way Pappus does not model, and a glyph's area is whatever the
