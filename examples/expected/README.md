@@ -40,17 +40,42 @@ The counterbore term is an *annulus*, not a cylinder: the bore through it is
 already counted. Counting the whole cylinder is a mistake the simulator used to
 make, and it made every counterbored plate lighter than it is.
 
-`hex_standoff`, `enclosure_base` and `duct_transition` have never had their
-volumes captured live, and none is analytically tractable here -- a loft's
-cross-section does not interpolate linearly in area, so its volume is not the
-mean section times the span. The first run seeds them; **check the arithmetic before trusting the number**, or
-it becomes a regression test for whatever it happened to build.
+`duct_transition` and `moulded_housing` were seeded from a live run rather than
+derived, because neither is analytically tractable here -- a loft's cross-section
+does not interpolate linearly in area, so its volume is not the mean section
+times the span, and the housing is drafted on every outer wall. A seeded number
+is a regression baseline and not a verification: **check the arithmetic before
+trusting one**, or it becomes a regression test for whatever the code happened to
+build.
 
-`enclosure_base` is the exception that proves the point. Its 46.896177 cm^3 was
-derived term by term and the simulator disagreed by 10.7%, which is how the worst
-error in the simulator's volume model was found rather than argued about: a cut
-after a shell was charged against the solid the part had been before it was
-hollowed. The simulator now says 46.897289 -- 0.002% above the hand figure, the
-difference being the polygon it keeps where a filleted corner is an arc -- and the
-number here is still the hand calculation, because that is the one a live run has
-to be checked against.
+`enclosure_base` is the one that proves the point. Its 46.896177 cm^3 was derived
+term by term, the simulator disagreed by 10.7%, and that is how the worst error
+in the simulator's volume model was found rather than argued about: a cut after a
+shell was charged against the solid the part had been before it was hollowed.
+Inventor has since been asked, and it agrees with the hand figure to within the
+0.0005 cm^3 the acceptance run compares at.
+
+## How close the simulator is, measured against that run
+
+All eleven examples, Inventor 2027.1 on 2026-09-03. This is the number that says
+how good the oracle is, which is what makes a rehearsal worth reading.
+
+| Example | Inventor | Simulator | Apart |
+|---|---|---|---|
+| `mounting_plate` | 75.0185 | 75.018492 | 0.00% |
+| `belt_pulley` | 68.0062 | 68.006231 | 0.00% |
+| `cover_plate` | 56.2551 | 56.255104 | 0.00% |
+| `pipe_bend` | 7.9944 | 7.994380 | 0.00% |
+| `threaded_boss` | 70.8552 | 70.855439 | 0.00% |
+| `enclosure_base` | 46.8962 | 46.897289 | +0.002% |
+| `angle_bracket` | 43.1999 | 43.201218 | +0.003% |
+| `flanged_shaft` | 93.6305 | 93.626922 | -0.004% |
+| `duct_transition` | 32.6496 | 32.477039 | -0.53% |
+| `moulded_housing` | 46.5234 | 46.229078 | -0.63% |
+| `hex_standoff` | 1.0466 | 1.037631 | -0.86% |
+
+The three at the bottom are the three the simulator says outright it cannot do
+exactly: a loft's sections do not interpolate linearly in area, a draft taper is
+not modelled at all, and a chamfer across a hex prism's end meets three faces at
+each corner where the estimate assumes two. The housing was 15.96% out before the
+volume ledger landed, for the reason `enclosure_base` explains.

@@ -161,6 +161,13 @@ only to report it: a cut that removes more than the body it was aimed at contain
 now stops at nothing and says so, where before the surplus came quietly off another
 body's total.
 
+Measured against Inventor 2027.1, the simulator is now within 1% of a live build
+on all eleven shipped examples and within 0.01% on eight of them. The three that
+are not are the three it says outright it cannot do exactly: a loft, a draft
+taper, and a chamfer across a hex prism's end. `examples/expected/README.md`
+carries the table, which is worth re-running rather than trusting: it is the
+number that says how much a rehearsal is worth.
+
 ### `tools/` — the MCP surface
 
 Thirty tools rather than one per feature type -- thirty-one when the escape

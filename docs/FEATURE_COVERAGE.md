@@ -181,6 +181,12 @@ Each of these was hit while building real parts, and each passed
    0.002% above it, the remainder being the polygon that stands in for an arc.
    `tests/test_volume_ledger.py` holds it there.
 
+   *Confirmed live*, Inventor 2027.1 on 2026-09-03: the enclosure measured
+   within 0.0005 cm^3 of the hand figure, and the moulded housing -- the other
+   shelled part, and the one nobody had derived -- went from 15.96% below
+   Inventor to 0.63%. The simulator is now within 1% of a live build on all
+   eleven shipped examples; `examples/expected/README.md` has the table.
+
 3. **`save_part` fails with a bare "Exception occurred" when that path is already
    open** in Inventor from an earlier build. Since each rebuild leaves another
    document open, saving over the same path fails on the second attempt onward and
