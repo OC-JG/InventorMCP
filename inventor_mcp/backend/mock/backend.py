@@ -2602,7 +2602,17 @@ def _degrees_of_freedom(plan: SketchPlan) -> int:
 
     Each primitive contributes its free parameters, each constraint removes
     its usual count, and each dimension removes one.  It is an estimate, not a
-    solver -- Inventor is the authority once connected.
+    solver -- Inventor is the authority once connected, but only on *whether*
+    the sketch is constrained, never on by how much: `PlanarSketch` answers
+    `ConstraintStatus`, a four-value enum, and exposes no degrees-of-freedom
+    count at all. The only `GetDegreesOfFreedom` in the API belongs to
+    `ComponentOccurrence`, which is an assembly occurrence's rigid-body
+    freedoms and unrelated. Measured on 2027.1 -- see docs/INVENTOR_SETUP.md.
+
+    So this estimate is the only number anywhere, and the COM backend leaves
+    `degrees_of_freedom` as None rather than inventing one. Connecting to
+    Inventor trading a number for a boolean is that asymmetry, not an
+    oversight.
 
     ponytail: it can come out negative, and `_sketch_info` clamps that to zero
     and calls the sketch fully constrained. So an over-constrained sketch and a

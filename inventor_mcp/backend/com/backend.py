@@ -1429,7 +1429,16 @@ class ComBackend(Backend):
             dimensions=len(plan.dimensions),
             profiles=profiles,
             hole_centers=len(plan.hole_centers),
-            fully_constrained=_fully_constrained(sketch),
+            # `degrees_of_freedom` stays None here, and that is deliberate:
+            # Inventor exposes no such count for a sketch. `ConstraintStatus`
+            # is a four-value enum, and the only `GetDegreesOfFreedom` in the
+            # whole API belongs to `ComponentOccurrence` -- an assembly
+            # occurrence's rigid-body freedoms, nothing to do with a sketch.
+            # Measured on 2027.1; see `_fully_constrained` and
+            # docs/INVENTOR_SETUP.md. The simulator's number is an estimate it
+            # can make because it does no solving; Inventor will not be asked
+            # to guess one.
+            fully_constrained=_fully_constrained(sketch, self._constants),
             inferred_constraints=len(inferred),
             refused_constraints=len(refused),
             driving_dimensions=len(driving),
@@ -1802,7 +1811,9 @@ class ComBackend(Backend):
                     constraints=int(sketch.GeometricConstraints.Count),
                     dimensions=int(sketch.DimensionConstraints.Count),
                     profiles=_count_profiles(sketch),
-                    fully_constrained=_fully_constrained(sketch),
+                    # No `degrees_of_freedom`: Inventor has no count to give.
+                    # See the note on the other `SketchInfo` above.
+                    fully_constrained=_fully_constrained(sketch, self._constants),
                 )
             )
         return results
@@ -3832,12 +3843,32 @@ def _count_profiles(sketch: Any) -> int:  # pragma: no cover - Windows only
     return count_
 
 
-def _fully_constrained(sketch: Any) -> bool | None:  # pragma: no cover - Windows only
-    """``None`` when this Inventor version does not expose the flag."""
-    for name in ("FullyConstrained", "IsFullyConstrained"):
-        value = getattr(sketch, name, None)
-        if isinstance(value, bool):
-            return value
+def _fully_constrained(sketch: Any, constants: Constants) -> bool | None:
+    """Inventor's own verdict on a sketch, or ``None`` when it will not give one.
+
+    There is no ``FullyConstrained`` property. This looked for one -- and for
+    ``IsFullyConstrained`` -- and neither exists, so it returned ``None`` for
+    every sketch on every version and the flag never arrived at all.
+    ``ConstraintStatus`` is what Inventor actually answers, and it is a
+    four-value enum: measured on 2027.1 both from the type library
+    (``scripts/com_signatures.py --search Constrain``) and from a live sketch
+    through late binding, which is the only way to be sure a missing attribute
+    is Inventor's answer and not the makepy wrapper's.
+
+    Over-constrained and unknown both come back ``None``: a bool cannot say
+    "constrained, but wrongly", and ``refused_dimensions`` is where that shows
+    up instead.
+
+    There is no degrees-of-freedom count to go with it -- see
+    :func:`~inventor_mcp.backend.mock.backend._degrees_of_freedom`.
+    """
+    status = getattr(_dynamic(sketch), "ConstraintStatus", None)
+    if not isinstance(status, int) or isinstance(status, bool):
+        return None
+    if status == constants["kFullyConstrainedConstraintStatus"]:
+        return True
+    if status == constants["kUnderConstrainedConstraintStatus"]:
+        return False
     return None
 
 

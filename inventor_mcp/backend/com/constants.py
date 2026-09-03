@@ -87,6 +87,10 @@ FALLBACK: dict[str, int] = {
     "kCounterSinkHole": 21506,
     "kFlatHoleBottom": 39425,
     "kAngleHoleBottom": 39426,
+    # ConstraintStatusEnum -- read back from a sketch, not passed to Inventor,
+    # but a wrong number here would silently call every sketch under-constrained.
+    "kFullyConstrainedConstraintStatus": 51713,
+    "kUnderConstrainedConstraintStatus": 51714,
     # WeldBeadReliefShapeEnum placeholder kept out; add values here as needed.
 }
 

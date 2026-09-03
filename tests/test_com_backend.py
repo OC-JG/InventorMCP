@@ -175,6 +175,42 @@ class TestHelpers:
         assert com._com_passes_filter(horizontal, "horizontal") is True
 
 
+class TestConstraintStatus:
+    """`ConstraintStatus` is the only constraint answer a sketch gives.
+
+    It used to read `FullyConstrained`, which does not exist on any version --
+    so the flag was `None` everywhere and nothing said so. These values are
+    Inventor 2027.1's, measured; see docs/INVENTOR_SETUP.md.
+    """
+
+    class _Sketch:
+        def __init__(self, status):
+            if status is not None:
+                self.ConstraintStatus = status
+
+    @staticmethod
+    def _verdict(status):
+        return com._fully_constrained(
+            TestConstraintStatus._Sketch(status), Constants(None))
+
+    def test_fully_constrained_reads_true(self):
+        assert self._verdict(FALLBACK["kFullyConstrainedConstraintStatus"]) is True
+
+    def test_under_constrained_reads_false(self):
+        assert self._verdict(FALLBACK["kUnderConstrainedConstraintStatus"]) is False
+
+    @pytest.mark.parametrize("status", [51715, 51716, None, "kFullyConstrained", True])
+    def test_anything_else_is_unknown(self, status):
+        # Over-constrained included: a bool cannot say "constrained, but
+        # wrongly", and `refused_dimensions` reports that instead.
+        assert self._verdict(status) is None
+
+    def test_the_old_property_name_is_not_mistaken_for_an_answer(self):
+        sketch = self._Sketch(None)
+        sketch.FullyConstrained = True
+        assert com._fully_constrained(sketch, Constants(None)) is None
+
+
 class TestContract:
     def test_both_backends_implement_the_whole_interface(self):
         from inventor_mcp.backend.base import Backend

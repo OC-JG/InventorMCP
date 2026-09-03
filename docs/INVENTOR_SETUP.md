@@ -186,6 +186,33 @@ afternoon:
   only if the recipe drew a closed loop and no profile came out of it.
 * `PlanarSketch.OriginPoint` cannot be constrained against. Project the origin
   work point into the sketch first.
+* **A sketch has no degrees-of-freedom count, and no `FullyConstrained`
+  property either.** `ConstraintStatus` is the only answer Inventor gives, and
+  it is a `ConstraintStatusEnum`: `kFullyConstrained` 51713,
+  `kUnderConstrained` 51714, `kOverConstrained` 51715, `kUnknown` 51716.
+  Measured on 2027.1 two ways. `python scripts/com_signatures.py PlanarSketch`
+  prints the class's whole property list: `ConstraintStatus` is there, and
+  nothing named for DOF or freedom is. Then a live sketch through late binding,
+  because the makepy wrapper raising `AttributeError` is not proof on its own —
+  it declares a narrower interface than the object answers to. A circle alone
+  read 51714; its centre grounded on the projected origin, still 51714; with a
+  diameter dimension added, 51713.
+
+  The two values the backend compares against are in the fallback table, so
+  `python scripts/dump_constants.py` checks them against Inventor's own type
+  library along with everything else.
+
+  The only `GetDegreesOfFreedom` in the API is `ComponentOccurrence`'s — an
+  assembly occurrence's rigid-body freedoms, unrelated to sketch constraint
+  solving. So `SketchInfo.degrees_of_freedom` is filled by the simulator, which
+  estimates it because it does no solving, and left `None` by the COM backend,
+  which will not invent one. `fully_constrained` is the field both backends
+  fill. This asymmetry is deliberate; do not go looking for the count again.
+
+  The COM backend looked for `FullyConstrained` and `IsFullyConstrained` until
+  this was measured. Neither exists, so it returned `None` for every sketch on
+  every version and the flag never arrived at all — a silent one, since `None`
+  is also the honest answer when a version genuinely cannot say.
 * A midpoint constraint moves the *point* onto the line, so the grounded sketch
   origin can never be that point.
 * **A hole's `ExtentDirection` runs opposite to an extrude's.** Measured with
