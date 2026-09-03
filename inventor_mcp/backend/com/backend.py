@@ -3275,15 +3275,34 @@ class ComBackend(Backend):
                 camera.ViewOrientationType = self._k(orientation)
             camera.Fit()
             camera.ApplyWithoutTransition()
+            # A display mode Inventor will not take used to be swallowed here,
+            # which meant the picture came back in whatever mode the view was
+            # already in and nothing said so. That is how `hidden_line` went
+            # years asking for an enum name Inventor does not have: it never
+            # raised, it just quietly rendered shaded.
             mode = DISPLAY_MODES.get(request.display_mode)
+            refused: str | None = None
             if mode:
                 try:
                     view.DisplayMode = self._k(mode)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    refused = f"{type(exc).__name__}: {exc}"
             view.SaveAsBitmap(path, request.width, request.height)
-        return {"written": os.path.exists(path), "path": path,
-                "width": request.width, "height": request.height}
+        result: dict[str, Any] = {
+            "written": os.path.exists(path), "path": path,
+            "width": request.width, "height": request.height,
+            "display_mode": request.display_mode,
+            "display_mode_applied": bool(mode) and refused is None,
+        }
+        if refused is not None:
+            result["note"] = (
+                "Inventor would not take that display mode, so this picture is "
+                f"in whatever mode the view was already in: {refused}")
+        elif not mode:
+            result["note"] = (
+                f"No display mode is mapped for {request.display_mode!r}, so this "
+                "picture is in whatever mode the view was already in.")
+        return result
 
 
 # ---------------------------------------------------------------------------

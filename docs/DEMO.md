@@ -869,15 +869,22 @@ matter to this demonstration:
 So steps 1 to 14 have all been executed on this release. What follows is not a list of
 worries; it is the residue.
 
-### The four enum names neither 2026.1 nor 2027.1 has
+### The four enum names that were never Inventor's, and are now
 
 `kBothShellDirection`, `kHiddenLineRendering`, `kFlatHoleBottom` and `kAngleHoleBottom`
-are absent from both releases' type libraries under those names -- 2027.1 was asked on
-2026-09-03 and gave the same answer. There is nothing to read, so the
-fallback table would be used -- and the table has never been checked for those four on any
-release. Three of them are out of their own numbering family, which is exactly how
-`kThroughAllExtent` once came to be Inventor's `kToNextExtent`: an extrude that stopped at
-the next face while every report said "through all".
+were absent from both releases' type libraries under those names, and three of them were
+out of their own numbering family besides -- which is exactly how `kThroughAllExtent` once
+came to be Inventor's `kToNextExtent`: an extrude that stopped at the next face while
+every report said "through all". They were made to refuse rather than resolve.
+
+On 2026-09-03 Inventor 2027.1 was asked what it *does* call them, and all four turned out
+to be wrong **names** rather than wrong values, which is why looking a value up could never
+have fixed them. A third shell direction is `kBothSidesShellDirection`, 41219, sitting in
+the family exactly where it should. There is no hidden-line render style at all;
+`kWireframeWithHiddenEdgesRendering` (8712) is what the words describe. The two hole-bottom
+names do not exist under any name and nothing read them, so they are gone from the table
+rather than refused: an entry for a name Inventor does not have is a fiction with a number
+attached.
 
 They are therefore marked disputed and **refuse rather than guess**. What that costs is
 narrow and nothing in this script touches it:

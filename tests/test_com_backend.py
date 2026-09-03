@@ -1335,55 +1335,79 @@ class TestTheMeasuredEnumValues:
         assert FALLBACK["kVerticalDim"] == 19202
         assert FALLBACK["kAlignedDim"] == 19203
 
-    def test_what_2026_reopened_is_written_down(self):
-        """Four names neither 2026.1 nor 2027.1 has.
+    def test_what_2026_reopened_and_2027_closed(self):
+        """The four names neither release has, and what they turned out to be.
 
-        Everything else in the table -- forty-seven of fifty-one -- both
-        releases agreed with exactly, which is the strongest evidence yet that
-        these are API facts rather than one release's numbers. The four they
-        have no name for are a different case: there is nothing to read, so the
-        table is what would be used, and the table has never been checked for
-        them on any release. They refuse rather than guess.
+        Forty-seven of the fifty-one entries both releases agreed with exactly,
+        which is the strongest evidence yet that those are API facts rather than
+        one release's numbers. Four had no name in either library, were left in
+        the table, and were made to refuse rather than resolve to a number
+        nobody had checked.
 
-        Two of the four are reachable, so refusing has a cost a person will
-        meet: a shell with `direction: "both"`, and `capture_view` in
-        hidden-line mode. What Inventor does call them is still unknown;
-        `scripts/dump_constants.py --find Shell` is how to ask.
+        Asking 2027.1 what it *does* call them settled all four, and none was a
+        wrong value: they were wrong names, which is why looking the value up
+        could never have worked. Two are now correct names, two are gone.
         """
         from inventor_mcp.backend.com.constants import FALLBACK, SUSPECT
 
-        assert set(SUSPECT) == {
-            "kBothShellDirection", "kHiddenLineRendering",
-            "kFlatHoleBottom", "kAngleHoleBottom",
-        }
-        for name, why in SUSPECT.items():
-            assert name in FALLBACK, f"{name} is disputed but not in the table"
-            assert "2026.1" in why, (
-                f"{name}'s reason should say which release said so")
+        assert SUSPECT == {}, (
+            "something is disputed again; say which release said so and why")
+        assert FALLBACK["kBothSidesShellDirection"] == 41219
+        assert FALLBACK["kWireframeWithHiddenEdgesRendering"] == 8712
+        for gone in ("kBothShellDirection", "kHiddenLineRendering",
+                     "kFlatHoleBottom", "kAngleHoleBottom"):
+            assert gone not in FALLBACK, (
+                f"{gone} is not a name Inventor has; an entry for it is a "
+                "fiction with a number attached")
 
-    def test_the_two_reachable_disputes_are_out_of_their_own_family(self):
-        """Why these are refused rather than left to resolve quietly.
+    def test_the_names_the_tool_surface_asks_for_are_names_inventor_has(self):
+        """The bug the acceptance run found, in the form that would catch it.
+
+        `shell` with direction "both" and `capture_view` in hidden-line mode
+        each resolved a name absent from every type library asked. One refused
+        outright; the other was swallowed and gave the previous display mode
+        back with no complaint. Both are in the table now, under the names the
+        library uses.
+        """
+        from inventor_mcp.backend.com.constants import (
+            DISPLAY_MODES,
+            EXTENT_DIRECTIONS,
+            FALLBACK,
+            SHELL_DIRECTIONS,
+            VIEW_ORIENTATIONS,
+        )
+
+        for mapping in (SHELL_DIRECTIONS, DISPLAY_MODES, VIEW_ORIENTATIONS,
+                        EXTENT_DIRECTIONS):
+            for word, name in mapping.items():
+                assert name in FALLBACK, (
+                    f"{word!r} maps to {name!r}, which is not in the table at "
+                    "all -- so it can only work where the type library is "
+                    "readable, and nothing says what it should be otherwise")
+
+    def test_the_two_that_are_reachable_are_in_their_own_family(self):
+        """They were rejected for being out of it, so being in it is the fix.
 
         A value from the wrong numbering family is how `kThroughAllExtent` came
-        to be Inventor's `kToNextExtent`. Shell directions run 41217/41218 and
-        render styles run 8706/8708, so neither 41987 nor 9986 belongs where the
-        table puts it -- and both are reachable from the tool surface, by a
-        shell with direction "both" and by capture_view in hidden-line mode.
+        to be Inventor's `kToNextExtent`. 41987 was nowhere near the 41217 and
+        41218 the other shell directions use; 41219 is the next one along.
         """
         from inventor_mcp.backend.com.constants import FALLBACK
 
         shell = {FALLBACK["kInsideShellDirection"], FALLBACK["kOutsideShellDirection"]}
-        assert all(abs(FALLBACK["kBothShellDirection"] - v) > 16 for v in shell)
+        assert all(abs(FALLBACK["kBothSidesShellDirection"] - v) <= 2 for v in shell)
 
         render = {FALLBACK["kShadedRendering"], FALLBACK["kWireframeRendering"]}
-        assert all(abs(FALLBACK["kHiddenLineRendering"] - v) > 16 for v in render)
+        assert all(abs(FALLBACK["kWireframeWithHiddenEdgesRendering"] - v) <= 16
+                   for v in render)
 
     def test_the_unreachable_two_are_still_unreached(self):
-        """kFlatHoleBottom and kAngleHoleBottom cost nothing to refuse.
+        """kFlatHoleBottom and kAngleHoleBottom are gone, and must stay gone.
 
-        The hole calls take a `FlatBottom` boolean and a `BottomTipAngle`
-        instead, so nothing resolves these names. If that ever changes, this
-        test fails and the value has to be measured before it can be used.
+        No type library asked has a name for either, and the hole calls take a
+        `FlatBottom` boolean and a `BottomTipAngle` instead, so nothing resolves
+        them. If that ever changes, this test fails and the name has to be found
+        on a live Inventor before it can be used.
         """
         import pathlib
 
