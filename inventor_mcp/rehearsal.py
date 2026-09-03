@@ -62,11 +62,19 @@ from .session import DocumentContext
 #: catching a feature that did something else entirely, not for certifying the
 #: arithmetic, and a false alarm teaches the reader to ignore the field.
 #:
-#: `split` stays at the placeholder. Its run came back 25.3% apart, and that
-#: number is worth nothing: the simulator kept the wrong *amount* and Inventor
-#: kept the wrong *side*, so the figure is two unrelated errors compounding.
-#: See defect 5 in `docs/FEATURE_COVERAGE.md`. Setting a tolerance from it would
-#: enshrine an inversion.
+#: `split` stays at the placeholder, for a different reason now. Its first run
+#: came back 25.3% apart and that number was worth nothing: the simulator kept
+#: the wrong *amount* and Inventor kept the wrong *side*, two unrelated errors
+#: compounding. Both are fixed -- defect 5 in `docs/FEATURE_COVERAGE.md` -- and
+#: the simulator is exact on a prismatic part now, so this should end up as tight
+#: as an extrude's. It stays at half until a live run says the two agree, because
+#: a tolerance set from a fix nobody has run is a guess wearing a measurement's
+#: clothes.
+#:
+#: Worth knowing while reading any of these: the comparison is of volumes moved,
+#: so it is blind to an operation that moved the right amount on the wrong side.
+#: That is defect 6, and it is how the split inversion survived -- one of its
+#: runs was 1.2% apart while keeping the opposite half of the part.
 #:
 #: Nothing already here was retuned. The chamfer and the loft became much more
 #: accurate in the same pass and their entries stayed put: one live datapoint

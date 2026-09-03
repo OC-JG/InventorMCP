@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import copy
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from itertools import count
 from typing import Any, Iterable, Sequence
 
@@ -203,6 +203,44 @@ class _Slab:
     body: int = 0
     #: What put it there, for diagnosis only.
     source: str = "extrude"
+
+    @property
+    def volume(self) -> float:
+        """Signed, in cm^3: what this prism contributes to the part."""
+        return self.sign * _outline_area(self.outline) * abs(self.far - self.near)
+
+    def clipped(self, axis: int, cut: float, keep_below: bool) -> "_Slab | None":
+        """This prism with everything on the far side of a plane taken off.
+
+        The plane is perpendicular to *axis* at *cut*, both in model space. A
+        prism is a profile and a length, so which of the two gets clipped
+        depends on whether the cut runs along the sweep or across it -- and
+        across it means clipping the outline itself, which is the same
+        Sutherland-Hodgman used to stop a revolved cut being charged for the
+        air it overshoots.
+
+        Returns None when nothing of it survives.
+        """
+        (u_axis, _), (v_axis, _), (w_axis, _) = _PLANES[self.plane][0]
+        low, high = min(self.near, self.far), max(self.near, self.far)
+
+        if axis == w_axis:
+            near, far = (low, min(high, cut)) if keep_below else (max(low, cut), high)
+            if far - near <= 0:
+                return None
+            return replace(self, near=near, far=far)
+
+        big = 1.0e6
+        if axis == u_axis:
+            box = (-big, cut, -big, big) if keep_below else (cut, big, -big, big)
+        elif axis == v_axis:
+            box = (-big, big, -big, cut) if keep_below else (-big, big, cut, big)
+        else:  # pragma: no cover - a plane's three axes are all accounted for
+            return None
+        outline = clip_to_box(self.outline, *box)
+        if len(outline) < 3:
+            return None
+        return replace(self, outline=outline)
 
     def interval_along(self, axis: int,
                        through: tuple[float, float, float]) -> tuple[float, float] | None:
@@ -1697,13 +1735,21 @@ class MockBackend(Backend):
         if document.volume <= 0:
             raise FeatureError("Nothing to split: the part has no solid body yet.")
         was = document.volume
+        how = "the ledger's prisms, clipped at the plane"
         if request.style == "trim":
-            # Where the plane falls inside the bounding box is the only cheap
-            # estimate of how much goes away.
-            # ponytail: assumes the part is spread evenly either side of the cut,
-            # which a tray is not. Directional, not dimensional.
-            kept = self._trim_fraction(document, request)
-            document.bodies = [volume * kept for volume in document.bodies]
+            axis, offset = self._cut_axis_and_offset(document, request.tool)
+            # The schema's promise: `remove_positive` discards the side the
+            # plane's normal points at, so what is kept is what lies below it.
+            ratios = self._trim_ratios(document, axis, offset,
+                                       keep_below=request.remove_positive)
+            if ratios is None:
+                how = "estimated from where the plane falls in the bounding box"
+                kept = self._trim_fraction(document, request)
+                ratios = dict.fromkeys(range(len(document.bodies)), kept)
+            document.bodies = [volume * ratios.get(index, 1.0)
+                               for index, volume in enumerate(document.bodies)]
+            self._clip_slabs(document, axis, offset,
+                             keep_below=request.remove_positive)
         elif request.style == "split" and document.bodies:
             half = document.bodies[0] / 2
             document.bodies = [half, half, *document.bodies[1:]]
@@ -1717,7 +1763,7 @@ class MockBackend(Backend):
                 "tool": request.tool,
                 "style": request.style,
                 "remove_positive": request.remove_positive,
-                "volume_from": "estimated from where the plane falls in the bounding box",
+                "volume_from": how,
             },
         )
         document.features.append(feature)
@@ -1725,10 +1771,66 @@ class MockBackend(Backend):
         self._record("split", name=name, style=request.style)
         return _feature_info(feature)
 
+    def _cut_axis_and_offset(self, document: _Document, tool: str) -> tuple[int, float]:
+        """Which axis a cutting plane is perpendicular to, and where it sits.
+
+        A work plane's axis comes from the plane it was built on, not from its
+        own name. Reading the name meant every work plane not called xy, xz or
+        yz fell through to the default and was treated as horizontal, so a part
+        trimmed at a plane offset from YZ was cut across Z instead of X.
+        """
+        base, offset = document.work_planes.get(tool, (tool, 0.0))
+        return self._PLANE_AXIS.get(base.split(":")[0], 2), offset
+
+    def _trim_ratios(self, document: _Document, axis: int, cut: float,
+                     *, keep_below: bool) -> dict[int, float] | None:
+        """Per body, the share of its ledger volume the trim keeps.
+
+        A share rather than the volume itself, because the ledger knows about
+        prisms and not about the fillets, chamfers and drafts that have since
+        adjusted the total. Scaling by the share keeps those and fixes the thing
+        that was actually wrong: where the share came from.
+
+        It used to come from the bounding box, on the assumption that a part is
+        spread evenly either side of the cut. A base slab with a boss on it is
+        not, and the error is not small -- 11.66 cm^3 kept where the answer is
+        20.8. Returns None when the ledger has nothing to say, which is a
+        revolve, a sweep or a loft, and then the old estimate stands.
+        """
+        if not document.slabs:
+            return None
+        whole: dict[int, float] = {}
+        kept: dict[int, float] = {}
+        for slab in document.slabs:
+            whole[slab.body] = whole.get(slab.body, 0.0) + slab.volume
+            piece = slab.clipped(axis, cut, keep_below)
+            if piece is not None:
+                kept[slab.body] = kept.get(slab.body, 0.0) + piece.volume
+        ratios: dict[int, float] = {}
+        for body, total in whole.items():
+            if total <= 0:
+                return None
+            ratios[body] = min(max(kept.get(body, 0.0) / total, 0.0), 1.0)
+        return ratios
+
+    def _clip_slabs(self, document: _Document, axis: int, cut: float,
+                    *, keep_below: bool) -> None:
+        """Take the trimmed-off half out of the ledger as well as the total.
+
+        Otherwise every later cut is measured against the part as it was before
+        the trim -- which is the mistake the shell made for as long as it left
+        the ledger alone, and it cost a 26x over-count on the enclosure.
+        """
+        survivors: list[_Slab] = []
+        for slab in document.slabs:
+            piece = slab.clipped(axis, cut, keep_below)
+            if piece is not None:
+                survivors.append(piece)
+        document.slabs = survivors
+
     def _trim_fraction(self, document: _Document, request: SplitRequest) -> float:
-        """What share of the volume a trim keeps."""
-        axis = self._PLANE_AXIS.get(request.tool.split(":")[0], 2)
-        offset = document.work_planes.get(request.tool, (None, 0.0))[1]
+        """What share of the volume a trim keeps, when the ledger cannot say."""
+        axis, offset = self._cut_axis_and_offset(document, request.tool)
         if not document.bounds:
             return 0.5
         low, high = document.bounds[axis], document.bounds[axis + 3]
@@ -2292,6 +2394,17 @@ def _loft_volume(areas: Sequence[float], offsets: Sequence[float]) -> float:
         gap = abs(far - near)
         total += gap / 3.0 * (first + second + math.sqrt(max(first * second, 0.0)))
     return total
+
+
+def _outline_area(points: Sequence[tuple[float, float]]) -> float:
+    """A closed polygon's area, by the shoelace, unsigned."""
+    if len(points) < 3:
+        return 0.0
+    total = 0.0
+    for index, current in enumerate(points):
+        following = points[(index + 1) % len(points)]
+        total += current[0] * following[1] - following[0] * current[1]
+    return abs(total) / 2
 
 
 def _net_area(sketch: _Sketch, loops: Sequence[Sequence[str]]) -> float:

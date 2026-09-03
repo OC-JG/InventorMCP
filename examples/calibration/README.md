@@ -38,9 +38,9 @@ the operation being measured.
 | `coil_spring` | `coil` | +3.3377 cm³ | +3.3310 cm³ | 0.2% |
 | `drafted_block` | `draft` | −4.7167 cm³ | −4.6178 cm³ | 2.1% |
 | `engraved_plate` | `emboss` | −0.0662 cm³ | −0.0803 cm³ | 17.5% |
-| `stepped_split` | `split` | −15.5429 cm³ | −20.8000 cm³ | *see below* |
-| `stepped_split_negative` | `split` | −11.6571 cm³ | −6.4000 cm³ | *see below* |
-| `origin_plane_split` | `split` | −19.4286 cm³ | not yet run | |
+| `stepped_split` | `split` | −6.4000 cm³ | −20.8000 cm³ | *see below* |
+| `stepped_split_negative` | `split` | −20.8000 cm³ | −6.4000 cm³ | *see below* |
+| `origin_plane_split` | `split` | −8.0000 cm³ | −19.2000 cm³ | *see below* |
 
 Measured on Inventor 2027.1, 2026-09-03. Three of the four tolerances in
 `PREDICTED` were set from that run, each deliberately looser than the run alone
@@ -85,13 +85,26 @@ could break.
   which case both backends are right about the flag and disagree about the
   plane, and the fix belongs in the simulator instead.
 
-  **`origin_plane_split` is the discriminator.** An origin plane has no
-  construction to get wrong: XY's normal is +Z by definition, so there is no
-  offset plane left in the picture to have been built backwards. The part
-  straddles z = 0, with 19.2 cm³ below and 8.0 above, and is trimmed by XY
-  itself with `remove_positive: true`. Removing the 19.2 exonerates the offset
-  plane and puts the inversion at the call site. Removing the 8.0 means the
-  offset plane was the problem all along and the call site was always right.
+  **`origin_plane_split` settled it.** An origin plane has no construction to
+  get wrong: XY's normal is +Z by definition, so there was no offset plane left
+  in the picture to have been built backwards. The part straddles z = 0 with
+  19.2 cm³ below and 8.0 above, trimmed by XY itself with `remove_positive:
+  true`, and Inventor removed the **19.2 below**. That exonerates the offset
+  plane and puts the inversion at the call site: Inventor's second argument to
+  `SplitPart` says which side to *keep*, where the code read it as which side to
+  remove. Both halves of the fault are now fixed — the flag is inverted where it
+  reaches Inventor, and the simulator's share comes from the ledger instead of
+  the bounding box — and the numbers in the table above are what the run that
+  found all this reported, so **the next run should disagree with them**: the
+  simulator column is already the corrected one, and Inventor's should move to
+  match it.
+
+  The worst part of that run was not the bug. On `origin_plane_split` the
+  simulator said 19.4286 and Inventor said 19.2 — **1.2% apart, while keeping
+  opposite halves of the part**. Any tolerance in the table would have passed
+  it. Comparing volumes catches a cut that missed and a fillet on the wrong
+  edge, and is blind to a cut that took the right amount off the wrong side
+  whenever the two halves are near enough in size.
 
 `coil_spring` and `engraved_plate` are not tractable here: a helix's turns
 interfere in a way Pappus does not model, and a glyph's area is whatever the

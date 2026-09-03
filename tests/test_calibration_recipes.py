@@ -133,18 +133,34 @@ class TestTheTwoThatCanBeWorkedOut:
         assert (removed_estimate - removed_truth) / removed_truth == pytest.approx(
             0.0214, abs=5e-4)
 
-    def test_the_stepped_split_keeps_a_share_of_the_box_not_of_the_part(self):
-        """19.2 of base and 1.6 of boss is 20.8 kept; 1.2/2.8 of 27.2 is 11.657."""
+    def test_the_stepped_split_keeps_the_part_and_not_a_share_of_the_box(self):
+        """19.2 of base and 1.6 of boss is 20.8 kept, which is now what it says.
+
+        It used to keep 1.2/2.8 of 27.2, or 11.657: the share of the *bounding
+        box* below the plane, on the assumption that a part is spread evenly
+        either side of a cut. A base slab with a boss on it is not, and 44% is
+        not a rounding error. The trim reads the ledger of prisms now, so a
+        prismatic part comes out exact.
+        """
         volumes = self.volume_after("stepped_split")
         assert volumes[3] == pytest.approx(27.2), "base plus boss, before the cut"
         truth = 6.0 * 4.0 * 0.8 + 2.0 * 2.0 * 0.4
         assert truth == pytest.approx(20.8)
-        estimate = volumes[-1]
-        assert estimate == pytest.approx(27.2 * (1.2 / 2.8), abs=5e-4)
-        assert estimate == pytest.approx(11.6571, abs=5e-4)
-        # Low by about 44%, which is the ponytail on `_trim_fraction` stated as
-        # a number rather than as a worry.
-        assert (truth - estimate) / truth == pytest.approx(0.4396, abs=5e-4)
+        assert volumes[-1] == pytest.approx(truth, abs=5e-6)
+        # And the old answer is gone rather than coincidentally close.
+        assert volumes[-1] != pytest.approx(27.2 * (1.2 / 2.8), abs=1e-3)
+
+    def test_the_other_side_of_the_same_cut_is_the_complement(self):
+        """The two halves have to add up, or the trim is inventing material."""
+        keeps_below = self.volume_after("stepped_split")[-1]
+        keeps_above = self.volume_after("stepped_split_negative")[-1]
+        assert keeps_below + keeps_above == pytest.approx(27.2, abs=5e-6)
+
+    def test_the_origin_plane_cut_keeps_what_lies_under_the_origin(self):
+        """A part straddling z = 0: 19.2 below it, 8.0 above, and no work plane."""
+        volumes = self.volume_after("origin_plane_split")
+        assert volumes[-2] == pytest.approx(27.2)
+        assert volumes[-1] == pytest.approx(19.2, abs=5e-6)
 
 
 def test_the_readme_quotes_the_numbers_the_simulator_produces():

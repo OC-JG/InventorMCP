@@ -2700,7 +2700,22 @@ class ComBackend(Backend):
         with self._batch(document), self._translate_errors("Split"):
             try:
                 if request.style == "trim":
-                    feature = features.SplitPart(tool, request.remove_positive)
+                    # Inverted, and measured rather than reasoned. Inventor's
+                    # second argument says which side to KEEP, where this read it
+                    # as which side to remove, so every trim threw away the half
+                    # the caller meant to keep -- and reported a volume that was
+                    # correct for the half it kept, so nothing raised.
+                    #
+                    # Established on 2026-09-03 by cutting one part three ways:
+                    # `remove_positive` true and false gave exactly complementary
+                    # results, so the flag does reach Inventor and does choose the
+                    # side; and the same cut made by the XY origin plane, whose
+                    # normal is +Z by definition and so cannot have been built
+                    # backwards, still kept the wrong half. That last one is what
+                    # rules out the alternative -- an offset work plane pointing
+                    # the other way -- and puts the fault here.
+                    # See defect 5 in docs/FEATURE_COVERAGE.md.
+                    feature = features.SplitPart(tool, not request.remove_positive)
                 elif request.style == "split":
                     feature = features.SplitBody(tool, component.SurfaceBodies.Item(1))
                 else:

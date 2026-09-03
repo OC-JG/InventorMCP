@@ -198,37 +198,48 @@ Each of these was hit while building real parts, and each passed
    as upside-down text that is not upside down. Anything checking its own work
    from a render can be misled; coordinates must be measured instead.
 
-5. **A `trim` split throws away the opposite side to the one documented.** The
+5. **A `trim` split threw away the opposite side to the one documented.**
+   *Fixed 2026-09-03, offline half verified, live half awaiting a run.* The
    schema says `remove_positive` discards "the side the plane's normal points
-   at", and the simulator does that. Inventor does the reverse. Measured on
-   2026-09-03 with `examples/calibration/stepped_split.json`: a 27.2 cm^3 part
-   cut at z = 12 with `remove_positive: true` should lose the 6.4 cm^3 above the
-   plane and keep 20.8. Inventor removed 20.8 and kept 6.4. Anything that trims
-   a part keeps the wrong half, and the volume it reports is right for the half
-   it kept, so nothing raises.
+   at". Inventor did the reverse: a 27.2 cm^3 part cut at z = 12 with
+   `remove_positive: true` should lose the 6.4 cm^3 above the plane, and it lost
+   the 20.8 below. Every trimmed part kept the wrong half, and the volume
+   reported was correct for the half it kept, so nothing raised.
 
-   The COM call is `SplitFeatures.SplitPart(tool, request.remove_positive)`.
-   Running the same cut both ways on 2026-09-03 settled the first question: with
-   the flag false Inventor removed 6.4 and kept 20.8, exactly complementary to
-   the true case, so **the flag does reach Inventor and does control the side**.
-   Its effect is simply the reverse of what the schema promises.
+   Three runs of one part found it and then narrowed it. True and false gave
+   exactly complementary results, so the flag reached Inventor and did choose
+   the side. The same cut made by the XY origin plane -- whose normal is +Z by
+   definition and so cannot have been built backwards -- still kept the wrong
+   half, which ruled out the remaining alternative that an offset work plane
+   pointed the other way. That put the fault at the call site:
+   `SplitFeatures.SplitPart`'s second argument says which side to *keep*, and
+   the code passed it which side to remove. It is now inverted there.
 
-   Two explanations still fit that, and they call for opposite fixes in
-   different files:
+   The simulator was wrong too, differently, and is also fixed. Its share of
+   the volume came from where the plane fell in the *bounding box*, on the
+   assumption that a part is spread evenly either side of a cut -- 11.657 cm^3
+   kept where the answer is 20.8. It now clips the ledger's prisms at the plane,
+   which is exact for a prismatic part, and takes the trimmed-off half out of
+   the ledger so later cuts are not measured against a part that no longer
+   exists. Where the ledger cannot answer -- a revolve, a sweep, a loft -- the
+   old estimate stands and says so.
 
-   * Inventor's second argument means *keep* the positive side where this code
-     reads it as *remove* it, and the fix is one inversion in the COM backend;
-   * or the offset work plane's normal points the other way, in which case both
-     backends are right about the flag and disagree about the plane, and the fix
-     is in the simulator's `_trim_fraction`.
+   A third thing was wrong on the way past: a work plane's axis was read from
+   its *name* rather than from the plane it was built on, so every work plane
+   not called xy, xz or yz was treated as horizontal. A part trimmed at a plane
+   offset from YZ was cut across Z instead of X.
 
-   `origin_plane_split.json` is the discriminator, because an origin plane has
-   no construction to get wrong: XY's normal is +Z by definition. A part
-   straddling z = 0, 19.2 cm^3 below and 8.0 above, trimmed by XY itself with
-   `remove_positive: true`. Removing the 19.2 below exonerates the offset plane
-   and puts the inversion at the call site; removing the 8.0 above means the
-   offset plane was the problem all along.
+   `PREDICTED["split"]` stays at its placeholder until a live run confirms the
+   two now agree.
 
-   Until then `PREDICTED["split"]` stays at its placeholder, because the 25.3%
-   its run reported is the simulator's wrong amount compounded with Inventor's
-   wrong side and means nothing on its own.
+6. **The divergence check cannot see a cut that took the right amount off the
+   wrong side.** Found while fixing defect 5, and worth more than it. On
+   `origin_plane_split` the simulator reported 19.4286 cm^3 removed and Inventor
+   19.2 -- 1.2% apart, while keeping *opposite halves of the part*. Every
+   tolerance in `PREDICTED` would have passed it, because the comparison is of
+   volumes moved and nothing else. It catches a cut that missed and a fillet on
+   the wrong edge; it is blind to a mirrored outcome whenever the two halves are
+   near enough in size. Fixing it means comparing something that has a
+   direction -- the centre of mass, or the bounding box -- and `measure` already
+   returns both. No fix yet: worth doing before anything else relies on the
+   check for an operation that chooses a side.

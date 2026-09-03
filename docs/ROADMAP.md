@@ -222,11 +222,20 @@ has never had, one of which had been quietly refusing every `shell` with
       0.20 and 0.40 — each looser than its run alone would justify, for the
       reasons recorded beside the table. The drafted block was a prediction and
       Inventor matched it to four decimals: 4.6178 against a derived 4.6179.
-      **`split` is not calibrated and should not be**: its run found Inventor
-      trimming the opposite side to the one the schema documents, which is
-      defect 5 in `FEATURE_COVERAGE.md`, and a tolerance drawn from it would
-      enshrine an inversion. Settling that needs one more run —
-      `stepped_split_negative` — on **the owner's machine**.
+      **`split` is not calibrated yet**, and the reason turned out to be a bug
+      rather than a missing number: Inventor was trimming the opposite side to
+      the one the schema documents, and the simulator was taking the right side
+      but the wrong amount. Three runs of one part narrowed it to the call site
+      and both halves are fixed — defect 5 in `FEATURE_COVERAGE.md`. One more
+      run on **the owner's machine** confirms the two now agree, and then this
+      entry can be as tight as an extrude's.
+- [ ] **Give the divergence check a sense of direction** — defect 6, found on
+      the way. It compares volumes moved and nothing else, so a cut that took
+      the right amount off the wrong side reads as a pass: the run that exposed
+      the split inversion was 1.2% apart while keeping the opposite half of the
+      part. `measure` already returns the centre of mass and the bounding box,
+      so the material is there. Worth doing before anything else leans on the
+      check for an operation that chooses a side.
 - [x] **Drift tests are the rule** (restructure 2). *(2026-09-03.)* Written
       down in `DECISIONS.md` as "a fact stated twice needs a test that the two
       agree", with the six drifts that earned it and the corollary that the
