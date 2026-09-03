@@ -257,9 +257,41 @@ Each is one request type, one abstract method, two implementations, roughly
 350 lines across the same five files. Ordered by how often the lack of it has
 actually bitten.
 
-- [ ] **Work axis and work point.** `AxisSpec` already accepts `work_axis`;
-      nothing creates one, so a circular pattern can only turn about an origin
-      axis. Unblocks every off-centre bolt circle.
+- [x] **Work axis and work point.** *(2026-09-03. Simulator measured and
+      tested; the three COM calls are unmeasured -- see below.)* `AxisSpec`
+      already accepted `work_axis` and nothing created one.
+
+      **The reason given here was wrong, and checking it was worth more than
+      taking it.** This item read "so a circular pattern can only turn about an
+      origin axis", which is false: `resolve_axis` has always resolved named
+      sketch lines and the COM backend passes whatever it resolves straight to
+      `AxisEntity`, so an off-centre bolt circle was already buildable via a
+      throwaway sketch on a *perpendicular* plane carrying a line in that
+      plane's own coordinates. That was measured before anything was written,
+      and it builds clean.
+
+      The real reason is geometric and sharper: a circular pattern turns about
+      an axis perpendicular to the face it patterns, a sketch line lies *in* its
+      own sketch plane, and so no line drawn on a plate's face can ever be that
+      plate's bolt-circle axis. The workaround therefore asks the caller to do
+      the axis mapping in their head, on a plane they are not otherwise using.
+      `work_axis` with `kind: "normal_to_plane"` says it directly, in the
+      plane's own coordinates, with `at` carrying expressions like every other
+      number here.
+
+      Probing the false claim also turned up **defect 7**: the recipe that gets
+      this wrong -- a pattern axis lying in the patterned face's own plane --
+      passes `check_recipe`, passes `validate_recipe` and returns `ok: true`
+      from the simulator, because `_repeat` counts occurrences without ever
+      reading the axis. `work_axis` makes that mistake avoidable; it does not
+      make it detectable, and the note in `FEATURE_COVERAGE.md` says what would.
+- [ ] **Measure the work axis against a live Inventor.** Split from the item
+      above rather than left inside it, because a tick that covers unmeasured
+      COM would be the kind of claim this file exists not to make.
+      `WorkPoints.AddByPoint`, `WorkAxes.AddByTwoPoints` and
+      `WorkAxes.AddByLine` have never executed; `INVENTOR_SETUP.md` has the
+      order to check them in, and the test that matters is not "did it run" but
+      whether the bolt circle moves when the driving parameter does.
 - [ ] **`hole` gains `bodies`**, the multi-body targeting `extrude` already
       has.
 - [ ] **A both-directions extent on `hole`**, or a warning when a through

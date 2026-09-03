@@ -360,7 +360,8 @@ Direction = Literal["positive", "negative", "symmetric"]
 #: drilled into the part, and the backend can see which side that is.
 HoleDirection = Literal["auto", "positive", "negative"]
 PlaneRef = str  # "xy" | "xz" | "yz" | "face:<handle>" | "plane:<name>" | a work-plane name
-AxisRef = str  # "x" | "y" | "z" | sketch-entity name | edge handle
+AxisRef = str  # "x" | "y" | "z" | sketch-entity name | work-axis name | edge handle
+PointRef = str  # a work-point name
 
 
 class OpBase(Base):
@@ -591,7 +592,12 @@ class RectangularPatternOp(OpBase):
 class CircularPatternOp(OpBase):
     op: Literal["circular_pattern"] = "circular_pattern"
     features: list[str] = Field(default_factory=list)
-    axis: AxisRef = "z"
+    axis: AxisRef = Field(
+        "z",
+        description="'x'|'y'|'z', a named work axis, or the name of a sketch line. A bolt "
+        "circle away from the origin wants a `work_axis`: the axis has to stand "
+        "perpendicular to the face being patterned, and a sketch line never can.",
+    )
     count: CountSpec = Field(4, description="1 to 1000; may be an expression.")
     angle: ValueSpec = "360 deg"
     fitted: bool = Field(True, description="Spread occurrences evenly over `angle`.")
@@ -610,6 +616,85 @@ class WorkPlaneOp(OpBase):
     second: PlaneRef | None = Field(None, description="Second plane for a midplane.")
     offset: ValueSpec = 10.0
     angle: ValueSpec = "45 deg"
+
+
+class WorkPointOp(OpBase):
+    """A named point in space, placed in a plane's own 2D coordinates.
+
+    It exists to be referred to: a work axis through two of them, or a
+    dimension measured to one. `at` and `offset` are expressions like every
+    other number here, so a point put at `[bolt_x, bolt_y]` moves when the
+    parameter does.
+    """
+
+    op: Literal["work_point"] = "work_point"
+    plane: PlaneRef = Field(
+        "xy", description="Plane the point is placed on: 'xy' | 'xz' | 'yz' or a named work plane."
+    )
+    at: Point2D = Field([0.0, 0.0], description="Where on that plane, in the plane's coordinates.")
+    offset: ValueSpec = Field(
+        0.0, description="Lift the point off the plane along its normal."
+    )
+
+
+class WorkAxisOp(OpBase):
+    """An axis in space, for a circular pattern that does not turn about the origin.
+
+    A bolt circle centred anywhere but the origin needs one. The reason is
+    geometric rather than incidental: a `circular_pattern` turns about an axis
+    perpendicular to the face it patterns, a sketch line lies *in* its own
+    sketch plane, and so no line drawn on a plate's face can ever be that
+    plate's bolt-circle axis. Before this operation the only way round it was a
+    throwaway sketch on a perpendicular plane carrying a line in that plane's
+    coordinates -- which works, and asks the caller to do the axis mapping in
+    their head.
+
+    `normal_to_plane` is the bolt-circle case and the default: perpendicular to
+    a plane, through a point given in that plane's coordinates. The other two
+    name geometry that already exists -- two work points, or a sketch line.
+    """
+
+    op: Literal["work_axis"] = "work_axis"
+    kind: Literal["normal_to_plane", "two_points", "sketch_line"] = "normal_to_plane"
+    plane: PlaneRef = Field(
+        "xy", description="For `normal_to_plane`: the plane the axis stands perpendicular to."
+    )
+    at: Point2D = Field(
+        [0.0, 0.0],
+        description="For `normal_to_plane`: where the axis crosses that plane, in its coordinates.",
+    )
+    points: list[PointRef] = Field(
+        default_factory=list,
+        description="For `two_points`: exactly two work-point names the axis runs through.",
+    )
+    line: str | None = Field(
+        None, description="For `sketch_line`: the name of a sketch line to lie along."
+    )
+    sketch: str | None = Field(
+        None, description="For `sketch_line`: which sketch holds it; defaults to the most recent."
+    )
+
+    @model_validator(mode="after")
+    def _kind_has_what_it_needs(self) -> "WorkAxisOp":
+        """Refuse a work axis whose kind was given without the geometry it names.
+
+        A `two_points` axis with no points, or a `sketch_line` with no line,
+        would otherwise fall back to the `normal_to_plane` default and build an
+        axis somewhere nobody asked for -- the quiet wrong answer this schema
+        exists to refuse.
+        """
+        if self.kind == "two_points" and len(self.points) != 2:
+            raise ValueError(
+                f"A 'two_points' work axis needs exactly two work-point names, "
+                f"got {len(self.points)}."
+            )
+        if self.kind == "sketch_line" and not self.line:
+            raise ValueError("A 'sketch_line' work axis needs `line` set to a named sketch line.")
+        if self.kind != "two_points" and self.points:
+            raise ValueError(f"`points` only means something on a 'two_points' axis, not {self.kind!r}.")
+        if self.kind != "sketch_line" and self.line:
+            raise ValueError(f"`line` only means something on a 'sketch_line' axis, not {self.kind!r}.")
+        return self
 
 
 class ThreadOp(OpBase):
@@ -772,6 +857,8 @@ Operation = Annotated[
         CircularPatternOp,
         MirrorOp,
         WorkPlaneOp,
+        WorkPointOp,
+        WorkAxisOp,
         ThreadOp,
         EmbossOp,
         DraftOp,

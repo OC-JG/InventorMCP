@@ -250,6 +250,42 @@ afternoon:
   the measurement fails, and the measured axes are reported on every sketch
   result — `live_smoke.py` prints them.
 
+## Not measured at all: work points and work axes
+
+Everything else in this file was learned by running against a real Inventor.
+This section is the exception, and is kept separate for that reason: `work_point`
+and `work_axis` were written on 2026-09-03 in a session with no Inventor to
+reach, so **three COM calls in `backend/com/backend.py` have never executed**.
+The simulator side is measured and tested; the live side is a proposal.
+
+What a live run has to confirm, in this order:
+
+1. **`WorkPoints.AddByPoint(sketchPoint)`** — that it exists, takes a sketch
+   point, and does not need a second `Construction` argument. Everything else
+   here depends on it.
+2. **`WorkAxes.AddByTwoPoints(first, second)`** — that it takes two
+   `WorkPoint` objects rather than transient `Point`s.
+3. **`WorkAxes.AddByLine(sketchLine)`** — that a sketch line is acceptable
+   where the docs say `Line`.
+
+Then the thing worth checking beyond "did it run": build
+`{"op": "work_axis", "plane": "xy", "at": [30, 0]}` on a plate, pattern a hole
+about it, **and change the driving parameter**. The axis is built from two work
+points that share the caller's expressions, so the bolt circle should move with
+the parameter. If it does not, the expressions are not reaching the carrier
+sketch's dimensions and the feature is parametric in name only.
+
+Why it is built the way it is, rather than the shorter way: the obvious
+implementation is to offset two origin planes and intersect them
+(`WorkAxes.AddByTwoPlanes`), which is fewer calls and uses only primitives this
+file has already verified. It was rejected because it needs the sign of an
+origin plane's normal, which nothing here has measured, and **a wrong sign there
+builds a part that looks right** — the same failure as the `trim` inversion in
+defect 5, which survived three runs precisely because the volume was correct for
+the half it kept. The carrier-sketch route instead puts every position through
+`build_sketch`, which measures a sketch's own axes rather than deducing them
+from a plane's name, so a call that behaves differently raises instead.
+
 ## Known-shaky areas
 
 These are the parts of the COM backend most likely to need adjustment, and why:

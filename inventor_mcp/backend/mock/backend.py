@@ -71,7 +71,9 @@ from ..base import (
     SweepRequest,
     ThreadRequest,
     TopoInfo,
+    WorkAxisRequest,
     WorkPlaneRequest,
+    WorkPointRequest,
 )
 
 #: Plane name -> (axis index and sign for sketch u, sketch v and the plane
@@ -114,6 +116,18 @@ def map3d(plane: str, u: float, v: float, w: float) -> tuple[float, float, float
 
 def plane_normal(plane: str) -> tuple[float, float, float]:
     return _PLANES[plane][1]
+
+
+def _unit_vector(vector: Sequence[float]) -> tuple[float, float, float] | None:
+    """*vector* scaled to length one, or None if it has no length to scale.
+
+    A degenerate direction is returned rather than raised on, because the
+    caller knows which two things coincided and can say so; this does not.
+    """
+    length = math.sqrt(sum(component * component for component in vector))
+    if length < 1e-9:
+        return None
+    return tuple(component / length for component in vector)  # type: ignore[return-value]
 
 
 def to_sketch(plane: str, point: Sequence[float]) -> tuple[float, float, float]:
@@ -311,6 +325,15 @@ class _Document:
     sketches: list[_Sketch] = field(default_factory=list)
     features: list[_Feature] = field(default_factory=list)
     work_planes: dict[str, tuple[str, float]] = field(default_factory=dict)
+    #: Work points by name, as a model-space position in cm.
+    work_points: dict[str, tuple[float, float, float]] = field(default_factory=dict)
+    #: Work axes by name, as a model-space point on the axis and a unit
+    #: direction. Both are kept because a circular pattern needs the position
+    #: and a revolve needs the direction, and an axis that only knew one of them
+    #: would answer half the questions asked of it.
+    work_axes: dict[str, tuple[tuple[float, float, float], tuple[float, float, float]]] = field(
+        default_factory=dict
+    )
     topology: list[_Topo] = field(default_factory=list)
     bounds: list[float] | None = None  # xmin, ymin, zmin, xmax, ymax, zmax
     #: The signed prisms the part is made of, in creation order: what extrudes
@@ -2162,6 +2185,122 @@ class MockBackend(Backend):
         document.features.append(feature)
         self._record("work_plane", name=name)
         return _feature_info(feature)
+
+    def _base_plane_of(self, document: _Document, reference: str,
+                       what: str) -> tuple[str, float]:
+        """Which origin plane a bare plane reference means, and its offset.
+
+        The same rule `_plane_and_offset` applies to a sketch, for the callers
+        that have a plane name and no `SketchPlan` to carry it.
+        """
+        named = reference.split(":")[0]
+        if named in _PLANES:
+            return named, 0.0
+        if reference in document.work_planes:
+            return document.work_planes[reference]
+        raise FeatureError(
+            f"Unknown plane {reference!r} for {what}.",
+            hint="Use 'xy', 'xz', 'yz' or the name of a work plane created earlier.",
+        )
+
+    def work_point(self, doc_id: str, request: WorkPointRequest) -> FeatureInfo:
+        document = self._doc(doc_id)
+        base, plane_offset = self._base_plane_of(document, request.plane, "a work point")
+        name = self._feature_name(document, request.name, "workpoint")
+        u, v = (component.value for component in request.at)
+        offset = (request.offset.value if request.offset else 0.0) + plane_offset
+        position = map3d(base, u, v, offset)
+        document.work_points[name] = position
+        feature = _Feature(
+            id=self._next("feat"),
+            name=name,
+            kind="work_point",
+            detail={
+                "plane": request.plane,
+                "at": [component.as_dict() for component in request.at],
+                "offset": request.offset.as_dict() if request.offset else None,
+                "position_cm": [round(value, 6) for value in position],
+            },
+        )
+        document.features.append(feature)
+        self._record("work_point", name=name)
+        return _feature_info(feature)
+
+    def work_axis(self, doc_id: str, request: WorkAxisRequest) -> FeatureInfo:
+        document = self._doc(doc_id)
+        name = self._feature_name(document, request.name, "workaxis")
+        origin, direction, described = self._axis_geometry(document, request)
+        document.work_axes[name] = (origin, direction)
+        feature = _Feature(
+            id=self._next("feat"),
+            name=name,
+            kind="work_axis",
+            detail={
+                "kind": request.kind,
+                "through": [round(value, 6) for value in origin],
+                "direction": [round(value, 6) for value in direction],
+                **described,
+            },
+        )
+        document.features.append(feature)
+        self._record("work_axis", name=name)
+        return _feature_info(feature)
+
+    def _axis_geometry(
+        self, document: _Document, request: WorkAxisRequest
+    ) -> tuple[tuple[float, float, float], tuple[float, float, float], dict[str, Any]]:
+        """A point on the axis, its unit direction, and what to say about it."""
+        if request.kind == "normal_to_plane":
+            base, plane_offset = self._base_plane_of(document, request.plane, "a work axis")
+            u, v = (component.value for component in request.at)
+            origin = map3d(base, u, v, plane_offset)
+            return origin, plane_normal(base), {
+                "plane": request.plane,
+                "at": [component.as_dict() for component in request.at],
+            }
+
+        if request.kind == "two_points":
+            positions = []
+            for point_name in request.points:
+                if point_name not in document.work_points:
+                    known = ", ".join(sorted(document.work_points)) or "(none)"
+                    raise FeatureError(
+                        f"No work point named {point_name!r} to run a work axis through.",
+                        hint=f"Work points in this part: {known}.",
+                    )
+                positions.append(document.work_points[point_name])
+            origin, other = positions
+            direction = _unit_vector(tuple(b - a for a, b in zip(origin, other)))
+            if direction is None:
+                raise FeatureError(
+                    f"Work points {request.points[0]!r} and {request.points[1]!r} are at the "
+                    "same place, so they do not define an axis.",
+                    hint="Move one of them, or give the axis a plane and a point instead.",
+                )
+            return origin, direction, {"points": list(request.points)}
+
+        # sketch_line
+        sketch = document.find_sketch(request.sketch) if request.sketch else (
+            document.sketches[-1] if document.sketches else None
+        )
+        if sketch is None:
+            raise FeatureError("There is no sketch to take a work axis from.")
+        lines = [p for p in sketch.plan.resolve_label(request.line or "") if isinstance(p, PLine)]
+        if not lines:
+            named = ", ".join(sorted(sketch.plan.labels)) or "(none)"
+            raise FeatureError(
+                f"Sketch {sketch.name!r} has no line named {request.line!r}.",
+                hint=f"Named entities in that sketch: {named}.",
+            )
+        line = lines[0]
+        start = map3d(sketch.base_plane, line.start[0], line.start[1], sketch.offset)
+        end = map3d(sketch.base_plane, line.end[0], line.end[1], sketch.offset)
+        direction = _unit_vector(tuple(b - a for a, b in zip(start, end)))
+        if direction is None:
+            raise FeatureError(
+                f"Sketch line {request.line!r} has zero length, so it does not define an axis."
+            )
+        return start, direction, {"sketch": sketch.name, "line": request.line}
 
     def thread(self, doc_id: str, request: ThreadRequest) -> FeatureInfo:
         document = self._doc(doc_id)

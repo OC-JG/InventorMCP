@@ -157,6 +157,13 @@ patterns    {"op":"rectangular_pattern","features":["Hole1"],"axis1":"x","count1
             {"op":"circular_pattern","features":["Hole1"],"axis":"z","count":6}
             {"op":"mirror","features":["Rib"],"plane":"yz"}
 work_plane  {"op":"work_plane","name":"Top","kind":"offset","base":"xy","offset":"height"}
+work_axis   {"op":"work_axis","name":"BossAxis","plane":"xy","at":["boss_x","boss_y"]}
+             A bolt circle anywhere but the origin needs one. A sketch line
+             cannot serve: the axis has to stand perpendicular to the face being
+             patterned, and a sketch line lies flat in its own plane. Then
+             `{"op":"circular_pattern","axis":"BossAxis",...}`.
+             Also `kind":"two_points"` with `points`, or `"sketch_line"` with `line`.
+work_point  {"op":"work_point","name":"Datum","plane":"xy","at":[30,20],"offset":5}
 material    {"op":"material","material":"Aluminum 6061"}
 
 SELECTORS pick edges and faces without magic indices:

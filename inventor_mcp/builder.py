@@ -43,7 +43,9 @@ from .backend.base import (
     SplitRequest,
     SweepRequest,
     ThreadRequest,
+    WorkAxisRequest,
     WorkPlaneRequest,
+    WorkPointRequest,
 )
 from .errors import FeatureError, ParameterError, RecipeError
 from .dfm.freeze import guard_for_recipe
@@ -75,7 +77,9 @@ from .schema import (
     SketchOp,
     SweepOp,
     ThreadOp,
+    WorkAxisOp,
     WorkPlaneOp,
+    WorkPointOp,
 )
 from .session import DocumentContext, Session
 from .units import Quantity
@@ -83,6 +87,18 @@ from .units import Quantity
 
 def _driven(resolved: Resolved | None) -> Driven | None:
     return None if resolved is None else Driven(resolved.expression, resolved.value)
+
+
+def _driven_pair(resolved: Sequence[Resolved]) -> tuple[Driven, Driven]:
+    """A two-component point that keeps each component's expression.
+
+    ``Resolver.point2d`` throws the expressions away, which is the right answer
+    for sketch geometry the backend places by coordinate. Work geometry is
+    referred to by later operations, so `[bolt_x, bolt_y]` has to reach Inventor
+    as those two parameters and not as the numbers they came to.
+    """
+    first, second = resolved
+    return (Driven(first.expression, first.value), Driven(second.expression, second.value))
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +128,10 @@ def resolve_axis(context: DocumentContext, reference: str, sketch_hint: str | No
         return AxisSpec(kind="work_axis", value=token.lower())
     if token.startswith("edge:"):
         return AxisSpec(kind="edge", value=token.split(":", 1)[1])
+    # A work axis created here is checked before the sketches, because its name
+    # is an explicit reference to one thing while a sketch label is a search.
+    if token in context.work_axes:
+        return AxisSpec(kind="work_axis", value=token)
 
     candidates = [sketch_hint] if sketch_hint else []
     candidates += [name for name in reversed(list(context.plans)) if name != sketch_hint]
@@ -126,9 +146,11 @@ def resolve_axis(context: DocumentContext, reference: str, sketch_hint: str | No
                 return AxisSpec(kind="sketch_line", value=token, sketch=sketch_name)
 
     named = sorted({label for plan in context.plans.values() for label in plan.labels})
+    axes = ", ".join(sorted(context.work_axes)) or "(none)"
     raise FeatureError(
         f"Cannot resolve {reference!r} as an axis.",
-        hint="Use 'x', 'y', 'z', the name of a sketch line, or 'edge:<handle>'. "
+        hint="Use 'x', 'y', 'z', the name of a work axis or a sketch line, or "
+        f"'edge:<handle>'. Work axes created here: {axes}. "
         f"Named sketch entities available: {', '.join(named) or '(none)'}.",
     )
 
@@ -439,6 +461,31 @@ def _apply_one(session: Session, context: DocumentContext, op: Operation) -> dic
             name=op.name,
         )
         return _record(context, backend.work_plane(context.doc_id, request), "work_plane")
+
+    if isinstance(op, WorkPointOp):
+        request = WorkPointRequest(
+            plane=op.plane,
+            at=_driven_pair(resolver.coordinates(op.at, "work point")),
+            offset=_driven(resolver.length(op.offset, "work point offset")),
+            name=op.name,
+        )
+        info = backend.work_point(context.doc_id, request)
+        context.work_points.add(info.name)
+        return _record(context, info, "work_point")
+
+    if isinstance(op, WorkAxisOp):
+        request = WorkAxisRequest(
+            kind=op.kind,
+            plane=op.plane,
+            at=_driven_pair(resolver.coordinates(op.at, "work axis")),
+            points=list(op.points),
+            line=op.line,
+            sketch=op.sketch or (context.last_sketch if op.kind == "sketch_line" else None),
+            name=op.name,
+        )
+        info = backend.work_axis(context.doc_id, request)
+        context.work_axes.add(info.name)
+        return _record(context, info, "work_axis")
 
     if isinstance(op, ThreadOp):
         request = ThreadRequest(

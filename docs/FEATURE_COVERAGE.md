@@ -261,3 +261,28 @@ Each of these was hit while building real parts, and each passed
    before the cut -- and with the box unchanged its centre could not move, which
    is the only signal that distinguishes keeping this half from keeping the
    other.
+
+7. **A circular pattern about an axis lying in the patterned face's own plane
+   passes every check and means nothing.** Found on 2026-09-03 while checking
+   whether the roadmap's reason for wanting a work axis was true. A
+   `circular_pattern` turns about an axis perpendicular to the face it patterns;
+   a sketch line lies *in* its own sketch plane; so a plate sketched on XY with
+   its pattern axis given as a line drawn on XY is asking Inventor to revolve
+   the holes about an axis lying flat in the plate. `validate_recipe` reports no
+   findings, `check_recipe` reports no findings, and the simulator returns
+   `ok: true` with a plausible volume, because the mock's `_repeat` accounts for
+   occurrences by multiplying the seed's volume delta and never looks at the
+   axis at all.
+
+   The `work_axis` operation added the same day gives the correct thing to
+   reach for, and its schema and cheat-sheet entries both say why a sketch line
+   cannot serve. That makes the mistake avoidable, not detectable: the recipe
+   above is still accepted.
+
+   Fixing it properly means the simulator placing occurrences rather than
+   counting them, which is the `ponytail` already recorded on `_repeat` -- the
+   occurrence moves volume but records no prism, so the ledger knows about the
+   seed and not the copies. Placing them would also let the divergence check's
+   `centre_shift_mm` catch a pattern about the wrong axis, which is the same
+   signal that caught the `trim` inversion. That is a ledger-sized change and
+   is not attempted here.

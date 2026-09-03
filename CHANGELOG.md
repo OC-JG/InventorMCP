@@ -5,6 +5,38 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 ## Unreleased
 
 ### Added
+- **Work axis and work point.** A named axis in space, so a circular pattern can
+  turn about something other than an origin axis, and a named point to hang one
+  on. `kind: "normal_to_plane"` is the bolt-circle case and the default:
+  perpendicular to a plane, through a point given in that plane's own
+  coordinates, with `at` carrying expressions like every other number here.
+  `two_points` and `sketch_line` name geometry that already exists.
+
+  **The roadmap's reason for wanting this was wrong, and checking it first was
+  worth more than the feature.** It said a circular pattern could only turn
+  about an origin axis. It never could: `resolve_axis` has always resolved named
+  sketch lines, so an off-centre bolt circle was already buildable through a
+  throwaway sketch on a perpendicular plane -- measured before a line was
+  written, and it builds clean. The real reason is geometric: the axis must
+  stand perpendicular to the face being patterned, a sketch line lies flat in
+  its own sketch plane, and so the workaround asks the caller to do the axis
+  mapping in their head on a plane they are not otherwise using.
+
+  Probing that claim turned up **defect 7**: the recipe that gets it wrong --
+  a pattern axis lying in the patterned face's own plane -- passes
+  `check_recipe`, passes `validate_recipe`, and returns `ok: true` with a
+  plausible volume, because the simulator's `_repeat` counts occurrences and
+  never reads the axis. This operation makes the mistake avoidable, not
+  detectable; `docs/FEATURE_COVERAGE.md` records what detecting it would take.
+
+  **The COM side is unmeasured.** Written in a session with no Inventor to
+  reach, so `WorkPoints.AddByPoint`, `WorkAxes.AddByTwoPoints` and
+  `WorkAxes.AddByLine` have never executed. The simulator side is measured and
+  tested (32 tests). The shorter implementation -- offsetting two origin planes
+  and intersecting them -- was rejected for needing the sign of an origin
+  plane's normal, which nothing here has measured and which would fail the way
+  the `trim` inversion did: silently, with a part that looks right.
+  `docs/INVENTOR_SETUP.md` says what a live run must confirm and in what order.
 - **Draft, combine, split and boss.** Four more operations, and one that could not
   be built at all.
 

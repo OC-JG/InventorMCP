@@ -35,7 +35,18 @@ from ...errors import (
 )
 from ...expressions import referenced_parameters
 from ...geometry import profile_loops
-from ...plan import PArc, PCircle, PEllipse, PLine, PPoint, PText, PointRef, Ref, SketchPlan
+from ...plan import (
+    ORIGIN,
+    PArc,
+    PCircle,
+    PEllipse,
+    PLine,
+    PPoint,
+    PText,
+    PointRef,
+    Ref,
+    SketchPlan,
+)
 from ...units import from_internal, inventor_symbol, unit_from_inventor
 from ..base import (
     AppInfo,
@@ -45,6 +56,7 @@ from ..base import (
     CoilRequest,
     CircularPatternRequest,
     DocInfo,
+    Driven,
     ExportRequest,
     ExtrudeRequest,
     FeatureInfo,
@@ -67,7 +79,9 @@ from ..base import (
     SweepRequest,
     ThreadRequest,
     TopoInfo,
+    WorkAxisRequest,
     WorkPlaneRequest,
+    WorkPointRequest,
 )
 from . import holes
 from .constants import (
@@ -2865,6 +2879,95 @@ class ComBackend(Backend):
         return FeatureInfo(id=f"wp:{plane.Name}", name=str(plane.Name), kind="work_plane",
                            detail={"base": request.base})
 
+    # -- work points and axes ---------------------------------------------
+    #
+    # None of the three COM calls below has been run against a real Inventor:
+    # this feature was written in a cloud session with no Inventor to reach.
+    # `docs/INVENTOR_SETUP.md` lists what a live run has to confirm. The shape
+    # of the code is chosen so that being wrong is loud rather than quiet --
+    # every position comes from `build_sketch`, which measures the sketch's own
+    # axes instead of deducing them from a plane's name, so a call that does not
+    # exist raises and a call that does puts the geometry where the recipe said.
+    # The alternative -- offsetting origin planes and intersecting them -- needs
+    # the sign of an origin plane's normal, which nothing here has measured, and
+    # a wrong sign there would build a part that looked right.
+
+    def _carrier_point(self, doc_id: str, plane: str, at: Sequence[Driven],
+                       offset_expression: str | None, tag: str) -> Any:  # pragma: no cover
+        """A work point at *at* on *plane*, via a sketch that carries it.
+
+        The sketch is how the point stays parametric: its two driving dimensions
+        are the caller's own expressions, so the point moves when the parameter
+        does. ``AddByPoint`` is the only unmeasured step.
+        """
+        document = self._doc(doc_id)
+        component = document.ComponentDefinition
+        sketch_name = f"{tag}_carrier"
+        plan = SketchPlan(name=sketch_name, plane=plane)
+        if offset_expression:
+            plan.offset_expression = offset_expression
+        point = plan.add(PPoint("point1", construction=True), _CARRIER_LABEL)
+        u, v = at
+        for kind, driven, text in (("horizontal", u, (0.0, -0.4)), ("vertical", v, (-0.4, 0.0))):
+            if abs(driven.value) < 1e-9:
+                plan.constrain(
+                    "vertical_align" if kind == "horizontal" else "horizontal_align",
+                    ORIGIN, Ref(point.id),
+                )
+            else:
+                plan.dimension(kind, (ORIGIN, Ref(point.id)), driven.expression,
+                               abs(driven.value), text_offset=text)
+        self.build_sketch(doc_id, plan)
+        sketch = self._sketch(doc_id, sketch_name)
+        sketch_point = _named_sketch_point(sketch, _CARRIER_LABEL)
+        with self._translate_errors("Work point"):
+            work_point = component.WorkPoints.AddByPoint(sketch_point)
+            work_point.Visible = False
+        return work_point
+
+    def work_point(self, doc_id: str, request: WorkPointRequest) -> FeatureInfo:  # pragma: no cover
+        document = self._doc(doc_id)
+        offset = request.offset.expression if request.offset and request.offset.value else None
+        with self._batch(document):
+            point = self._carrier_point(
+                doc_id, request.plane, request.at, offset, request.name or "wpt"
+            )
+            if request.name:
+                point.Name = request.name
+        return FeatureInfo(id=f"wpt:{point.Name}", name=str(point.Name), kind="work_point",
+                           detail={"plane": request.plane,
+                                   "at": [component.as_dict() for component in request.at]})
+
+    def work_axis(self, doc_id: str, request: WorkAxisRequest) -> FeatureInfo:  # pragma: no cover
+        document = self._doc(doc_id)
+        component = document.ComponentDefinition
+        axes = component.WorkAxes
+        with self._batch(document), self._translate_errors("Work axis"):
+            if request.kind == "sketch_line":
+                sketch = self._sketch(doc_id, request.sketch or "")
+                axis = axes.AddByLine(_named_sketch_line(sketch, request.line or ""))
+            elif request.kind == "two_points":
+                first, second = (_named_work_point(component, name) for name in request.points)
+                axis = axes.AddByTwoPoints(first, second)
+            else:
+                # Perpendicular to the plane, through `at`: two points at the
+                # same place in the plane's coordinates, one on it and one on a
+                # parallel plane above it. The separation only has to be
+                # non-zero -- the direction is the plane's normal whatever it is
+                # -- so it is a literal, while `at` stays the caller's
+                # expressions on both points and the axis tracks the parameter.
+                tag = request.name or "wax"
+                low = self._carrier_point(doc_id, request.plane, request.at, None, f"{tag}_a")
+                high = self._carrier_point(doc_id, request.plane, request.at,
+                                           _CARRIER_SEPARATION, f"{tag}_b")
+                axis = axes.AddByTwoPoints(low, high)
+            if request.name:
+                axis.Name = request.name
+            axis.Visible = False
+        return FeatureInfo(id=f"wax:{axis.Name}", name=str(axis.Name), kind="work_axis",
+                           detail={"kind": request.kind, "plane": request.plane,
+                                   "measured_against_inventor": False})
+
     def thread(self, doc_id: str, request: ThreadRequest) -> FeatureInfo:  # pragma: no cover
         document = self._doc(doc_id)
         faces = self._topology_collection(doc_id, request.faces)
@@ -3381,6 +3484,50 @@ def _named_work_plane(component: Any, name: str) -> Any:  # pragma: no cover - W
     raise SketchError(
         f"No work plane named {name!r}.",
         hint="Use 'xy', 'xz', 'yz', or create one with the `work_plane` operation first.",
+    )
+
+
+#: The label the carrier sketch gives its one point, so it can be found again.
+_CARRIER_LABEL = "__work_point__"
+
+#: How far apart the two points defining a `normal_to_plane` axis sit. Any
+#: non-zero separation gives the same axis, so this is a literal rather than an
+#: expression -- there is no parameter it could sensibly track.
+_CARRIER_SEPARATION = "10 mm"
+
+
+def _named_sketch_point(sketch: Any, label: str) -> Any:  # pragma: no cover - Windows only
+    points = sketch.SketchPoints
+    for index in range(1, int(points.Count) + 1):
+        point = points.Item(index)
+        if str(getattr(point, "Name", "")) == label:
+            return point
+    raise FeatureError(
+        f"The carrier sketch did not keep a point named {label!r}.",
+        hint="Inventor renamed or dropped it; a work point cannot be placed without it.",
+    )
+
+
+def _named_sketch_line(sketch: Any, name: str) -> Any:  # pragma: no cover - Windows only
+    lines = sketch.SketchLines
+    for index in range(1, int(lines.Count) + 1):
+        line = lines.Item(index)
+        if str(getattr(line, "Name", "")) == name:
+            return line
+    raise FeatureError(
+        f"Sketch {str(sketch.Name)!r} has no line named {name!r} to lie a work axis along.",
+        hint="Give the sketch line a `name` in the recipe and reference it here.",
+    )
+
+
+def _named_work_point(component: Any, name: str) -> Any:  # pragma: no cover - Windows only
+    points = component.WorkPoints
+    for index in range(1, int(points.Count) + 1):
+        if str(points.Item(index).Name) == name:
+            return points.Item(index)
+    raise FeatureError(
+        f"No work point named {name!r}.",
+        hint="Create it with a `work_point` operation before the axis that runs through it.",
     )
 
 
