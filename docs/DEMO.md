@@ -869,10 +869,11 @@ matter to this demonstration:
 So steps 1 to 14 have all been executed on this release. What follows is not a list of
 worries; it is the residue.
 
-### The four enum names 2026.1 does not have
+### The four enum names neither 2026.1 nor 2027.1 has
 
 `kBothShellDirection`, `kHiddenLineRendering`, `kFlatHoleBottom` and `kAngleHoleBottom`
-are absent from 2026.1's type library under those names. There is nothing to read, so the
+are absent from both releases' type libraries under those names -- 2027.1 was asked on
+2026-09-03 and gave the same answer. There is nothing to read, so the
 fallback table would be used -- and the table has never been checked for those four on any
 release. Three of them are out of their own numbering family, which is exactly how
 `kThroughAllExtent` once came to be Inventor's `kToNextExtent`: an extrude that stopped at

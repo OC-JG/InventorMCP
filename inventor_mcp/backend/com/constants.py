@@ -129,19 +129,19 @@ FALLBACK: dict[str, int] = {
 #: fires; ``resolve`` prefers the type library and never consults the table.
 SUSPECT: dict[str, str] = {
     "kBothShellDirection": (
-        "Inventor 2026.1's type library has no such name, and 41987 is outside "
+        "no such name in Inventor 2026.1's type library, nor 2027.1's, and 41987 is outside "
         "the 41217/41218 family the other two shell directions belong to"
     ),
     "kHiddenLineRendering": (
-        "Inventor 2026.1's type library has no such name, and 9986 is outside "
+        "no such name in Inventor 2026.1's type library, nor 2027.1's, and 9986 is outside "
         "the 8706/8708 family the other two render styles belong to"
     ),
     "kFlatHoleBottom": (
-        "Inventor 2026.1's type library has no such name; nothing reads this "
+        "no such name in Inventor 2026.1's type library, nor 2027.1's; nothing reads this "
         "entry today, so it has never been exercised anywhere"
     ),
     "kAngleHoleBottom": (
-        "Inventor 2026.1's type library has no such name; nothing reads this "
+        "no such name in Inventor 2026.1's type library, nor 2027.1's; nothing reads this "
         "entry today, so it has never been exercised anywhere"
     ),
 }

@@ -1336,14 +1336,19 @@ class TestTheMeasuredEnumValues:
         assert FALLBACK["kAlignedDim"] == 19203
 
     def test_what_2026_reopened_is_written_down(self):
-        """Four names 2026.1's type library does not have.
+        """Four names neither 2026.1 nor 2027.1 has.
 
-        Everything else in the table -- forty-seven of fifty-one -- 2026.1
-        agreed with exactly, which is the strongest evidence yet that these are
-        API facts rather than one release's numbers. The four it has no name for
-        are a different case: there is nothing to read, so the table is what
-        would be used, and the table has never been checked for them on any
-        release. They refuse rather than guess.
+        Everything else in the table -- forty-seven of fifty-one -- both
+        releases agreed with exactly, which is the strongest evidence yet that
+        these are API facts rather than one release's numbers. The four they
+        have no name for are a different case: there is nothing to read, so the
+        table is what would be used, and the table has never been checked for
+        them on any release. They refuse rather than guess.
+
+        Two of the four are reachable, so refusing has a cost a person will
+        meet: a shell with `direction: "both"`, and `capture_view` in
+        hidden-line mode. What Inventor does call them is still unknown;
+        `scripts/dump_constants.py --find Shell` is how to ask.
         """
         from inventor_mcp.backend.com.constants import FALLBACK, SUSPECT
 
