@@ -163,12 +163,29 @@ Each of these was hit while building real parts, and each passed
    Fix: support a both-directions extent on holes, or warn when a through hole's
    axis re-enters material it did not cut.
 
-2. **The simulator's `shell` does not update `document.slabs`.** Slabs record the
-   prisms an extrude added and are what `_through_all_distance` measures against,
-   so after a shell every through-cut is charged against the pre-shell solid. The
-   enclosure's cable bore was costed at the full 105 mm box length instead of two
-   2 mm walls -- a 26x over-count on that feature. Anything reasoning from a
-   rehearsal of a hollow part inherits this.
+   *Easier to see now.* The simulator's ledger counts material in pieces, so it
+   predicts both walls where Inventor drills one. The divergence check reports
+   that as a disagreement instead of the two errors cancelling into a plausible
+   number.
+
+2. ~~**The simulator's `shell` does not update `document.slabs`.**~~ *Fixed.* The
+   slab list is now a signed ledger: a shell records the cavity it hollowed out,
+   a cut records the prism it swept, a hole records its bore, and the list is read
+   in creation order so material put back into a void counts again. A cut is
+   charged the material it meets rather than its whole swept shape -- the
+   enclosure's cable entry costs 0.36 cm^3 against the 5.04 it used to, which is
+   what the hand calculation in `examples/expected/enclosure_base.json` says it
+   should be. The same feature also rounds a filleted prism's recorded outline,
+   because a shell measures that outline and square corners made the cavity
+   10.5 mm^2 too big. The part went from 10.7% below the hand-derived volume to
+   0.002% above it, the remainder being the polygon that stands in for an arc.
+   `tests/test_volume_ledger.py` holds it there.
+
+   *Confirmed live*, Inventor 2027.1 on 2026-09-03: the enclosure measured
+   within 0.0005 cm^3 of the hand figure, and the moulded housing -- the other
+   shelled part, and the one nobody had derived -- went from 15.96% below
+   Inventor to 0.63%. The simulator is now within 1% of a live build on all
+   eleven shipped examples; `examples/expected/README.md` has the table.
 
 3. **`save_part` fails with a bare "Exception occurred" when that path is already
    open** in Inventor from an earlier build. Since each rebuild leaves another
@@ -180,3 +197,67 @@ Each of these was hit while building real parts, and each passed
    and `top` returns a side elevation with **Z rendered inverted** -- which reads
    as upside-down text that is not upside down. Anything checking its own work
    from a render can be misled; coordinates must be measured instead.
+
+5. **A `trim` split threw away the opposite side to the one documented.**
+   *Fixed and confirmed live, 2026-09-03: all three fixtures now agree with
+   Inventor to four decimal places, on the side and on the amount.* The
+   schema says `remove_positive` discards "the side the plane's normal points
+   at". Inventor did the reverse: a 27.2 cm^3 part cut at z = 12 with
+   `remove_positive: true` should lose the 6.4 cm^3 above the plane, and it lost
+   the 20.8 below. Every trimmed part kept the wrong half, and the volume
+   reported was correct for the half it kept, so nothing raised.
+
+   Three runs of one part found it and then narrowed it. True and false gave
+   exactly complementary results, so the flag reached Inventor and did choose
+   the side. The same cut made by the XY origin plane -- whose normal is +Z by
+   definition and so cannot have been built backwards -- still kept the wrong
+   half, which ruled out the remaining alternative that an offset work plane
+   pointed the other way. That put the fault at the call site:
+   `SplitFeatures.SplitPart`'s second argument says which side to *keep*, and
+   the code passed it which side to remove. It is now inverted there.
+
+   The simulator was wrong too, differently, and is also fixed. Its share of
+   the volume came from where the plane fell in the *bounding box*, on the
+   assumption that a part is spread evenly either side of a cut -- 11.657 cm^3
+   kept where the answer is 20.8. It now clips the ledger's prisms at the plane,
+   which is exact for a prismatic part, and takes the trimmed-off half out of
+   the ledger so later cuts are not measured against a part that no longer
+   exists. Where the ledger cannot answer -- a revolve, a sweep, a loft -- the
+   old estimate stands and says so.
+
+   A third thing was wrong on the way past: a work plane's axis was read from
+   its *name* rather than from the plane it was built on, so every work plane
+   not called xy, xz or yz was treated as horizontal. A part trimmed at a plane
+   offset from YZ was cut across Z instead of X.
+
+   `PREDICTED["split"]` is 0.05 now, measured from those three. A trimmed
+   revolve, sweep or loft is excluded from the comparison rather than covered by
+   it: the ledger has no prisms to clip there, the simulator says outright that
+   its number is a fallback, and the rehearsal declines to compare a step that
+   says so.
+
+6. **The divergence check could not see a cut that took the right amount off
+   the wrong side.** *Fixed 2026-09-03.* Found while fixing defect 5 and worth
+   more than it. On `origin_plane_split` the simulator reported 19.4286 cm^3
+   removed and Inventor 19.2 -- 1.2% apart, while keeping *opposite halves of
+   the part*. Every tolerance in `PREDICTED` passed it, because the comparison
+   was of volumes moved and nothing else: it catches a cut that missed and a
+   fillet on the wrong edge, and was blind to a mirrored outcome whenever the
+   two halves were near enough in size.
+
+   Every operation now records `centre_shift_mm`, where the bounding box's
+   centre moved, and `compare_to_rehearsal` reports an operation whose two runs
+   sent it opposite ways. The rule is deliberately narrow -- a sign flip with
+   both sides past a millimetre, rather than the two shifts agreeing within a
+   tolerance -- because the simulator's box is synthesised from sketch extents
+   and is only approximate for a revolve, a sweep or a loft. Approximate enough
+   that a millimetre or two says nothing; never so wrong that it reverses the
+   direction a part's centre travelled. So it catches the mirror and not every
+   positional disagreement, and a wider rule would need calibrating against a
+   live Inventor the way the volume tolerances were.
+
+   A second thing had to be fixed to make it work at all: the simulator's trim
+   left `document.bounds` alone, so a trimmed part measured the size it had been
+   before the cut -- and with the box unchanged its centre could not move, which
+   is the only signal that distinguishes keeping this half from keeping the
+   other.

@@ -393,12 +393,13 @@ build_part_from_recipe(recipe=<same>, rollback_on_error=true)
   → 16 parameters, 13 operations
 ```
 
-**Do not quote a volume for this part.** The rehearsal reports 39.098969 cm³ and that is
-not a prediction of what Inventor will measure: the simulator has no booleans, so its
-cable cut removes the whole 12 × 6 × 100 mm prism where Inventor removes only the two end
-walls it passes through, and it ignores the draft taper on the outer walls. Both numbers
-are right for what they are. The rehearsal's job on this part is the empty `warnings`
-list, not the volume.
+**Do not quote a volume for this part.** The rehearsal reports 46.229078 cm³ and that is
+still not a prediction of what Inventor will measure: the simulator ignores the draft
+taper on the outer walls, and this part is drafted throughout. Its cable cut is right
+now — 0.36 cm³, the two 2.5 mm end walls the slot passes through, measured off the
+ledger of prisms rather than charged the whole 12 × 6 × 100 mm sweep, which is where
+7.2 cm³ of the old number came from. The rehearsal's job on this part is the empty
+`warnings` list, not the volume.
 
 The build also installs the recipe's own freeze. `boss_hole_d`, `cable_w` and `cable_h`
 are declared frozen in the recipe's `dfm` block, and from this moment `set_parameters`
@@ -868,14 +869,22 @@ matter to this demonstration:
 So steps 1 to 14 have all been executed on this release. What follows is not a list of
 worries; it is the residue.
 
-### The four enum names 2026.1 does not have
+### The four enum names that were never Inventor's, and are now
 
 `kBothShellDirection`, `kHiddenLineRendering`, `kFlatHoleBottom` and `kAngleHoleBottom`
-are absent from 2026.1's type library under those names. There is nothing to read, so the
-fallback table would be used -- and the table has never been checked for those four on any
-release. Three of them are out of their own numbering family, which is exactly how
-`kThroughAllExtent` once came to be Inventor's `kToNextExtent`: an extrude that stopped at
-the next face while every report said "through all".
+were absent from both releases' type libraries under those names, and three of them were
+out of their own numbering family besides -- which is exactly how `kThroughAllExtent` once
+came to be Inventor's `kToNextExtent`: an extrude that stopped at the next face while
+every report said "through all". They were made to refuse rather than resolve.
+
+On 2026-09-03 Inventor 2027.1 was asked what it *does* call them, and all four turned out
+to be wrong **names** rather than wrong values, which is why looking a value up could never
+have fixed them. A third shell direction is `kBothSidesShellDirection`, 41219, sitting in
+the family exactly where it should. There is no hidden-line render style at all;
+`kWireframeWithHiddenEdgesRendering` (8712) is what the words describe. The two hole-bottom
+names do not exist under any name and nothing read them, so they are gone from the table
+rather than refused: an entry for a name Inventor does not have is a fiction with a number
+attached.
 
 They are therefore marked disputed and **refuse rather than guess**. What that costs is
 narrow and nothing in this script touches it:
@@ -996,10 +1005,11 @@ above were checked against the source.
    recipe, but by arithmetic rather than by the fillet being the seventh operation — it is
    the eighth.
 
-6. **The housing's rehearsal volume is not a prediction.** 39.098969 cm³ was computed
-   offline; the simulator ignores the draft taper and has no booleans, so its cable cut
-   removes 7.2 cm³ where Inventor removes about 0.36. Step 8 now says not to quote a volume
-   for this part and gives the reason.
+6. **The housing's rehearsal volume is not a prediction.** 46.229078 cm³ was computed
+   offline, and the simulator ignores the draft taper, which this part has on every outer
+   wall. The cable cut is no longer part of the discrepancy: it now removes 0.36 cm³, the
+   two end walls, where it used to remove 7.2. Step 8 says not to quote a volume for this
+   part and gives the reason.
 
 7. **The bracket's upright hole spacing is a literal.** `±15` in the `UprightHoles` sketch
    is not driven by any parameter, so the "30 apart" in the spoken description is not

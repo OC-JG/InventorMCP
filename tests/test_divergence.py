@@ -144,9 +144,9 @@ class TestThroughTheBuild:
         def lazy_hole(doc_id, request):
             """Drill nothing, exactly as a hole over empty air does."""
             document = backend._doc(doc_id)
-            before = document.volume
+            before = list(document.bodies)
             info = real_hole(doc_id, request)
-            document.volume = before
+            document.bodies = before
             return info
 
         monkeypatch.setattr(backend, "name", "inventor")
@@ -159,10 +159,13 @@ class TestThroughTheBuild:
         assert "read these before trusting the result" in result["divergence_note"]
 
     def test_a_rehearsal_that_breaks_does_not_break_the_build(self, session, monkeypatch):
-        import inventor_mcp.builder as builder
+        # Patched where `rehearse` is defined, not where it is called from:
+        # `build_part` imports it from `rehearsal` at the moment it needs it, so
+        # patching the name on `builder` would replace something nothing reads.
+        import inventor_mcp.rehearsal as rehearsal
 
         monkeypatch.setattr(session.ensure_backend(), "name", "inventor")
-        monkeypatch.setattr(builder, "rehearse",
+        monkeypatch.setattr(rehearsal, "rehearse",
                             lambda recipe: (_ for _ in ()).throw(RuntimeError("boom")))
         result = build_part(session, self.recipe())
         assert result["ok"] is True
@@ -250,7 +253,8 @@ class TestTheShellItself:
             ]}))
         document = session.backend._doc(result["document"])
         shell = [f for f in document.features if f.kind == "shell"][0]
-        assert shell.detail["volume_from"] == "the outline inset by the wall thickness, swept"
+        assert shell.detail["volume_from"] == (
+            "the outline offset by the wall and swept, wall inside")
 
     def test_a_revolved_body_falls_back_and_admits_it(self, session):
         from inventor_mcp.builder import build_part
@@ -265,7 +269,10 @@ class TestTheShellItself:
         assert result["ok"], result["errors"]
         document = session.backend._doc(result["document"])
         shell = [f for f in document.features if f.kind == "shell"][0]
-        assert "not a single prism" in shell.detail["volume_from"]
+        assert "not a prism" in shell.detail["volume_from"]
+        assert shell.detail["estimated"] is True, (
+            "and the rehearsal has to be told, or the tolerance has to be wide "
+            "enough to cover an estimate nobody measured")
 
 
 class TestTheGuardCoversWhatIsGuessedAt:
@@ -318,3 +325,273 @@ class TestTheGuardCoversWhatIsGuessedAt:
 
     def test_but_not_a_coarse_estimate_of_the_right_thing(self):
         assert compare_to_rehearsal([step(0, "emboss", -1.3)], [step(0, "emboss", -1.0)]) == []
+
+
+class TestACutOnTheWrongSide:
+    """The failure a comparison of volumes cannot see, and now does.
+
+    A `trim` split kept the wrong half of every part for as long as the feature
+    existed. The run that eventually exposed it reported the simulator at
+    19.4286 cm^3 removed and Inventor at 19.2 -- 1.2% apart, inside every
+    tolerance in `PREDICTED` -- while the two were keeping *opposite halves of
+    the part*. Volume says how much an operation moved and cannot say which side
+    it moved it from, so when the two sides are near enough in size there is
+    nothing in the number to notice.
+
+    The centre of the bounding box has a direction, and the two halves send it
+    opposite ways. Defect 6 in `docs/FEATURE_COVERAGE.md`.
+    """
+
+    def split(self, change: float, shift: list[float]) -> list[dict]:
+        return [{"index": 0, "op": "split", "name": "Trim", "measured": {
+            "volume_cm3": 10.0, "volume_change_cm3": change,
+            "centre_shift_mm": shift}}]
+
+    def test_the_historical_case_is_caught_with_the_volumes_agreeing(self):
+        """1.2% apart, which passes, and opposite halves, which no longer does."""
+        [finding] = compare_to_rehearsal(
+            self.split(-19.2, [0, 0, 4.0]),          # Inventor kept the top
+            self.split(-19.4286, [0, 0, -10.0]),     # the simulator kept the bottom
+        )
+        assert "off_by_cm3" not in finding, "the volumes agreed; only the side did not"
+        assert finding["axis"] == "z"
+        assert finding["rehearsed_shift_mm"] == -10.0
+        assert finding["measured_shift_mm"] == 4.0
+        assert "opposite way along Z" in finding["why"]
+
+    def test_moving_the_same_way_is_silent(self):
+        assert compare_to_rehearsal(self.split(-19.2, [0, 0, -9.5]),
+                                    self.split(-19.2, [0, 0, -10.0])) == []
+
+    def test_a_shift_too_small_to_mean_anything_is_ignored(self):
+        """A fillet barely moves a centre, and the sign of that is noise.
+
+        Both sides have to clear `SHIFTED` before the direction counts, because
+        the simulator's bounding box is synthesised from sketch extents and is
+        only approximate for a revolve, a sweep or a loft.
+        """
+        from inventor_mcp.rehearsal import SHIFTED
+
+        tiny = SHIFTED / 2
+        assert compare_to_rehearsal(self.split(-19.2, [0, 0, tiny]),
+                                    self.split(-19.2, [0, 0, -tiny])) == []
+
+    def test_one_side_moving_alone_is_not_enough(self):
+        """It detects a mirror, not every positional disagreement.
+
+        A wider rule would need calibrating the way the volume tolerances were,
+        and nothing has measured one yet -- so this stays narrow and says so.
+        """
+        assert compare_to_rehearsal(self.split(-19.2, [0, 0, 8.0]),
+                                    self.split(-19.2, [0, 0, 0.0])) == []
+
+    def test_both_kinds_of_evidence_land_in_one_finding(self):
+        """An operation that is wrong twice should not be reported twice."""
+        [finding] = compare_to_rehearsal(self.split(+19.2, [0, 0, 4.0]),
+                                         self.split(-19.4286, [0, 0, -10.0]))
+        assert "off_by_cm3" in finding and "axis" in finding
+        assert "the other way" in finding["why"]
+        assert "opposite way along Z" in finding["why"]
+
+    def test_a_step_with_no_box_is_not_guessed_at(self):
+        without = [{"index": 0, "op": "split", "name": "Trim",
+                    "measured": {"volume_cm3": 10.0, "volume_change_cm3": -19.2}}]
+        assert compare_to_rehearsal(without, self.split(-19.2, [0, 0, -10.0])) == []
+
+
+class TestTheTrimmedPartIsSmallerAfterwards:
+    """Which is what gives the check above anything to read.
+
+    The simulator's bounds were left alone by a trim, so a part measured the
+    size it had been before the cut -- and with the box unchanged its centre
+    could not move, which is the only signal that distinguishes keeping this
+    half from keeping the other.
+    """
+
+    @pytest.fixture
+    def session(self) -> Session:
+        session = Session(backend_kind="mock")
+        session.ensure_backend().connect()
+        return session
+
+    def trim(self, session: Session, remove_positive: bool) -> dict:
+        from inventor_mcp.builder import build_part
+
+        result = build_part(session, PartRecipe.model_validate({
+            "name": "T", "units": "mm", "operations": [
+                {"op": "sketch", "name": "B", "plane": "xy", "entities": [
+                    {"type": "rectangle", "center": [0, 0], "width": 60, "height": 40}]},
+                {"op": "extrude", "name": "Slab", "sketch": "B", "distance": 20},
+                {"op": "work_plane", "name": "Cut", "kind": "offset",
+                 "base": "xy", "offset": 12},
+                {"op": "split", "name": "Trim", "tool": "Cut", "style": "trim",
+                 "remove_positive": remove_positive},
+            ]}))
+        assert result["ok"], result["errors"]
+        return session.backend.mass_properties(result["document"]).as_dict()
+
+    def test_keeping_the_lower_half_leaves_a_part_12_mm_tall(self, session):
+        box = self.trim(session, remove_positive=True)["bounding_box"]
+        assert (box[5] - box[2]) * 10 == pytest.approx(12.0)
+
+    def test_keeping_the_upper_half_leaves_one_8_mm_tall(self, session):
+        box = self.trim(session, remove_positive=False)["bounding_box"]
+        assert (box[5] - box[2]) * 10 == pytest.approx(8.0)
+        assert box[2] * 10 == pytest.approx(12.0), "it starts at the cut"
+
+
+class TestTheOtherTwoWallDirections:
+    """`both` and `outside`, which were estimated until the outline could grow.
+
+    A shell need not build its wall inward. `outside` puts all of it beyond the
+    face, so the original solid becomes the void; `both` straddles, half each
+    way. Neither could be computed while `inset_area` refused a negative
+    distance, so both fell back to the surface-area estimate -- and `both` was
+    13.6% out, which is inside the tolerance a shell is allowed and so was never
+    reported as anything.
+
+    All three are exact now, and the middle one is confirmed: Inventor 2027.1
+    removed 35.1920 cm^3 from this exact part on 2026-09-03.
+    """
+
+    @pytest.fixture
+    def session(self) -> Session:
+        session = Session(backend_kind="mock")
+        session.ensure_backend().connect()
+        return session
+
+    def shelled(self, session: Session, direction: str) -> tuple[float, str]:
+        from inventor_mcp.builder import build_part
+
+        result = build_part(session, PartRecipe.model_validate({
+            "name": "Box", "units": "mm", "operations": [
+                {"op": "sketch", "name": "Outline", "plane": "xy", "entities": [
+                    {"type": "rectangle", "center": [0, 0], "width": 60, "height": 40}]},
+                {"op": "extrude", "name": "Block", "sketch": "Outline", "distance": 20},
+                {"op": "shell", "name": "Cavity", "thickness": 2, "direction": direction,
+                 "faces": {"kind": "face", "filter": "top"}},
+            ]}))
+        assert result["ok"], result["errors"]
+        document = session.backend._doc(result["document"])
+        shell = [f for f in document.features if f.kind == "shell"][0]
+        return (session.backend.mass_properties(result["document"]).volume,
+                shell.detail["volume_from"])
+
+    def test_a_wall_built_inward_leaves_the_outside_where_it_was(self, session):
+        volume, how = self.shelled(session, "inside")
+        # 6 x 4 x 2 less a 5.6 x 3.6 cavity 1.8 deep.
+        assert volume == pytest.approx(48 - 5.6 * 3.6 * 1.8, rel=1e-9)
+        assert "wall inside" in how
+
+    def test_a_wall_split_either_side_is_what_inventor_measured(self, session):
+        """6.2 x 4.2 x 2.1 less 5.8 x 3.8 x 1.9, and Inventor removed 35.1920."""
+        volume, how = self.shelled(session, "both")
+        assert volume == pytest.approx(6.2 * 4.2 * 2.1 - 5.8 * 3.8 * 1.9, rel=1e-9)
+        assert 48 - volume == pytest.approx(35.192, abs=5e-5)
+        assert "either side" in how
+
+    def test_a_wall_built_outward_turns_the_solid_into_the_void(self, session):
+        volume, how = self.shelled(session, "outside")
+        # 6.4 x 4.4 x 2.2 less the original 6 x 4 x 2, which is now the cavity.
+        assert volume == pytest.approx(6.4 * 4.4 * 2.2 - 48, rel=1e-9)
+        assert "wall outside" in how
+
+    def test_the_part_grows_outward_in_the_ledger_too(self, session):
+        """Or a later cut is measured against a boundary that has moved."""
+        from inventor_mcp.builder import build_part
+
+        result = build_part(session, PartRecipe.model_validate({
+            "name": "Box", "units": "mm", "operations": [
+                {"op": "sketch", "name": "Outline", "plane": "xy", "entities": [
+                    {"type": "rectangle", "center": [0, 0], "width": 60, "height": 40}]},
+                {"op": "extrude", "name": "Block", "sketch": "Outline", "distance": 20},
+                {"op": "shell", "name": "Cavity", "thickness": 2, "direction": "outside",
+                 "faces": {"kind": "face", "filter": "top"}},
+            ]}))
+        document = session.backend._doc(result["document"])
+        material = [s for s in document.slabs if s.sign > 0]
+        assert len(material) == 1
+        widths = [abs(u) for u, _ in material[0].outline]
+        assert max(widths) == pytest.approx(3.2), "60 mm grown 2 mm each side"
+        voids = [s for s in document.slabs if s.sign < 0]
+        assert len(voids) == 1 and voids[0].source == "shell"
+
+
+class TestWhatTheShellWillAndWillNotBeJudgedOn:
+    """`PREDICTED["shell"]` is 0.02, which only holds if the fallback opts out.
+
+    The tolerance was 0.35 for as long as one number had to cover both a
+    shelled prism, which is exact arithmetic, and everything the exact branch
+    could not do. Splitting those apart is what lets it be the 0.02 an extrude
+    gets: the cases that cannot be computed say so, and the rehearsal leaves
+    them out of the comparison rather than the tolerance being stretched to
+    hide them.
+
+    Which is the difference between a tolerance and an excuse. A shell 30%
+    adrift from Inventor is now either reported or explicitly not measured, and
+    never quietly within bounds.
+    """
+
+    @pytest.fixture
+    def session(self) -> Session:
+        session = Session(backend_kind="mock")
+        session.ensure_backend().connect()
+        return session
+
+    BOX = [
+        {"op": "sketch", "name": "B", "plane": "xy", "entities": [
+            {"type": "rectangle", "center": [0, 0], "width": 60, "height": 40}]},
+        {"op": "extrude", "name": "Block", "sketch": "B", "distance": 20},
+    ]
+    ROUND = [
+        {"op": "sketch", "name": "P", "plane": "xz", "entities": [
+            {"type": "rectangle", "corner": [0, 0], "width": 20, "height": 30}]},
+        {"op": "revolve", "name": "Blank", "sketch": "P", "axis": "z"},
+    ]
+
+    def shell_step(self, faces: dict, body: list[dict] | None = None) -> dict:
+        from inventor_mcp.rehearsal import rehearse
+
+        report = rehearse(PartRecipe.model_validate({
+            "name": "S", "units": "mm",
+            "operations": (body or self.BOX) + [
+                {"op": "shell", "name": "C", "thickness": 2, "faces": faces}]}))
+        assert report["ok"], report["findings"]
+        return [s for s in report["steps"] if s["op"] == "shell"][0]
+
+    def test_the_tolerance_is_an_exact_operations_tolerance(self):
+        from inventor_mcp.rehearsal import PREDICTED
+
+        assert PREDICTED["shell"] == PREDICTED["extrude"] == 0.02
+
+    def test_a_prism_opened_through_an_end_is_judged(self):
+        step = self.shell_step({"kind": "face", "filter": "top"})
+        assert step.get("predictable") is not False
+
+    def test_a_prism_opened_through_a_side_is_not(self):
+        """The cavity there is inset on some edges and flush with others.
+
+        An inset area cannot say that, and this used to treat the open face as
+        closed -- over-stating the wall and under-stating the cavity, with
+        nothing to show for it.
+        """
+        step = self.shell_step({"kind": "face", "filter": "front"})
+        assert step["predictable"] is False
+        assert "fell back" in step["why_not"]
+
+    def test_a_body_that_is_not_a_prism_is_not_either(self):
+        step = self.shell_step({"kind": "face", "filter": "top"}, body=self.ROUND)
+        assert step["predictable"] is False
+
+    def test_the_two_fallbacks_would_fail_the_new_tolerance_if_judged(self, session):
+        """Which is the point: they are excluded, not covered.
+
+        The side-opened box estimates 30.4 cm^3 where the exact answer for the
+        cavity it describes is 36.288 -- 16% out, eight times the tolerance. A
+        number like that inside the bounds would make the bounds meaningless.
+        """
+        side = self.shell_step({"kind": "face", "filter": "front"})
+        end = self.shell_step({"kind": "face", "filter": "top"})
+        adrift = abs(side["measured"]["volume_change_cm3"]
+                     - end["measured"]["volume_change_cm3"])
+        assert adrift / abs(end["measured"]["volume_change_cm3"]) > 0.02 * 8

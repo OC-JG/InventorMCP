@@ -72,7 +72,15 @@ exact confusion the volume reporting exists to prevent.
 
 Where the simulator genuinely cannot answer, it declines: a revolve records no
 prism, so a through-cut through one falls back to the span rather than inventing
-a thickness.
+a thickness, and a shell whose cavity it could not compute records no cavity at
+all rather than one of about the right size in about the right place.
+
+The same rule decides where a volume is *kept*. It is kept per body and added up
+only to report the part, because a total is exactly what hides the error: a cut
+that removes more than the body it was aimed at holds used to be paid for out of
+another body's material, and the sum stayed plausible. Each body now stops at
+nothing on its own, and the difference between what an operation asked to remove
+and what it actually removed is what the operation reports moving.
 
 ## A drawing is read, not traced
 
@@ -252,6 +260,45 @@ Where the numbers *can* travel, they do: material wall bands and required draft
 angles come across from the tool's own table as numbers, because the alternative
 was parsing them out of display strings like `"1.2–3.5 mm"` — which breaks
 silently the day someone changes a dash.
+
+## A fact stated twice needs a test that the two agree
+
+The abstract base class is the model. `Backend` has an abstract method per
+operation, so the live and simulated implementations cannot drift apart -- not
+by discipline, by construction -- and across eighteen operations they never
+have. Every duplication in this repository that had nothing enforcing it drifted
+instead, and each cost a real failure:
+
+* the recipe cheat-sheet against the schema: `coil` was implemented in both
+  backends, verified against a live spring to 0.2%, tested, and mentioned in
+  neither the cheat-sheet nor the Skill;
+* the README's tool table against the registered tools: two tools missing, and
+  "all five examples" beside a directory of eleven;
+* `requires-python` against the CI matrix against what the code needs: 3.10
+  declared, 3.11 the lowest leg, 3.12 what one f-string needed, and eight red
+  runs on `main`;
+* the DFM thresholds against the analyser's own, which is the case the section
+  below this one is about;
+* `PREDICTED` against the approximations it is supposed to watch: the four
+  roughest -- each marked `ponytail:` by its own author -- had no entry at all,
+  so the divergence check was silent in exactly the places somebody had flagged
+  as least trustworthy;
+* the DFM job's green tick against whether the analyser ran at all.
+
+So the rule, and it is not "be careful": **a fact stated in two places does not
+merge without a test that they still say the same thing.** The tests are cheap
+-- most of them read one file and one Python object and compare -- and they fail
+in the place the drift happened, naming it. `tests/test_docs_still_true.py`,
+`tests/test_supported_pythons.py`, `tests/test_dfm_targets.py`, the
+`dfm-unavailable:` sentinel in `tests/conftest.py`, and the check that the
+snapshot policy and the defect it works around still agree are the ones in place
+now.
+
+A corollary worth stating because it is the tempting way out: the answer to a
+duplication is usually the test, not the removal. The cheat-sheet is duplicated
+into a tool description *on purpose*, because a model that has to fetch a schema
+before it can write anything will guess instead. What is not allowed is having
+it in two places and nothing checking.
 
 ## Documentation that has drifted is worse than none
 

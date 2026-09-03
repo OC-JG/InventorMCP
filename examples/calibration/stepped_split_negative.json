@@ -1,0 +1,95 @@
+{
+  "name": "CalibrationSteppedSplitNegative",
+  "description": "The same part and the same cut with `remove_positive` false, which is the only way to tell two explanations apart. If this one removes 6.4 cm^3 where its partner removed 20.8, the flag does control the side and its sense is the opposite of what the schema promises -- 'discard the side the plane's normal points at' -- so the fix is one inversion in the COM backend. If instead this also removes 20.8, the flag is not reaching Inventor at all and the trim keeps whichever side it likes, which is a different bug with a different fix. Neither is guessable from the one run that found it.",
+  "units": "mm",
+  "parameters": [
+    {
+      "name": "base_w",
+      "value": 60
+    },
+    {
+      "name": "base_d",
+      "value": 40
+    },
+    {
+      "name": "base_t",
+      "value": 8
+    },
+    {
+      "name": "boss_s",
+      "value": 20,
+      "comment": "square boss, side"
+    },
+    {
+      "name": "boss_h",
+      "value": 20
+    },
+    {
+      "name": "cut_z",
+      "value": 12,
+      "comment": "above the base, through the boss"
+    }
+  ],
+  "operations": [
+    {
+      "op": "sketch",
+      "name": "Base",
+      "plane": "xy",
+      "entities": [
+        {
+          "type": "rectangle",
+          "center": [
+            0,
+            0
+          ],
+          "width": "base_w",
+          "height": "base_d"
+        }
+      ]
+    },
+    {
+      "op": "extrude",
+      "name": "Slab",
+      "sketch": "Base",
+      "distance": "base_t"
+    },
+    {
+      "op": "sketch",
+      "name": "BossPad",
+      "plane": "xy",
+      "offset": "base_t",
+      "entities": [
+        {
+          "type": "rectangle",
+          "center": [
+            0,
+            0
+          ],
+          "width": "boss_s",
+          "height": "boss_s"
+        }
+      ]
+    },
+    {
+      "op": "extrude",
+      "name": "Boss",
+      "sketch": "BossPad",
+      "distance": "boss_h",
+      "operation": "join"
+    },
+    {
+      "op": "work_plane",
+      "name": "Cut",
+      "kind": "offset",
+      "base": "xy",
+      "offset": "cut_z"
+    },
+    {
+      "op": "split",
+      "name": "TrimOther",
+      "tool": "Cut",
+      "style": "trim",
+      "remove_positive": false
+    }
+  ]
+}

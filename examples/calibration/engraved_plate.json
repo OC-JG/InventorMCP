@@ -1,0 +1,78 @@
+{
+  "name": "CalibrationEngravedPlate",
+  "description": "A plate with one engraved word on it. Not derivable: the simulator estimates a glyph's area from its height and the character count, and Inventor cuts the real outlines, so this measures how wrong that estimate is on a real font. Expect the largest divergence of the four.",
+  "units": "mm",
+  "parameters": [
+    {
+      "name": "plate_w",
+      "value": 80
+    },
+    {
+      "name": "plate_d",
+      "value": 40
+    },
+    {
+      "name": "plate_t",
+      "value": 10
+    },
+    {
+      "name": "mark_h",
+      "value": 8,
+      "comment": "cap height of the lettering"
+    },
+    {
+      "name": "mark_deep",
+      "value": 0.5
+    }
+  ],
+  "operations": [
+    {
+      "op": "sketch",
+      "name": "Body",
+      "plane": "xy",
+      "entities": [
+        {
+          "type": "rectangle",
+          "center": [
+            0,
+            0
+          ],
+          "width": "plate_w",
+          "height": "plate_d"
+        }
+      ]
+    },
+    {
+      "op": "extrude",
+      "name": "Plate",
+      "sketch": "Body",
+      "distance": "plate_t"
+    },
+    {
+      "op": "sketch",
+      "name": "Mark",
+      "plane": "xy",
+      "offset": "plate_t",
+      "entities": [
+        {
+          "type": "text",
+          "text": "CALIBRATE",
+          "position": [
+            0,
+            0
+          ],
+          "height": "mark_h",
+          "font": "Arial",
+          "align": "center"
+        }
+      ]
+    },
+    {
+      "op": "emboss",
+      "name": "Engraving",
+      "sketch": "Mark",
+      "depth": "mark_deep",
+      "style": "engrave"
+    }
+  ]
+}

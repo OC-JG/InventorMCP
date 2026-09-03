@@ -186,6 +186,33 @@ afternoon:
   only if the recipe drew a closed loop and no profile came out of it.
 * `PlanarSketch.OriginPoint` cannot be constrained against. Project the origin
   work point into the sketch first.
+* **A sketch has no degrees-of-freedom count, and no `FullyConstrained`
+  property either.** `ConstraintStatus` is the only answer Inventor gives, and
+  it is a `ConstraintStatusEnum`: `kFullyConstrained` 51713,
+  `kUnderConstrained` 51714, `kOverConstrained` 51715, `kUnknown` 51716.
+  Measured on 2027.1 two ways. `python scripts/com_signatures.py PlanarSketch`
+  prints the class's whole property list: `ConstraintStatus` is there, and
+  nothing named for DOF or freedom is. Then a live sketch through late binding,
+  because the makepy wrapper raising `AttributeError` is not proof on its own —
+  it declares a narrower interface than the object answers to. A circle alone
+  read 51714; its centre grounded on the projected origin, still 51714; with a
+  diameter dimension added, 51713.
+
+  The two values the backend compares against are in the fallback table, so
+  `python scripts/dump_constants.py` checks them against Inventor's own type
+  library along with everything else.
+
+  The only `GetDegreesOfFreedom` in the API is `ComponentOccurrence`'s — an
+  assembly occurrence's rigid-body freedoms, unrelated to sketch constraint
+  solving. So `SketchInfo.degrees_of_freedom` is filled by the simulator, which
+  estimates it because it does no solving, and left `None` by the COM backend,
+  which will not invent one. `fully_constrained` is the field both backends
+  fill. This asymmetry is deliberate; do not go looking for the count again.
+
+  The COM backend looked for `FullyConstrained` and `IsFullyConstrained` until
+  this was measured. Neither exists, so it returned `None` for every sketch on
+  every version and the flag never arrived at all — a silent one, since `None`
+  is also the honest answer when a version genuinely cannot say.
 * A midpoint constraint moves the *point* onto the line, so the grounded sketch
   origin can never be that point.
 * **A hole's `ExtentDirection` runs opposite to an extrude's.** Measured with
@@ -236,6 +263,17 @@ These are the parts of the COM backend most likely to need adjustment, and why:
   point. `_first_curve` picks geometry instead.
 - **`shell`** uses `CreateShellDefinition`. Older releases expose a direct
   `ShellFeatures.Add(faces, thickness, direction)` instead.
+- **`direction: "both"` splits the wall across the original face**, half in and
+  half out, and the enum is `kBothSidesShellDirection` (41219) -- not
+  `kBothShellDirection`, which is a name no release has and which the constants
+  table asked for until 2026-09-03, so this direction refused on every machine
+  rather than only on one with an unreadable type library.
+
+  Measured, and exactly: a 60x40x20 box with its top removed and a 2 mm wall
+  both ways leaves an outer solid grown 1 mm on the four sides and the base and
+  a cavity inset 1 mm, so 6.2 x 4.2 x 2.1 less 5.8 x 3.8 x 1.9 is 12.808 cm^3
+  and the shell removed 35.192. Inventor removed 35.1920.
+  `examples/calibration/shelled_both_ways.json` is that part.
 - **A pattern of a hole needs `kAdjustToModelCompute`.** Measured: patterning a
   boss works with the default compute type, and patterning a hole fails outright
   — with the boss or alone — until each occurrence is recomputed rather than

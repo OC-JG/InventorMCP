@@ -1429,7 +1429,16 @@ class ComBackend(Backend):
             dimensions=len(plan.dimensions),
             profiles=profiles,
             hole_centers=len(plan.hole_centers),
-            fully_constrained=_fully_constrained(sketch),
+            # `degrees_of_freedom` stays None here, and that is deliberate:
+            # Inventor exposes no such count for a sketch. `ConstraintStatus`
+            # is a four-value enum, and the only `GetDegreesOfFreedom` in the
+            # whole API belongs to `ComponentOccurrence` -- an assembly
+            # occurrence's rigid-body freedoms, nothing to do with a sketch.
+            # Measured on 2027.1; see `_fully_constrained` and
+            # docs/INVENTOR_SETUP.md. The simulator's number is an estimate it
+            # can make because it does no solving; Inventor will not be asked
+            # to guess one.
+            fully_constrained=_fully_constrained(sketch, self._constants),
             inferred_constraints=len(inferred),
             refused_constraints=len(refused),
             driving_dimensions=len(driving),
@@ -1802,7 +1811,9 @@ class ComBackend(Backend):
                     constraints=int(sketch.GeometricConstraints.Count),
                     dimensions=int(sketch.DimensionConstraints.Count),
                     profiles=_count_profiles(sketch),
-                    fully_constrained=_fully_constrained(sketch),
+                    # No `degrees_of_freedom`: Inventor has no count to give.
+                    # See the note on the other `SketchInfo` above.
+                    fully_constrained=_fully_constrained(sketch, self._constants),
                 )
             )
         return results
@@ -2700,7 +2711,22 @@ class ComBackend(Backend):
         with self._batch(document), self._translate_errors("Split"):
             try:
                 if request.style == "trim":
-                    feature = features.SplitPart(tool, request.remove_positive)
+                    # Inverted, and measured rather than reasoned. Inventor's
+                    # second argument says which side to KEEP, where this read it
+                    # as which side to remove, so every trim threw away the half
+                    # the caller meant to keep -- and reported a volume that was
+                    # correct for the half it kept, so nothing raised.
+                    #
+                    # Established on 2026-09-03 by cutting one part three ways:
+                    # `remove_positive` true and false gave exactly complementary
+                    # results, so the flag does reach Inventor and does choose the
+                    # side; and the same cut made by the XY origin plane, whose
+                    # normal is +Z by definition and so cannot have been built
+                    # backwards, still kept the wrong half. That last one is what
+                    # rules out the alternative -- an offset work plane pointing
+                    # the other way -- and puts the fault here.
+                    # See defect 5 in docs/FEATURE_COVERAGE.md.
+                    feature = features.SplitPart(tool, not request.remove_positive)
                 elif request.style == "split":
                     feature = features.SplitBody(tool, component.SurfaceBodies.Item(1))
                 else:
@@ -3275,15 +3301,34 @@ class ComBackend(Backend):
                 camera.ViewOrientationType = self._k(orientation)
             camera.Fit()
             camera.ApplyWithoutTransition()
+            # A display mode Inventor will not take used to be swallowed here,
+            # which meant the picture came back in whatever mode the view was
+            # already in and nothing said so. That is how `hidden_line` went
+            # years asking for an enum name Inventor does not have: it never
+            # raised, it just quietly rendered shaded.
             mode = DISPLAY_MODES.get(request.display_mode)
+            refused: str | None = None
             if mode:
                 try:
                     view.DisplayMode = self._k(mode)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    refused = f"{type(exc).__name__}: {exc}"
             view.SaveAsBitmap(path, request.width, request.height)
-        return {"written": os.path.exists(path), "path": path,
-                "width": request.width, "height": request.height}
+        result: dict[str, Any] = {
+            "written": os.path.exists(path), "path": path,
+            "width": request.width, "height": request.height,
+            "display_mode": request.display_mode,
+            "display_mode_applied": bool(mode) and refused is None,
+        }
+        if refused is not None:
+            result["note"] = (
+                "Inventor would not take that display mode, so this picture is "
+                f"in whatever mode the view was already in: {refused}")
+        elif not mode:
+            result["note"] = (
+                f"No display mode is mapped for {request.display_mode!r}, so this "
+                "picture is in whatever mode the view was already in.")
+        return result
 
 
 # ---------------------------------------------------------------------------
@@ -3832,12 +3877,32 @@ def _count_profiles(sketch: Any) -> int:  # pragma: no cover - Windows only
     return count_
 
 
-def _fully_constrained(sketch: Any) -> bool | None:  # pragma: no cover - Windows only
-    """``None`` when this Inventor version does not expose the flag."""
-    for name in ("FullyConstrained", "IsFullyConstrained"):
-        value = getattr(sketch, name, None)
-        if isinstance(value, bool):
-            return value
+def _fully_constrained(sketch: Any, constants: Constants) -> bool | None:
+    """Inventor's own verdict on a sketch, or ``None`` when it will not give one.
+
+    There is no ``FullyConstrained`` property. This looked for one -- and for
+    ``IsFullyConstrained`` -- and neither exists, so it returned ``None`` for
+    every sketch on every version and the flag never arrived at all.
+    ``ConstraintStatus`` is what Inventor actually answers, and it is a
+    four-value enum: measured on 2027.1 both from the type library
+    (``scripts/com_signatures.py --search Constrain``) and from a live sketch
+    through late binding, which is the only way to be sure a missing attribute
+    is Inventor's answer and not the makepy wrapper's.
+
+    Over-constrained and unknown both come back ``None``: a bool cannot say
+    "constrained, but wrongly", and ``refused_dimensions`` is where that shows
+    up instead.
+
+    There is no degrees-of-freedom count to go with it -- see
+    :func:`~inventor_mcp.backend.mock.backend._degrees_of_freedom`.
+    """
+    status = getattr(_dynamic(sketch), "ConstraintStatus", None)
+    if not isinstance(status, int) or isinstance(status, bool):
+        return None
+    if status == constants["kFullyConstrainedConstraintStatus"]:
+        return True
+    if status == constants["kUnderConstrainedConstraintStatus"]:
+        return False
     return None
 
 

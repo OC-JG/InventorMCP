@@ -1,0 +1,11 @@
+{
+  "volume_cm3": 46.523405,
+  "faces": 71,
+  "edges": 144,
+  "span_mm": [
+    101.571,
+    71.571,
+    30.0
+  ],
+  "checked": "RECORDED from Inventor 2027.1 on 2026-09-03, not derived. Every outer wall is drafted, so the part is a frustum with ribs and bosses on it and the arithmetic is not worth doing by hand. The span shows the draft: 101.571 mm across a 100 mm box, the extra 1.571 being two walls leaning out over 30 mm of height. The simulator says 46.229078, 0.63% below, and the shortfall is the draft taper, which it does not model and says it does not model. It said 39.098961 before the volume ledger, 15.96% below, because a cut after a shell was charged against the solid the part had been before it was hollowed -- this part is the reason that was worth fixing. Regression baseline."
+}
