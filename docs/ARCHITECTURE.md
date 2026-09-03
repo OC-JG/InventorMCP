@@ -103,6 +103,28 @@ constraint bookkeeping that would otherwise only be observable inside Inventor �
 that a slot really does get four tangencies, that a rectangle's centre really is
 pinned.
 
+### `builder.py`, `checks.py`, `rehearsal.py` — three jobs, three files
+
+`builder.py` replays a recipe against a backend: one `apply_operation` that both
+the granular tools and a whole-recipe build go through, so the incremental and
+declarative ways of working cannot drift apart.
+
+The other two came out of it when it reached 1,200 lines doing five jobs, and
+before drawings and assemblies arrive to make it worse. `checks.py` is what can
+be said about a recipe with no backend at all — an expression that will not
+evaluate, a sketch nothing creates, a profile that is not closed, a parameter
+that drives nothing. `rehearsal.py` builds it in the simulator and reports what
+each operation would do, and holds a live build up against that report; the
+tolerances it judges by live in the same file, because a tolerance kept away
+from the thing it judges is a tolerance nobody updates.
+
+The dependency runs one way — `rehearsal` imports `builder` and `checks`,
+`checks` imports `builder` — with one exception: `build_part` imports
+`rehearsal` inside the function, because a build compares itself against a
+rehearsal. Everything the two files used to export is still reachable from
+`builder`, through a module `__getattr__` that resolves it lazily. New code
+should import from the module that owns the name.
+
 ### `backend/` — two implementations of one interface
 
 `Backend` is an ABC. Requests reaching it are fully resolved: lengths in cm, angles
@@ -127,6 +149,25 @@ useful precisely because it models the things that are easy to get wrong — pro
 closure, how many vertical edges a fillet will catch, whether a through-hole crosses
 the thickness rather than the length.
 
+Its volume model is a **ledger of signed prisms**, one per body. An extrude records
+the prism it added; a cut, a shell and a hole record the region they emptied; a
+fillet moves the corners of the profile it rounded. Asking "how much material is
+there along this line" then walks that ledger in creation order, and the answer is
+a list rather than a number, because through the wall of a hollow box there are two
+pieces of material with air between them. That is what lets a cut be charged what
+it meets instead of what it sweeps, and it replaced a single scalar volume beside
+an append-only list that only extrudes wrote to. Volume is kept per body and summed
+only to report it: a cut that removes more than the body it was aimed at contains
+now stops at nothing and says so, where before the surplus came quietly off another
+body's total.
+
+Measured against Inventor 2027.1, the simulator is now within 1% of a live build
+on all eleven shipped examples and within 0.01% on eight of them. The three that
+are not are the three it says outright it cannot do exactly: a loft, a draft
+taper, and a chamfer across a hex prism's end. `examples/expected/README.md`
+carries the table, which is worth re-running rather than trusting: it is the
+number that says how much a rehearsal is worth.
+
 ### `tools/` — the MCP surface
 
 Thirty tools rather than one per feature type -- thirty-one when the escape
@@ -139,18 +180,22 @@ Every tool is wrapped by `guard`, which turns exceptions into
 `{"ok": false, "error": ..., "message": ..., "hint": ...}`. A caller that gets a
 structured error can fix its own input; one that gets a stack trace cannot.
 
-The recipe cheat-sheet is embedded in the descriptions of the three tools that take
-recipes, rather than only in a resource. A model that has to fetch a schema before
-it can write anything will often guess instead.
+The recipe cheat-sheet is embedded in a tool description rather than only in a
+resource. A model that has to fetch a schema before it can write anything will
+often guess instead, so the guide is in the tool list, where it is read without
+being asked for.
 
-That has a price worth knowing: the three copies are 98% identical and come to
-27 kB, about 8,400 tokens of the tool list, of which roughly 4,600 is the
-duplication. It is paid on every request to a client that has this server
-enabled, whether or not the conversation is about CAD. Since the cheat-sheet was
-written, `skills/inventor-parametric-modelling/` has come to carry the same
-material and loads only when it is relevant, so the argument for paying it three
-times is weaker than when the decision was made. Left alone for now, because the
-Skill is a Claude-specific mechanism and the tool descriptions are not.
+It is there once. It used to be in the descriptions of all three tools that take
+recipes, 98% identical, 27 kB together — about 8,400 tokens of the tool list, of
+which roughly 4,600 was the duplication, paid on every request to a client that
+had this server enabled whether or not the conversation was about CAD. A client
+sees every description at once, so one copy is as visible as three. The copy that
+stays is on `build_part_from_recipe`; `validate_recipe` and `apply_operations`
+carry one sentence saying so, and `tests/test_docs_still_true.py` fails if a
+second copy comes back. The Skill in `skills/inventor-parametric-modelling/`
+carries the same material and loads only when relevant, but it is a
+Claude-specific mechanism and the tool description is not, which is why the one
+copy stays in the list.
 
 ## Things deliberately left out
 

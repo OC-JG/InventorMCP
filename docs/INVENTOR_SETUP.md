@@ -263,6 +263,17 @@ These are the parts of the COM backend most likely to need adjustment, and why:
   point. `_first_curve` picks geometry instead.
 - **`shell`** uses `CreateShellDefinition`. Older releases expose a direct
   `ShellFeatures.Add(faces, thickness, direction)` instead.
+- **`direction: "both"` splits the wall across the original face**, half in and
+  half out, and the enum is `kBothSidesShellDirection` (41219) -- not
+  `kBothShellDirection`, which is a name no release has and which the constants
+  table asked for until 2026-09-03, so this direction refused on every machine
+  rather than only on one with an unreadable type library.
+
+  Measured, and exactly: a 60x40x20 box with its top removed and a 2 mm wall
+  both ways leaves an outer solid grown 1 mm on the four sides and the base and
+  a cavity inset 1 mm, so 6.2 x 4.2 x 2.1 less 5.8 x 3.8 x 1.9 is 12.808 cm^3
+  and the shell removed 35.192. Inventor removed 35.1920.
+  `examples/calibration/shelled_both_ways.json` is that part.
 - **A pattern of a hole needs `kAdjustToModelCompute`.** Measured: patterning a
   boss works with the default compute type, and patterning a hole fails outright
   — with the boss or alone — until each occurrence is recomputed rather than

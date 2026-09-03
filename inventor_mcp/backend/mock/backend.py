@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import copy
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from itertools import count
 from typing import Any, Iterable, Sequence
 
@@ -31,6 +31,8 @@ from ...expressions import UnitContext, evaluate, referenced_parameters
 from ...geometry import (
     clip_to_box,
     inset_area,
+    inset_polygon,
+    treat_polygon_corner,
     loop_area,
     loop_points,
     plan_bounds,
@@ -114,6 +116,12 @@ def plane_normal(plane: str) -> tuple[float, float, float]:
     return _PLANES[plane][1]
 
 
+def to_sketch(plane: str, point: Sequence[float]) -> tuple[float, float, float]:
+    """Map a model-space point back onto *plane*'s sketch coordinates."""
+    axes, _ = _PLANES[plane]
+    return tuple(point[axis] * sign for axis, sign in axes)  # type: ignore[return-value]
+
+
 @dataclass
 class _Topo:
     id: str
@@ -167,11 +175,18 @@ class _Sketch:
 
 @dataclass
 class _Slab:
-    """A prism the part is made of: a 2D profile swept along its plane normal.
+    """A prism, signed: material the part gained, or a void something took out.
 
     Recorded so that "how thick is the part here" can be answered from the
     geometry that built it rather than from a bounding box. An L-section's box
     is 90 mm deep where the L itself is 6, and a through-cut charged the box.
+
+    The sign is the second half of that. The list used to hold only what joined
+    extrudes added, and nothing ever removed from it, so a cut through a shelled
+    box was charged against the solid the box had been before it was hollowed --
+    a 26x over-count on the enclosure's cable entry. A cut, a shell and a hole
+    now each record the region they emptied, and the ledger is read in creation
+    order, so material added back into a void counts again.
     """
 
     plane: str
@@ -180,6 +195,52 @@ class _Slab:
     #: Where the sweep starts and ends along the plane's normal.
     near: float
     far: float
+    #: +1 for material, -1 for a void. Read in order: a boss standing in a
+    #: shelled cavity is material again where its own profile covers.
+    sign: float = 1.0
+    #: Which body this prism belongs to, indexed as `_Document.bodies` is. A cut
+    #: aimed at one body must not be measured against another's material.
+    body: int = 0
+    #: What put it there, for diagnosis only.
+    source: str = "extrude"
+
+    @property
+    def volume(self) -> float:
+        """Signed, in cm^3: what this prism contributes to the part."""
+        return self.sign * _outline_area(self.outline) * abs(self.far - self.near)
+
+    def clipped(self, axis: int, cut: float, keep_below: bool) -> "_Slab | None":
+        """This prism with everything on the far side of a plane taken off.
+
+        The plane is perpendicular to *axis* at *cut*, both in model space. A
+        prism is a profile and a length, so which of the two gets clipped
+        depends on whether the cut runs along the sweep or across it -- and
+        across it means clipping the outline itself, which is the same
+        Sutherland-Hodgman used to stop a revolved cut being charged for the
+        air it overshoots.
+
+        Returns None when nothing of it survives.
+        """
+        (u_axis, _), (v_axis, _), (w_axis, _) = _PLANES[self.plane][0]
+        low, high = min(self.near, self.far), max(self.near, self.far)
+
+        if axis == w_axis:
+            near, far = (low, min(high, cut)) if keep_below else (max(low, cut), high)
+            if far - near <= 0:
+                return None
+            return replace(self, near=near, far=far)
+
+        big = 1.0e6
+        if axis == u_axis:
+            box = (-big, cut, -big, big) if keep_below else (cut, big, -big, big)
+        elif axis == v_axis:
+            box = (-big, big, -big, cut) if keep_below else (-big, big, cut, big)
+        else:  # pragma: no cover - a plane's three axes are all accounted for
+            return None
+        outline = clip_to_box(self.outline, *box)
+        if len(outline) < 3:
+            return None
+        return replace(self, outline=outline)
 
     def interval_along(self, axis: int,
                        through: tuple[float, float, float]) -> tuple[float, float] | None:
@@ -251,16 +312,46 @@ class _Document:
     features: list[_Feature] = field(default_factory=list)
     work_planes: dict[str, tuple[str, float]] = field(default_factory=dict)
     topology: list[_Topo] = field(default_factory=list)
-    volume: float = 0.0
     bounds: list[float] | None = None  # xmin, ymin, zmin, xmax, ymax, zmax
-    #: The prisms the solid is made of, in creation order. Only joined extrudes
-    #: are recorded -- enough to answer "how thick is the part here", which is
-    #: what a through-all cut has to know.
+    #: The signed prisms the part is made of, in creation order: what extrudes
+    #: added and what cuts, shells and holes took out. Enough to answer "how
+    #: thick is the part here", which is what a cut has to know.
     slabs: list[_Slab] = field(default_factory=list)
-    #: Volume of each solid body, in creation order. Only a `new_body` extrude
-    #: starts a new one; everything else lands on the body it joined. This is
-    #: the least the simulator can know and still answer `combine` honestly.
+    #: Volume of each solid body, in creation order, and the only place a volume
+    #: is kept. A `new_body` extrude starts one; everything else lands on the
+    #: body it was aimed at, or the first.
     bodies: list[float] = field(default_factory=list)
+
+    @property
+    def volume(self) -> float:
+        """The part's volume: the bodies added up, and only ever read.
+
+        Adding up is what a caller wants at the end and exactly what an
+        operation must not do. This used to be the stored number, with each
+        body's volume a separate list nothing kept current -- so a cut that
+        removed more than the body it was aimed at contained came off the total
+        and was paid for by some other body, which is how an inverted or
+        over-cut solid hides. Every operation now charges a body, and a body
+        that would go negative stops at nothing and says so in what it reports
+        moving.
+        """
+        return sum(self.bodies)
+
+    def charge(self, delta: float, body: int = 0) -> float:
+        """Move one body's volume, and report what actually moved.
+
+        The return value is the truth about the operation: it differs from
+        *delta* exactly when the body ran out of material, which is a cut that
+        removed more than was there and worth seeing rather than absorbing.
+        """
+        if not self.bodies:
+            if delta <= 0:
+                return 0.0
+            self.bodies.append(0.0)
+        index = min(max(body, 0), len(self.bodies) - 1)
+        before = self.bodies[index]
+        self.bodies[index] = max(before + delta, 0.0)
+        return self.bodies[index] - before
 
     def find_sketch(self, name: str) -> _Sketch:
         for sketch in self.sketches:
@@ -679,8 +770,6 @@ class MockBackend(Backend):
         document.sketches.append(sketch)
         document.modified = True
         self._record("build_sketch", name=name, plane=plan.plane, **plan.summary())
-
-        free = _degrees_of_freedom(plan)
         return _sketch_info(sketch)
 
     def _plane_and_offset(self, document: _Document,
@@ -723,31 +812,6 @@ class MockBackend(Backend):
             )
 
         plane = sketch.base_plane
-        if request.extent == "distance":
-            assert request.distance is not None
-            distance = request.distance.value
-        else:
-            # Measured over the profile itself: how thick the part is *there*,
-            # which for a slot at the end of an L-bracket's base is the base and
-            # not the whole 90 mm the bounding box would charge for.
-            centre = _loop_center(sketch.plan, loops[0])
-            distance = _through_all_distance(
-                document, plane, over=map3d(plane, centre[0], centre[1], sketch.offset))
-
-        area = _net_area(sketch, loops)
-        name = self._feature_name(document, request.name, "extrusion")
-        signed = area * distance
-        was = document.volume
-        if request.operation == "cut":
-            document.volume = max(document.volume - signed, 0.0)
-        else:
-            document.volume += signed
-        moved = document.volume - was
-
-        # Bodies are tracked only well enough for `combine` to mean something:
-        # a `new_body` extrude starts one, anything else lands on the first.
-        if not document.bodies and was > 0:
-            document.bodies = [was]
         if request.bodies:
             available = len(document.bodies)
             for index in request.bodies:
@@ -757,20 +821,47 @@ class MockBackend(Backend):
                         hint="A second body comes from an `extrude` with "
                         "operation 'new_body'.",
                     )
-        if request.operation == "new_body":
-            document.bodies.append(signed)
-        elif document.bodies:
-            # Inventor lands a feature on the first body unless it is aimed
-            # somewhere else, and a cut aimed at the wrong body removes nothing
-            # -- which is the mistake the rehearsal exists to catch.
-            target = request.bodies[0] - 1 if request.bodies else 0
-            document.bodies[target] = max(document.bodies[target] + moved, 0.0)
+        # Inventor lands a feature on the first body unless it is aimed
+        # somewhere else, and a cut aimed at the wrong body removes nothing --
+        # which is the mistake the rehearsal exists to catch.
+        aimed = (request.bodies[0] - 1) if request.bodies else None
+        centre = _loop_center(sketch.plan, loops[0])
+        over = map3d(plane, centre[0], centre[1], sketch.offset)
+        if request.extent == "distance":
+            assert request.distance is not None
+            distance = request.distance.value
+        else:
+            # Measured over the profile itself: how thick the part is *there*,
+            # which for a slot at the end of an L-bracket's base is the base and
+            # not the whole 90 mm the bounding box would charge for.
+            distance = _through_all_distance(document, plane, over=over, body=aimed)
 
-        self._synthesise_extrude_topology(document, sketch, loops, plane, distance,
-                                          request.direction, name,
-                                          cut=request.operation == "cut")
-        if request.operation != "cut":
-            self._record_slabs(document, sketch, loops, plane, distance, request.direction)
+        area = _net_area(sketch, loops)
+        name = self._feature_name(document, request.name, "extrusion")
+        span = _sweep_span(sketch.offset, distance, request.direction)
+        cut = request.operation == "cut"
+        if cut:
+            reach, how, span = self._cut_reach(
+                document, plane, sketch, loops, distance, span,
+                measured=request.extent != "distance", body=aimed)
+        else:
+            reach, how = distance, None
+        signed = area * reach
+
+        if request.operation == "new_body":
+            document.bodies.append(0.0)
+            target = len(document.bodies) - 1
+        else:
+            target = aimed if aimed is not None else 0
+        moved = document.charge(-signed if cut else signed, target)
+
+        self._synthesise_extrude_topology(document, sketch, loops, plane,
+                                          _sweep_span(sketch.offset, distance,
+                                                      request.direction),
+                                          name, cut=cut)
+        self._record_slabs(document, sketch, loops, plane, span,
+                           sign=-1.0 if cut else 1.0, body=target,
+                           source="cut" if cut else request.operation)
 
         feature = _Feature(
             id=self._next("feat"),
@@ -789,6 +880,7 @@ class MockBackend(Backend):
                 "bodies": list(request.bodies) or None,
                 "profiles": len(loops),
                 "profile_area_cm2": round(area, 6),
+                "volume_from": how,
             },
         )
         document.features.append(feature)
@@ -799,21 +891,111 @@ class MockBackend(Backend):
 
     def _record_slabs(self, document: _Document, sketch: _Sketch,
                       loops: Sequence[Sequence[str]], plane: str,
-                      distance: float, direction: str) -> None:
-        """Remember the prisms this extrude added, for later thickness queries."""
-        if direction == "negative":
-            near, far = -distance, 0.0
-        elif direction == "symmetric":
-            near, far = -distance / 2, distance / 2
-        else:
-            near, far = 0.0, distance
-        near += sketch.offset
-        far += sketch.offset
+                      span: tuple[float, float], *, sign: float = 1.0,
+                      body: int = 0, source: str = "extrude") -> None:
+        """Remember the prisms this feature added or emptied.
+
+        A cut records a void rather than nothing: the region it swept holds no
+        material afterwards however much it held before, so the ledger is right
+        about it either way, and the next cut through the same place is charged
+        what is left instead of the same material again.
+        """
+        near, far = span
         for loop in loops:
             outline = loop_points(sketch.plan, loop)
             if len(outline) >= 3:
                 document.slabs.append(
-                    _Slab(plane=plane, outline=outline, near=near, far=far))
+                    _Slab(plane=plane, outline=outline, near=near, far=far,
+                          sign=sign, body=body, source=source))
+
+    def _record_bores(self, document: _Document, plane: str, offset: float,
+                      centres: Sequence[tuple[float, float]], radius: float,
+                      depth: float) -> None:
+        """Record each drilled hole as a void, so later features see through it.
+
+        Which way the drill goes is measured rather than assumed, the same way
+        the COM backend decides it: the material is on one side of the sketch
+        plane, and that is the side the hole goes into.
+
+        ponytail: the bore is recorded for its full depth even where part of
+        that depth runs through air, and the hole is still *charged* its full
+        depth. A hole deeper than the material it stands on removes too much
+        here, as it always has; what is new is only that the next feature can
+        see the hole.
+        """
+        normal = plane_normal(plane)
+        axis = max(range(3), key=lambda index: abs(normal[index]))
+        circle = [
+            (math.cos(step * math.pi / 12) * radius, math.sin(step * math.pi / 12) * radius)
+            for step in range(24)
+        ]
+        for u, v in centres:
+            over = map3d(plane, u, v, offset)
+            spans = _material_spans(document, axis, over)
+            side = 1.0
+            if spans:
+                here = over[axis]
+                reach = max(abs(high - here) for _, high in spans) + abs(depth) + 1.0
+                ahead = _span_length(spans, (here, here + reach))
+                behind = _span_length(spans, (here - reach, here))
+                side = -1.0 if behind > ahead else 1.0
+            document.slabs.append(_Slab(
+                plane=plane,
+                outline=[(u + du, v + dv) for du, dv in circle],
+                near=offset, far=offset + side * depth,
+                sign=-1.0, source="hole"))
+
+    def _cut_reach(self, document: _Document, plane: str, sketch: _Sketch,
+                   loops: Sequence[Sequence[str]], distance: float,
+                   span: tuple[float, float], *, measured: bool,
+                   body: int | None) -> tuple[float, str, tuple[float, float]]:
+        """How much material a cut meets, why that number, and what it empties.
+
+        The simulator has no booleans, so a cut used to be charged its whole
+        swept prism: the enclosure's cable entry, a 12 x 6 mm slot swept the
+        70 mm depth of a box whose walls are 2.5 mm thick, was charged 5.04 cm^3
+        against the 0.36 it removes. The ledger answers that directly -- how much
+        material lies inside the sweep, over points the profile covers -- and the
+        two walls come to 5 mm.
+
+        ponytail: a handful of sample points stand in for the whole profile, and
+        the *most* material any of them sees is charged to all of it. A cut whose
+        profile sees the same thickness all the way across, which is the usual
+        one, is exact; a cut straddling a step is over-charged. That is the way
+        round this has to be wrong: too much material removed shows up as a
+        volume that is obviously off, where too little looks like a cut that
+        worked.
+        """
+        normal = plane_normal(plane)
+        axis = max(range(3), key=lambda index: abs(normal[index]))
+        best: list[tuple[float, float]] | None = None
+        for point in _profile_samples(sketch, loops):
+            spans = _material_spans(
+                document, axis, map3d(plane, point[0], point[1], sketch.offset), body)
+            if spans is None:
+                continue
+            if best is None or _span_length(spans, span) > _span_length(best, span):
+                best = spans
+        if best is None:
+            return (distance,
+                    "the whole swept prism: no recorded prism covers this "
+                    "profile, so there is nothing to measure it against",
+                    span)
+        if measured:
+            # A through-all extent was already measured through the material, so
+            # the distance *is* the answer; what it empties is everything from
+            # the first face it meets to the last.
+            if not best:
+                return (distance, "nothing: the profile stands over a void", span)
+            return (distance, "measured through the material the profile covers",
+                    (min(low for low, _ in best), max(high for _, high in best)))
+        reach = _span_length(best, span)
+        if reach >= distance - 1e-12:
+            return (distance, "the whole sweep, which is material all the way", span)
+        return (reach,
+                f"the {reach:.4g} cm of material the cut meets, out of a "
+                f"{distance:.4g} cm sweep",
+                span)
 
     def _synthesise_extrude_topology(
         self,
@@ -821,21 +1003,12 @@ class MockBackend(Backend):
         sketch: _Sketch,
         loops: Sequence[Sequence[str]],
         plane: str,
-        distance: float,
-        direction: str,
+        span: tuple[float, float],
         feature_name: str,
         cut: bool = False,
     ) -> None:
         normal = plane_normal(plane)
-        offset = sketch.offset
-        if direction == "negative":
-            near, far = -distance, 0.0
-        elif direction == "symmetric":
-            near, far = -distance / 2, distance / 2
-        else:
-            near, far = 0.0, distance
-        near += offset
-        far += offset
+        near, far = span
 
         minx, miny, maxx, maxy = plan_bounds(sketch.plan)
         for depth in (near, far):
@@ -993,12 +1166,7 @@ class MockBackend(Backend):
                   if request.operation == "cut" else None)
         area, radius = _pappus(sketch, loops, request.axis, window)
         volume = area * radius * angle
-        was = document.volume
-        if request.operation == "cut":
-            document.volume = max(document.volume - volume, 0.0)
-        else:
-            document.volume += volume
-        moved = document.volume - was
+        moved = document.charge(-volume if request.operation == "cut" else volume)
 
         if request.operation != "cut":
             self._expand_for_revolve(document, sketch, request.axis)
@@ -1058,10 +1226,8 @@ class MockBackend(Backend):
         path = document.find_sketch(request.path_sketch)
         area = _net_area(profile, profile.loops)
         length = _path_length(path.plan)
-        was = document.volume
-        document.volume += area * length if request.operation != "cut" else -area * length
-        document.volume = max(document.volume, 0.0)
-        moved = document.volume - was
+        moved = document.charge(-area * length if request.operation == "cut"
+                                else area * length)
         if request.operation != "cut":
             self._expand_for_sweep(document, profile, path)
         name = self._feature_name(document, request.name, "sweep")
@@ -1103,12 +1269,7 @@ class MockBackend(Backend):
         per_turn = math.hypot(2.0 * math.pi * radius, pitch or 0.0)
         estimate = area * per_turn * turns
 
-        was = document.volume
-        if request.operation == "cut":
-            document.volume = max(document.volume - estimate, 0.0)
-        else:
-            document.volume += estimate
-        moved = document.volume - was
+        moved = document.charge(-estimate if request.operation == "cut" else estimate)
         name = self._feature_name(document, request.name, "coil")
         feature = _Feature(self._next("feat"), name, "coil", volume_delta=moved,
                            detail={"sketch": sketch.name,
@@ -1142,12 +1303,11 @@ class MockBackend(Backend):
         if request.operation == "cut":
             if was <= 0:
                 raise FeatureError("Nothing to cut: the part has no solid body yet.")
-            document.volume = max(was - estimate, 0.0)
+            moved = document.charge(-estimate)
         elif request.operation == "intersect":
-            document.volume = min(was, estimate)
+            moved = document.charge(min(estimate - was, 0.0))
         else:
-            document.volume += estimate
-        moved = document.volume - was
+            moved = document.charge(estimate)
         if request.operation == "cut" and moved == 0:
             raise FeatureError(
                 "The loft cut removed nothing.",
@@ -1185,9 +1345,8 @@ class MockBackend(Backend):
             depth = _through_all_distance(
                 document, plane, over=map3d(plane, first[0], first[1], sketch.offset))
         removed = (math.pi * radius**2 * depth + _style_volume(request, radius)) * len(centers)
-        was = document.volume
-        document.volume = max(document.volume - removed, 0.0)
-        moved = document.volume - was
+        moved = document.charge(-removed)
+        self._record_bores(document, plane, sketch.offset, centers, radius, depth)
 
         name = self._feature_name(document, request.name, "hole")
         for index, (u, v) in enumerate(centers):
@@ -1253,7 +1412,10 @@ class MockBackend(Backend):
             mean_squared = a * a + a * (b - a) + 13.0 / 35.0 * (b - a) ** 2
         return self._edge_treatment(
             doc_id, "fillet", request.edges, mean_squared * (1.0 - math.pi / 4.0),
-            request.name, detail)
+            request.name, detail,
+            # A variable fillet is not one arc, so there is no single corner to
+            # put in the outline and it is left as it was.
+            radius=request.radius.value if request.radius_end is None else None)
 
     def chamfer(self, doc_id: str, request: ChamferRequest) -> FeatureInfo:
         """A flat cut takes away a triangle, which is not what a fillet takes.
@@ -1280,7 +1442,11 @@ class MockBackend(Backend):
         else:
             second = first
         return self._edge_treatment(doc_id, "chamfer", request.edges,
-                                    0.5 * first * second, request.name, detail)
+                                    0.5 * first * second, request.name, detail,
+                                    # Which leg falls on which edge is a choice
+                                    # only the live faces can settle; equal
+                                    # distances, the usual case, do not care.
+                                    setbacks=(first, second))
 
     def _edge_treatment(
         self,
@@ -1290,6 +1456,8 @@ class MockBackend(Backend):
         per_length: float,
         requested_name: str | None,
         detail: dict[str, Any],
+        radius: float | None = None,
+        setbacks: tuple[float, float] | None = None,
     ) -> FeatureInfo:
         """Move the volume by *per_length* of cross-section along every match.
 
@@ -1325,16 +1493,18 @@ class MockBackend(Backend):
         # part whose edges are shorter than the radius is large.
         adds = selector.filter == "concave"
         corner = total_length * per_length
-        was = document.volume
-        document.volume = max(document.volume + (corner if adds else -corner), 0.0)
+        moved = document.charge(corner if adds else -corner)
+        corners = self._treat_outline_corners(document, matches, radius=radius,
+                                              setbacks=setbacks)
         for match in matches:
             match.consumed = True
         feature = _Feature(
             id=self._next("feat"),
             name=name,
             kind=kind,
-            volume_delta=document.volume - was,
+            volume_delta=moved,
             detail={**detail, "edges": len(matches), "edge_ids": [m.id for m in matches],
+                    "outline_corners": corners,
                     "volume_note": ("added, since the selector asks for a concave edge"
                                     if adds else "removed, as on an outside corner")},
         )
@@ -1343,24 +1513,82 @@ class MockBackend(Backend):
         self._record(kind, name=name, edges=len(matches))
         return _feature_info(feature)
 
+    def _treat_outline_corners(self, document: _Document, matches: Sequence[_Topo], *,
+                               radius: float | None,
+                               setbacks: tuple[float, float] | None) -> int:
+        """Round or cut the recorded prisms wherever a treated edge is a corner.
+
+        An edge running along a prism sits at a corner of that prism's profile,
+        so filleting it changes the profile -- and the profile is what the shell
+        and every later cut measure against. Leaving it square made the
+        enclosure's cavity 10.5 mm^2 too big and the finished part 0.34 cm^3
+        light, which is a fillet quietly paid for twice.
+
+        Only edges the ledger can place are treated: one running along a
+        recorded prism, at one of that prism's own vertices. A fillet on
+        anything else -- a revolved body, an end cap, a patterned occurrence --
+        moves the volume as before and leaves the outline alone, because there
+        is no recorded corner to move.
+
+        ponytail: the volume the feature charges is worked out from the edge
+        lengths and is not reconciled with the area this takes off the profile.
+        The two agree exactly at a right angle, which is the corner of a
+        rectangular outline and the case that prompted this; they drift apart as
+        the corner does.
+        """
+        if radius is None and setbacks is None:
+            return 0
+        treated = 0
+        for match in matches:
+            if match.kind != "edge" or match.direction is None:
+                continue
+            for slab in document.slabs:
+                if slab.sign < 0:
+                    continue
+                normal = plane_normal(slab.plane)
+                along = sum(a * b for a, b in zip(match.direction, normal))
+                if abs(abs(along) - 1.0) > 1e-6:
+                    continue
+                u, v, w = to_sketch(slab.plane, match.midpoint)
+                if not (min(slab.near, slab.far) - 1e-6 <= w
+                        <= max(slab.near, slab.far) + 1e-6):
+                    continue
+                index = next(
+                    (at for at, point in enumerate(slab.outline)
+                     if abs(point[0] - u) < 1e-6 and abs(point[1] - v) < 1e-6),
+                    None,
+                )
+                if index is None:
+                    continue
+                outline = treat_polygon_corner(slab.outline, index, radius=radius,
+                                               setbacks=setbacks)
+                if outline is not None:
+                    slab.outline = outline
+                    treated += 1
+                break
+        return treated
+
     def shell(self, doc_id: str, request: ShellRequest) -> FeatureInfo:
         document = self._doc(doc_id)
         if document.volume <= 0:
             raise FeatureError("Nothing to shell: the part has no solid body yet.")
         openings = self._match(document, request.faces) if request.faces.ids or request.faces.filter != "all" else []
-        removed, how = self._hollow_out(document, request, openings)
-        document.volume -= removed
+        removed, how, estimated = self._hollow_out(document, request, openings)
+        moved = document.charge(-removed)
         name = self._feature_name(document, request.name, "shell")
         feature = _Feature(
             id=self._next("feat"),
             name=name,
             kind="shell",
-            volume_delta=-removed,
+            volume_delta=moved,
             detail={
                 "thickness": request.thickness.as_dict(),
                 "direction": request.direction,
                 "removed_faces": len(openings),
                 "volume_from": how,
+                # Read by the rehearsal, which will not compare a step whose
+                # number is a fallback rather than a measurement.
+                "estimated": estimated,
             },
         )
         document.features.append(feature)
@@ -1388,13 +1616,8 @@ class MockBackend(Backend):
                 hint="An emboss needs a `text` entity or a closed profile.",
             )
 
-        moved = area * request.depth.value
-        was = document.volume
-        if request.style == "engrave":
-            document.volume = max(document.volume - moved, 0.0)
-        else:
-            document.volume += moved
-        delta = document.volume - was
+        cut = area * request.depth.value
+        delta = document.charge(-cut if request.style == "engrave" else cut)
 
         name = self._feature_name(document, request.name, "emboss")
         feature = _Feature(
@@ -1446,14 +1669,13 @@ class MockBackend(Backend):
         height = self._pull_extent(document, request.plane)
         area = sum(topo.area or 0.0 for topo in faces)
         removed = 0.5 * area * height * abs(math.tan(request.angle.value))
-        was = document.volume
-        document.volume = max(document.volume - removed, 0.0)
+        moved = document.charge(-removed)
         name = self._feature_name(document, request.name, "draft")
         feature = _Feature(
             id=self._next("feat"),
             name=name,
             kind="draft",
-            volume_delta=document.volume - was,
+            volume_delta=moved,
             detail={
                 "faces": len(faces),
                 "plane": request.plane,
@@ -1469,7 +1691,7 @@ class MockBackend(Backend):
 
     def combine(self, doc_id: str, request: CombineRequest) -> FeatureInfo:
         document = self._doc(doc_id)
-        bodies = document.bodies or [document.volume]
+        bodies = list(document.bodies)
         for index in [request.base, *request.tools]:
             if index < 1 or index > len(bodies):
                 raise FeatureError(
@@ -1491,7 +1713,6 @@ class MockBackend(Backend):
         if not request.keep_tools:
             keep = [v for i, v in enumerate(keep, start=1) if i not in request.tools]
         document.bodies = keep
-        document.volume = sum(keep)
         name = self._feature_name(document, request.name, "combine")
         feature = _Feature(
             id=self._next("feat"),
@@ -1517,18 +1738,36 @@ class MockBackend(Backend):
         if document.volume <= 0:
             raise FeatureError("Nothing to split: the part has no solid body yet.")
         was = document.volume
+        how = "the ledger's prisms, clipped at the plane"
+        estimated = False
         if request.style == "trim":
-            # Where the plane falls inside the bounding box is the only cheap
-            # estimate of how much goes away.
-            # ponytail: assumes the part is spread evenly either side of the cut,
-            # which a tray is not. Directional, not dimensional.
-            kept = self._trim_fraction(document, request)
-            document.volume = document.volume * kept
-            document.bodies = [document.volume] if document.bodies else []
-        elif request.style == "split":
-            bodies = document.bodies or [document.volume]
-            half = bodies[0] / 2
-            document.bodies = [half, half, *bodies[1:]]
+            axis, offset = self._cut_axis_and_offset(document, request.tool)
+            # The schema's promise: `remove_positive` discards the side the
+            # plane's normal points at, so what is kept is what lies below it.
+            ratios = self._trim_ratios(document, axis, offset,
+                                       keep_below=request.remove_positive)
+            if ratios is None:
+                estimated = True
+                how = "estimated from where the plane falls in the bounding box"
+                kept = self._trim_fraction(document, request)
+                ratios = dict.fromkeys(range(len(document.bodies)), kept)
+            document.bodies = [volume * ratios.get(index, 1.0)
+                               for index, volume in enumerate(document.bodies)]
+            self._clip_slabs(document, axis, offset,
+                             keep_below=request.remove_positive)
+            # And the part is smaller now, which the bounds have to say. They
+            # did not, so a trimmed part still measured as the size it was
+            # before the cut -- and with the box unchanged the centre of it
+            # could not move, which is the one signal that distinguishes
+            # keeping this half from keeping the other one.
+            if document.bounds:
+                if request.remove_positive:
+                    document.bounds[axis + 3] = min(document.bounds[axis + 3], offset)
+                else:
+                    document.bounds[axis] = max(document.bounds[axis], offset)
+        elif request.style == "split" and document.bodies:
+            half = document.bodies[0] / 2
+            document.bodies = [half, half, *document.bodies[1:]]
         name = self._feature_name(document, request.name, "split")
         feature = _Feature(
             id=self._next("feat"),
@@ -1539,7 +1778,11 @@ class MockBackend(Backend):
                 "tool": request.tool,
                 "style": request.style,
                 "remove_positive": request.remove_positive,
-                "volume_from": "estimated from where the plane falls in the bounding box",
+                "volume_from": how,
+                # Read by the rehearsal, which will not compare a step whose
+                # number is a fallback. Prose says which branch ran; this says
+                # whether the answer can be checked against anything.
+                "estimated": estimated,
             },
         )
         document.features.append(feature)
@@ -1547,10 +1790,66 @@ class MockBackend(Backend):
         self._record("split", name=name, style=request.style)
         return _feature_info(feature)
 
+    def _cut_axis_and_offset(self, document: _Document, tool: str) -> tuple[int, float]:
+        """Which axis a cutting plane is perpendicular to, and where it sits.
+
+        A work plane's axis comes from the plane it was built on, not from its
+        own name. Reading the name meant every work plane not called xy, xz or
+        yz fell through to the default and was treated as horizontal, so a part
+        trimmed at a plane offset from YZ was cut across Z instead of X.
+        """
+        base, offset = document.work_planes.get(tool, (tool, 0.0))
+        return self._PLANE_AXIS.get(base.split(":")[0], 2), offset
+
+    def _trim_ratios(self, document: _Document, axis: int, cut: float,
+                     *, keep_below: bool) -> dict[int, float] | None:
+        """Per body, the share of its ledger volume the trim keeps.
+
+        A share rather than the volume itself, because the ledger knows about
+        prisms and not about the fillets, chamfers and drafts that have since
+        adjusted the total. Scaling by the share keeps those and fixes the thing
+        that was actually wrong: where the share came from.
+
+        It used to come from the bounding box, on the assumption that a part is
+        spread evenly either side of the cut. A base slab with a boss on it is
+        not, and the error is not small -- 11.66 cm^3 kept where the answer is
+        20.8. Returns None when the ledger has nothing to say, which is a
+        revolve, a sweep or a loft, and then the old estimate stands.
+        """
+        if not document.slabs:
+            return None
+        whole: dict[int, float] = {}
+        kept: dict[int, float] = {}
+        for slab in document.slabs:
+            whole[slab.body] = whole.get(slab.body, 0.0) + slab.volume
+            piece = slab.clipped(axis, cut, keep_below)
+            if piece is not None:
+                kept[slab.body] = kept.get(slab.body, 0.0) + piece.volume
+        ratios: dict[int, float] = {}
+        for body, total in whole.items():
+            if total <= 0:
+                return None
+            ratios[body] = min(max(kept.get(body, 0.0) / total, 0.0), 1.0)
+        return ratios
+
+    def _clip_slabs(self, document: _Document, axis: int, cut: float,
+                    *, keep_below: bool) -> None:
+        """Take the trimmed-off half out of the ledger as well as the total.
+
+        Otherwise every later cut is measured against the part as it was before
+        the trim -- which is the mistake the shell made for as long as it left
+        the ledger alone, and it cost a 26x over-count on the enclosure.
+        """
+        survivors: list[_Slab] = []
+        for slab in document.slabs:
+            piece = slab.clipped(axis, cut, keep_below)
+            if piece is not None:
+                survivors.append(piece)
+        document.slabs = survivors
+
     def _trim_fraction(self, document: _Document, request: SplitRequest) -> float:
-        """What share of the volume a trim keeps."""
-        axis = self._PLANE_AXIS.get(request.tool.split(":")[0], 2)
-        offset = document.work_planes.get(request.tool, (None, 0.0))[1]
+        """What share of the volume a trim keeps, when the ledger cannot say."""
+        axis, offset = self._cut_axis_and_offset(document, request.tool)
         if not document.bounds:
             return 0.5
         low, high = document.bounds[axis], document.bounds[axis + 3]
@@ -1574,6 +1873,11 @@ class MockBackend(Backend):
         This is exact while occurrences do not overlap each other or run off the
         part, which is the normal case and the only one a pattern is usually
         asked for. It says so rather than implying more.
+
+        ponytail: an occurrence moves the volume but records no prism of its
+        own, so the ledger knows about the seed's material or void and not about
+        the copies. A cut through where a patterned hole went is measured
+        against material the pattern has already taken away.
         """
         if extra <= 0:
             return 0.0, "no additional occurrences"
@@ -1582,58 +1886,131 @@ class MockBackend(Backend):
             return 0.0, ("volume not modelled: nothing was recorded for "
                          + ", ".join(unknown))
         seed = sum(target.volume_delta or 0.0 for target in targets)
-        was = document.volume
-        document.volume = max(document.volume + seed * extra, 0.0)
-        moved = document.volume - was
+        moved = document.charge(seed * extra)
         return moved, (f"{extra} more occurrence(s) of {moved:+.4f} cm^3 in total, "
                        "assuming they do not overlap each other or the part's edge")
 
+    #: Where a wall of thickness t sits relative to the face it is built on:
+    #: how much of it reaches outward and how much inward. They add to one.
+    #: Measured on Inventor 2027.1 for `both`, which straddles the face half
+    #: each way -- a 60x40x20 box with its top off and a 2 mm wall came to
+    #: 6.2 x 4.2 x 2.1 less 5.8 x 3.8 x 1.9, and Inventor removed 35.1920 to
+    #: the digit. See `examples/calibration/shelled_both_ways.json`.
+    _WALL_SPLIT = {"inside": (0.0, 1.0), "both": (0.5, 0.5), "outside": (1.0, 0.0)}
+
     def _hollow_out(self, document: _Document, request: ShellRequest,
-                    openings: Sequence[_Topo]) -> tuple[float, str]:
+                    openings: Sequence[_Topo]) -> tuple[float, str, bool]:
         """How much a shell takes out, exactly where that is knowable.
 
-        A shelled prism is the outline inset by the wall thickness, swept: the
-        cavity's cross-section is an exact function of the outline, and the only
-        question is how much of the sweep it spans -- one wall thickness less for
-        each face left in place. That makes the commonest shell (a box with its
-        top removed) predictable rather than estimated, which is what lets a live
-        one be checked against it.
+        A shelled prism is the outline offset by the wall, swept: both surfaces
+        are exact functions of the outline, and the only question is how much of
+        the sweep each spans -- one wall less for every face left in place. That
+        makes the commonest shells predictable rather than estimated, which is
+        what lets a live one be checked against a prediction.
 
-        Anything else falls back to the old estimate -- the surface area times the
-        thickness -- and says so, because a shell of a revolved or swept body is
-        not a prism and pretending otherwise would be worse than approximating.
+        All three directions are exact, and the difference between them is only
+        where the wall sits relative to the face it is built on. `inside` puts
+        it all within, so the outer boundary does not move. `outside` puts it
+        all beyond, so the original solid becomes the void. `both` straddles,
+        half each way. Only `inside` used to be computed, because offsetting an
+        outline *outward* was not possible until :func:`inset_area` learned to
+        take a negative distance -- so the two that grow the part fell back to
+        an estimate, and one of them was 13.6% out.
 
-        ponytail: whichever branch runs, `document.slabs` is left alone. Slabs
-        record the prisms an extrude added and are what `_through_all_distance`
-        measures thickness against, so every through-cut *after* a shell is
-        charged against the solid the part was before it. The PCB enclosure's
-        cable bore was costed at the full 105 mm box length instead of two 2 mm
-        walls, a 26x over-count. `rehearse` knows to stop trusting itself here
-        -- it marks every later step `predictable: false` -- but the numbers
-        themselves are still wrong, and anything reading them directly inherits
-        that.
+        Anything that is not a single prism falls back to the surface area times
+        the thickness, and *says so* -- the third return value is what the
+        rehearsal reads to leave the step out of the comparison entirely, the
+        same seam the trim uses. That is what lets the tolerance be the one the
+        exact branch deserves rather than one wide enough to hide a fallback.
+
+        An opening that is not perpendicular to the sweep takes the same route.
+        The cavity there is the outline inset on some sides and flush with the
+        others, which is not something an inset area can say, and the exact
+        branch used to quietly treat that face as closed -- over-stating the
+        wall and under-stating the cavity, with nothing to indicate it. An
+        estimate that admits itself is better than an exact-looking answer to a
+        question that was not asked.
+
+        Both surfaces are also *recorded* -- the cavity as a void, and the grown
+        boundary in place of the one it replaces. The cavity used not to be, and
+        that was the simulator's worst single error: through-cuts after a shell
+        were charged against the solid the part had been before it was hollowed,
+        so the enclosure's cable entry cost 5.04 cm^3 against the 0.36 it
+        removes. Nothing is recorded where an offset could not be built, because
+        a boundary whose shape is unknown is worse in the ledger than absent.
+
         """
         thickness = request.thickness.value
-        if len(document.slabs) == 1 and request.direction == "inside":
-            slab = document.slabs[0]
-            inner = inset_area(slab.outline, thickness)
-            sweep = abs(slab.far - slab.near)
-            if inner is not None and sweep > 0:
-                # An opening perpendicular to the sweep is a cap: it leaves the
-                # cavity running all the way to that end.
-                normal = plane_normal(slab.plane)
-                caps = sum(
-                    1 for face in openings
-                    if face.normal is not None
-                    and abs(sum(a * b for a, b in zip(face.normal, normal))) > 0.9
-                )
-                depth = sweep - thickness * max(2 - caps, 0)
-                if depth > 0:
-                    return (min(inner * depth, document.volume),
-                            "the outline inset by the wall thickness, swept")
+        split = self._WALL_SPLIT.get(request.direction)
+        if len(document.slabs) == 1 and split is not None:
+            exact = self._shell_a_prism(document, thickness, split, openings)
+            if exact is not None:
+                removed, how = exact
+                return removed, how, False
         surface = sum(match.area or 0.0 for match in document.topology if match.kind == "face")
         return (max(document.volume - surface * thickness, 0.0),
-                "estimated from the surface area: this body is not a single prism")
+                "estimated from the surface area: this is not a prism shelled "
+                "through its ends", True)
+
+    def _shell_a_prism(self, document: _Document, thickness: float,
+                       split: tuple[float, float],
+                       openings: Sequence[_Topo]) -> tuple[float, str] | None:
+        """The exact answer for the one body the ledger holds, or None."""
+        slab = document.slabs[0]
+        sweep = abs(slab.far - slab.near)
+        if sweep <= 0:
+            return None
+        outward, inward = (thickness * share for share in split)
+
+        # An opening perpendicular to the sweep is a cap: it leaves the cavity
+        # running all the way to that end, and no wall is built there.
+        normal = plane_normal(slab.plane)
+        along = [sum(a * b for a, b in zip(face.normal, normal))
+                 for face in openings if face.normal is not None]
+        caps = sum(1 for value in along if abs(value) > 0.9)
+        # An opening in a *side* is a hole in the wall, not a cap, and the
+        # cavity is then the outline inset on some edges and flush with others
+        # -- which an inset area cannot express. This used to be ignored and the
+        # face treated as closed, so the volume was wrong in a way that looked
+        # exact. Hand it to the estimate, which says what it is.
+        if len(openings) > caps:
+            return None
+        open_high = caps == 2 or any(value > 0.9 for value in along)
+        open_low = caps == 2 or any(value < -0.9 for value in along)
+
+        low, high = min(slab.near, slab.far), max(slab.near, slab.far)
+        cavity = (low if open_low else low + inward,
+                  high if open_high else high - inward)
+        outer = (low if open_low else low - outward,
+                 high if open_high else high + outward)
+        if cavity[1] - cavity[0] <= 0:
+            return None
+
+        face = _outline_area(slab.outline)
+        inner_area = face if inward == 0 else inset_area(slab.outline, inward)
+        outer_area = face if outward == 0 else inset_area(slab.outline, -outward)
+        if not inner_area or not outer_area:
+            return None
+
+        before = face * sweep
+        after = outer_area * (outer[1] - outer[0]) - inner_area * (cavity[1] - cavity[0])
+        removed = before - after
+
+        cavity_outline = (list(slab.outline) if inward == 0
+                          else inset_polygon(slab.outline, inward))
+        outer_outline = (list(slab.outline) if outward == 0
+                         else inset_polygon(slab.outline, -outward))
+        if cavity_outline is not None and outer_outline is not None:
+            slab.outline = outer_outline
+            slab.near, slab.far = outer
+            document.slabs.append(_Slab(
+                plane=slab.plane, outline=cavity_outline,
+                near=cavity[0], far=cavity[1],
+                sign=-1.0, body=slab.body, source="shell"))
+        wall = {(0.0, 1.0): "inside", (0.5, 0.5): "split either side of the face",
+                (1.0, 0.0): "outside"}.get(split, "as asked")
+        return (min(removed, document.volume),
+                f"the outline offset by the wall and swept, wall {wall}")
 
     def rectangular_pattern(self, doc_id: str, request: RectangularPatternRequest) -> FeatureInfo:
         document = self._doc(doc_id)
@@ -2098,6 +2475,17 @@ def _loft_volume(areas: Sequence[float], offsets: Sequence[float]) -> float:
     return total
 
 
+def _outline_area(points: Sequence[tuple[float, float]]) -> float:
+    """A closed polygon's area, by the shoelace, unsigned."""
+    if len(points) < 3:
+        return 0.0
+    total = 0.0
+    for index, current in enumerate(points):
+        following = points[(index + 1) % len(points)]
+        total += current[0] * following[1] - following[0] * current[1]
+    return abs(total) / 2
+
+
 def _net_area(sketch: _Sketch, loops: Sequence[Sequence[str]]) -> float:
     """The material a profile encloses: outer loops less the holes inside them.
 
@@ -2319,8 +2707,62 @@ def _scan(outline: Sequence[tuple[float, float]], at: float,
     return min(hits), max(hits)
 
 
+def _sweep_span(offset: float, distance: float, direction: str) -> tuple[float, float]:
+    """Where an extrusion of *distance* in *direction* starts and ends.
+
+    In the sketch plane's normal coordinate, which for every plane this
+    simulator knows runs the same way as the model axis it maps to.
+    """
+    if direction == "negative":
+        near, far = -distance, 0.0
+    elif direction == "symmetric":
+        near, far = -distance / 2, distance / 2
+    else:
+        near, far = 0.0, distance
+    return (near + offset, far + offset)
+
+
+def _add_span(spans: list[tuple[float, float]],
+              span: tuple[float, float]) -> list[tuple[float, float]]:
+    """*spans* with *span* filled in, kept sorted and non-overlapping."""
+    low, high = min(span), max(span)
+    merged: list[tuple[float, float]] = []
+    for start, end in sorted([*spans, (low, high)]):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _remove_span(spans: Sequence[tuple[float, float]],
+                 span: tuple[float, float]) -> list[tuple[float, float]]:
+    """*spans* with *span* taken out, which may split one in two."""
+    low, high = min(span), max(span)
+    left: list[tuple[float, float]] = []
+    for start, end in spans:
+        if end <= low or start >= high:
+            left.append((start, end))
+            continue
+        if start < low:
+            left.append((start, low))
+        if end > high:
+            left.append((high, end))
+    return left
+
+
+def _span_length(spans: Sequence[tuple[float, float]],
+                 window: tuple[float, float] | None = None) -> float:
+    """How much of *spans* lies inside *window*, or all of it."""
+    if window is None:
+        return sum(high - low for low, high in spans)
+    left, right = min(window), max(window)
+    return sum(max(min(high, right) - max(low, left), 0.0) for low, high in spans)
+
+
 def _through_all_distance(document: _Document, plane: str = "xy",
-                         over: tuple[float, float, float] | None = None) -> float:
+                          over: tuple[float, float, float] | None = None,
+                          body: int | None = None) -> float:
     """How much *material* a through-feature passes through, along the normal.
 
     The body's whole span along that axis is the wrong answer for anything but a
@@ -2330,56 +2772,89 @@ def _through_all_distance(document: _Document, plane: str = "xy",
     looked plausible, and a mirror of that cut doubled it.
 
     Given *over* -- a model-space point the feature passes through -- the answer
-    is measured off the prisms that actually built the part: see
-    :func:`_material_interval`. Without it, or when no prism covers that point,
-    the span stands as before. The span is an over-estimate rather than an
-    under-estimate, which is the right way round for a cut: too much material
-    removed shows up as a volume that is obviously wrong, where too little looks
-    like a cut that worked.
+    is measured off the signed prisms that actually built the part: see
+    :func:`_material_spans`. Material in more than one piece adds up, so a bore
+    through both walls of a hollow box is charged both walls and not the air
+    between them. Without a point, or when no prism covers it, the bounding box
+    stands as before: an over-estimate rather than an under-estimate, which is
+    the right way round for a cut, because too much material removed shows up as
+    a volume that is obviously wrong where too little looks like a cut that
+    worked.
     """
     if not document.bounds:
         return 1.0
     normal = plane_normal(plane)
     axis = max(range(3), key=lambda index: abs(normal[index]))
-    spans = [document.bounds[index + 3] - document.bounds[index] for index in range(3)]
+    box = [document.bounds[index + 3] - document.bounds[index] for index in range(3)]
     if over is not None:
-        interval = _material_interval(document, axis, over)
-        if interval is not None:
-            low, high = interval
-            if high - low > 0:
-                return high - low
-    if spans[axis] > 0:
-        return spans[axis]
-    return max(spans) or 1.0
+        spans = _material_spans(document, axis, over, body)
+        if spans:
+            return _span_length(spans)
+    if box[axis] > 0:
+        return box[axis]
+    return max(box) or 1.0
 
 
-def _material_interval(document: _Document, axis: int,
-                       through: tuple[float, float, float]) -> tuple[float, float] | None:
-    """The extent of material along *axis* over the point *through*, or None.
+def _material_spans(document: _Document, axis: int,
+                    through: tuple[float, float, float],
+                    body: int | None = None) -> list[tuple[float, float]] | None:
+    """Where there is material along *axis* over the point *through*, or None.
 
-    Built from the prisms the part is made of: every joined extrude is a 2D
-    profile swept along its plane's normal, so asking "how thick is the part
-    here" is a question about those profiles rather than about a bounding box.
-    An L-section's bounding box is 90 mm deep where the L itself is 6, which is
-    exactly the difference that mattered.
+    Built from the signed prisms the part is made of, applied in creation
+    order: every extrude is a 2D profile swept along its plane's normal, so
+    asking "how thick is the part here" is a question about those profiles
+    rather than about a bounding box. An L-section's bounding box is 90 mm deep
+    where the L itself is 6, which is the difference that started this.
 
-    Returns None when no prism covers the point -- a revolve, a sweep or a loft
-    is not recorded this way, and inventing an answer for one would be worse
-    than falling back to the span.
+    Order matters, and is why this is not "add the solids, then subtract the
+    voids": a boss standing in a shelled cavity is material again exactly where
+    its own profile covers, and a cut through it is void again after that.
 
-    Cuts are not subtracted from the prisms, so two through-cuts in the same
-    place are each charged the full thickness. That over-removes, which is the
-    safer direction: a volume that is obviously too small gets looked at, where
-    a cut credited with removing nothing looks like a cut that worked.
+    The answer is a list because material can come in pieces. Through the wall
+    of a shelled box there are two: the near wall and the far one, 2.5 mm each
+    with 65 mm of air between, which is 0.36 cm^3 of cable entry rather than the
+    5.04 the whole prism used to be charged.
+
+    Returns None when no prism covers the point at all -- a revolve, a sweep or
+    a loft is not recorded this way, and inventing an answer for one would be
+    worse than falling back to the bounding box.
+
+    *body* restricts the question to one solid, for a cut that names the body it
+    is aimed at. Without it the question is about the part.
     """
-    intervals: list[tuple[float, float]] = []
+    spans: list[tuple[float, float]] | None = None
     for slab in document.slabs:
+        if body is not None and slab.body != body:
+            continue
         interval = slab.interval_along(axis, through)
-        if interval is not None:
-            intervals.append(interval)
-    if not intervals:
-        return None
-    return min(low for low, _ in intervals), max(high for _, high in intervals)
+        if interval is None:
+            continue
+        if slab.sign > 0:
+            spans = _add_span(spans or [], interval)
+        elif spans:
+            spans = _remove_span(spans, interval)
+    return spans
+
+
+def _profile_samples(sketch: _Sketch,
+                     loops: Sequence[Sequence[str]]) -> list[tuple[float, float]]:
+    """A few points inside a profile, to ask what material lies under it.
+
+    The centre, and half way from the centre to each vertex of the first loop.
+    Half way rather than the vertices themselves: a cut drawn flush with the face
+    it cuts has vertices exactly on the boundary of the prism below, where "is
+    this point inside" has no reliable answer.
+    """
+    if not loops:
+        return [(0.0, 0.0)]
+    centre = _loop_center(sketch.plan, loops[0])
+    outline = loop_points(sketch.plan, loops[0])
+    samples = [centre]
+    step = max(1, len(outline) // 8)
+    for index in range(0, len(outline), step):
+        corner = outline[index]
+        samples.append(((centre[0] + corner[0]) / 2, (centre[1] + corner[1]) / 2))
+    return samples
 
 
 def _hole_points(sketch: _Sketch, indices: Sequence[int]) -> list[tuple[float, float]]:

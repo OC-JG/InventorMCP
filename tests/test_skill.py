@@ -299,3 +299,75 @@ class TestTheStandardParts:
         assert hole["tap"] == "M16x2"
         assert hole["diameter"] != "thread_d", (
             "that is the nominal diameter, not the hole you drill to tap it")
+
+
+class TestTheSnapshotPolicy:
+    """That a part gets looked at, and that the caveat matches the defect.
+
+    Adopted from the closest open-source peer, which states it as "deterministic
+    checks passing is not a reason to skip": their modelling notes list six
+    traps that pass every automated check and only a render finds. This server
+    had `capture_view` and no rule that anyone runs it.
+
+    The awkward half is that `capture_view`'s own orientation names do not
+    describe what they return -- `docs/FEATURE_COVERAGE.md` defect 4 -- so the
+    policy has to prescribe `iso` and say why. Which makes the policy and the
+    defect two statements of one fact, in two files, with nothing holding them
+    together. Hence the last test here.
+    """
+
+    COVERAGE = SKILL.parent.parent.parent / "docs" / "FEATURE_COVERAGE.md"
+
+    @pytest.fixture(scope="class")
+    def coverage(self) -> str:
+        return self.COVERAGE.read_text()
+
+    def test_the_skill_says_to_run_it_every_time(self, skill):
+        section = skill[skill.index("## Look at it"):]
+        section = section[:section.index("\n## ", 3)]
+        assert "capture_view" in section
+        assert "every time" in section
+        assert "not a reason to skip" in section, (
+            "the policy's whole point is that passing checks do not excuse it")
+
+    def test_the_guide_the_tools_serve_says_it_too(self):
+        """A caller that never loads the Skill still has to be told."""
+        from inventor_mcp.guide import MODELLING_NOTES
+
+        assert "capture_view" in MODELLING_NOTES
+        assert "iso" in MODELLING_NOTES
+
+    def test_the_tool_itself_says_it(self, server):
+        import asyncio
+
+        tools = {tool.name: tool for tool in asyncio.run(server.list_tools())}
+        description = tools["capture_view"].description
+        assert "before reporting the part finished" in description
+        assert "iso" in description
+
+    def test_the_orientation_it_prescribes_is_one_the_tool_accepts(self, server):
+        import asyncio
+
+        tools = {tool.name: tool for tool in asyncio.run(server.list_tools())}
+        schema = tools["capture_view"].input_schema
+        allowed = schema["properties"]["orientation"]
+        assert "iso" in (allowed.get("enum") or [allowed.get("default")]), allowed
+
+    def test_the_caveat_and_the_defect_are_still_the_same_fact(self, skill, coverage):
+        """When defect 4 is fixed, this policy has to be revisited, not left.
+
+        `FEATURE_COVERAGE.md` strikes a defect's title through when it is fixed.
+        Until then the Skill is right to say the names mislead; afterwards it
+        would be telling people to work around something that works.
+        """
+        defects = coverage[coverage.index("## Defects worth fixing"):]
+        assert "capture_view" in defects, "defect 4 has moved out of that section"
+        # It is the last entry in the file, so there may be no blank line after it.
+        entry = defects[defects.index("\n4. ") + 4:].split("\n\n")[0]
+        assert "capture_view" in entry, f"the fourth defect is not the one meant: {entry[:60]}"
+        fixed = entry.startswith("~~")
+        claims_broken = "has not been fixed" in skill
+        assert fixed != claims_broken, (
+            "docs/FEATURE_COVERAGE.md defect 4 and the Skill's snapshot section "
+            "disagree about whether capture_view's orientation names work. "
+            "Whichever changed, change the other.")

@@ -193,6 +193,22 @@ WORKED EXAMPLE -- a bolted mounting plate:
 }
 """
 
+RECIPE_POINTER = (
+    "The recipe format -- parameters, every sketch entity, every operation and a "
+    "worked example -- is written out once, on `build_part_from_recipe`, and is "
+    "also the `inventor://recipe/guide` resource and what `part_recipe_schema` "
+    "returns. It is not repeated here."
+)
+"""The sentence the other recipe-taking tools carry instead of the cheat-sheet.
+
+The cheat-sheet used to be embedded in three tool descriptions, 98% identical,
+which cost about 4,600 tokens of every request to a client with this server
+enabled before the caller had said a word. A client sees every tool description
+at once, so one copy in the list is as visible as three; the copy that stays is
+on the tool a caller is looking for when it wants to make a part. This pointer
+is what the other two say so a reader of either knows where to look.
+"""
+
 MODELLING_NOTES = """\
 Practical notes that save a rebuild:
 
@@ -207,6 +223,16 @@ Practical notes that save a rebuild:
   hole spacing is "plate_w - 2 * edge_margin" survives a change of width.
 * `validate_recipe` costs nothing and catches most mistakes. Run it first.
 * Handles from `select_topology` are only valid until the model next rebuilds.
+* `capture_view` before you report the part finished, every time. The checks
+  passing is not a reason to skip it: a sketch on the wrong plane still closes,
+  a loft whose sections pair up wrongly still lofts, and a feature of the right
+  size in the wrong place measures right. A render is the only thing that
+  catches those, and it costs one call.
+* Ask for `iso`. The other orientation names do not describe what they return --
+  on a part built on "xy" and extruded in +Z, `front` gives a top view and `top`
+  gives a side elevation with Z rendered inverted, so upside-down text in one of
+  those is not evidence of anything. Measure coordinates with `measure_part` or
+  `select_topology`; use the picture for the shape.
 * A failed build leaves the part where it stopped, because that is usually what
   explains the failure. Pass `rollback_on_error` when the part matters more than
   the diagnosis -- and to retry a hole, which consumes its sketch and cannot be

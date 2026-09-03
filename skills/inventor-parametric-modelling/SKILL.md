@@ -24,7 +24,8 @@ them. `"width": "plate_w"`, not `"width": 120`.
 3. `build_part_from_recipe` — parameters first, then sketches and features.
 4. Read what came back (see below). Do not assume it worked.
 5. `set_parameters` — change a driving dimension; the model updates.
-6. `export_model` / `capture_view`.
+6. **`capture_view` — always, before you say it is done.** See below.
+7. `export_model`.
 
 ### What to read in the rehearsal
 
@@ -45,7 +46,12 @@ something else, work out why before spending a CAD seat on it.
 Two things the rehearsal cannot tell you, because the simulator has no
 booleans and no notion of which side the material is on:
 
-- whether a cut that *overlaps* the part removes the right amount;
+- **how much a feature other than an extrude takes out of a hollow part.** An
+  `extrude` cut asks how much material lies inside its sweep, so a slot through
+  the wall of a shelled box is charged the wall. A hole is charged its full
+  depth, a draft its whole face, an emboss its whole area. On a hollow part
+  those are over-estimates, and the rehearsal marks the step `predictable:
+  false` rather than letting you compare it;
 - which way a fillet or chamfer will move the volume. It models every fillet as
   subtractive, so an inside-corner fillet looks wrong here and is not.
 
@@ -72,6 +78,35 @@ for operations that did nothing at all, and this is how you tell:
 Check the number against what you expect. A 9 mm hole 6 mm deep removes
 π×4.5²×6 = 382 mm³ = 0.382 cm³. If the report says something else, something
 else happened.
+
+## Look at it
+
+**Run `capture_view` before reporting the part finished, every time.** The
+deterministic checks passing is not a reason to skip it. They are good at the
+things they measure and blind to everything else, and these all pass every
+check in this server:
+
+- a sketch on the wrong plane, which still closes and still extrudes;
+- a loft whose sections pair up in the wrong order, which still lofts — into a
+  twist;
+- a feature of exactly the right size in the wrong place, which measures right;
+- an emboss reading backwards, which has the right area;
+- a fillet that quietly came out smaller than asked because the edge could not
+  take the radius.
+
+A render costs one call and catches all five. Nothing else does.
+
+**Ask for `iso`.** The other orientation names do not describe what they
+return. On a part built on `"xy"` and extruded in +Z — which is what this Skill
+tells you to build — `front` and `back` give top and bottom views, and `top`
+gives a side elevation **with Z rendered inverted**. So text that looks
+upside-down in a `top` view is not upside-down, and a part that looks wrong in a
+`front` view may be a part you are looking at from above. That is recorded as
+defect 4 in `docs/FEATURE_COVERAGE.md` and has not been fixed.
+
+So: read the *shape* off the picture, and measure *coordinates* with
+`measure_part` and `select_topology`. If the picture and the numbers disagree,
+the numbers are the ones that were measured.
 
 ## From a sentence to a recipe
 

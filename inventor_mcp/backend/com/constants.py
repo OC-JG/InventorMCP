@@ -49,7 +49,10 @@ FALLBACK: dict[str, int] = {
     # ShellDirectionEnum
     "kInsideShellDirection": 41217,
     "kOutsideShellDirection": 41218,
-    "kBothShellDirection": 41987,
+    # Inventor's name for it is kBothSides-, and the table said kBoth- for a
+    # value, 41987, that belongs to no shell direction. A shell with
+    # `direction: "both"` refused on every release as a result.
+    "kBothSidesShellDirection": 41219,
     # PatternComputeTypeEnum
     "kIdenticalCompute": 47361,
     "kAdjustToModelCompute": 47362,
@@ -62,8 +65,11 @@ FALLBACK: dict[str, int] = {
     "kBackViewOrientation": 10756,
     # DisplayModeEnum / RenderStyle
     "kShadedRendering": 8708,
-    "kHiddenLineRendering": 9986,
     "kWireframeRendering": 8706,
+    # There is no kHiddenLineRendering in Inventor. What a person means by a
+    # hidden-line view -- edges, no shading, the ones behind the part still
+    # drawn -- is this, and 9986 was neither a real name nor a plausible value.
+    "kWireframeWithHiddenEdgesRendering": 8712,
     # SelectionFilterEnum (used for view fitting)
     "kPartFaceFilter": 15877,
     "kPartEdgeFilter": 15873,
@@ -85,10 +91,12 @@ FALLBACK: dict[str, int] = {
     "kCounterBoreHole": 21507,
     "kSpotFaceHole": 21508,
     "kCounterSinkHole": 21506,
-    "kFlatHoleBottom": 39425,
-    "kAngleHoleBottom": 39426,
+    # No kFlatHoleBottom or kAngleHoleBottom: Inventor has no such names on any
+    # release asked, nothing in this repository reads them, and 39425/39426 were
+    # invented. The hole calls take a FlatBottom boolean and a BottomTipAngle.
     # ConstraintStatusEnum -- read back from a sketch, not passed to Inventor,
     # but a wrong number here would silently call every sketch under-constrained.
+    # Both confirmed against 2027.1's type library by scripts/dump_constants.py.
     "kFullyConstrainedConstraintStatus": 51713,
     "kUnderConstrainedConstraintStatus": 51714,
     # WeldBeadReliefShapeEnum placeholder kept out; add values here as needed.
@@ -113,42 +121,38 @@ FALLBACK: dict[str, int] = {
 #: Re-run ``scripts/dump_constants.py`` on any release that is not 2027.1: these
 #: numbers are a measurement of one version, not a fact about the API.
 #:
-#: Which is what Inventor 2026.1 then said. Forty-seven of the fifty-one agree
-#: with it exactly; the four below are not in its type library under these names
-#: at all, so on 2026 there is nothing to read and the table is what would be
-#: used -- and the table has never been checked for them anywhere.
+#: Which is what Inventor 2026.1 then said. Forty-seven of the fifty-one agreed
+#: with it exactly, and four were not in its type library under those names at
+#: all: ``kBothShellDirection``, ``kHiddenLineRendering``, ``kFlatHoleBottom``
+#: and ``kAngleHoleBottom``. Three gave themselves away by their numbering --
+#: shell directions run 41217 and 41218, so a third member of that enum is not
+#: 41987; render styles run 8706 and 8708, so hidden line is not 9986 -- which
+#: is the signature of the mistake that put ``kThroughAllExtent`` on Inventor's
+#: ``kToNextExtent``. They were left in the table and made to refuse.
 #:
-#: Three of the four give themselves away by their numbering. Shell directions
-#: run 41217 and 41218, so a third member of that enum is not 41987. Rendering
-#: styles run 8706 and 8708, so hidden line is not 9986. A value out of its own
-#: family is the signature of the mistake that put ``kThroughAllExtent`` on
-#: Inventor's ``kToNextExtent`` -- an extrude that stopped at the next face
-#: while every report said "through all", wrong in a way nothing raises.
+#: Inventor 2027.1 was asked the same question on 2026-09-03, and then asked
+#: what it *does* call them. All four are now settled, and none of them was a
+#: wrong value: they were wrong names, which is why looking the value up could
+#: never have worked.
 #:
-#: So they refuse. ``kFlatHoleBottom`` and ``kAngleHoleBottom`` are not reached
-#: by any code path today -- the hole calls take a ``FlatBottom`` boolean and a
-#: ``BottomTipAngle`` instead -- and refusing costs nothing. The other two are
-#: reachable: a shell with ``direction: "both"``, and ``capture_view`` in
-#: hidden-line mode. On a release whose type library has the names, none of this
-#: fires; ``resolve`` prefers the type library and never consults the table.
-SUSPECT: dict[str, str] = {
-    "kBothShellDirection": (
-        "Inventor 2026.1's type library has no such name, and 41987 is outside "
-        "the 41217/41218 family the other two shell directions belong to"
-    ),
-    "kHiddenLineRendering": (
-        "Inventor 2026.1's type library has no such name, and 9986 is outside "
-        "the 8706/8708 family the other two render styles belong to"
-    ),
-    "kFlatHoleBottom": (
-        "Inventor 2026.1's type library has no such name; nothing reads this "
-        "entry today, so it has never been exercised anywhere"
-    ),
-    "kAngleHoleBottom": (
-        "Inventor 2026.1's type library has no such name; nothing reads this "
-        "entry today, so it has never been exercised anywhere"
-    ),
-}
+#: * ``kBothSidesShellDirection`` is 41219, in the family exactly where a third
+#:   shell direction should be. The table's ``kBothShellDirection`` was a name
+#:   Inventor has never had, so a shell with ``direction: "both"`` refused on
+#:   every release rather than only on one with an unreadable type library.
+#: * There is no hidden-line render style. There is
+#:   ``kWireframeWithHiddenEdgesRendering`` (8712), which is what the words
+#:   describe; ``kHiddenEdgeRendering`` (8707) is an alias of
+#:   ``kShadedWithHiddenEdgesRendering``, which is shaded and so is not it.
+#: * ``kFlatHoleBottom`` and ``kAngleHoleBottom`` do not exist under any name
+#:   the library offers, and nothing here reads them -- the hole calls take a
+#:   ``FlatBottom`` boolean and a ``BottomTipAngle``. Removed rather than
+#:   refused: an entry for a name Inventor does not have is not a fallback, it
+#:   is a fiction with a number attached.
+#:
+#: So nothing is disputed at present, and this is empty. It is not vestigial:
+#: the refusal it drives is what a future release's contradiction goes into, and
+#: an empty dict is the honest way to say that today's table has been asked.
+SUSPECT: dict[str, str] = {}
 
 
 class Constants:
@@ -245,7 +249,7 @@ EXTENT_DIRECTIONS = {
 SHELL_DIRECTIONS = {
     "inside": "kInsideShellDirection",
     "outside": "kOutsideShellDirection",
-    "both": "kBothShellDirection",
+    "both": "kBothSidesShellDirection",
 }
 
 TEXT_ALIGNMENT = {
@@ -262,8 +266,13 @@ VIEW_ORIENTATIONS = {
     "back": "kBackViewOrientation",
 }
 
+#: Our three words for Inventor's eleven visual styles. "hidden_line" is a
+#: definition rather than a lookup: Inventor has no style of that name, and this
+#: is the one whose name describes what a hidden-line view is -- edges, no
+#: shading, the ones behind the part still drawn. The other candidate at 8707 is
+#: an alias of "shaded with hidden edges", which is shaded, so it is not this.
 DISPLAY_MODES = {
     "shaded": "kShadedRendering",
-    "hidden_line": "kHiddenLineRendering",
+    "hidden_line": "kWireframeWithHiddenEdgesRendering",
     "wireframe": "kWireframeRendering",
 }

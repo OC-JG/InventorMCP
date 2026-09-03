@@ -1,0 +1,11 @@
+{
+  "volume_cm3": 32.649634,
+  "faces": 10,
+  "edges": 24,
+  "span_mm": [
+    60.532,
+    60.532,
+    70.006
+  ],
+  "checked": "RECORDED from Inventor 2027.1 on 2026-09-03, not derived. A loft's cross-section does not interpolate linearly in area, so its volume is not the mean section times the span and there is no hand figure to check this against. The span is the part of it that can be read: 70.006 mm tall for a 70 mm loft, and 60.532 across a round section 60 mm in diameter, the remainder being the polygon Inventor tessellates the bounding box from. The simulator says 32.477039, 0.53% below, using a frustum rule between consecutive sections. Regression baseline: it says what this recipe built on one release, and nothing more."
+}
