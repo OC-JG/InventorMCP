@@ -14,6 +14,7 @@ from .backend.base import (
     AxisSpec,
     Backend,
     ChamferRequest,
+    CoilRequest,
     CircularPatternRequest,
     Driven,
     CombineRequest,
@@ -42,6 +43,7 @@ from .plan import PLine
 from .resolve import Resolved, Resolver
 from .schema import (
     ChamferOp,
+    CoilOp,
     CircularPatternOp,
     BossOp,
     CombineOp,
@@ -256,6 +258,7 @@ def _apply_one(session: Session, context: DocumentContext, op: Operation) -> dic
             direction=op.direction,
             operation=op.operation,
             taper=_driven(resolver.angle(op.taper, "extrude taper")) if op.taper else None,
+            bodies=tuple(op.bodies or ()),
             name=op.name,
         )
         return _record(context, backend.extrude(context.doc_id, request), "extrude")
@@ -272,6 +275,30 @@ def _apply_one(session: Session, context: DocumentContext, op: Operation) -> dic
             name=op.name,
         )
         return _record(context, backend.revolve(context.doc_id, request), "revolve")
+
+    if isinstance(op, CoilOp):
+        sketch_name, _ = context.sketch_plan(op.sketch)
+        request = CoilRequest(
+            sketch=sketch_name,
+            axis=resolve_axis(context, op.axis, sketch_name),
+            profiles=op.profiles,
+            pitch=_driven(resolver.length(op.pitch, "coil pitch", positive=True))
+            if op.pitch is not None else None,
+            height=_driven(resolver.length(op.height, "coil height", positive=True))
+            if op.height is not None else None,
+            # unitless, not count: a coil of 1.75 turns is ordinary, and
+            # `count` refuses a fraction on purpose.
+            revolutions=_driven(resolver.unitless(op.revolutions, "coil revolutions"))
+            if op.revolutions is not None else None,
+            taper=_driven(resolver.angle(op.taper, "coil taper"))
+            if op.taper is not None else None,
+            operation=op.operation,
+            clockwise=op.clockwise,
+            reverse_axis=op.reverse_axis,
+            spiral=op.spiral,
+            name=op.name,
+        )
+        return _record(context, backend.coil(context.doc_id, request), "coil")
 
     if isinstance(op, SweepOp):
         profile_name, _ = context.sketch_plan(op.profile_sketch)
@@ -320,6 +347,9 @@ def _apply_one(session: Session, context: DocumentContext, op: Operation) -> dic
         request = FilletRequest(
             edges=resolve_selector(op.edges, resolver, kind="edge"),
             radius=_driven(resolver.length(op.radius, "fillet radius", positive=True)),  # type: ignore[arg-type]
+            radius_end=_driven(resolver.length(op.radius_end, "fillet end radius", positive=True))  # type: ignore[arg-type]
+            if op.radius_end is not None
+            else None,
             name=op.name,
         )
         return _record(context, backend.fillet(context.doc_id, request), "fillet")
@@ -652,9 +682,24 @@ def build_part(
 #:
 #: The tight entries are arithmetic the simulator does exactly: a prism is an
 #: area times a length, a hole is a cylinder, an occurrence repeats its seed. The
-#: loose ones are estimates -- Pappus for a revolve, a mean section for a loft, a
-#: corner prism for a fillet -- and are here to catch a feature that did
+#: loose ones are estimates -- Pappus for a revolve, the frustum rule for a loft,
+#: a corner prism for a fillet -- and are here to catch a feature that did
 #: something else entirely rather than to check the arithmetic.
+#:
+#: The last four are the ones worth explaining. Sweeping the simulator's marked
+#: approximations turned up that all three of them -- the draft wedge, the split
+#: fraction, the emboss ink heuristic -- were absent from this table, and so was
+#: the coil's arc length. The guard had holes in exactly the places their author
+#: had written "this is approximate". Half tolerates a coarse estimate and still
+#: catches both classes that matter, because `_divergence_reason` keys on a sign
+#: flip and on a change where none was predicted, and any tolerance under 1.0
+#: catches both. None of the four has run against live Inventor, so half is a
+#: place to start measuring from, not a measurement.
+#:
+#: Nothing already here was retuned. The chamfer and the loft became much more
+#: accurate in the same pass and their entries stayed put: one live datapoint
+#: each is not a basis for a tolerance, and tightening on a hunch is the mistake
+#: this table exists to catch.
 PREDICTED = {
     "extrude": 0.02,
     "hole": 0.02,
@@ -667,6 +712,10 @@ PREDICTED = {
     "shell": 0.35,
     "fillet": 0.30,
     "chamfer": 0.30,
+    "coil": 0.50,
+    "draft": 0.50,
+    "emboss": 0.50,
+    "split": 0.50,
 }
 
 #: Below this, in cm^3, a difference is not worth reporting whatever the
@@ -953,25 +1002,67 @@ def rehearse(recipe: PartRecipe) -> dict[str, Any]:
         steps.append(step)
         _warn_about(report["warnings"], where, op, outcome)
 
-        target = getattr(op, "sketch", None) or context.last_sketch
-        subtractive = op.op in _SUBTRACTIVE or getattr(op, "operation", None) == "cut"
         box = [value / 10 for value in was["at_mm"]] if "at_mm" in was else None
-        if subtractive and target in context.plans and not _profile_reaches_the_part(
-                context.plans[target], box):
-            report["warnings"].append({
-                "where": where,
-                "warning": f"sketch {target!r} does not reach the part",
-                "why": "Its geometry lies entirely outside the part's bounding box "
-                       "in its own plane, so this will cut empty air. The simulator "
-                       "cannot see this -- it has no booleans -- but the bounding "
-                       "boxes can.",
-            })
+        if _removes_material(op):
+            for target in _sketches_that_cut(op, context):
+                if target in context.plans and not _profile_reaches_the_part(
+                        context.plans[target], box):
+                    report["warnings"].append({
+                        "where": where,
+                        "warning": f"sketch {target!r} does not reach the part",
+                        "why": "Its geometry lies entirely outside the part's bounding "
+                               "box in its own plane, so this will cut empty air. The "
+                               "simulator cannot see this -- it has no booleans -- but "
+                               "the bounding boxes can.",
+                    })
 
     report["steps"] = steps
     report["rehearsed"] = True
     report["result"] = measure(session, context)
     report["warnings"].extend(_undriven_parameters(recipe, context))
     return report
+
+
+def _removes_material(op: Operation) -> bool:
+    """Whether this operation is meant to take material away.
+
+    ``operation: "cut"`` covers most of it; the two that say it another way are
+    a hole, which is always a cut, and an engraved emboss, whose knob is
+    ``style`` -- so an engrave that missed the part was the one cut nothing
+    checked. ``shell`` removes material too and is deliberately absent: it has no
+    profile to miss with.
+    """
+    if getattr(op, "operation", None) == "cut":
+        return True
+    if op.op == "hole":
+        return True
+    return op.op == "emboss" and getattr(op, "style", None) == "engrave"
+
+
+def _sketches_that_cut(op: Operation, context: DocumentContext) -> list[str]:
+    """Which sketches' geometry decides where *op* takes material from.
+
+    Only sketches the operation actually consumes. It used to be
+    ``getattr(op, "sketch", None) or context.last_sketch`` for everything, and
+    an operation with no sketch of its own fell through to whichever one
+    happened to be last -- so a shell was reported as "sketch 'Unrelated' does
+    not reach the part", naming a sketch it has nothing to do with. A warning
+    that fires on a correct recipe is worse than no warning; the reader learns
+    to skip the field.
+
+    A sweep contributes both of its sketches. The profile decides the section
+    and the path decides where it goes, and either one placed away from the
+    material is a cut through air.
+    """
+    if op.op == "sweep":
+        return [name for name in (getattr(op, "profile_sketch", None),
+                                  getattr(op, "path_sketch", None)) if name]
+    if op.op == "loft":
+        return [name for name in getattr(op, "sketches", ()) or () if name]
+    if "sketch" in type(op).model_fields:
+        named = getattr(op, "sketch", None) or context.last_sketch
+        return [named] if named else []
+    return []
 
 
 def _profile_reaches_the_part(plan: Any, box: Sequence[float] | None) -> bool:

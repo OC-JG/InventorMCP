@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 
 import pytest
@@ -482,3 +483,69 @@ class TestNamesWithDigitsInThem:
         guard = FreezeGuard(["seal_face"], expressions={
             "boss1_d": "8", "seal_face": "boss1_d - 0.4"})
         assert guard.check("boss1_d") is not None
+
+
+class TestAValueThatIsNotANumber:
+    """`inf` and `nan` are numbers to Python and not to JSON.
+
+    `**` guards its own overflow and `*` does not, so `1e308 * 1e308` evaluated
+    to `inf` and `inf - inf` to `nan`, and both then travelled the whole way
+    down as ordinary values. The build reported `ok: true` with no errors and
+    handed back mass properties holding `NaN` and `-Infinity` -- which are not
+    JSON, so a strict client cannot read even the reply claiming the part is
+    fine. Refused at the evaluator, which every value passes through.
+    """
+
+    @pytest.mark.parametrize("source", [
+        "1e308 * 1e308",
+        "1e308 * 1e308 - 1e308 * 1e308",
+        "0 * (1e308 * 1e308)",
+        "w * 1e308 * 1e308",
+    ])
+    def test_it_is_refused(self, source):
+        with pytest.raises(ExpressionError) as caught:
+            evaluate(source, {"w": Quantity(10.0, Dim.LENGTH)})
+        assert "not a usable dimension" in str(caught.value)
+
+    @pytest.mark.parametrize("source", ["w * 2", "sqrt(2) * w", "1e300", "w / 3"])
+    def test_a_large_but_finite_value_still_passes(self, source):
+        """The guard must not start refusing arithmetic that works."""
+        assert math.isfinite(evaluate(source, {"w": Quantity(10.0, Dim.LENGTH)}).value)
+
+    def test_the_build_says_so_instead_of_reporting_a_part(self):
+        from inventor_mcp.builder import build_part
+        from inventor_mcp.schema import PartRecipe
+        from inventor_mcp.session import Session
+
+        session = Session(backend_kind="mock")
+        session.ensure_backend().connect()
+        out = build_part(session, PartRecipe.model_validate({
+            "name": "Overflow", "units": "mm",
+            "parameters": [{"name": "w", "value": "1e308 * 1e308 * 1 mm"}],
+            "operations": [
+                {"op": "sketch", "name": "S", "plane": "xy", "entities": [
+                    {"type": "rectangle", "center": [0, 0], "width": "w", "height": 10}]},
+                {"op": "extrude", "sketch": "S", "distance": 5}]}))
+        assert out["ok"] is False
+        assert "not a usable dimension" in out["errors"][0]["error"]
+
+    def test_and_the_reply_is_json_a_strict_parser_will_read(self):
+        """`json.dumps` emits bare NaN and Infinity quite happily. Nothing else does."""
+        from inventor_mcp.builder import build_part
+        from inventor_mcp.schema import PartRecipe
+        from inventor_mcp.session import Session
+
+        session = Session(backend_kind="mock")
+        session.ensure_backend().connect()
+        out = build_part(session, PartRecipe.model_validate({
+            "name": "Overflow", "units": "mm",
+            "parameters": [{"name": "w", "value": "1e308 * 1e308 * 1 mm"}],
+            "operations": [
+                {"op": "sketch", "name": "S", "plane": "xy", "entities": [
+                    {"type": "rectangle", "center": [0, 0], "width": "w", "height": 10}]},
+                {"op": "extrude", "sketch": "S", "distance": 5}]}))
+
+        def reject(token):
+            raise AssertionError(f"the reply carries {token!r}, which is not JSON")
+
+        json.loads(json.dumps(out), parse_constant=reject)

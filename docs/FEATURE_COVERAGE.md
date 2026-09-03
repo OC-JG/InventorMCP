@@ -13,14 +13,15 @@ Revolve Rib RuleFillet RuledSurface Sculpt Shell Simplify SketchDrivenPattern
 Slot SnapFit Split Sweep Thicken Thread Trim Unwrap iFeatures
 ```
 
-**Covered today (17):** Extrude, Revolve, Sweep, Loft, Hole, Fillet, Chamfer,
-Shell, RectangularPattern, CircularPattern, Mirror, Thread, Emboss, FaceDraft,
-Combine, Split, plus work planes and material, which are not `Features`
-collections. `boss` and `rib` exist as operations but are built from primitives,
-because neither Inventor feature can be created through the API -- see below.
+**Covered today, 17 of the 53 collections:** Extrude, Revolve, Sweep, Loft,
+Coil, Hole, Fillet, Chamfer, Shell, RectangularPattern, CircularPattern, Mirror,
+Thread, Emboss, FaceDraft, Combine, Split. Work planes and material are covered
+too and are not `Features` collections, so they sit outside the count. `boss` and
+`rib` exist as recipe operations but are built from primitives, because neither
+Inventor feature can be created through the API -- see below.
 
-That is 14 of 53 by count, but the count flatters the gap in one direction and
-overstates it in the other: the covered ones are the high-frequency core of solid
+Seventeen of fifty-three flatters the gap in one direction and overstates it in
+the other: the covered ones are the high-frequency core of solid
 modelling, and a good half of what is missing is surfacing and repair work that a
 text-to-part server has no business doing.
 
@@ -86,18 +87,47 @@ appears across all of Inventor.
    `split` maps a style onto Inventor's separate calls: `trim` to `SplitPart`,
    `split` to `SplitBody`, `faces` to `SplitFaces`.
 
+### Tier 1b -- done since, all five verified against live Inventor
+
+Volumes below are Inventor's, checked against hand arithmetic, and each recipe
+also passes the simulator rehearsal.
+
+10. **A closed profile that mixes arcs with lines.** Separate `line` and `arc`
+    entities touched only by coordinate, so Inventor saw loose curves, offered no
+    profile, and the extrude failed with a bare "Exception occurred." Endpoints
+    within 1e-5 cm are now made coincident, which `shared_point_groups` turns
+    into one shared point per corner. A stadium of two lines and two arcs
+    extrudes to 1.114159 cm^3, exactly `(20x10 + pi x 25) x 4`.
+11. **Variable fillets**, via `radius_end` on `fillet`. `AddSimple` only does a
+    constant radius, so this uses `CreateFilletDefinition` +
+    `AddVariableRadiusEdgeSet` + `Add`. A 40x20x10 block filleted 3 to 8 on its
+    four vertical edges comes out at 7.714333 cm^3.
+12. **Multi-body cut targeting**, via `bodies` on `extrude`, which sets
+    `ExtrudeDefinition.AffectedBodies`. This closes the defect that an `extrude`
+    cut only ever affected the primary body: two 20x20x10 blocks with an 8 bore
+    through the second measure 7.497345 cm^3, where before the cut removed
+    nothing at all.
+13. **Sweep along a path** and **loft with guide rails** needed no work -- both
+    were already implemented and are confirmed here: 1.9792 cm^3 for a 6 circle
+    swept 70 mm, and 13.6136 cm^3 for a 30-to-10 loft over 40 mm.
+
 ### Tier 2 -- frequently wanted, no current workaround
 
 5. **SketchDrivenPattern.** Pattern by sketch points. Rectangular and circular
    patterns cover the regular cases; anything irregular currently has to be
    enumerated by hand.
-6. **Coil.** Springs and helical forms. No approximation exists.
-7. **Thicken / FaceOffset.** Offsetting a face or turning a surface into a wall.
-8. **MoveFace / DirectEdit.** The server imports STEP for DFM analysis and then
-   cannot change anything about it, because imported geometry has no parameters.
-   Direct edit is the only route to modifying translated geometry.
-9. **Lip, SnapFit, Grill, Rest.** The rest of Inventor's plastic-part set. Narrow,
-   but this server's centre of gravity is exactly the parts that use them.
+6. **Thicken.** Turning a surface into a wall. `ThickenFeatures.Add` is public.
+   `FaceOffsetFeatures` only exposes `_Add`, and Inventor's leading underscore
+   means internal, so plain face offset is not on the table.
+7. **MoveFace.** `MoveFaceFeatures` has `Add` and `CreateDefinition`, so this is
+   buildable, and it is the only route to changing imported geometry -- the
+   server reads STEP for DFM analysis and can then alter nothing, because
+   translated geometry has no parameters.
+
+Not tier 2 after all, checked against the type library rather than the docs:
+**Lip, SnapFit, Grill, Rest** and **DirectEdit** are all read-only collections
+with no `Add` of any kind, so no amount of work here would make them buildable.
+They belong to Inventor's UI, not its API.
 
 ### Tier 3 -- real, but not for this tool yet
 
@@ -116,6 +146,9 @@ Found by using the server rather than by reading its API surface:
   feature, which is often not where it belongs.
 * **No project geometry or sketch offset**, so a sketch cannot reference the edges
   of the solid it sits on.
+* **`hole` still only drills the primary body.** `extrude` can now be aimed with
+  `bodies`, but `HoleFeatures` was not given the same treatment, so a hole in a
+  second body still needs an `extrude` cut.
 
 ## Defects worth fixing, with evidence
 

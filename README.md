@@ -208,9 +208,17 @@ That indirection is what buys the useful properties:
 }
 ```
 
-More in [`examples/`](examples/): a flanged shaft, a hex standoff, a shelled
-enclosure, an angle bracket and a counterbored cover plate. Each one is
-exercised by the test suite, so they cannot drift out of date.
+Eleven more in [`examples/`](examples/), named so you can go and open one:
+`mounting_plate` is the plate above, `angle_bracket` a mirrored L-section,
+`flanged_shaft` a revolve with a bolt circle, `hex_standoff` a tapped polygon,
+`enclosure_base` a shelled box, `cover_plate` a counterbored lid, `belt_pulley`
+a revolved groove, `pipe_bend` a sweep along an arc, `duct_transition` a loft
+from round to square, `threaded_boss` a tapped hole with a real thread, and
+`moulded_housing` the part the manufacturability loop is demonstrated on.
+
+Each one is exercised by the test suite -- it must parse, pass the static
+checks, build, and leave a solid body, with every declared parameter reaching
+the model -- so they cannot drift out of date.
 
 ### Sketches come out constrained
 
@@ -319,6 +327,8 @@ See [docs/DFM.md](docs/DFM.md).
 | `new_part` / `open_part` / `save_part` / `close_part` / `activate_part` | Document lifecycle; `open_part` takes an .ipt, a STEP/IGES/SAT file, or the next version of one |
 | `part_recipe_schema` | Full JSON Schema plus the quick reference |
 | `validate_recipe` | Static checks; no Inventor needed |
+| `drawing_reading_schema` | The shape of a drawing reading, and how to record one |
+| `check_against_drawing` | Compare a recipe against what a drawing says, dimension by dimension |
 | `build_part_from_recipe` | The main text-to-model entry point |
 | `apply_operations` | Append operations to an open part |
 | `set_parameters` | Change driving dimensions and rebuild |
@@ -419,8 +429,8 @@ pytest                      # the whole suite, no Inventor required
 The recipe layer, expression evaluator, geometry expansion, selectors, tool surface
 and simulator are covered by the test suite and run on any platform.
 
-**All five examples build end to end against Inventor 2027.1**, and every volume
-matches a hand calculation to five significant figures or better. Between them
+**The first five examples build end to end against Inventor 2027.1**, and every
+volume matches a hand calculation to five significant figures or better. Between them
 they cover parameters with expressions, constrained sketches on all three origin
 planes and on an offset work plane, extrudes and cuts, revolved-free profiles
 from polylines and slots and bolt circles, blind and through holes, fillets and
@@ -436,16 +446,20 @@ not, and the Inventor API quirks that cost the most time getting there.
 
 ## Inventor versions
 
-Driven against **Inventor 2027.1** on Windows with Python 3.14 and pywin32, and
-nothing else. Every quirk recorded in
-[docs/INVENTOR_SETUP.md](docs/INVENTOR_SETUP.md) was measured there.
+Driven against **Inventor 2027.1** on Windows with Python 3.14 and pywin32, where
+every quirk recorded in [docs/INVENTOR_SETUP.md](docs/INVENTOR_SETUP.md) was
+measured, and reproduced on **Inventor 2026.1**, where a full acceptance run
+passed every check it compared. Forty-seven of fifty-one enum values matched
+2026.1's own type library; the four that did not are absent from it under those
+names, so there is nothing to read rather than something to disagree with. See
+["Inventor 2026"](docs/DEMO.md#inventor-2026).
 
-Earlier versions are likely to need different enum values, and the COM backend
+Nothing older has been run. Earlier versions are likely to need different enum values, and the COM backend
 reads them from Inventor's own type library first, so a machine with a working
 pywin32 cache should be fine. The fallback table is *not* verified — where its
 value is disputed the server now refuses rather than guessing, and
 `scripts/dump_constants.py` prints what Inventor actually says. Reports from
-2022–2026 are welcome and are the fastest way to widen this.
+2022–2025 are welcome and are the fastest way to widen this.
 
 ## Licence
 

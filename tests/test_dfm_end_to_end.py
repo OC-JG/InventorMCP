@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -32,7 +31,9 @@ import pytest
 from inventor_mcp.backend.base import ExportRequest
 from inventor_mcp.builder import build_part
 from inventor_mcp.dfm.loop import current_parameters, improve
-from inventor_mcp.dfm.runner import DfmUnavailable, compare_reports, find_dfm_root
+from inventor_mcp.dfm.runner import compare_reports
+
+from conftest import skip_without_analyser
 from inventor_mcp.schema import PartRecipe
 
 SHAPES = Path(__file__).parent / "dfm_shapes.mjs"
@@ -70,12 +71,7 @@ RECIPE = {
 
 @pytest.fixture(scope="module")
 def analyser() -> Path:
-    if shutil.which("node") is None:
-        pytest.skip("no node, so the DFM analyser cannot run")
-    try:
-        return find_dfm_root()
-    except DfmUnavailable as exc:
-        pytest.skip(f"{exc.message} {exc.hint or ''}")
+    return skip_without_analyser()
 
 
 @pytest.fixture

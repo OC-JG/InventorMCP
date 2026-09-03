@@ -42,6 +42,7 @@ from ..base import (
     AxisSpec,
     Backend,
     ChamferRequest,
+    CoilRequest,
     CircularPatternRequest,
     DocInfo,
     ExportRequest,
@@ -178,6 +179,56 @@ def resolve_binding(binding: str | None = None) -> str:
     """
     chosen = (binding or os.environ.get("INVENTOR_MCP_BINDING") or "late").strip().lower()
     return chosen if chosen in BINDING_MODES else "late"
+
+
+#: kOverConstrainedConstraintStatus, from Inventor's own ConstraintStatusEnum.
+_OVER_CONSTRAINED = 51715
+
+
+def _over_constrained(sketch: Any) -> bool:  # pragma: no cover - Windows only
+    """Whether the sketch, as last solved, is over-constrained."""
+    try:
+        return int(sketch.ConstraintStatus) == _OVER_CONSTRAINED
+    except Exception:
+        return False
+
+
+def _dimension_count(sketch: Any) -> int:  # pragma: no cover - Windows only
+    """How many dimension constraints the sketch holds, or -1 if it will not say."""
+    try:
+        return int(sketch.DimensionConstraints.Count)
+    except Exception:
+        return -1
+
+
+def _undimension(sketch: Any, established: int) -> bool:  # pragma: no cover - Windows only
+    """Delete the dimensions added since *established*.  True if the sketch recovered."""
+    if established < 0:
+        return False
+    try:
+        dimensions = sketch.DimensionConstraints
+        while int(dimensions.Count) > established:
+            dimensions.Item(int(dimensions.Count)).Delete()
+    except Exception:
+        return False
+    _solve(sketch)
+    return not _over_constrained(sketch)
+
+
+def _solve(sketch: Any) -> None:  # pragma: no cover - Windows only
+    """Make Inventor solve the sketch now, so the next dimension is judged live.
+
+    Inventor only spots a redundant dimension against a solved sketch.  Left
+    unsolved it takes every dimension without complaint, and the sketch then
+    refuses to give any feature a profile -- ``ExtrudeFeatures.Add`` raises a
+    bare "Exception occurred." with nothing in the ErrorManager to explain it.
+    Solving between generated dimensions turns that into an ordinary refusal
+    that ``refused_dimensions`` can report.
+    """
+    try:
+        sketch.Solve()
+    except Exception:
+        pass
 
 
 def _as_late_bound(obj: Any) -> Any:  # pragma: no cover - Windows only
@@ -1318,6 +1369,7 @@ class ComBackend(Backend):
                         )
 
             for dimension in optional:
+                established = _dimension_count(sketch)
                 try:
                     outcome, note = self._add_dimension(
                         sketch, transient, objects, dimension)
@@ -1325,6 +1377,18 @@ class ComBackend(Backend):
                     raise
                 except Exception as exc:  # pragma: no cover - version-specific
                     outcome, note = "refused", f"{dimension.expression!r}: {exc}"
+                # Inventor judges a dimension against a *solved* sketch, and an
+                # unsolved one accepts a redundant dimension without complaint.
+                # The sketch is then over-constrained, and hands out profiles
+                # that no feature will take -- ExtrudeFeatures.Add raises a bare
+                # "Exception occurred." with nothing in the ErrorManager to say
+                # why.  So solve, and take a generated dimension straight back
+                # out if it spent a degree of freedom that was already spent.
+                _solve(sketch)
+                if (outcome == "applied" and _over_constrained(sketch)
+                        and _undimension(sketch, established)):
+                    outcome = "refused"
+                    note = f"{note} -- it would over-constrain the sketch"
                 if outcome == "applied":
                     driving.append(note)
                 else:
@@ -1410,13 +1474,24 @@ class ComBackend(Backend):
         elif isinstance(primitive, PArc):
             start = _polar(primitive.center, primitive.radius, primitive.start_angle)
             end = _polar(primitive.center, primitive.radius, primitive.end_angle)
+            # AddByCenterStartEndPoint always sweeps counter-clockwise, so it
+            # ignores the sign of the recipe's sweep.  An arc that runs backwards
+            # (end_angle below start_angle) is therefore handed over back to
+            # front, which traces the locus the recipe actually asked for -- get
+            # this wrong and the arc bulges the other way, so a closed profile
+            # self-intersects and the feature throws.  Swapping the remembered
+            # attributes alongside keeps the plan's own "start" and "end"
+            # pointing at the same corners for constraints.
+            ends = [("start", start), ("end", end)]
+            if primitive.end_angle < primitive.start_angle:
+                ends.reverse()
             entity = sketch.SketchArcs.AddByCenterStartEndPoint(
                 transient.CreatePoint2d(*primitive.center),
-                anchor("start", start),
-                anchor("end", end),
+                anchor(*ends[0]),
+                anchor(*ends[1]),
             )
-            remember(entity, "start", "StartSketchPoint")
-            remember(entity, "end", "EndSketchPoint")
+            remember(entity, ends[0][0], "StartSketchPoint")
+            remember(entity, ends[1][0], "EndSketchPoint")
         elif isinstance(primitive, PEllipse):
             major_axis = transient.CreateUnitVector2d(
                 math.cos(primitive.rotation), math.sin(primitive.rotation)
@@ -1431,14 +1506,7 @@ class ComBackend(Backend):
             # Inventor owns the glyph outlines, so this is placed and styled
             # rather than constrained. The style override is how font, size and
             # weight travel -- FontSize is in database units, like everything else.
-            escaped = (primitive.text.replace("&", "&amp;")
-                       .replace("<", "&lt;").replace(">", "&gt;"))
-            styled = (
-                f'<StyleOverride Font="{primitive.font}" FontSize="{primitive.height}"'
-                f'{" Bold=\"True\"" if primitive.bold else ""}'
-                f'{" Italic=\"True\"" if primitive.italic else ""}'
-                f">{escaped}</StyleOverride>"
-            )
+            styled = _style_override(primitive)
             try:
                 # AddFitted takes exactly two arguments on this build -- passing a
                 # rotation as a third is refused, so it is set as a property after.
@@ -1859,6 +1927,9 @@ class ComBackend(Backend):
                 definition.SetDistanceExtent(request.distance.expression, direction)
             if request.taper is not None:
                 definition.TaperAngle = request.taper.expression
+            if request.bodies:
+                _aim_at_bodies(self._require_app(), document.ComponentDefinition,
+                               definition, request.bodies)
             feature = features.Add(definition)
             # A cut that meets no material builds without complaint and leaves
             # the part exactly as it was.  Saying so is the whole point: an
@@ -1901,6 +1972,92 @@ class ComBackend(Backend):
             if request.name:
                 feature.Name = request.name
         return _feature_info(feature, "revolve", {"sketch": request.sketch, "axis": request.axis.value})
+
+    def coil(self, doc_id: str, request: CoilRequest) -> FeatureInfo:  # pragma: no cover
+        """A helical sweep: springs, threads, and a drill's flutes.
+
+        Inventor exposes the extent three ways and the recipe gives two of the
+        three, so the matching call is chosen rather than converted -- pitch and
+        height stays pitch and height, and Inventor does its own arithmetic.
+
+        The trailing options are optional-with-a-default, which pywin32 sends as
+        a missing variant that Inventor sometimes rejects; so they are passed
+        explicitly first and dropped only if that fails, the same fallback the
+        fillet uses.
+        """
+        document = self._doc(doc_id)
+        sketch = self._sketch(doc_id, request.sketch)
+        axis = self._resolve_axis(doc_id, request.axis)
+        features = document.ComponentDefinition.Features.CoilFeatures
+        operation = self._k(BOOLEAN_OPERATIONS[request.operation])
+        before = _solid_volume(document) if request.operation == "cut" else None
+
+        with self._batch(document), self._translate_errors("Coil"):
+            profile = self._profiles(sketch, request.profiles)
+            taper = request.taper.expression if request.taper else "0 deg"
+            if request.spiral:
+                calls = [("AddSpiral", (profile, axis, request.pitch.expression,
+                                        request.revolutions.expression))]
+            elif request.pitch is not None and request.height is not None:
+                calls = [("AddByPitchAndHeight", (profile, axis,
+                                                  request.pitch.expression,
+                                                  request.height.expression))]
+            elif request.pitch is not None:
+                calls = [("AddByPitchAndRevolution", (profile, axis,
+                                                      request.pitch.expression,
+                                                      request.revolutions.expression))]
+            else:
+                calls = [("AddByRevolutionAndHeight", (profile, axis,
+                                                       request.revolutions.expression,
+                                                       request.height.expression))]
+
+            failures: list[str] = []
+            feature = None
+            for name, head in calls:
+                method = getattr(features, name, None)
+                if method is None:
+                    failures.append(f"{name} is not available on this build")
+                    continue
+                tails = ([(operation, request.reverse_axis, request.clockwise)]
+                         if request.spiral else
+                         [(operation, request.reverse_axis, request.clockwise, taper),
+                          (operation, request.reverse_axis, request.clockwise),
+                          (operation,)])
+                for tail in tails:
+                    try:
+                        feature = method(*head, *tail)
+                    except Exception as exc:
+                        failures.append("%s with %d options: %s"
+                                        % (name, len(tail), _com_message(exc)))
+                        continue
+                    break
+                if feature is not None:
+                    break
+            if feature is None:
+                raise FeatureError(
+                    f"Could not create the coil: {self._explain_text(failures[0])}",
+                    hint="A coil's profile must not touch or cross its axis, and "
+                    "consecutive turns must not run into each other -- a pitch "
+                    "smaller than the profile is the usual cause. " +
+                    "; ".join(failures[:3]),
+                )
+            if request.operation == "cut" and not _removed_material(document, before):
+                _delete_quietly(feature)
+                raise FeatureError(
+                    f"The coil cut from sketch {request.sketch!r} removed no material.",
+                    hint="Its helix does not pass through the part. Check the axis, "
+                    "the profile's distance from it, and the height.",
+                )
+            if request.name:
+                feature.Name = request.name
+        return _feature_info(feature, "coil", {
+            "sketch": request.sketch,
+            "axis": request.axis.value,
+            "operation": request.operation,
+            "pitch": request.pitch.as_dict() if request.pitch else None,
+            "height": request.height.as_dict() if request.height else None,
+            "revolutions": request.revolutions.as_dict() if request.revolutions else None,
+        })
 
     def sweep(self, doc_id: str, request: SweepRequest) -> FeatureInfo:  # pragma: no cover
         document = self._doc(doc_id)
@@ -2205,6 +2362,9 @@ class ComBackend(Backend):
         edges = self._topology_collection(doc_id, request.edges)
         features = document.ComponentDefinition.Features.FilletFeatures
 
+        if request.radius_end is not None:
+            return self._variable_fillet(doc_id, document, features, request)
+
         failures: list[str] = []
         with self._batch(document), self._translate_errors("Fillet"):
             feature = None
@@ -2235,6 +2395,82 @@ class ComBackend(Backend):
                 feature.Name = request.name
         return _feature_info(feature, "fillet", {
             "edges": int(edges.Count), "radius": request.radius.as_dict()
+        })
+
+    #: Add's trailing options for a variable fillet. Edge chaining is off
+    #: because every edge is named explicitly, and the smooth transition is
+    #: Inventor's own default for a variable radius -- it also decides how much
+    #: material comes away, which is what the simulator's estimate models.
+    _VARIABLE_FILLET_OPTIONS = (
+        False,  # AutomaticEdgeChain
+        True,   # SmoothRadiusTransition
+        True,   # RollAlongSharpEdges
+        True,   # RollingBallWherePossible
+        False,  # PreserveAllFeatures
+    )
+
+    def _variable_fillet(self, doc_id: str, document: Any, features: Any,
+                         request: FilletRequest) -> FeatureInfo:  # pragma: no cover
+        """A fillet whose radius runs from one value to another along each edge.
+
+        ``AddSimple`` only does a constant radius, so this goes the long way
+        round: a definition, an edge set, then ``Add``.  One set per edge --
+        Inventor refuses a variable-radius set holding several edges, since the
+        run from one radius to the other belongs to a single edge.
+
+        Which end of the edge starts at which radius is Inventor's to decide and
+        it does not say, so a fillet can come out the other way round; the
+        schema says as much.
+        """
+        assert request.radius_end is not None
+        matches = self.select(doc_id, request.edges)
+        if not matches:
+            raise SelectionError(
+                "The fillet selector matched no edges.",
+                hint="Call `select_topology` with the same selector to see the "
+                "alternatives.",
+                selector=request.edges.__dict__,
+            )
+
+        def defined(start: Any, end: Any) -> Any:
+            definition = features.CreateFilletDefinition()
+            for match in matches:
+                edges = self._new_collection("edge")
+                edges.Add(self._topology[match.id]["object"])
+                definition.AddVariableRadiusEdgeSet(edges, start, end)
+            return definition
+
+        failures: list[str] = []
+        with self._batch(document), self._translate_errors("Variable fillet"):
+            feature = None
+            # Expressions keep the fillet parameter-driven; plain numbers are
+            # the fallback, the same order the constant-radius path uses.
+            for start, end, described in (
+                (request.radius.expression, request.radius_end.expression, "expressions"),
+                (request.radius.value, request.radius_end.value, "values"),
+            ):
+                try:
+                    feature = features.Add(defined(start, end),
+                                           *self._VARIABLE_FILLET_OPTIONS)
+                except Exception as exc:
+                    failures.append(f"radii as {described}: {_com_message(exc)}")
+                    continue
+                break
+            if feature is None:
+                raise FeatureError(
+                    f"Could not create the variable fillet: "
+                    f"{self._explain_text(failures[0])}",
+                    hint=f"{request.radius.expression} to "
+                    f"{request.radius_end.expression} over {len(matches)} edge(s). "
+                    "A radius that does not fit the faces around the edge is the "
+                    "usual cause; " + "; ".join(failures),
+                )
+            if request.name:
+                feature.Name = request.name
+        return _feature_info(feature, "fillet", {
+            "edges": len(matches),
+            "radius": request.radius.as_dict(),
+            "radius_end": request.radius_end.as_dict(),
         })
 
     def chamfer(self, doc_id: str, request: ChamferRequest) -> FeatureInfo:  # pragma: no cover
@@ -2421,14 +2657,7 @@ class ComBackend(Backend):
         document = self._doc(doc_id)
         component = document.ComponentDefinition
         app = self._require_app()
-        available = int(component.SurfaceBodies.Count)
-        for index in [request.base, *request.tools]:
-            if index < 1 or index > available:
-                raise FeatureError(
-                    f"There is no body {index}: the part has {available}.",
-                    hint="A second body comes from an `extrude` with "
-                    "operation 'new_body'.",
-                )
+        _check_bodies(component, [request.base, *request.tools])
         tools = app.TransientObjects.CreateObjectCollection()
         for index in request.tools:
             tools.Add(component.SurfaceBodies.Item(index))
@@ -3067,6 +3296,24 @@ def _iterate(collection: Any) -> Iterator[Any]:  # pragma: no cover - Windows on
         yield collection.Item(index)
 
 
+def _style_override(primitive: PText) -> str:
+    """The formatted-text markup Inventor's ``TextBoxes.AddFitted`` takes.
+
+    A module-level function so it can be tested off Windows.  It was written
+    inline, with the attribute quotes escaped inside the f-string, and a
+    backslash in an f-string expression is a syntax error before Python 3.12 --
+    so this module did not *parse* on the oldest interpreter ``pyproject``
+    claims, and ``--backend auto`` raised ``SyntaxError`` there instead of
+    falling back to the simulator.  Concatenation avoids the escape entirely.
+    """
+    escaped = (primitive.text.replace("&", "&amp;")
+               .replace("<", "&lt;").replace(">", "&gt;"))
+    weight = ' Bold="True"' if primitive.bold else ""
+    slant = ' Italic="True"' if primitive.italic else ""
+    return (f'<StyleOverride Font="{primitive.font}" FontSize="{primitive.height}"'
+            + weight + slant + f">{escaped}</StyleOverride>")
+
+
 def _polar(center: tuple[float, float], radius: float, angle: float) -> tuple[float, float]:
     return (center[0] + radius * math.cos(angle), center[1] + radius * math.sin(angle))
 
@@ -3318,6 +3565,40 @@ def _is_structural(constraint: Any, groups: dict[tuple[str, str], Any]) -> bool:
     first, second = constraint.refs
     keys = [(ref.entity, ref.point.value) for ref in (first, second)]
     return all(key in groups for key in keys) and groups[keys[0]] == groups[keys[1]]
+
+
+def _check_bodies(component: Any, indices: Sequence[int]) -> None:  # pragma: no cover
+    """Reject a body number the part does not have, before Inventor is asked."""
+    available = int(component.SurfaceBodies.Count)
+    for index in indices:
+        if index < 1 or index > available:
+            raise FeatureError(
+                f"There is no body {index}: the part has {available}.",
+                hint="A second body comes from an `extrude` with "
+                "operation 'new_body'.",
+            )
+
+
+def _aim_at_bodies(app: Any, component: Any, definition: Any,
+                   indices: Sequence[int]) -> None:  # pragma: no cover
+    """Point a feature definition at particular solid bodies.
+
+    Inventor aims a new feature at the first body only, so a cut meant for the
+    second one silently removes nothing -- which reads as a working recipe that
+    built the wrong part.
+    """
+    _check_bodies(component, indices)
+    collection = app.TransientObjects.CreateObjectCollection()
+    for index in indices:
+        collection.Add(component.SurfaceBodies.Item(index))
+    try:
+        definition.AffectedBodies = collection
+    except Exception as exc:
+        raise FeatureError(
+            f"Could not aim the feature at body {list(indices)}: {_com_message(exc)}",
+            hint="This Inventor build may not accept AffectedBodies on this "
+            "feature. `combine` with operation 'cut' does the same job.",
+        ) from exc
 
 
 def _set_radius_expression(feature: Any, expression: str) -> bool:  # pragma: no cover

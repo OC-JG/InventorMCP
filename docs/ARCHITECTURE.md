@@ -129,9 +129,11 @@ the thickness rather than the length.
 
 ### `tools/` — the MCP surface
 
-Nineteen tools rather than one per feature type. Feature creation goes through
-`apply_operations` with the same operation objects a recipe uses, which keeps the
-tool list small and means there is one syntax to learn instead of two.
+Thirty tools rather than one per feature type -- thirty-one when the escape
+hatch is on. Feature creation goes through `apply_operations` with the same
+operation objects a recipe uses, which keeps the tool list small and means there
+is one syntax to learn instead of two. Most of the count is not modelling: seven
+document-lifecycle tools and eleven manufacturability ones.
 
 Every tool is wrapped by `guard`, which turns exceptions into
 `{"ok": false, "error": ..., "message": ..., "hint": ...}`. A caller that gets a
@@ -141,11 +143,26 @@ The recipe cheat-sheet is embedded in the descriptions of the three tools that t
 recipes, rather than only in a resource. A model that has to fetch a schema before
 it can write anything will often guess instead.
 
+That has a price worth knowing: the three copies are 98% identical and come to
+27 kB, about 8,400 tokens of the tool list, of which roughly 4,600 is the
+duplication. It is paid on every request to a client that has this server
+enabled, whether or not the conversation is about CAD. Since the cheat-sheet was
+written, `skills/inventor-parametric-modelling/` has come to carry the same
+material and loads only when it is relevant, so the argument for paying it three
+times is weaker than when the decision was made. Left alone for now, because the
+Skill is a Claude-specific mechanism and the tool descriptions are not.
+
 ## Things deliberately left out
 
 - **Assemblies.** Parts first. The recipe schema has no `iam` concept and adding one
   properly means constraints between components, which is a second design problem.
-- **Drawings.** Same reasoning.
+- **Producing drawings.** No drawing views, no sheets, no title blocks -- the
+  same reasoning as assemblies. *Reading* one is a different thing and is
+  supported: `check_against_drawing` compares a `DrawingReading` against a
+  recipe, and `drawing.py` holds the schema for it. The distinction is the point
+  of the design, and `docs/DECISIONS.md` argues it under "A drawing is read, not
+  traced": tracing a drawing's outlines gives exact geometry and no parameters,
+  which is the one thing this project exists not to produce.
 - **Sheet metal.** A different feature set with its own rules, and none of it is
   reachable from the recipe schema.
 - **A real geometry kernel in the mock.** The point of the mock is fast feedback on
@@ -165,3 +182,102 @@ Two bugs were found by writing the examples rather than by writing tests: bare
 numbers in mixed arithmetic were rejected, and the mock's YZ-plane axis mapping put
 the plane offset on the wrong axis. Both now have regression tests. That is the
 argument for keeping examples executable.
+
+## What this shape makes cheap
+
+Adding a modelling operation is a five-file change, and the same five files
+every time. Measured on the last two that went in:
+
+| | files | lines |
+|---|---|---|
+| `coil` | schema, base, com, mock, builder (+ tests) | 344 |
+| `draft`, `combine`, `split`, `boss` | the same five (+ guide, docs, tests) | 726 |
+
+Nothing in `units`, `expressions`, `geometry`, `plan`, `session` or `tools` had
+to move for either, and the tool count did not change. That is the layering
+paying for itself: an operation is a new *word* in the recipe language, not a
+new mechanism.
+
+**Two of the five are enforced by the compiler.** `Backend` is an ABC with an
+abstract method per operation, so a backend missing one will not instantiate.
+The live and simulated implementations therefore cannot drift apart — not by
+discipline, by construction — and that single fact is what makes the simulator
+trustworthy enough to use as an oracle for a live build.
+
+The other three are not enforced, and the difference shows. `coil` was given a
+schema, implemented in both backends, verified against a live spring to 0.2% and
+covered by tests — and then appeared in neither the recipe cheat-sheet nor the
+Skill, so nothing told a caller it existed. `tests/test_docs_still_true.py` now
+applies the ABC's rule to the cheat-sheet by hand: every operation and entity
+the schema accepts has to appear in it.
+
+## What it makes dear
+
+Ranked by how much of the design has to change, not by how much anyone wants
+them:
+
+- **A work axis or work point.** The cheapest thing on this list and the one
+  most often needed: `AxisSpec` already accepts `work_axis`, and the only reason
+  a circular pattern cannot turn about anything but an origin axis is that
+  nothing creates one. One request type, one abstract method, two
+  implementations — the `coil` shape exactly.
+- **Sketch-driven pattern, thicken, move face.** Also the `coil` shape. `hole`
+  gaining the `bodies` targeting that `extrude` already has is smaller still.
+- **Sheet metal.** A parallel feature set with its own document subtype and its
+  own rules. Mechanically the same shape, repeated forty times, and the
+  simulator would have to learn what a bend is.
+- **Producing a drawing.** The recipe schema describes a solid. A drawing
+  describes *views of* one, which is a different noun at the top of the
+  document, so `PartRecipe` stops being the only root. Everything below the
+  schema — resolution, expressions, units — still applies.
+- **Assemblies.** The genuinely hard one, and not for the reason it looks. The
+  session already holds many documents at once and the COM backend already
+  identifies an `AssemblyDocument`, so the plumbing is there. What is missing is
+  that an assembly's content is *constraints between components*, and this
+  project's whole thesis is that a constraint should carry an expression. A
+  mate offset of `plate_t + shim` is the assembly-level version of everything
+  `geometry.py` does for a sketch, and it wants the same care. Bolting on a
+  component list with hard-coded transforms would build the right picture and
+  be worthless the moment somebody changed a thickness — which is the failure
+  this repository exists to avoid, one level up.
+
+Nothing on that list is blocked by a decision that would have to be reversed.
+The recipe-as-data choice constrains what can be *said*, and the escape hatch is
+the honest pressure valve for the rest: `run_inventor_script` reaches the whole
+API, is off unless the machine's owner turns it on, and is what lets "we do not
+support that" be a statement about the recipe rather than about the server.
+
+## What will need maintaining
+
+Four surfaces move under this project rather than with it.
+
+**Inventor's enum table.** The COM backend reads enum values from the installed
+type library first and falls back to a table when it cannot. The table is not
+verified — when it was finally measured, 32 of its 51 entries were wrong, one of
+them silently turning a through-all extrude into a to-next. Where a value is
+disputed the server now refuses rather than guessing, but every new Inventor
+release is a fresh chance for the fallback to be consulted and be wrong.
+`scripts/dump_constants.py` is the answer and has to actually be run.
+
+**The simulator against the real thing.** Every estimate in `mock/` is
+calibrated against a number somebody measured in Inventor, and `PREDICTED` in
+`builder.py` says how far each is trusted. Those tolerances only stay honest if
+live acceptance runs keep happening: four operations in that table — coil,
+draft, emboss, split — have never been compared against Inventor at all and sit
+at a placeholder 0.5. `scripts/live_acceptance.py` is where that debt is paid.
+
+**The DFM analyser.** A pinned submodule with thresholds this project restates
+rather than imports, because the tool states them inline and does not export
+them. `tests/test_dfm_targets.py` puts every target through the real engine, so
+a drift fails a test and names the check — but only when the token is present.
+Without it the job skips every meaningful step and still reports green, which is
+the one place in this repository's CI where a pass is not evidence.
+
+**The Python floor, and CI actually being read.** `pyproject`'s
+`requires-python`, the CI matrix and what the code needs are three numbers that
+have to agree, and all three were different at once: `>=3.10` declared, 3.11 the
+lowest leg, 3.12 what one f-string needed. CI was red on `main` for eight runs
+before anyone looked, which `docs/DECISIONS.md` had already recorded happening
+once before, for sixteen. `tests/test_supported_pythons.py` holds the first two
+together. Nothing in a repository can make somebody read a log; a required
+status check on the default branch can.

@@ -211,6 +211,7 @@ class ExtrudeRequest:
     direction: str = "positive"
     operation: str = "join"
     taper: Driven | None = None
+    bodies: Sequence[int] = ()
     name: str | None = None
 
 
@@ -274,6 +275,23 @@ class HoleRequest:
 class FilletRequest:
     edges: ResolvedSelector
     radius: Driven
+    radius_end: Driven | None = None
+    name: str | None = None
+
+
+@dataclass
+class CoilRequest:
+    sketch: str
+    axis: AxisSpec
+    profiles: Sequence[int] | str = "all"
+    pitch: Driven | None = None
+    height: Driven | None = None
+    revolutions: Driven | None = None
+    taper: Driven | None = None
+    operation: str = "join"
+    clockwise: bool = True
+    reverse_axis: bool = False
+    spiral: bool = False
     name: str | None = None
 
 
@@ -476,6 +494,9 @@ class Backend(ABC):
 
     @abstractmethod
     def sweep(self, doc_id: str, request: SweepRequest) -> FeatureInfo: ...
+
+    @abstractmethod
+    def coil(self, doc_id: str, request: CoilRequest) -> FeatureInfo: ...
 
     @abstractmethod
     def loft(self, doc_id: str, request: LoftRequest) -> FeatureInfo: ...

@@ -72,3 +72,31 @@ def plate_recipe() -> dict:
     import copy
 
     return copy.deepcopy(PLATE_RECIPE)
+
+
+#: Prefix on every skip that means "the DFM analyser could not be reached".
+#:
+#: CI's manufacturability job exists to catch the thresholds in
+#: `inventor_mcp/dfm/remedy.py` drifting out of agreement with the analyser's
+#: own rules. Every test that can do that skips when the analyser is absent, and
+#: a fully skipped `pytest` run exits 0 -- so with a token present and the
+#: analyser somehow unreachable, the job reported green while checking nothing.
+#: A sentinel rather than a prose match, because the job has to key on something
+#: that will not drift when the message is reworded.
+DFM_UNAVAILABLE = "dfm-unavailable:"
+
+
+def skip_without_analyser():
+    """Find the DFM analyser, or skip with a reason CI can recognise."""
+    import shutil
+
+    import pytest
+
+    from inventor_mcp.dfm.runner import DfmUnavailable, find_dfm_root
+
+    if shutil.which("node") is None:
+        pytest.skip(f"{DFM_UNAVAILABLE} no node, so the DFM analyser cannot run")
+    try:
+        return find_dfm_root()
+    except DfmUnavailable as exc:
+        pytest.skip(f"{DFM_UNAVAILABLE} {exc.message} {exc.hint or ''}")

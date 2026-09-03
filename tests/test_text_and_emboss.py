@@ -114,3 +114,46 @@ class TestMeasuredAgainstInventor:
         top, bottom = 12.60, 2.11
         assert top == pytest.approx(anchor, abs=0.05)
         assert (top - bottom) == pytest.approx(1.31 * height, rel=0.05)
+
+
+class TestTheStyleMarkupInventorIsHanded:
+    """The one string that carries font, size and weight into Inventor.
+
+    It was written inline inside ``build_sketch`` with the XML attribute quotes
+    escaped inside an f-string -- which is a syntax error before Python 3.12, so
+    the whole COM module failed to *parse* on the oldest interpreter
+    ``pyproject`` claims, taking ``--backend auto``'s fall-back to the simulator
+    with it. Nothing covered the line, so nothing said. It is a function now, and
+    this is the cover.
+    """
+
+    def style(self, **kwargs):
+        from inventor_mcp.backend.com.backend import _style_override
+
+        return _style_override(
+            PText(id="t1", **{"text": "OnlyCat", "height": 0.5, **kwargs}))
+
+    def test_plain_text(self):
+        assert self.style() == (
+            '<StyleOverride Font="Arial" FontSize="0.5">OnlyCat</StyleOverride>')
+
+    def test_bold_and_italic_are_attributes_in_that_order(self):
+        assert self.style(bold=True, italic=True) == (
+            '<StyleOverride Font="Arial" FontSize="0.5" Bold="True" Italic="True">'
+            "OnlyCat</StyleOverride>")
+
+    def test_only_the_weight_that_was_asked_for(self):
+        assert ' Bold="True"' in self.style(bold=True)
+        assert "Italic" not in self.style(bold=True)
+        assert ' Italic="True"' in self.style(italic=True)
+        assert "Bold" not in self.style(italic=True)
+
+    def test_the_font_travels(self):
+        assert 'Font="Consolas"' in self.style(font="Consolas")
+
+    def test_markup_in_the_text_is_escaped_rather_than_injected(self):
+        """Otherwise a part named `A<B` hands Inventor a broken document."""
+        styled = self.style(text="A<B & C>D")
+        assert ">A&lt;B &amp; C&gt;D<" in styled
+        assert styled.count("<StyleOverride") == 1
+        assert styled.count("</StyleOverride>") == 1

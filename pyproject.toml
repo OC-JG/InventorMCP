@@ -10,7 +10,10 @@ name = "inventor-mcp"
 version = "0.1.0"
 description = "MCP server that turns natural-language descriptions into parametric Autodesk Inventor models"
 readme = "README.md"
-requires-python = ">=3.10"
+# 3.11 because that is the oldest leg CI runs; a floor nothing tests is a
+# claim rather than a fact, and tests/test_supported_pythons.py holds the
+# two together. Raise the leg first if this needs to go lower.
+requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "OnlyCat" }]

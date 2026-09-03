@@ -44,6 +44,7 @@ from ..base import (
     AxisSpec,
     Backend,
     ChamferRequest,
+    CoilRequest,
     CircularPatternRequest,
     DocInfo,
     ExportRequest,
@@ -747,10 +748,23 @@ class MockBackend(Backend):
         # a `new_body` extrude starts one, anything else lands on the first.
         if not document.bodies and was > 0:
             document.bodies = [was]
+        if request.bodies:
+            available = len(document.bodies)
+            for index in request.bodies:
+                if index < 1 or index > available:
+                    raise FeatureError(
+                        f"There is no body {index}: the part has {available}.",
+                        hint="A second body comes from an `extrude` with "
+                        "operation 'new_body'.",
+                    )
         if request.operation == "new_body":
             document.bodies.append(signed)
         elif document.bodies:
-            document.bodies[0] = max(document.bodies[0] + moved, 0.0)
+            # Inventor lands a feature on the first body unless it is aimed
+            # somewhere else, and a cut aimed at the wrong body removes nothing
+            # -- which is the mistake the rehearsal exists to catch.
+            target = request.bodies[0] - 1 if request.bodies else 0
+            document.bodies[target] = max(document.bodies[target] + moved, 0.0)
 
         self._synthesise_extrude_topology(document, sketch, loops, plane, distance,
                                           request.direction, name,
@@ -772,6 +786,7 @@ class MockBackend(Backend):
                 # says which parameter drives the draft, and role discovery on a
                 # part nobody described reads exactly that.
                 "taper": request.taper.as_dict() if request.taper else None,
+                "bodies": list(request.bodies) or None,
                 "profiles": len(loops),
                 "profile_area_cm2": round(area, 6),
             },
@@ -1010,6 +1025,12 @@ class MockBackend(Backend):
                 feature=name,
                 geometry="cylindrical",
                 midpoint=(0.0, 0.0, 0.0),
+                # ponytail: a stand-in, not a surface area -- the circumference
+                # at the profile's radius times the square root of its area,
+                # which has the right units and no better claim than that. It
+                # exists so a revolve contributes *a* face to selectors and to
+                # the shell fallback's surface total; nothing should read it as
+                # a measurement.
                 area=2 * math.pi * radius * math.sqrt(max(area, 0.0)),
             )
         )
@@ -1018,6 +1039,20 @@ class MockBackend(Backend):
         return _feature_info(feature)
 
     def sweep(self, doc_id: str, request: SweepRequest) -> FeatureInfo:
+        """Pappus: the section's area times how far it travels.
+
+        ponytail: exact only while the profile's centroid sits on the path and
+        the path's radius of curvature stays comfortably above the profile's
+        own size. A tube swept round a bend tighter than its own diameter
+        overlaps itself on the inside, and this charges that material twice.
+
+        ponytail: and there is no overlap test at all. A cut sweep whose path
+        runs nowhere near the material still subtracts a full area x length --
+        the simulator has no booleans, so it cannot see the miss. The guard for
+        that is `_profile_reaches_the_part` in the builder, which checks both
+        of a sweep's sketches; this function will happily eat a quarter of the
+        part on its own.
+        """
         document = self._doc(doc_id)
         profile = document.find_sketch(request.profile_sketch)
         path = document.find_sketch(request.path_sketch)
@@ -1035,17 +1070,70 @@ class MockBackend(Backend):
         document.features.append(feature)
         return _feature_info(feature)
 
+    def coil(self, doc_id: str, request: CoilRequest) -> FeatureInfo:
+        """Profile area times the helix's arc length.
+
+        A helix of radius r and pitch p covers sqrt((2*pi*r)^2 + p^2) per turn,
+        so the swept volume is the profile's area times that times the number of
+        turns. r is taken from the profile's centroid: the sketch is drawn in a
+        plane containing the axis, so the centroid's offset across that plane IS
+        the helix radius.
+
+        Like every estimate here it ignores what happens where consecutive turns
+        meet, so a coil whose pitch barely clears its profile will read high.
+
+        ponytail: the radius is read as the profile centroid's offset along the
+        sketch's *u* axis, which assumes the axis of revolution passes through
+        u = 0 and lies in the sketch plane. That is how a spring is drawn and it
+        is not enforced anywhere, so a profile sketched off to one side of its
+        axis, or on a plane the axis only crosses, gets a radius that is simply
+        the wrong number.
+        """
+        document = self._doc(doc_id)
+        sketch = document.find_sketch(request.sketch)
+        area = _net_area(sketch, sketch.loops)
+        centre = _loop_center(sketch.plan, sketch.loops[0]) if sketch.loops else (0.0, 0.0)
+        radius = abs(centre[0])
+        pitch = request.pitch.value if request.pitch else None
+        height = request.height.value if request.height else None
+        turns = (request.revolutions.value if request.revolutions
+                 else (height / pitch if pitch else 0.0))
+        if pitch is None and height is not None and turns:
+            pitch = height / turns
+        per_turn = math.hypot(2.0 * math.pi * radius, pitch or 0.0)
+        estimate = area * per_turn * turns
+
+        was = document.volume
+        if request.operation == "cut":
+            document.volume = max(document.volume - estimate, 0.0)
+        else:
+            document.volume += estimate
+        moved = document.volume - was
+        name = self._feature_name(document, request.name, "coil")
+        feature = _Feature(self._next("feat"), name, "coil", volume_delta=moved,
+                           detail={"sketch": sketch.name,
+                                   "operation": request.operation,
+                                   # the same keys the live backend reports, so
+                                   # a recipe reads the same either way
+                                   "pitch": request.pitch.as_dict()
+                                   if request.pitch else None,
+                                   "height": request.height.as_dict()
+                                   if request.height else None,
+                                   "revolutions": request.revolutions.as_dict()
+                                   if request.revolutions else None,
+                                   "turns": round(turns, 4),
+                                   "helix_radius": round(radius, 4),
+                                   "path_length": round(per_turn * turns, 4)})
+        document.features.append(feature)
+        return _feature_info(feature)
+
     def loft(self, doc_id: str, request: LoftRequest) -> FeatureInfo:
         document = self._doc(doc_id)
         sketches = [document.find_sketch(name) for name in request.sketches]
         areas = [_net_area(sketch, sketch.loops) for sketch in sketches]
-        # The mean area times the distance between the outermost sections. The
-        # mean area on its own was being added as if it were a volume, so a
-        # 70 mm duct came out at a quarter of its size and the units did not
-        # even agree.
         offsets = [sketch.offset for sketch in sketches]
         span = abs(max(offsets) - min(offsets))
-        estimate = (sum(areas) / max(len(areas), 1)) * span
+        estimate = _loft_volume(areas, offsets)
         was = document.volume
         # The estimate is the same either way; which SIGN it carries is the
         # operation. This used to add a cut loft's volume -- a duct's cut bore
@@ -1088,6 +1176,11 @@ class MockBackend(Backend):
         if request.depth:
             depth = request.depth.value
         else:
+            # ponytail: measured over the *first* centre and then charged to
+            # every one of them. Right for a grid of holes through a plate,
+            # wrong for a sketch whose holes straddle a step or a rib -- and the
+            # holes that most want checking are the ones through varying
+            # material.
             first = centers[0]
             depth = _through_all_distance(
                 document, plane, over=map3d(plane, first[0], first[1], sketch.offset))
@@ -1144,22 +1237,66 @@ class MockBackend(Backend):
         return _feature_info(feature)
 
     def fillet(self, doc_id: str, request: FilletRequest) -> FeatureInfo:
-        return self._edge_treatment(doc_id, "fillet", request.edges, request.radius.value,
-                                    request.name, {"radius": request.radius.as_dict()})
+        """A quarter-round takes away the corner outside it: r^2 (1 - pi/4)."""
+        detail: dict[str, Any] = {"radius": request.radius.as_dict()}
+        mean_squared = request.radius.value ** 2
+        if request.radius_end is not None:
+            detail["radius_end"] = request.radius_end.as_dict()
+            # The cross-section goes as r^2, so what is wanted is the mean of
+            # r^2 along the edge.  Inventor's variable fillet moves the radius on
+            # a smooth cubic rather than a straight ramp -- r(t) = a + (b - a)
+            # (3t^2 - 2t^3) -- and integrating that gives
+            # a^2 + a(b - a) + 13/35 (b - a)^2.  Measured against Inventor:
+            # 3 mm to 8 mm over a 10 mm edge removes 0.071420 cm^3 and this
+            # predicts 0.071432, while a straight ramp would say 0.069388.
+            a, b = request.radius.value, request.radius_end.value
+            mean_squared = a * a + a * (b - a) + 13.0 / 35.0 * (b - a) ** 2
+        return self._edge_treatment(
+            doc_id, "fillet", request.edges, mean_squared * (1.0 - math.pi / 4.0),
+            request.name, detail)
 
     def chamfer(self, doc_id: str, request: ChamferRequest) -> FeatureInfo:
-        return self._edge_treatment(doc_id, "chamfer", request.edges, request.distance.value,
-                                    request.name, {"distance": request.distance.as_dict()})
+        """A flat cut takes away a triangle, which is not what a fillet takes.
+
+        This used to hand ``_edge_treatment`` the chamfer distance and let it
+        apply the *fillet* formula, r^2 (1 - pi/4) = 0.2146 d^2, where a 45
+        degree chamfer removes d^2 / 2 -- a 57% under-estimate on every chamfer
+        the simulator ever rehearsed. Nothing pinned the number, so nothing said;
+        and since the divergence check allows a chamfer 30%, a live run would
+        have reported the *recipe* as suspect ("a selector catching more edges
+        than the one that was meant") for a recipe that was right.
+
+        Three styles, three triangles: legs d and d, legs d and d2, or leg d and
+        d * tan(angle) where the angle is measured off the first face.
+        """
+        first = request.distance.value
+        detail: dict[str, Any] = {"distance": request.distance.as_dict()}
+        if request.distance2 is not None:
+            detail["distance2"] = request.distance2.as_dict()
+            second = request.distance2.value
+        elif request.angle is not None:
+            detail["angle_deg"] = round(math.degrees(request.angle.value), 4)
+            second = first * math.tan(request.angle.value)
+        else:
+            second = first
+        return self._edge_treatment(doc_id, "chamfer", request.edges,
+                                    0.5 * first * second, request.name, detail)
 
     def _edge_treatment(
         self,
         doc_id: str,
         kind: str,
         selector: ResolvedSelector,
-        size: float,
+        per_length: float,
         requested_name: str | None,
         detail: dict[str, Any],
     ) -> FeatureInfo:
+        """Move the volume by *per_length* of cross-section along every match.
+
+        The caller works out the cross-section, because a fillet's and a
+        chamfer's are different shapes and squashing both into one "size" is how
+        the chamfer came to be charged a fillet's price.
+        """
         document = self._doc(doc_id)
         matches = self._match(document, selector)
         if not matches:
@@ -1170,19 +1307,24 @@ class MockBackend(Backend):
             )
         name = self._feature_name(document, requested_name, kind)
         total_length = sum(match.length or 0.0 for match in matches)
-        # r^2 (1 - pi/4) per unit length: the corner left outside a quarter
-        # circle inscribed in a square. On an outside corner that material goes
-        # away; on an inside corner the same amount is added, and the simulator
-        # subtracted either way -- which is why the angle bracket read 1.4 cm^3
-        # light with a correct fillet in it.
+        # On an outside corner that material goes away; on an inside corner the
+        # same amount is added, and the simulator subtracted either way -- which
+        # is why the angle bracket read 1.4 cm^3 light with a correct fillet in
+        # it.
         #
         # The sign comes from the selector rather than from the shape: the
         # simulator synthesises topology from sketch loops and genuinely cannot
         # see which side the material is on, so it takes the recipe's word. A
         # recipe that asks for "concave" and gets a convex edge is a mistake only
         # Inventor can catch.
+        #
+        # ponytail: every match is charged its full length, so where two treated
+        # edges meet the corner they share is counted twice. On a block filleted
+        # all round that is an over-estimate of order r^3 per corner against a
+        # total of order r^2 * L, which is why it has not mattered; it would on a
+        # part whose edges are shorter than the radius is large.
         adds = selector.filter == "concave"
-        corner = total_length * size * size * 0.2146
+        corner = total_length * per_length
         was = document.volume
         document.volume = max(document.volume + (corner if adds else -corner), 0.0)
         for match in matches:
@@ -1460,6 +1602,16 @@ class MockBackend(Backend):
         Anything else falls back to the old estimate -- the surface area times the
         thickness -- and says so, because a shell of a revolved or swept body is
         not a prism and pretending otherwise would be worse than approximating.
+
+        ponytail: whichever branch runs, `document.slabs` is left alone. Slabs
+        record the prisms an extrude added and are what `_through_all_distance`
+        measures thickness against, so every through-cut *after* a shell is
+        charged against the solid the part was before it. The PCB enclosure's
+        cable bore was costed at the full 105 mm box length instead of two 2 mm
+        walls, a 26x over-count. `rehearse` knows to stop trusting itself here
+        -- it marks every later step `predictable: false` -- but the numbers
+        themselves are still wrong, and anything reading them directly inherits
+        that.
         """
         thickness = request.thickness.value
         if len(document.slabs) == 1 and request.direction == "inside":
@@ -1590,6 +1742,11 @@ class MockBackend(Backend):
         corners = [map3d(plane, u, v, 0.0)
                    for u in (low_u, high_u) for v in (low_v, high_v)]
         if turning is None:  # a sketch line or an edge: no cheap answer
+            # ponytail: and this does the cube anyway. Revolving about a sketch
+            # line is exactly the case the docstring above says makes a pulley
+            # look like a ball -- the named-axis path was fixed and this one was
+            # left. It over-states the bounds, which loses the "does this cut
+            # reach the part" warning rather than raising a false one.
             reach = max(abs(value) for corner in corners for value in corner)
             self._expand_bounds(document, [
                 (x, y, z) for x in (-reach, reach)
@@ -1907,7 +2064,38 @@ def _text_area(primitive: "PText") -> float:
     """
     height = primitive.height
     ink = _INK_PER_EM * (_BOLD_INK if primitive.bold else 1.0)
+    # ponytail: every character is charged the same ink, spaces included, so a
+    # run of several words reads high by roughly one character per gap. Below
+    # the ~10% the heuristic is good to anyway, which is why it stands.
     return len(primitive.text.strip()) * ink * height * height
+
+
+def _loft_volume(areas: Sequence[float], offsets: Sequence[float]) -> float:
+    """The frustum rule, section to section: h/3 (A1 + A2 + sqrt(A1 A2)).
+
+    Exact whenever consecutive sections are scaled copies of each other, which
+    is what a loft between two circles or two similar rectangles is, and the
+    standard prismatoid estimate when they are not.
+
+    This used to be the mean area times the whole span, which is a real
+    over-estimate rather than a rounding one: the 30-to-10 loft over 40 mm that
+    ``docs/FEATURE_COVERAGE.md`` records Inventor building at 13.6136 cm^3 came
+    out here at 15.7080, 15% high. The divergence check allows a loft 35%, so
+    nothing said, and the number that was 15% wrong was the one a rehearsal
+    offered as the prediction. The frustum rule gives 13.613568.
+
+    Pairwise, so a three-section loft is two frusta and not one average -- the
+    mean over all sections loses the shape entirely once there are more than
+    two, and a waisted duct is exactly where somebody would reach for a third.
+    """
+    if len(areas) < 2:
+        return 0.0
+    ordered = sorted(zip(offsets, areas))
+    total = 0.0
+    for (near, first), (far, second) in zip(ordered, ordered[1:]):
+        gap = abs(far - near)
+        total += gap / 3.0 * (first + second + math.sqrt(max(first * second, 0.0)))
+    return total
 
 
 def _net_area(sketch: _Sketch, loops: Sequence[Sequence[str]]) -> float:
@@ -2415,6 +2603,15 @@ def _degrees_of_freedom(plan: SketchPlan) -> int:
     Each primitive contributes its free parameters, each constraint removes
     its usual count, and each dimension removes one.  It is an estimate, not a
     solver -- Inventor is the authority once connected.
+
+    ponytail: it can come out negative, and `_sketch_info` clamps that to zero
+    and calls the sketch fully constrained. So an over-constrained sketch and a
+    perfectly constrained one are the same answer here, while the live backend
+    would strip the excess dimensions and report `refused_dimensions`. Acting
+    on the negative would mean trusting the estimate to be exact, which it is
+    not -- text contributes nothing, and every constraint kind not in the table
+    below is assumed to remove one -- so this stays a known blind spot rather
+    than becoming a guess.
     """
     dof = 0
     for primitive in plan.primitives:

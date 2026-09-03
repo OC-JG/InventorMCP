@@ -97,4 +97,38 @@ jobs:
         run: |
           # -rs so a skip is visible: a test that passes because it did not run
           # is worse than no test, and this job exists to notice that.
-          pytest -q -rs tests/test_dfm_targets.py tests/test_dfm_end_to_end.py
+          pytest -q -rs --junitxml=dfm-results.xml \
+            tests/test_dfm_targets.py tests/test_dfm_end_to_end.py
+
+      - name: ...and the analyser was actually reachable
+        if: steps.gate.outputs.have == 'yes'
+        # The step above passes whether those tests ran or skipped, and they all
+        # skip when the analyser cannot be found. A fully skipped pytest run
+        # exits 0, so this job used to report green while checking nothing --
+        # which is the one thing docs/DECISIONS.md says a workflow must never
+        # do. With the token present there is no legitimate reason to skip.
+        #
+        # Keyed on the sentinel that tests/conftest.py puts on exactly those
+        # skips, not on a count: some of these tests are pure and run without
+        # the analyser, so "did anything run" is satisfied while every test
+        # that could catch a threshold drift sat out.
+        run: |
+          python - <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          sentinel = "dfm-unavailable:"
+          root = ET.parse("dfm-results.xml").getroot()
+          reasons = {
+              skip.get("message", "")
+              for case in root.iter("testcase") for skip in case.iter("skipped")
+              if skip.get("message", "").startswith(sentinel)
+          }
+          if reasons:
+              for reason in sorted(reasons):
+                  print("  " + reason)
+              sys.exit(
+                  "The analyser was unreachable, so the targets in "
+                  "inventor_mcp/dfm/remedy.py went unchecked against the rules "
+                  "they duplicate -- which is the only thing this job is for. "
+                  "See docs/DFM.md.")
+          print("every analyser-backed DFM test ran")
+          PY

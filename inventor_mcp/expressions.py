@@ -62,6 +62,19 @@ def _as_quantity(value: _Value) -> Quantity:
             "Expression produced a quantity with no meaningful unit "
             f"(length^{value.exponents[0]} angle^{value.exponents[1]} mass^{value.exponents[2]})."
         )
+    if not math.isfinite(value.number):
+        # `**` guards its own overflow; `*` and `-` do not, so `1e308 * 1e308`
+        # came through as `inf` and `inf - inf` as `nan`. Both then travelled
+        # the whole way down as ordinary numbers: the build reported ok, and
+        # the mass properties came back holding `NaN` and `-Infinity` -- which
+        # are not JSON, so a strict client cannot even read the reply that says
+        # the part is fine.
+        raise ExpressionError(
+            f"Expression evaluates to {value.number}, which is not a usable "
+            "dimension.",
+            hint="Check for an overflow, or for a subtraction of two very "
+                 "large numbers.",
+        )
     return Quantity(value.number, dim)
 
 
