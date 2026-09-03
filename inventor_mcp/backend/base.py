@@ -268,6 +268,9 @@ class HoleRequest:
     tap_class: str | None = None
     tap_right_handed: bool = True
     tap_full_depth: bool = True
+    #: Bodies the hole may affect, 1-based in creation order. Empty leaves
+    #: Inventor's default, which is the first body only.
+    bodies: Sequence[int] = ()
     name: str | None = None
 
 

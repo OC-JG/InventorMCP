@@ -292,8 +292,25 @@ actually bitten.
       `WorkAxes.AddByLine` have never executed; `INVENTOR_SETUP.md` has the
       order to check them in, and the test that matters is not "did it run" but
       whether the bolt circle moves when the driving parameter does.
-- [ ] **`hole` gains `bodies`**, the multi-body targeting `extrude` already
-      has.
+- [x] **`hole` gains `bodies`**, the multi-body targeting `extrude` already
+      has. *(2026-09-03.)* Every piece it needed was already parameterised by
+      body -- `charge`, `_through_all_distance`, `_material_spans` and
+      `_Slab.body` -- so the simulator side was threading an argument that four
+      functions were already waiting for, and `extrude`'s inline body check
+      became a shared `_aimed_body` rather than a second copy.
+
+      Two things are worth knowing. **A hole is aimed after it is built, not
+      before**: unlike `extrude` there is no definition object to put
+      `AffectedBodies` on, because `HoleFeatures.Add...` makes the feature in
+      one call, so the COM backend sets it on the finished feature and treats a
+      release that refuses as a hard error -- the hole exists either way, and one
+      on the wrong body has taken real material out of a part that looks
+      finished. Unmeasured, like the work axis. **And the total volume cannot
+      show that aiming worked**: both test blocks are 8 cm³ and
+      `_through_all_distance` deliberately falls back to the bounding box over a
+      point no prism covers, so a bore aimed at the wrong body is still charged
+      full depth and the totals agree to the digit. Per body they do not, which
+      is the ledger's reason for never aggregating.
 - [ ] **A both-directions extent on `hole`**, or a warning when a through
       hole's axis re-enters material it did not cut — defect 1 in
       `FEATURE_COVERAGE.md`.

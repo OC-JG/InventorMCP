@@ -381,6 +381,7 @@ def _apply_one(session: Session, context: DocumentContext, op: Operation) -> dic
             tap_class=op.tap_class,
             tap_right_handed=op.tap_right_handed,
             tap_full_depth=op.tap_full_depth,
+            bodies=list(op.bodies or ()),
             name=op.name,
         )
         return _record(context, backend.hole(context.doc_id, request), "hole")

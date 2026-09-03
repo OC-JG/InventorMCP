@@ -5,6 +5,27 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 ## Unreleased
 
 ### Added
+- **`hole` gains `bodies`**, the multi-body targeting `extrude` already had. A
+  hole aimed at a second body used to land on the first, which removes real
+  material from the wrong place and reports success.
+
+  The simulator needed no new arithmetic: `charge`, `_through_all_distance`,
+  `_material_spans` and `_Slab.body` were all already parameterised by body, so
+  this threads an argument four functions were waiting for. `extrude`'s inline
+  body-number check became a shared `_aimed_body` instead of a second copy.
+
+  A hole is aimed *after* it is built, unlike an extrude: `HoleFeatures.Add...`
+  makes the feature in one call, so there is no definition object to put
+  `AffectedBodies` on. The COM backend sets it on the finished feature and
+  treats a release that refuses as a hard error rather than a warning — the hole
+  exists either way, and one on the wrong body has cut a part that looks
+  finished. Unmeasured, for the same reason as the work axis below.
+
+  Worth recording because a test went looking for it: the *total* volume cannot
+  show that aiming worked. `_through_all_distance` deliberately falls back to
+  the bounding box over a point no prism covers, so a bore aimed at the wrong
+  body is still charged its full depth and two runs agree to the digit. Per body
+  they do not, which is the ledger's reason for never aggregating.
 - **Work axis and work point.** A named axis in space, so a circular pattern can
   turn about something other than an origin axis, and a named point to hang one
   on. `kind: "normal_to_plane"` is the bolt-circle case and the default:

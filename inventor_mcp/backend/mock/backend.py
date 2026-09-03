@@ -118,6 +118,26 @@ def plane_normal(plane: str) -> tuple[float, float, float]:
     return _PLANES[plane][1]
 
 
+def _aimed_body(document: "_Document", bodies: Sequence[int]) -> int | None:
+    """Which body a feature is aimed at, 0-based, or None for Inventor's default.
+
+    Inventor lands a feature on the first body unless it is aimed somewhere
+    else, and a feature aimed at the wrong body removes nothing -- which is the
+    mistake the rehearsal exists to catch, and why a body number the part does
+    not have is refused here rather than passed on.
+    """
+    if not bodies:
+        return None
+    available = len(document.bodies)
+    for index in bodies:
+        if index < 1 or index > available:
+            raise FeatureError(
+                f"There is no body {index}: the part has {available}.",
+                hint="A second body comes from an `extrude` with operation 'new_body'.",
+            )
+    return bodies[0] - 1
+
+
 def _unit_vector(vector: Sequence[float]) -> tuple[float, float, float] | None:
     """*vector* scaled to length one, or None if it has no length to scale.
 
@@ -835,19 +855,7 @@ class MockBackend(Backend):
             )
 
         plane = sketch.base_plane
-        if request.bodies:
-            available = len(document.bodies)
-            for index in request.bodies:
-                if index < 1 or index > available:
-                    raise FeatureError(
-                        f"There is no body {index}: the part has {available}.",
-                        hint="A second body comes from an `extrude` with "
-                        "operation 'new_body'.",
-                    )
-        # Inventor lands a feature on the first body unless it is aimed
-        # somewhere else, and a cut aimed at the wrong body removes nothing --
-        # which is the mistake the rehearsal exists to catch.
-        aimed = (request.bodies[0] - 1) if request.bodies else None
+        aimed = _aimed_body(document, request.bodies)
         centre = _loop_center(sketch.plan, loops[0])
         over = map3d(plane, centre[0], centre[1], sketch.offset)
         if request.extent == "distance":
@@ -933,7 +941,7 @@ class MockBackend(Backend):
 
     def _record_bores(self, document: _Document, plane: str, offset: float,
                       centres: Sequence[tuple[float, float]], radius: float,
-                      depth: float) -> None:
+                      depth: float, *, body: int | None = None) -> None:
         """Record each drilled hole as a void, so later features see through it.
 
         Which way the drill goes is measured rather than assumed, the same way
@@ -954,7 +962,7 @@ class MockBackend(Backend):
         ]
         for u, v in centres:
             over = map3d(plane, u, v, offset)
-            spans = _material_spans(document, axis, over)
+            spans = _material_spans(document, axis, over, body)
             side = 1.0
             if spans:
                 here = over[axis]
@@ -966,7 +974,7 @@ class MockBackend(Backend):
                 plane=plane,
                 outline=[(u + du, v + dv) for du, dv in circle],
                 near=offset, far=offset + side * depth,
-                sign=-1.0, source="hole"))
+                sign=-1.0, body=body or 0, source="hole"))
 
     def _cut_reach(self, document: _Document, plane: str, sketch: _Sketch,
                    loops: Sequence[Sequence[str]], distance: float,
@@ -1356,6 +1364,7 @@ class MockBackend(Backend):
             )
         plane = sketch.base_plane
         radius = request.diameter.value / 2
+        aimed = _aimed_body(document, request.bodies)
         if request.depth:
             depth = request.depth.value
         else:
@@ -1366,10 +1375,11 @@ class MockBackend(Backend):
             # material.
             first = centers[0]
             depth = _through_all_distance(
-                document, plane, over=map3d(plane, first[0], first[1], sketch.offset))
+                document, plane, over=map3d(plane, first[0], first[1], sketch.offset),
+                body=aimed)
         removed = (math.pi * radius**2 * depth + _style_volume(request, radius)) * len(centers)
-        moved = document.charge(-removed)
-        self._record_bores(document, plane, sketch.offset, centers, radius, depth)
+        moved = document.charge(-removed, aimed if aimed is not None else 0)
+        self._record_bores(document, plane, sketch.offset, centers, radius, depth, body=aimed)
 
         name = self._feature_name(document, request.name, "hole")
         for index, (u, v) in enumerate(centers):
@@ -1411,6 +1421,7 @@ class MockBackend(Backend):
                 # by the recipe's diameter. Inventor sizes it from the table,
                 # which is why the recipe should give the tap-drill diameter.
                 "tap_sized_by": "the recipe's diameter" if request.tap else None,
+                "bodies": list(request.bodies) or None,
             },
         )
         document.features.append(feature)

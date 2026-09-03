@@ -2222,6 +2222,19 @@ class ComBackend(Backend):
                     "is wider than the bore it sits over.",
                 ) from exc
 
+            if request.bodies:
+                # Unlike `extrude`, a hole is built by `HoleFeatures.Add...`
+                # rather than from a definition object, so there is nothing to
+                # set `AffectedBodies` on before the feature exists. It is set
+                # afterwards instead, and a release that will not take it is a
+                # hard error rather than a warning: the hole is built either
+                # way, and one on the wrong body has removed real material from
+                # a part that now looks finished. Unmeasured -- see the work
+                # axis note in `docs/INVENTOR_SETUP.md` for the standing
+                # caveat about calls written without an Inventor to try them.
+                _aim_at_bodies(self._require_app(), document.ComponentDefinition,
+                               feature, request.bodies)
+
             # Inventor coerces what it can, so a wrong argument order can build
             # a plain hole and report success.  Reading the type back off the
             # feature is the only thing that distinguishes "made a counterbore"
@@ -2263,6 +2276,7 @@ class ComBackend(Backend):
             "method": call.method,
             "drilled": ("along" if along_normal else "against") + " the sketch normal",
             "chose_by": why,
+            "bodies": list(request.bodies) or None,
         }
         if request.tap:
             detail["tap"] = request.tap

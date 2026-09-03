@@ -482,6 +482,12 @@ class HoleOp(OpBase):
         description="Drill point angle for a blind hole, e.g. '118 deg'. Omit for "
         "a flat bottom, which is what Inventor's own hole dialog gives.",
     )
+    bodies: list[int] | None = Field(
+        None,
+        description="Bodies this hole may affect, 1-based in creation order. "
+        "Omit to leave Inventor's default, which is the first body only -- so a "
+        "hole aimed at a second body needs this.",
+    )
 
     @model_validator(mode="after")
     def _depth_consistency(self) -> "HoleOp":
