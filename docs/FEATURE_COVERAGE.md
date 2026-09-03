@@ -168,6 +168,22 @@ Each of these was hit while building real parts, and each passed
    that as a disagreement instead of the two errors cancelling into a plausible
    number.
 
+   *Warned about since 2026-09-03, and not fixed.* The two fixes offered above
+   are not equally available: **Inventor's hole extent has no both-directions
+   option** -- Distance, Through All and To, with Through All taking a side --
+   so there is nothing to reach for, and the roadmap's first suggestion is not
+   implementable rather than merely unimplemented. So the second one is what
+   landed. The simulator was already counting the pieces of material each
+   drill axis crosses in order to decide which way the hole goes; a count above
+   one is the whole of the condition, and `rehearse` now says so, names the
+   `extrude` cut with `direction: "symmetric"` as the substitute, and warns that
+   the step will diverge on volume too.
+
+   It fires on the reproduction and on none of the eleven shipped examples --
+   including the enclosure this defect was found on, which has been built with
+   the substitute since. A warning that cries on a correct recipe is worse than
+   no warning, so the quiet cases are tested as carefully as the loud one.
+
 2. ~~**The simulator's `shell` does not update `document.slabs`.**~~ *Fixed.* The
    slab list is now a signed ledger: a shell records the cavity it hollowed out,
    a cut records the prism it swept, a hole records its bore, and the list is read

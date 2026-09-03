@@ -118,6 +118,29 @@ def plane_normal(plane: str) -> tuple[float, float, float]:
     return _PLANES[plane][1]
 
 
+def _walls_on_the_axis(document: "_Document", plane: str, offset: float,
+                       centres: Sequence[tuple[float, float]],
+                       body: int | None) -> int:
+    """The most separate pieces of material any hole centre's axis crosses.
+
+    One is the ordinary case: a plate, a boss, a solid block. Two or more means
+    the axis leaves the near wall into air and re-enters, which is what a
+    through hole across a hollow box does -- and what Inventor will not drill,
+    because its through-all extent stops when it first exits material.
+
+    The maximum rather than the sum, because one hole of a set standing over a
+    hollow is enough to make the feature wrong, and reporting the total would
+    make a grid of twelve good holes look worse than a single bad one.
+    """
+    normal = plane_normal(plane)
+    axis = max(range(3), key=lambda index: abs(normal[index]))
+    most = 0
+    for u, v in centres:
+        spans = _material_spans(document, axis, map3d(plane, u, v, offset), body)
+        most = max(most, len(spans or ()))
+    return most
+
+
 def _aimed_body(document: "_Document", bodies: Sequence[int]) -> int | None:
     """Which body a feature is aimed at, 0-based, or None for Inventor's default.
 
@@ -1378,6 +1401,10 @@ class MockBackend(Backend):
                 document, plane, over=map3d(plane, first[0], first[1], sketch.offset),
                 body=aimed)
         removed = (math.pi * radius**2 * depth + _style_volume(request, radius)) * len(centers)
+        # Counted before the bores are recorded: afterwards the hole's own void
+        # has cut the material it passed through into more pieces, and the
+        # question is how many pieces there were to begin with.
+        walls = _walls_on_the_axis(document, plane, sketch.offset, centers, aimed)
         moved = document.charge(-removed, aimed if aimed is not None else 0)
         self._record_bores(document, plane, sketch.offset, centers, radius, depth, body=aimed)
 
@@ -1422,6 +1449,12 @@ class MockBackend(Backend):
                 # which is why the recipe should give the tap-drill diameter.
                 "tap_sized_by": "the recipe's diameter" if request.tap else None,
                 "bodies": list(request.bodies) or None,
+                # How many separate pieces of material the drill axis crosses.
+                # More than one means a through hole exits the near wall into
+                # air and Inventor stops there -- defect 1 in
+                # `docs/FEATURE_COVERAGE.md`. The simulator charges every piece,
+                # so this is also why the two disagree on the volume.
+                "walls_on_the_axis": walls,
             },
         )
         document.features.append(feature)

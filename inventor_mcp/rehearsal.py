@@ -516,6 +516,29 @@ def _warn_about(warnings: list[dict[str, Any]], where: str, op: Operation,
     if moved is None:
         return
 
+    # Defect 1: Inventor's through-all extent stops where it first leaves
+    # material, so a hole across a hollow box drills the near wall and not the
+    # far one. Nothing in the volumes says so -- the feature builds, and it
+    # removes about what a one-wall bore should -- but the simulator counted the
+    # pieces of material the axis crosses on its way, and more than one of them
+    # is the whole of the condition. The simulator cannot fix it; there is no
+    # both-directions extent on an Inventor hole to reach for. Saying it plainly
+    # and naming the substitute is the fix available here.
+    walls = (outcome.get("detail") or {}).get("walls_on_the_axis") or 0
+    if op.op == "hole" and getattr(op, "through_all", False) and walls > 1:
+        warnings.append({
+            "where": where,
+            "warning": f"a through hole whose axis crosses {walls} walls will drill "
+                       "the near one only",
+            "why": "Inventor's through-all extent stops where it first exits "
+                   "material, so the far wall is left solid and the part looks "
+                   "built. The simulator charges every wall the axis meets, so "
+                   "expect this step to diverge on volume as well. Use an "
+                   "`extrude` cut with `direction: \"symmetric\"` and "
+                   "`extent: \"through_all\"`, or drill each wall on its own "
+                   "sketch.",
+        })
+
     subtractive = op.op in _SUBTRACTIVE or getattr(op, "operation", None) == "cut"
     if subtractive and abs(moved) < 1e-9:
         warnings.append({

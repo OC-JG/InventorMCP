@@ -5,6 +5,25 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 ## Unreleased
 
 ### Added
+- **A through hole that will drill the near wall only is warned about** —
+  defect 1, open since it cost the PCB enclosure a cable route. Inventor's
+  through-all extent stops where it first exits material, so a hole across a
+  hollow box leaves the far wall solid and the part looks built.
+
+  The roadmap offered two fixes and they were not equally available: **Inventor's
+  hole extent has no both-directions option** — Distance, Through All and To,
+  with Through All taking a side — so there is nothing to add a knob to. The
+  warning is what landed, and it was nearly free: the simulator already counts
+  the separate pieces of material each drill axis crosses, because it needs them
+  to decide which way the hole goes, and a count above one *is* the condition.
+  `rehearse` now reports it, names the substitute (`extrude` with
+  `direction: "symmetric"`) and says the step will diverge on volume too, since
+  the simulator charges every wall the axis meets.
+
+  Fires on the reproduction and on none of the eleven shipped examples — the
+  enclosure included, which has been built with the substitute since. Both
+  directions are tested: a warning that fires on a correct recipe teaches the
+  reader to ignore the field.
 - **`hole` gains `bodies`**, the multi-body targeting `extrude` already had. A
   hole aimed at a second body used to land on the first, which removes real
   material from the wrong place and reports success.

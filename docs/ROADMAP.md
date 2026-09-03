@@ -311,9 +311,28 @@ actually bitten.
       point no prism covers, so a bore aimed at the wrong body is still charged
       full depth and the totals agree to the digit. Per body they do not, which
       is the ledger's reason for never aggregating.
-- [ ] **A both-directions extent on `hole`**, or a warning when a through
-      hole's axis re-enters material it did not cut — defect 1 in
-      `FEATURE_COVERAGE.md`.
+- [x] ~~**A both-directions extent on `hole`**~~, **or a warning when a through
+      hole's axis re-enters material it did not cut** — defect 1 in
+      `FEATURE_COVERAGE.md`. *(2026-09-03, the second of the two.)*
+
+      The first is struck through rather than left open, because it is not
+      implementable: **Inventor's hole extent has no both-directions option.**
+      Distance, Through All and To, and Through All takes a side. There is
+      nothing to add a knob to, so the item was offering a choice between a fix
+      and a workaround without knowing it.
+
+      The warning was nearly free, which is the part worth recording. The
+      simulator already counted the separate pieces of material each drill axis
+      crosses -- it needs them to decide which way the hole goes -- and a count
+      above one *is* the condition, exactly. So `rehearse` reports it, names the
+      substitute (`extrude`, `direction: "symmetric"`, `extent: "through_all"`)
+      and says the step will diverge on volume as well, since the simulator
+      charges every wall the axis meets and Inventor drills one.
+
+      Fires on the reproduction, and on none of the eleven shipped examples --
+      the enclosure included, the part this defect was found on, which has used
+      the substitute since. Both directions are tested: a warning that fires on
+      a correct recipe teaches the reader to ignore the field.
 - [ ] **Sketch-driven pattern, thicken, move face** — Tier 2 in
       `FEATURE_COVERAGE.md`, all with public `Add` methods.
 - [ ] **`save_part` names the conflict** when the path is already open —
