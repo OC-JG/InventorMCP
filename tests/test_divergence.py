@@ -159,10 +159,13 @@ class TestThroughTheBuild:
         assert "read these before trusting the result" in result["divergence_note"]
 
     def test_a_rehearsal_that_breaks_does_not_break_the_build(self, session, monkeypatch):
-        import inventor_mcp.builder as builder
+        # Patched where `rehearse` is defined, not where it is called from:
+        # `build_part` imports it from `rehearsal` at the moment it needs it, so
+        # patching the name on `builder` would replace something nothing reads.
+        import inventor_mcp.rehearsal as rehearsal
 
         monkeypatch.setattr(session.ensure_backend(), "name", "inventor")
-        monkeypatch.setattr(builder, "rehearse",
+        monkeypatch.setattr(rehearsal, "rehearse",
                             lambda recipe: (_ for _ in ()).throw(RuntimeError("boom")))
         result = build_part(session, self.recipe())
         assert result["ok"] is True

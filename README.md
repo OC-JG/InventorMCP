@@ -397,7 +397,9 @@ inventor_mcp/
   resolve.py       a recipe value -> (expression string, evaluated number)
   geometry.py      entities -> primitives + constraints + driving dimensions
   plan.py          the backend-neutral sketch IR
-  builder.py       replays a recipe against a backend; static checks
+  builder.py       replays a recipe against a backend
+  checks.py        what can be said about a recipe without building it
+  rehearsal.py     builds it in the simulator; compares a live build to that
   session.py       open documents and what the server remembers about them
   backend/
     base.py        the contract both backends satisfy

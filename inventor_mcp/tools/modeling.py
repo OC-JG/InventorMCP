@@ -6,13 +6,9 @@ from typing import Annotated, Any
 
 from pydantic import Field, TypeAdapter
 
-from ..builder import (
-    apply_operation,
-    apply_parameter,
-    build_part,
-    check_recipe,
-    rehearse,
-)
+from ..builder import apply_operation, apply_parameter, build_part
+from ..checks import check_recipe
+from ..rehearsal import rehearse
 from ..guide import MODELLING_NOTES, RECIPE_CHEATSHEET, RECIPE_POINTER
 from ..schema import Operation, ParameterSpec, PartRecipe, recipe_json_schema
 from ..session import Session

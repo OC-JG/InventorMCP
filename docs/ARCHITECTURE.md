@@ -103,6 +103,28 @@ constraint bookkeeping that would otherwise only be observable inside Inventor �
 that a slot really does get four tangencies, that a rectangle's centre really is
 pinned.
 
+### `builder.py`, `checks.py`, `rehearsal.py` — three jobs, three files
+
+`builder.py` replays a recipe against a backend: one `apply_operation` that both
+the granular tools and a whole-recipe build go through, so the incremental and
+declarative ways of working cannot drift apart.
+
+The other two came out of it when it reached 1,200 lines doing five jobs, and
+before drawings and assemblies arrive to make it worse. `checks.py` is what can
+be said about a recipe with no backend at all — an expression that will not
+evaluate, a sketch nothing creates, a profile that is not closed, a parameter
+that drives nothing. `rehearsal.py` builds it in the simulator and reports what
+each operation would do, and holds a live build up against that report; the
+tolerances it judges by live in the same file, because a tolerance kept away
+from the thing it judges is a tolerance nobody updates.
+
+The dependency runs one way — `rehearsal` imports `builder` and `checks`,
+`checks` imports `builder` — with one exception: `build_part` imports
+`rehearsal` inside the function, because a build compares itself against a
+rehearsal. Everything the two files used to export is still reachable from
+`builder`, through a module `__getattr__` that resolves it lazily. New code
+should import from the module that owns the name.
+
 ### `backend/` — two implementations of one interface
 
 `Backend` is an ABC. Requests reaching it are fully resolved: lengths in cm, angles
