@@ -207,12 +207,28 @@ Each of these was hit while building real parts, and each passed
    a part keeps the wrong half, and the volume it reports is right for the half
    it kept, so nothing raises.
 
-   The COM call is `SplitFeatures.SplitPart(tool, request.remove_positive)`, so
-   either Inventor's second argument means "keep" where this code reads it as
-   "remove", or the flag is not reaching it at all and the trim keeps a fixed
-   side. The two need telling apart before either is fixed:
-   `stepped_split_negative.json` is the same cut with the flag false, and which
-   side *it* keeps decides which bug this is. Until then `PREDICTED["split"]`
-   stays at its placeholder, because the 25.3% its run reported is the
-   simulator's wrong amount compounded with Inventor's wrong side and means
-   nothing on its own.
+   The COM call is `SplitFeatures.SplitPart(tool, request.remove_positive)`.
+   Running the same cut both ways on 2026-09-03 settled the first question: with
+   the flag false Inventor removed 6.4 and kept 20.8, exactly complementary to
+   the true case, so **the flag does reach Inventor and does control the side**.
+   Its effect is simply the reverse of what the schema promises.
+
+   Two explanations still fit that, and they call for opposite fixes in
+   different files:
+
+   * Inventor's second argument means *keep* the positive side where this code
+     reads it as *remove* it, and the fix is one inversion in the COM backend;
+   * or the offset work plane's normal points the other way, in which case both
+     backends are right about the flag and disagree about the plane, and the fix
+     is in the simulator's `_trim_fraction`.
+
+   `origin_plane_split.json` is the discriminator, because an origin plane has
+   no construction to get wrong: XY's normal is +Z by definition. A part
+   straddling z = 0, 19.2 cm^3 below and 8.0 above, trimmed by XY itself with
+   `remove_positive: true`. Removing the 19.2 below exonerates the offset plane
+   and puts the inversion at the call site; removing the 8.0 above means the
+   offset plane was the problem all along.
+
+   Until then `PREDICTED["split"]` stays at its placeholder, because the 25.3%
+   its run reported is the simulator's wrong amount compounded with Inventor's
+   wrong side and means nothing on its own.

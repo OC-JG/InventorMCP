@@ -39,7 +39,8 @@ the operation being measured.
 | `drafted_block` | `draft` | −4.7167 cm³ | −4.6178 cm³ | 2.1% |
 | `engraved_plate` | `emboss` | −0.0662 cm³ | −0.0803 cm³ | 17.5% |
 | `stepped_split` | `split` | −15.5429 cm³ | −20.8000 cm³ | *see below* |
-| `stepped_split_negative` | `split` | −11.6571 cm³ | not yet run | |
+| `stepped_split_negative` | `split` | −11.6571 cm³ | −6.4000 cm³ | *see below* |
+| `origin_plane_split` | `split` | −19.4286 cm³ | not yet run | |
 
 Measured on Inventor 2027.1, 2026-09-03. Three of the four tolerances in
 `PREDICTED` were set from that run, each deliberately looser than the run alone
@@ -72,11 +73,25 @@ could break.
   and Inventor kept the wrong side, so it is two unrelated errors compounding.
 
   `stepped_split_negative` is the same part cut the same way with
-  `remove_positive` false, and it exists to tell two explanations apart. If it
-  removes 6.4 where its partner removed 20.8, the flag does control the side and
-  its sense is simply inverted, which is one line in the COM backend. If it also
-  removes 20.8, the flag is not reaching Inventor at all and the trim keeps
-  whichever side it likes, which is a different bug with a different fix.
+  `remove_positive` false, and it answered the first question on the same day:
+  Inventor removed **6.4** where its partner removed 20.8, exactly
+  complementary. So the flag reaches Inventor and controls the side, and it is
+  not that a trim keeps whichever half it likes.
+
+  What that leaves is two explanations calling for opposite fixes in different
+  files. Either Inventor's second argument to `SplitPart` means *keep* the
+  positive side where the code reads it as *remove* it — one inversion in the
+  COM backend — or the offset work plane's normal points the other way, in
+  which case both backends are right about the flag and disagree about the
+  plane, and the fix belongs in the simulator instead.
+
+  **`origin_plane_split` is the discriminator.** An origin plane has no
+  construction to get wrong: XY's normal is +Z by definition, so there is no
+  offset plane left in the picture to have been built backwards. The part
+  straddles z = 0, with 19.2 cm³ below and 8.0 above, and is trimmed by XY
+  itself with `remove_positive: true`. Removing the 19.2 exonerates the offset
+  plane and puts the inversion at the call site. Removing the 8.0 means the
+  offset plane was the problem all along and the call site was always right.
 
 `coil_spring` and `engraved_plate` are not tractable here: a helix's turns
 interfere in a way Pappus does not model, and a glyph's area is whatever the

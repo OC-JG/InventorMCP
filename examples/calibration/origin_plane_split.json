@@ -1,0 +1,84 @@
+{
+  "name": "CalibrationOriginPlaneSplit",
+  "description": "A part straddling z = 0, trimmed by the XY origin plane itself rather than by an offset work plane. This is the discriminator. The stepped_split pair proved the remove_positive flag controls which side goes, and that its effect is the opposite of what the schema promises -- but with an offset work plane in the way, two explanations still fit: either the flag's sense is inverted where it reaches Inventor, or the offset plane's normal points the other way and both backends are right about the flag while disagreeing about the plane. An origin plane has no construction to get wrong: XY's normal is +Z by definition. So if `remove_positive: true` removes the 19.2 cm^3 BELOW z = 0 rather than the 8.0 above it, the offset plane is exonerated and the inversion is at the call site in the COM backend.",
+  "units": "mm",
+  "parameters": [
+    {
+      "name": "base_w",
+      "value": 60
+    },
+    {
+      "name": "base_d",
+      "value": 40
+    },
+    {
+      "name": "base_t",
+      "value": 8,
+      "comment": "hangs below the origin plane"
+    },
+    {
+      "name": "boss_s",
+      "value": 20
+    },
+    {
+      "name": "boss_h",
+      "value": 20,
+      "comment": "stands above it, and is smaller"
+    }
+  ],
+  "operations": [
+    {
+      "op": "sketch",
+      "name": "Base",
+      "plane": "xy",
+      "entities": [
+        {
+          "type": "rectangle",
+          "center": [
+            0,
+            0
+          ],
+          "width": "base_w",
+          "height": "base_d"
+        }
+      ]
+    },
+    {
+      "op": "extrude",
+      "name": "Slab",
+      "sketch": "Base",
+      "distance": "base_t",
+      "direction": "negative"
+    },
+    {
+      "op": "sketch",
+      "name": "BossPad",
+      "plane": "xy",
+      "entities": [
+        {
+          "type": "rectangle",
+          "center": [
+            0,
+            0
+          ],
+          "width": "boss_s",
+          "height": "boss_s"
+        }
+      ]
+    },
+    {
+      "op": "extrude",
+      "name": "Boss",
+      "sketch": "BossPad",
+      "distance": "boss_h",
+      "operation": "join"
+    },
+    {
+      "op": "split",
+      "name": "TrimAtOrigin",
+      "tool": "xy",
+      "style": "trim",
+      "remove_positive": true
+    }
+  ]
+}
