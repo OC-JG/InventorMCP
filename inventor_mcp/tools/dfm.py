@@ -34,7 +34,7 @@ from typing import Annotated, Any, Literal
 from pydantic import Field
 
 from ..dfm.declaration import Declaration, given
-from ..dfm.loop import current_parameters, guard_for, improve, measure
+from ..dfm.loop import current_parameters, guard_for, improve, measure, run_moment
 from ..dfm.remedy import ROLES, propose
 from ..dfm.report import read_report
 from ..dfm.runner import (
@@ -81,10 +81,7 @@ def _stamped(stem: str, suffix: str) -> str:
     producing the "after" -- and compare_manufacture then compared a part with
     itself and reported nothing moved, which reads as "the fix did nothing".
     """
-    from datetime import datetime, timezone
-
-    moment = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
-    return f"{stem}-{moment}.{suffix}"
+    return f"{stem}-{run_moment()}.{suffix}"
 
 
 def register(server: Any, session: Session) -> None:
