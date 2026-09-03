@@ -41,7 +41,7 @@ the operation being measured.
 | `stepped_split` | `split` | −6.4000 cm³ | −6.4000 cm³ | 0.0% |
 | `stepped_split_negative` | `split` | −20.8000 cm³ | −20.8000 cm³ | 0.0% |
 | `origin_plane_split` | `split` | −8.0000 cm³ | −8.0000 cm³ | 0.0% |
-| `shelled_both_ways` | `shell` | −30.4000 cm³ | −35.1920 cm³ | 13.6% |
+| `shelled_both_ways` | `shell` | −35.1920 cm³ | −35.1920 cm³ | 0.0% |
 
 Measured on Inventor 2027.1, 2026-09-03. All four tolerances in `PREDICTED`
 now come from that run rather than from a placeholder: `coil` 0.15, `draft`
@@ -129,20 +129,23 @@ is `kBothSidesShellDirection`, the constants table asked for
 the server refused rather than guessing. The refusal was right and it hid the
 fact that nothing had ever exercised the path.
 
-The simulator cannot do this one exactly. Its exact branch is the inside case —
-a prism's outline inset and swept — so `both` falls to the surface-area
-estimate: 30.4 cm³ removed against Inventor's 35.192, 13.6% low. That is inside
-the 0.35 the shell is allowed, so nothing is reported, which is the right
-outcome for an approximation that says it is one.
+The run pinned down what `both` means, and the answer is exact. The wall
+straddles the original face, half in and half out, so a 60×40×20 box with a 2 mm
+wall leaves an outer solid grown 1 mm on the four sides and the base and a
+cavity inset 1 mm: 6.2 × 4.2 × 2.1 less 5.8 × 3.8 × 1.9 is 12.808 cm³, and the
+shell removes **35.192**. Inventor removed 35.1920.
 
-The run pinned down what `both` actually means, though, and the answer is exact.
-The wall straddles the original face, half in and half out, so a 60×40×20 box
-with a 2 mm wall leaves an outer solid grown 1 mm on the four sides and the base
-and a cavity inset 1 mm: 6.2 × 4.2 × 2.1 less 5.8 × 3.8 × 1.9 is 12.808 cm³, and
-the shell removed **35.192**. Inventor removed 35.1920. So the simulator could
-be exact here too — the same outline-and-sweep its inside branch already does,
-grown as well as inset — and it is only an estimate because nobody had been able
-to run the case.
+The simulator was 13.6% low when this fixture was written, because its exact
+branch was the inside case and `both` fell to the surface-area estimate. It is
+exact now, for all three directions: the only difference between them is where
+the wall sits relative to the face, and offsetting an outline outward was the
+one thing missing. `outside` puts the whole wall beyond the face, so the
+original solid becomes the void; `both` straddles it.
+
+Worth noting what that 13.6% did while it lasted. It sat inside the 0.35 a shell
+is allowed, so nothing was ever reported — the right outcome for an
+approximation that admits it is one, and also the reason a case nobody could run
+stayed wrong without anybody noticing.
 
 The other unreachable path was `capture_view` in hidden-line mode, which asked
 for `kHiddenLineRendering`, another name no release has. That one did not

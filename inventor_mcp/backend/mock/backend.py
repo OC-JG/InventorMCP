@@ -1887,67 +1887,111 @@ class MockBackend(Backend):
         return moved, (f"{extra} more occurrence(s) of {moved:+.4f} cm^3 in total, "
                        "assuming they do not overlap each other or the part's edge")
 
+    #: Where a wall of thickness t sits relative to the face it is built on:
+    #: how much of it reaches outward and how much inward. They add to one.
+    #: Measured on Inventor 2027.1 for `both`, which straddles the face half
+    #: each way -- a 60x40x20 box with its top off and a 2 mm wall came to
+    #: 6.2 x 4.2 x 2.1 less 5.8 x 3.8 x 1.9, and Inventor removed 35.1920 to
+    #: the digit. See `examples/calibration/shelled_both_ways.json`.
+    _WALL_SPLIT = {"inside": (0.0, 1.0), "both": (0.5, 0.5), "outside": (1.0, 0.0)}
+
     def _hollow_out(self, document: _Document, request: ShellRequest,
                     openings: Sequence[_Topo]) -> tuple[float, str]:
         """How much a shell takes out, exactly where that is knowable.
 
-        A shelled prism is the outline inset by the wall thickness, swept: the
-        cavity's cross-section is an exact function of the outline, and the only
-        question is how much of the sweep it spans -- one wall thickness less for
-        each face left in place. That makes the commonest shell (a box with its
-        top removed) predictable rather than estimated, which is what lets a live
-        one be checked against it.
+        A shelled prism is the outline offset by the wall, swept: both surfaces
+        are exact functions of the outline, and the only question is how much of
+        the sweep each spans -- one wall less for every face left in place. That
+        makes the commonest shells predictable rather than estimated, which is
+        what lets a live one be checked against a prediction.
 
-        Anything else falls back to the old estimate -- the surface area times the
-        thickness -- and says so, because a shell of a revolved or swept body is
-        not a prism and pretending otherwise would be worse than approximating.
+        All three directions are exact, and the difference between them is only
+        where the wall sits relative to the face it is built on. `inside` puts
+        it all within, so the outer boundary does not move. `outside` puts it
+        all beyond, so the original solid becomes the void. `both` straddles,
+        half each way. Only `inside` used to be computed, because offsetting an
+        outline *outward* was not possible until :func:`inset_area` learned to
+        take a negative distance -- so the two that grow the part fell back to
+        an estimate, and one of them was 13.6% out.
 
-        Where the cavity is known it is also *recorded*, as a void in the
-        ledger. It used not to be, and that was the simulator's worst single
-        error: through-cuts after a shell were charged against the solid the
-        part had been before it was hollowed, so the enclosure's cable entry
-        cost 5.04 cm^3 against the 0.36 it removes. The fallback branch records
-        nothing, because a cavity it could not compute is one it does not know
-        the shape of.
+        Anything that is not a single prism still falls back to the surface area
+        times the thickness, and says so, because a shell of a revolved or swept
+        body is not a prism and pretending otherwise would be worse than
+        approximating.
+
+        Both surfaces are also *recorded* -- the cavity as a void, and the grown
+        boundary in place of the one it replaces. The cavity used not to be, and
+        that was the simulator's worst single error: through-cuts after a shell
+        were charged against the solid the part had been before it was hollowed,
+        so the enclosure's cable entry cost 5.04 cm^3 against the 0.36 it
+        removes. Nothing is recorded where an offset could not be built, because
+        a boundary whose shape is unknown is worse in the ledger than absent.
 
         ponytail: an opening is counted as a cap by its normal, so a shell whose
         open face is not perpendicular to the sweep is treated as closed.
         """
         thickness = request.thickness.value
-        if len(document.slabs) == 1 and request.direction == "inside":
-            slab = document.slabs[0]
-            inner = inset_area(slab.outline, thickness)
-            sweep = abs(slab.far - slab.near)
-            if inner is not None and sweep > 0:
-                # An opening perpendicular to the sweep is a cap: it leaves the
-                # cavity running all the way to that end.
-                normal = plane_normal(slab.plane)
-                along = [
-                    sum(a * b for a, b in zip(face.normal, normal))
-                    for face in openings if face.normal is not None
-                ]
-                caps = sum(1 for value in along if abs(value) > 0.9)
-                depth = sweep - thickness * max(2 - caps, 0)
-                if depth > 0:
-                    low, high = min(slab.near, slab.far), max(slab.near, slab.far)
-                    # Which end is open decides where the cavity starts, and the
-                    # opening's own normal says which: a top face points along
-                    # the sweep, a bottom one against it.
-                    open_high = caps == 2 or any(value > 0.9 for value in along)
-                    open_low = caps == 2 or any(value < -0.9 for value in along)
-                    cavity = (low if open_low else low + thickness,
-                              high if open_high else high - thickness)
-                    outline = inset_polygon(slab.outline, thickness)
-                    if outline is not None:
-                        document.slabs.append(_Slab(
-                            plane=slab.plane, outline=outline,
-                            near=cavity[0], far=cavity[1],
-                            sign=-1.0, body=slab.body, source="shell"))
-                    return (min(inner * depth, document.volume),
-                            "the outline inset by the wall thickness, swept")
+        split = self._WALL_SPLIT.get(request.direction)
+        if len(document.slabs) == 1 and split is not None:
+            exact = self._shell_a_prism(document, thickness, split, openings)
+            if exact is not None:
+                return exact
         surface = sum(match.area or 0.0 for match in document.topology if match.kind == "face")
         return (max(document.volume - surface * thickness, 0.0),
                 "estimated from the surface area: this body is not a single prism")
+
+    def _shell_a_prism(self, document: _Document, thickness: float,
+                       split: tuple[float, float],
+                       openings: Sequence[_Topo]) -> tuple[float, str] | None:
+        """The exact answer for the one body the ledger holds, or None."""
+        slab = document.slabs[0]
+        sweep = abs(slab.far - slab.near)
+        if sweep <= 0:
+            return None
+        outward, inward = (thickness * share for share in split)
+
+        # An opening perpendicular to the sweep is a cap: it leaves the cavity
+        # running all the way to that end, and no wall is built there.
+        normal = plane_normal(slab.plane)
+        along = [sum(a * b for a, b in zip(face.normal, normal))
+                 for face in openings if face.normal is not None]
+        caps = sum(1 for value in along if abs(value) > 0.9)
+        open_high = caps == 2 or any(value > 0.9 for value in along)
+        open_low = caps == 2 or any(value < -0.9 for value in along)
+
+        low, high = min(slab.near, slab.far), max(slab.near, slab.far)
+        cavity = (low if open_low else low + inward,
+                  high if open_high else high - inward)
+        outer = (low if open_low else low - outward,
+                 high if open_high else high + outward)
+        if cavity[1] - cavity[0] <= 0:
+            return None
+
+        face = _outline_area(slab.outline)
+        inner_area = face if inward == 0 else inset_area(slab.outline, inward)
+        outer_area = face if outward == 0 else inset_area(slab.outline, -outward)
+        if not inner_area or not outer_area:
+            return None
+
+        before = face * sweep
+        after = outer_area * (outer[1] - outer[0]) - inner_area * (cavity[1] - cavity[0])
+        removed = before - after
+
+        cavity_outline = (list(slab.outline) if inward == 0
+                          else inset_polygon(slab.outline, inward))
+        outer_outline = (list(slab.outline) if outward == 0
+                         else inset_polygon(slab.outline, -outward))
+        if cavity_outline is not None and outer_outline is not None:
+            slab.outline = outer_outline
+            slab.near, slab.far = outer
+            document.slabs.append(_Slab(
+                plane=slab.plane, outline=cavity_outline,
+                near=cavity[0], far=cavity[1],
+                sign=-1.0, body=slab.body, source="shell"))
+        wall = {(0.0, 1.0): "inside", (0.5, 0.5): "split either side of the face",
+                (1.0, 0.0): "outside"}.get(split, "as asked")
+        return (min(removed, document.volume),
+                f"the outline offset by the wall and swept, wall {wall}")
 
     def rectangular_pattern(self, doc_id: str, request: RectangularPatternRequest) -> FeatureInfo:
         document = self._doc(doc_id)

@@ -253,7 +253,8 @@ class TestTheShellItself:
             ]}))
         document = session.backend._doc(result["document"])
         shell = [f for f in document.features if f.kind == "shell"][0]
-        assert shell.detail["volume_from"] == "the outline inset by the wall thickness, swept"
+        assert shell.detail["volume_from"] == (
+            "the outline offset by the wall and swept, wall inside")
 
     def test_a_revolved_body_falls_back_and_admits_it(self, session):
         from inventor_mcp.builder import build_part
@@ -434,3 +435,80 @@ class TestTheTrimmedPartIsSmallerAfterwards:
         box = self.trim(session, remove_positive=False)["bounding_box"]
         assert (box[5] - box[2]) * 10 == pytest.approx(8.0)
         assert box[2] * 10 == pytest.approx(12.0), "it starts at the cut"
+
+
+class TestTheOtherTwoWallDirections:
+    """`both` and `outside`, which were estimated until the outline could grow.
+
+    A shell need not build its wall inward. `outside` puts all of it beyond the
+    face, so the original solid becomes the void; `both` straddles, half each
+    way. Neither could be computed while `inset_area` refused a negative
+    distance, so both fell back to the surface-area estimate -- and `both` was
+    13.6% out, which is inside the tolerance a shell is allowed and so was never
+    reported as anything.
+
+    All three are exact now, and the middle one is confirmed: Inventor 2027.1
+    removed 35.1920 cm^3 from this exact part on 2026-09-03.
+    """
+
+    @pytest.fixture
+    def session(self) -> Session:
+        session = Session(backend_kind="mock")
+        session.ensure_backend().connect()
+        return session
+
+    def shelled(self, session: Session, direction: str) -> tuple[float, str]:
+        from inventor_mcp.builder import build_part
+
+        result = build_part(session, PartRecipe.model_validate({
+            "name": "Box", "units": "mm", "operations": [
+                {"op": "sketch", "name": "Outline", "plane": "xy", "entities": [
+                    {"type": "rectangle", "center": [0, 0], "width": 60, "height": 40}]},
+                {"op": "extrude", "name": "Block", "sketch": "Outline", "distance": 20},
+                {"op": "shell", "name": "Cavity", "thickness": 2, "direction": direction,
+                 "faces": {"kind": "face", "filter": "top"}},
+            ]}))
+        assert result["ok"], result["errors"]
+        document = session.backend._doc(result["document"])
+        shell = [f for f in document.features if f.kind == "shell"][0]
+        return (session.backend.mass_properties(result["document"]).volume,
+                shell.detail["volume_from"])
+
+    def test_a_wall_built_inward_leaves_the_outside_where_it_was(self, session):
+        volume, how = self.shelled(session, "inside")
+        # 6 x 4 x 2 less a 5.6 x 3.6 cavity 1.8 deep.
+        assert volume == pytest.approx(48 - 5.6 * 3.6 * 1.8, rel=1e-9)
+        assert "wall inside" in how
+
+    def test_a_wall_split_either_side_is_what_inventor_measured(self, session):
+        """6.2 x 4.2 x 2.1 less 5.8 x 3.8 x 1.9, and Inventor removed 35.1920."""
+        volume, how = self.shelled(session, "both")
+        assert volume == pytest.approx(6.2 * 4.2 * 2.1 - 5.8 * 3.8 * 1.9, rel=1e-9)
+        assert 48 - volume == pytest.approx(35.192, abs=5e-5)
+        assert "either side" in how
+
+    def test_a_wall_built_outward_turns_the_solid_into_the_void(self, session):
+        volume, how = self.shelled(session, "outside")
+        # 6.4 x 4.4 x 2.2 less the original 6 x 4 x 2, which is now the cavity.
+        assert volume == pytest.approx(6.4 * 4.4 * 2.2 - 48, rel=1e-9)
+        assert "wall outside" in how
+
+    def test_the_part_grows_outward_in_the_ledger_too(self, session):
+        """Or a later cut is measured against a boundary that has moved."""
+        from inventor_mcp.builder import build_part
+
+        result = build_part(session, PartRecipe.model_validate({
+            "name": "Box", "units": "mm", "operations": [
+                {"op": "sketch", "name": "Outline", "plane": "xy", "entities": [
+                    {"type": "rectangle", "center": [0, 0], "width": 60, "height": 40}]},
+                {"op": "extrude", "name": "Block", "sketch": "Outline", "distance": 20},
+                {"op": "shell", "name": "Cavity", "thickness": 2, "direction": "outside",
+                 "faces": {"kind": "face", "filter": "top"}},
+            ]}))
+        document = session.backend._doc(result["document"])
+        material = [s for s in document.slabs if s.sign > 0]
+        assert len(material) == 1
+        widths = [abs(u) for u, _ in material[0].outline]
+        assert max(widths) == pytest.approx(3.2), "60 mm grown 2 mm each side"
+        voids = [s for s in document.slabs if s.sign < 0]
+        assert len(voids) == 1 and voids[0].source == "shell"

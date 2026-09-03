@@ -1189,22 +1189,28 @@ def polygon_centroid(points: Sequence[tuple[float, float]]) -> tuple[float, floa
 
 
 def inset_area(points: Sequence[tuple[float, float]], distance: float) -> float | None:
-    """The area of the polygon offset inward by *distance*, or None if it collapses.
+    """The area of the polygon offset by *distance*, or None if it collapses.
 
-    Exact for any simple polygon whose inward offset does not self-intersect,
-    which is the case a wall thickness is. The identity is
-    ``A - P*d + d^2 * sum(tan(turn/2))``: each straight edge loses a strip of
-    length times distance, and each corner is then double-counted or
-    under-counted by an amount that depends only on how sharply it turns. A
-    right-angle corner contributes ``+d^2``; a fully rounded outline's many tiny
-    turns sum to ``+pi*d^2``, which is the Steiner formula; a reflex corner
-    contributes a negative amount.
+    Inward for a positive distance, **outward for a negative one**. Exact for
+    any simple polygon whose offset does not self-intersect, which is the case a
+    wall thickness is. The identity is ``A - P*d + d^2 * sum(tan(turn/2))``:
+    each straight edge loses a strip of length times distance, and each corner
+    is then double-counted or under-counted by an amount that depends only on
+    how sharply it turns. A right-angle corner contributes ``+d^2``; a fully
+    rounded outline's many tiny turns sum to ``+pi*d^2``, which is the Steiner
+    formula; a reflex corner contributes a negative amount. Every term carries
+    the sign of *d*, so the same identity grows the polygon when *d* is
+    negative: a 60 x 40 rectangle offset by -1 mm is 62 x 42.
 
     This is what makes a shelled box exactly predictable rather than estimated:
-    the cavity is the outline inset by the wall thickness, swept.
+    the cavity is the outline inset by the wall, swept. The outward direction
+    matters because a shell need not build its wall inward -- `direction:
+    "both"` straddles the original face, half each way, and `"outside"` puts all
+    of it beyond -- and until those could be offset outward the simulator had to
+    fall back to an estimate for two of the three.
     """
     count = len(points)
-    if count < 3 or distance <= 0:
+    if count < 3 or distance == 0:
         return None
     area = 0.0
     perimeter = 0.0
@@ -1311,7 +1317,11 @@ def treat_polygon_corner(points: Sequence[tuple[float, float]], index: int,
 
 def inset_polygon(points: Sequence[tuple[float, float]],
                   distance: float) -> list[tuple[float, float]] | None:
-    """The polygon offset inward by *distance*, or None where that is not safe.
+    """The polygon offset by *distance*, or None where that is not safe.
+
+    Inward for a positive distance, outward for a negative one, matching
+    :func:`inset_area`. Growing an outline is what a shell built outward or
+    both ways does to the part's boundary.
 
     :func:`inset_area` says how much area a shell's cavity has; this says where
     it is, which is what the simulator needs to answer "is there material here"
@@ -1326,7 +1336,7 @@ def inset_polygon(points: Sequence[tuple[float, float]],
     rather than a cavity in the wrong place.
     """
     count = len(points)
-    if count < 3 or distance <= 0:
+    if count < 3 or distance == 0:
         return None
     exact = inset_area(points, distance)
     if exact is None:
