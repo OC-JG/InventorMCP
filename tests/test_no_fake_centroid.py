@@ -85,16 +85,22 @@ class TestTheCentroidIsNotInvented:
 
 
 class TestWhatTheAcceptanceScriptDoesWithThat:
-    def test_the_bolt_circle_check_skips_rather_than_failing(self, session):
-        """`_centre_shift_mm` returns None, which is the skip branch.
+    def test_neither_end_of_its_measurement_reports_a_centre(self, session):
+        """The two plates are the two ends of the acceptance script's
+        measurement: the bolt circle 30 mm off-axis and then 45. Its
+        `_centre_shift_mm` reads both centres and returns `None` -- the skip
+        branch -- when either is missing. A figure for both is the *failure*
+        branch, and it blames the work axis for the simulator.
 
-        The two plates are the two ends of the acceptance script's measurement:
-        the bolt circle 30 mm off-axis and then 45. Zero -- what a box centre
-        gave for both -- is the *failure* branch, and it blames the work axis
-        for the simulator.
+        Asserted on `MassProps` rather than by importing the script: nothing in
+        `tests/` imports from `scripts/`, and the repo root is not on `sys.path`
+        under a bare `pytest`, which is what CI runs.
+
+        `None` and not a tuple of zeros, which is the trap here. A non-empty
+        tuple is truthy, so `(0.0, 0.0, 0.0)` passes that helper's `if not
+        first` guard and comes out as a 0.00000 mm shift -- the failing figure
+        the box centre used to give, wearing the look of an answer.
         """
-        from scripts.live_acceptance import _centre_shift_mm
-
-        before = session.backend.mass_properties(plate(session, 30))
-        after = session.backend.mass_properties(plate(session, 45))
-        assert _centre_shift_mm(before, after) is None
+        for bolt_x in (30, 45):
+            properties = session.backend.mass_properties(plate(session, bolt_x))
+            assert properties.center_of_mass is None, bolt_x
