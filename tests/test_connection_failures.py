@@ -31,6 +31,7 @@ import importlib.util
 import io
 import json
 import pathlib
+import subprocess
 import sys
 
 import pytest
@@ -1146,7 +1147,37 @@ class TestTheHookThatMakesAWebSessionRun:
         assert any("session-start.sh" in c for c in commands), commands
 
     def test_it_is_executable(self):
-        assert (ROOT / ".claude" / "hooks" / "session-start.sh").stat().st_mode & 0o111
+        """Asserted against git's recorded mode, not the filesystem's.
+
+        CPython on Windows derives the execute bits from the file *extension* --
+        .exe, .bat, .cmd, .com -- and not from anything stored, so a `.sh` there
+        reports no exec bit however it was committed. `st_mode & 0o111` was
+        therefore a test that passed on Linux, failed on the Windows machine
+        with the CAD seat, and asked the wrong question on both: what has to be
+        executable is the file **git ships** to the container that runs it.
+        """
+        try:
+            listing = subprocess.run(
+                ["git", "ls-files", "-s", ".claude/hooks/session-start.sh"],
+                cwd=ROOT, capture_output=True, text=True, encoding="utf-8",
+                timeout=60,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:  # pragma: no cover
+            pytest.skip(f"git is not usable here: {exc}")
+        if listing.returncode != 0 or not listing.stdout.strip():
+            pytest.skip("the hook is not tracked in this checkout")
+        mode = listing.stdout.split()[0]
+        assert mode == "100755", (
+            f"git has the hook as {mode}; a container checks it out unexecutable "
+            "and the SessionStart hook does not run"
+        )
+
+    def test_it_keeps_unix_line_endings_wherever_it_is_checked_out(self):
+        """`.gitattributes` says `* text=auto`, which hands a Windows checkout
+        CRLF. bash then reads the trailing \r as part of the command and fails
+        naming neither the file nor the reason."""
+        rules = (ROOT / ".gitattributes").read_text(encoding="utf-8")
+        assert "*.sh text eol=lf" in rules
 
     def test_it_leaves_a_local_machine_alone(self):
         """A hook that rebuilds an environment under somebody's feet is a hook

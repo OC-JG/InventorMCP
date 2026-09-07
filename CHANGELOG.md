@@ -220,6 +220,24 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   that the launch worked: reporting only what it could test would be a claim it
   cannot support.
 
+- **Two cross-platform faults in the session hook's own tests, found by
+  reading the diff rather than by CI.** `st_mode & 0o111` asserted the execute
+  bit against the *filesystem*, and CPython on Windows derives those bits from
+  the file extension — .exe, .bat, .cmd, .com — not from anything stored. So a
+  `.sh` reports no exec bit there however it was committed: a test that passed
+  on Linux, failed on the Windows machine with the CAD seat (where
+  `install.ps1` installs pytest precisely so the suite can run), and asked the
+  wrong question on both. What has to be executable is the file **git ships** to
+  the container that runs it, so that is what is asserted — `git ls-files -s`,
+  expecting `100755`.
+
+  And `.gitattributes` said only `* text=auto`, which hands a Windows checkout
+  CRLF. `bash` then takes the trailing `\r` as part of the command and fails
+  naming neither the file nor the reason. `*.sh text eol=lf` pins it, with a
+  test holding the rule in place. Latent rather than live — the hook runs in a
+  Linux container, where the checkout is LF either way — but it was a trap set
+  for whoever next runs one of these from a Windows clone.
+
 - **A `.venv` that was also the running interpreter got a redundant subprocess.**
   Found by a test that broke once the session hook created one: `candidates()`
   deduped `sys.executable` behind the venv entry and left it flagged

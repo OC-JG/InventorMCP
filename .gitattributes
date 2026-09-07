@@ -1,2 +1,9 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Shell scripts keep LF on every platform. `text=auto` above would hand a
+# Windows checkout CRLF, and bash takes the trailing \r as part of the command
+# -- `set -euo pipefail\r` is not a thing, and the error names neither the file
+# nor the reason. The session hook only runs in a Linux container today, so this
+# is a trap set for whoever next runs one of these from a Windows clone.
+*.sh text eol=lf
