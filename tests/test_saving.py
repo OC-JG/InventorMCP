@@ -261,14 +261,24 @@ class TestTheCostOfAsking:
     """
 
     def test_the_com_backend_does_not_use_the_listing_here(self):
+        import ast
         import inspect
+        import textwrap
 
         from inventor_mcp.backend.com.backend import ComBackend
 
-        source = inspect.getsource(ComBackend.document_at_path)
         # The docstring names `list_documents` to explain why it is avoided, so
-        # the check has to be on the code rather than on the text.
-        body = source.replace(ComBackend.document_at_path.__doc__ or "", "")
+        # the check has to be on the code rather than on the text. Through
+        # `ast` and not by subtracting `__doc__` from the source: 3.13 dedents
+        # docstrings at compile time, so that subtraction quietly stopped
+        # matching and the check read the very sentence it means to exclude --
+        # green on 3.11 and 3.12, red on 3.13, for nothing either backend did.
+        # `unparse` drops the comments too, which is the same intent.
+        source = textwrap.dedent(inspect.getsource(ComBackend.document_at_path))
+        function = ast.parse(source).body[0]
+        statements = (function.body[1:] if ast.get_docstring(function)
+                      else function.body)
+        body = ast.unparse(statements)
         assert "list_documents" not in body, (
             "the whole reason document_at_path exists is that list_documents is "
             "unbounded in cost and registers what it walks")
