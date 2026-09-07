@@ -194,9 +194,14 @@ answers for the client rather than for the interpreter you just typed a path to.
 Every other check describes *this* Python; a client launches a different command,
 out of a config file, with no shell and no virtualenv. The `clients` line finds
 those configs — `%APPDATA%\Claude\claude_desktop_config.json` and this repo's
-`.mcp.json` — runs what each one says with `--doctor` appended, and reports
-whether the thing that came up could serve. Eight green lines above a red
-`clients` line means the package is fine and the wiring is not.
+`.mcp.json` — runs what each one says, and then **speaks MCP to it**: an
+`initialize` request over stdio, exactly as a client would. Starting is not
+serving, and a server that starts and then fails or hangs on the handshake looks
+identical from the outside. So the line tells them apart — crashed (quoting the
+stderr your client throws away), hung, answering with something that is not
+JSON-RPC (a stray `print` on stdout will do it), or serving, with the protocol
+version the two ends agreed. Eight green lines above a red `clients` line means
+the package is fine and the wiring is not.
 
 Almost every case is one of three:
 

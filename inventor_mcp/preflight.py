@@ -332,18 +332,178 @@ def server_entries(config: Path) -> list[tuple[str, list[str]]]:
     return found
 
 
+#: How long to wait for a reply to ``initialize``. Generous: the first import of
+#: pydantic and the SDK on a cold filesystem is seconds, and on Windows an
+#: anti-virus scanner reading a new process's DLLs can add more. A server that
+#: has not answered by here is hung, which is a different fault from a crash and
+#: is reported as one.
+HANDSHAKE_TIMEOUT = 60.0
+
+
+def _read_line(stream: Any, timeout: float) -> str | None:
+    """One line from *stream*, or ``None`` if it does not arrive in time.
+
+    A reader thread and a queue, because there is no portable way to put a
+    timeout on a blocking pipe read -- ``select`` does not take pipes on
+    Windows, which is the platform this has to work on.
+    """
+    import queue
+    import threading
+
+    answers: queue.Queue = queue.Queue(maxsize=1)
+
+    def read() -> None:
+        try:
+            answers.put(stream.readline())
+        except Exception:  # pragma: no cover - the pipe closed under us
+            answers.put("")
+
+    threading.Thread(target=read, daemon=True).start()
+    try:
+        return answers.get(timeout=timeout)
+    except queue.Empty:
+        return None
+
+
+def handshake(
+    argv: list[str],
+    timeout: float = HANDSHAKE_TIMEOUT,
+    version: str | None = None,
+) -> tuple[bool, str]:
+    """Speak MCP to *argv* over stdio, as a client would, and see if it answers.
+
+    This is the check that `--doctor` could not make about itself. Appending
+    ``--doctor`` to a config's command proves the process starts, imports
+    everything and exits 0 -- and a server that does all that and then fails or
+    hangs answering ``initialize`` looks identical from the outside:
+    ``CONNECTION_CLOSED``, which is what a client reports for a server it never
+    heard from. Starting is not serving, and the gap between them was where the
+    fault lived.
+
+    Raw JSON-RPC rather than the SDK's client, deliberately. What is in doubt is
+    the wire, and a mismatch between the SDK's own client and its own server is
+    exactly the class of fault this would then be blind to. One request, one
+    line, one answer.
+    """
+    environment = dict(os.environ)
+    environment[DOCTOR_CHILD] = "1"
+    if version is None:
+        # The SDK's own idea of current, so the probe asks for what a
+        # contemporary client would. Overridable, because "does it still answer
+        # the version an older installed client speaks" is a question worth
+        # being able to ask directly.
+        try:
+            from mcp.types import LATEST_PROTOCOL_VERSION
+
+            version = LATEST_PROTOCOL_VERSION
+        except Exception:  # pragma: no cover - checked before this runs
+            version = "2025-06-18"
+
+    request = json.dumps({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {
+            "protocolVersion": version,
+            "capabilities": {},
+            "clientInfo": {"name": "inventor-mcp-doctor", "version": "1"},
+        },
+    })
+
+    try:
+        child = subprocess.Popen(
+            argv,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", errors="replace", bufsize=1,
+            env=environment,
+            # A relative `scripts/serve.py` in a project-scoped config is
+            # resolved against the client's working directory, which for that
+            # config is the project. Reproduce that rather than this shell's.
+            cwd=str(Path(__file__).resolve().parents[1]),
+        )
+    except (OSError, ValueError) as exc:
+        return False, f"would not launch: {exc}"
+
+    try:
+        try:
+            child.stdin.write(request + "\n")
+            child.stdin.flush()
+        except OSError:
+            # It died before it could be spoken to. Its stderr is the reason,
+            # and is what a client throws away.
+            return False, _died(child)
+
+        line = _read_line(child.stdout, timeout)
+        if line is None:
+            if child.poll() is not None:
+                return False, _died(child)
+            return False, (
+                f"started, but did not answer `initialize` within {timeout:.0f}s "
+                "-- it is hung, not crashed"
+            )
+        if line == "":
+            return False, _died(child)
+
+        try:
+            answer = json.loads(line)
+        except json.JSONDecodeError:
+            # Anything on stdout that is not the protocol corrupts the stream,
+            # and a client will drop the connection over it. A print() or a
+            # logging handler left on stdout is the usual culprit.
+            return False, (
+                "answered `initialize` with something that is not JSON-RPC, so "
+                f"stdout is not clean: {line.strip()[:120]!r}"
+            )
+        if "error" in answer:
+            return False, f"refused `initialize`: {answer['error']}"
+        got = (answer.get("result") or {}).get("serverInfo") or {}
+        spoke = (answer.get("result") or {}).get("protocolVersion", "?")
+        name = got.get("name", "?")
+        return True, f"serves ({name}, protocol {spoke})"
+    finally:
+        # Kill first, close second, and that order is load-bearing. A hung
+        # server leaves the reader thread blocked inside `readline()`, which
+        # holds the stream's internal buffer lock; closing that stream from this
+        # thread then waits for the lock, which means waiting for the server to
+        # produce a line -- the very thing that is not happening. Closing before
+        # terminating turned a 3-second timeout into a 120-second block against
+        # a child that slept for 120 seconds, so the report of a hang was itself
+        # hostage to the hang.
+        child.terminate()
+        try:
+            child.wait(timeout=10)
+        except subprocess.TimeoutExpired:  # pragma: no cover - refused SIGTERM
+            child.kill()
+            try:
+                child.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
+        for end in (child.stdin, child.stdout, child.stderr):
+            try:
+                if end is not None:
+                    end.close()
+            except Exception:  # pragma: no cover
+                pass
+
+
+def _died(child: subprocess.Popen) -> str:
+    """Why a child that will not talk is not talking."""
+    try:
+        _, stderr = child.communicate(timeout=10)
+    except Exception:  # pragma: no cover - already gone
+        stderr = ""
+    code = child.poll()
+    reason = _why(None, stderr)
+    ending = f"exited {code}" if code is not None else "closed its pipes"
+    return f"{ending}: {reason}" if reason else f"{ending} silently"
+
+
 def probe(argv: list[str]) -> tuple[bool, str]:
-    """Launch *argv* the way the client would, and ask it to report on itself.
+    """Whether the client's own command produces a server that answers.
 
-    ``--doctor`` appended to whatever the config says. That is what makes this
-    worth having: it is not a reimplementation of the client's launch, it *is*
-    the client's launch, and the thing launched answers for its own health. Both
-    shapes take the flag -- ``-m inventor_mcp --backend auto --doctor`` and
-    ``scripts/serve.py --backend auto --doctor`` -- because both end at the same
-    argument parser.
-
-    The child runs with ``DOCTOR_CHILD`` set, so it skips this check and there
-    is no recursion.
+    Two stages, because they fail for different reasons and the difference is
+    the whole point. ``--doctor`` first: it is cheap, it exits by itself, and
+    when the launch is broken its report names what is missing far better than a
+    dead pipe does. Then the handshake, which is the claim that matters -- a
+    process that starts is not yet a server that serves.
     """
     environment = dict(os.environ)
     environment[DOCTOR_CHILD] = "1"
@@ -352,16 +512,15 @@ def probe(argv: list[str]) -> tuple[bool, str]:
             [*argv, "--doctor"],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=180, env=environment,
-            # A relative `scripts/serve.py` in a project-scoped config is
-            # resolved against the client's working directory, which for that
-            # config is the project. Reproduce that rather than this shell's.
             cwd=str(Path(__file__).resolve().parents[1]),
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return False, f"would not launch: {exc}"
-    if done.returncode == 0:
-        return True, "starts"
-    return False, _why(done.stdout, done.stderr) or f"exited {done.returncode} silently"
+    if done.returncode != 0:
+        return False, _why(done.stdout, done.stderr) or (
+            f"exited {done.returncode} silently"
+        )
+    return handshake(argv)
 
 
 #: How a doctor states its verdict. Recognised so a probe can quote the child's
@@ -422,8 +581,11 @@ def check_registration() -> Finding:
             continue
         for name, argv in entries:
             ok, detail = probe(argv)
-            where = f"{config.name}:{name}"
-            (working if ok else broken).append(where if ok else f"{where} {detail}")
+            # The detail is kept either way. On success it names the protocol
+            # version the two ends settled on, which is the first thing worth
+            # knowing when a client that can start the server still will not
+            # talk to it.
+            (working if ok else broken).append(f"{config.name}:{name} {detail}")
 
     if broken:
         return Finding(
@@ -441,7 +603,7 @@ def check_registration() -> Finding:
             hint="Register it with the absolute path to this interpreter: "
                  f"`{sys.executable} -m inventor_mcp`",
         )
-    return Finding("clients", OK, "; ".join(working) + " -- launches a working server")
+    return Finding("clients", OK, "; ".join(working))
 
 
 #: Inventor's version-independent ProgID. The versioned ones -- ``.27``, ``.28``

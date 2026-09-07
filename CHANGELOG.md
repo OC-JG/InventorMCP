@@ -151,7 +151,46 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   fail for the machine's configuration rather than the install's health. The
   report's completeness and the exit code it implies are now separate
   assertions, and `doctor_from` exists so the verdict can be tested against
-  findings chosen for the purpose. Twenty-one tests hold the pair of facts together: what `.mcp.json`
+  findings chosen for the purpose.
+
+- **Starting is not serving, and `clients` was only checking that it started.**
+  With every line green and the desktop config naming an absolute virtualenv
+  interpreter, the connection still failed — and `ok` on that line meant only
+  "the process started, imported everything and exited 0". A server that does
+  all of that and then fails or hangs answering `initialize` is
+  indistinguishable from the outside: the client reports `CONNECTION_CLOSED`,
+  which is what it says about a server it never heard from. The gap between
+  starting and serving was the last place the fault could be hiding, and
+  nothing was looking there.
+
+  So the probe now speaks MCP over stdio: `initialize`, one line, one answer.
+  Raw JSON-RPC rather than the SDK's own client, because what is in doubt is
+  the wire, and an SDK client talking to an SDK server is blind to precisely
+  the mismatch worth finding. It distinguishes a crash (quoting the stderr the
+  client discards) from a **hang** — different faults, one symptom, different
+  repairs — and from a stdout that is not clean, which a stray `print` or a
+  logging handler left on stdout will do and which makes a client drop the
+  connection over output the server thought was harmless. On success it reports
+  the protocol version the two ends settled on.
+
+  **The hang check hung.** It closed the stream before terminating the child,
+  and closing waits on the buffer lock that the blocked `readline()` holds —
+  so it returned the correct answer after 120 seconds against a child that
+  slept for 120. The wording was right and the timeout did nothing; against a
+  real hung server the doctor would never have come back. Kill first, close
+  second, and the test asserts the elapsed time rather than only the message,
+  because the message was never what was broken. That one ordering was also the
+  whole of a 132-second test file, now 14.
+
+  A `no_client_probe` fixture keeps the tests that only need the *shape* of a
+  report from launching servers to get it.
+
+  Recorded for what it rules out: this SDK negotiates `2024-11-05`,
+  `2025-03-26`, `2025-06-18` and its own latest, all four answered, so an
+  unpinned `mcp>=1.2` moving under a working install is **not** what breaks a
+  client that speaks an older protocol. That is asserted rather than assumed,
+  since the dependency floor lets the SDK change without anything here
+  changing. Twenty-one tests hold the pair of facts together: what `.mcp.json`
   launches, that the README's warning still stands, that nothing importable-only
   on a healthy install sits at the top of `__main__` or `preflight`, and that the
   explanation goes to stderr rather than the stream carrying the protocol.

@@ -38,6 +38,22 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
+@pytest.fixture
+def no_client_probe(monkeypatch):
+    """Stop ``check_registration`` launching servers.
+
+    It spawns a subprocess per registration and speaks MCP to each, which is
+    the point of it and also a second or two every time. Tests that only need
+    the *shape* of a report -- that every check reports, that every name is
+    printed -- should not pay for it, and did: the file went from three seconds
+    to over two minutes before this existed.
+    """
+    from inventor_mcp import preflight
+
+    monkeypatch.setattr(preflight, "client_configs", lambda: [])
+    return preflight
+
+
 def top_level_imports(path: pathlib.Path) -> set[str]:
     """Modules imported at the top of a file, not inside a function or a try."""
     tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -150,8 +166,8 @@ class TestTheDoctorRunsWhereTheServerCannot:
                 "run on the install it exists to diagnose"
             )
 
-    def test_every_check_reports_rather_than_raises(self):
-        from inventor_mcp import preflight
+    def test_every_check_reports_rather_than_raises(self, no_client_probe):
+        preflight = no_client_probe
 
         findings = preflight.run_checks()
         assert len(findings) == len(preflight.CHECKS)
@@ -167,14 +183,14 @@ class TestTheDoctorRunsWhereTheServerCannot:
     #: wrong thing to assert about an install.
     ABOUT_THE_MACHINE = ("clients",)
 
-    def test_a_healthy_install_is_reported_as_healthy(self):
+    def test_a_healthy_install_is_reported_as_healthy(self, no_client_probe):
         """Run under the suite's own interpreter, which by definition has the deps.
 
         The analyser and Node are allowed to be missing -- they are warnings, and
         the offline CI legs have neither. A FAIL here means the interpreter
         running the tests could not start the server.
         """
-        from inventor_mcp import preflight
+        preflight = no_client_probe
 
         broken = [
             f for f in preflight.run_checks()
@@ -182,7 +198,7 @@ class TestTheDoctorRunsWhereTheServerCannot:
         ]
         assert not broken, [(f.name, f.detail) for f in broken]
 
-    def test_the_report_names_every_check_it_ran(self):
+    def test_the_report_names_every_check_it_ran(self, no_client_probe):
         """Separated from the exit code deliberately.
 
         The two used to be one assertion, and it broke the moment a check could
@@ -191,7 +207,7 @@ class TestTheDoctorRunsWhereTheServerCannot:
         healthy package. The report's completeness is the property worth holding
         here; the exit code has its own test below.
         """
-        from inventor_mcp import preflight
+        preflight = no_client_probe
 
         out = io.StringIO()
         preflight.doctor(out=out)
@@ -211,14 +227,14 @@ class TestTheDoctorRunsWhereTheServerCannot:
         assert preflight.doctor_from(healthy + warned, out=io.StringIO()) == 0
         assert preflight.doctor_from(healthy + failed, out=io.StringIO()) == 1
 
-    def test_every_problem_carries_a_repair(self):
+    def test_every_problem_carries_a_repair(self, no_client_probe):
         """A finding that is not OK and has no hint leaves somebody stuck.
 
         Skipped checks are the exception, and deliberately: their detail already
         names the failure that caused them, and a hint of their own would point
         at the wrong thing.
         """
-        from inventor_mcp import preflight
+        preflight = no_client_probe
 
         for check, _ in preflight.CHECKS:
             finding = check()
@@ -855,3 +871,137 @@ class TestTheCheckThatAnswersForTheClient:
         finding = preflight.check_registration()
         assert finding.status == preflight.WARN
         assert sys.executable in (finding.hint or "")
+
+
+class TestStartingIsNotServing:
+    """The gap that survived every check before it.
+
+    On the machine with the seat: the server started from the client's own
+    command, the client config named an absolute virtualenv interpreter, Inventor
+    attached at 2027.1, and `clients` read `ok` — because `ok` meant "the process
+    started, imported everything and exited 0". A server that does all of that
+    and then fails or hangs answering `initialize` is indistinguishable from the
+    outside: the client reports `CONNECTION_CLOSED`, which is what it says about
+    a server it never heard from.
+
+    So the probe speaks MCP. Raw JSON-RPC rather than the SDK's own client,
+    because what is in doubt is the wire, and an SDK client talking to an SDK
+    server would be blind to exactly the mismatch worth finding.
+    """
+
+    def test_a_real_server_answers_initialize(self):
+        from inventor_mcp import preflight
+
+        ok, detail = preflight.handshake(
+            [sys.executable, "-m", "inventor_mcp", "--backend", "mock"]
+        )
+        assert ok, detail
+        assert "serves" in detail
+        assert "protocol" in detail
+
+    def test_every_protocol_version_a_client_might_ask_for_is_answered(self):
+        """An unpinned `mcp>=1.2` means a reinstall can move the SDK under a
+        working install, and a server that had dropped the version an installed
+        client speaks would fail exactly like this — start fine, never talk.
+
+        Asserted rather than assumed, because the dependency floor permits the
+        SDK to change without anything here changing.
+        """
+        from inventor_mcp import preflight
+
+        for version in ("2024-11-05", "2025-03-26", "2025-06-18"):
+            ok, detail = preflight.handshake(
+                [sys.executable, "-m", "inventor_mcp", "--backend", "mock"],
+                version=version,
+            )
+            assert ok, f"{version}: {detail}"
+
+    def test_a_command_that_dies_is_reported_with_its_stderr(self):
+        """The stderr a client throws away is the whole reason it said nothing."""
+        from inventor_mcp import preflight
+
+        ok, detail = preflight.handshake(
+            [sys.executable, "-c", "import sys; sys.stderr.write('boom\\n'); raise SystemExit(3)"]
+        )
+        assert not ok
+        assert "boom" in detail or "exited 3" in detail
+
+    def test_a_server_that_never_answers_is_called_hung_not_crashed(self):
+        """Two different faults with one symptom. A client cannot tell them
+        apart; this can, and the repairs are not the same.
+
+        The elapsed time is asserted, not incidental. The first version of this
+        returned the right answer after **120 seconds** against a child that
+        slept for 120 -- because it closed the stream before terminating the
+        child, and closing waits on the buffer lock that the blocked
+        ``readline()`` is holding. So the report of a hang was itself hostage to
+        the hang, which on a real hung server means a doctor that never comes
+        back. The wording was right and the timeout did nothing.
+        """
+        import time
+
+        from inventor_mcp import preflight
+
+        started = time.monotonic()
+        ok, detail = preflight.handshake(
+            [sys.executable, "-c", "import time; time.sleep(120)"], timeout=3,
+        )
+        elapsed = time.monotonic() - started
+
+        assert not ok
+        assert "hung" in detail
+        assert elapsed < 30, (
+            f"took {elapsed:.0f}s to report a 3s timeout -- the timeout is not "
+            "in control, and against a real hung server this would not return"
+        )
+
+    def test_prose_on_stdout_is_caught_as_a_corrupted_stream(self):
+        """stdout carries the protocol. A stray `print`, or a logging handler
+        left on stdout, makes a client drop the connection — and looks like
+        nothing at all from the server's side."""
+        from inventor_mcp import preflight
+
+        ok, detail = preflight.handshake(
+            [sys.executable, "-c",
+             "import sys; sys.stdin.readline(); print('hello from a stray print')"],
+        )
+        assert not ok
+        assert "not clean" in detail
+
+    def test_a_refusal_is_quoted(self):
+        from inventor_mcp import preflight
+
+        script = (
+            "import sys, json;"
+            "sys.stdin.readline();"
+            "print(json.dumps({'jsonrpc':'2.0','id':1,"
+            "'error':{'code':-32602,'message':'unsupported protocol version'}}))"
+        )
+        ok, detail = preflight.handshake([sys.executable, "-c", script])
+        assert not ok
+        assert "unsupported protocol version" in detail
+
+    def test_the_probe_runs_doctor_before_it_tries_to_talk(self):
+        """Order matters. A broken launch reports what is missing far better
+        through its own doctor than through a dead pipe."""
+        source = (ROOT / "inventor_mcp" / "preflight.py").read_text(encoding="utf-8")
+        body = source[source.index("def probe("):]
+        body = body[: body.index("\ndef ", 1)] if "\ndef " in body[1:] else body
+        assert body.index("--doctor") < body.index("handshake(")
+
+    def test_the_handshake_speaks_json_rpc_itself(self):
+        """Not through the SDK's client: a mismatch between the SDK's client and
+        its own server is the fault this would then be unable to see."""
+        tree = ast.parse(
+            (ROOT / "inventor_mcp" / "preflight.py").read_text(encoding="utf-8")
+        )
+        fn = next(
+            node for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "handshake"
+        )
+        imported = {
+            node.module for node in ast.walk(fn)
+            if isinstance(node, ast.ImportFrom) and node.module
+        }
+        assert "mcp.client.stdio" not in imported
+        assert "mcp.types" in imported, "the protocol version should come from the SDK"
