@@ -385,3 +385,64 @@ class TestTheResultShape:
         ):
             outcome, _ = run(session, part, *reports, rounds=3)
             assert outcome.stopped_because, reports
+
+
+class TestNothingIsMeasuredOnAStaleModel:
+    """The loop's argument for itself is act, *rebuild*, re-measure.
+
+    Every measurement after a change was already taken behind an explicit
+    `rebuild` whose health report decides whether the round is undone. Round 0's
+    baseline was not: it measured whatever state the caller left the document
+    in, and a baseline taken on an un-rebuilt model makes every improvement
+    afterwards a comparison against the wrong part.
+
+    The gap was reachable rather than theoretical -- `promote_parameters` edits
+    expressions and never rebuilds, `import_geometry` builds a part outside the
+    `_batch` that supplies `document.Update()`, and `set_parameters` takes
+    `rebuild=False`. So the measurement rebuilds for itself instead of trusting
+    every route in.
+    """
+
+    def test_measure_rebuilds_before_it_reads(self):
+        import inspect
+
+        from inventor_mcp.dfm import loop
+
+        source = inspect.getsource(loop.measure)
+        body = source.replace(loop.measure.__doc__ or "", "")
+        rebuild_at = body.find("rebuild(")
+        export_at = body.find("export(")
+        assert rebuild_at != -1, "measure() reads without rebuilding first"
+        assert export_at != -1, "measure() no longer exports; update this test"
+        assert rebuild_at < export_at, (
+            "measure() exports before it rebuilds, so the analyser reads the "
+            "part as it was rather than as it is")
+
+    def test_the_round_loop_still_rebuilds_for_its_health_report(self):
+        """The redundancy is deliberate: that rebuild's return value decides
+        whether the round's values are put back, so it cannot move inside the
+        measurement."""
+        import inspect
+
+        from inventor_mcp.dfm import loop
+
+        source = inspect.getsource(loop.improve)
+        assert "_rebuild_unhappy(rebuild)" in source
+        assert "session.backend.rebuild(context.doc_id)" in source
+
+    def test_every_undo_is_followed_by_a_rebuild(self):
+        """An undone round leaves the document as the deliverable, so its
+        geometry has to match the parameters that were put back."""
+        import inspect
+        import re
+
+        from inventor_mcp.dfm import loop
+
+        source = inspect.getsource(loop.improve).splitlines()
+        for index, line in enumerate(source):
+            if not re.search(r"_undo\(session", line):
+                continue
+            following = " ".join(source[index + 1:index + 4])
+            assert "rebuild(" in following, (
+                f"the _undo on line {index} of improve() is not followed by a "
+                "rebuild, so the part on disk would not match its parameters")

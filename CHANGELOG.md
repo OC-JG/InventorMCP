@@ -4,6 +4,42 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
 ## Unreleased
 
+### Fixed
+- **The DFM loop's baseline was measured on whatever state the caller left the
+  document in.** Audited after defect 9, and this was the one real gap: each
+  round already applied its changes, called `rebuild`, read that rebuild's
+  health report to decide whether the values stood, and only then measured —
+  but **round 0 had no rebuild before it**, and a baseline taken on an
+  un-rebuilt model makes every improvement afterwards a comparison against the
+  wrong part.
+
+  Reachable rather than theoretical. Three routes deliver such a document:
+  `promote_parameters` edits expressions and never rebuilds, `import_geometry`
+  builds a part outside the `_batch` that supplies `document.Update()`, and
+  `set_parameters` accepts `rebuild=False`.
+
+  `measure` now rebuilds for itself, rather than each route being audited and
+  trusted to stay disciplined — the reasoning `apply_parameter` records for the
+  freeze guard. The round loop's explicit rebuild stays where it is, because its
+  return value decides whether the round is undone and it has to happen before
+  the export rather than as part of it. A round rebuilds twice, and the second
+  is worth its cost beside writing an STL and running the analyser over it.
+
+  What the audit found sound: both undo paths are already followed by a rebuild,
+  which matters because the document is the deliverable; the loop holds no
+  topology handles across a measurement; and `measure` analyses an exported STL
+  rather than Inventor's mass properties, so there is no cached number to go
+  stale — the staleness would have been in the file.
+
+  All 53 mutating calls on the COM backend were checked. Every public one that
+  changes geometry runs inside `_batch`. Two findings recorded in `DFM.md`
+  rather than changed on a guess: **`promote_parameters` reports
+  `identical_geometry` as a claim and not a measurement**, and
+  **`set_parameters(rebuild=False)` no longer skips all regeneration** — since
+  defect 9 put `set_parameter` inside `_batch`, that flag now skips the explicit
+  `Rebuild()` and its health report while an `Update()` happens regardless.
+  A deliberate consequence, and it errs toward measurements being current.
+
 ### Changed
 - **The work axis is confirmed, twelve of twelve.** Sixth live run, Inventor
   2027.1: **0.18636 mm measured against 0.18636 derived** — a prediction met

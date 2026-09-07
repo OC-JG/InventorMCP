@@ -422,6 +422,56 @@ part, and changing a part on the strength of one is changing it for no reason.
 
 ---
 
+## Every measurement is of a rebuilt model
+
+*Audited 2026-09-07, after defect 9 turned up a parameter change that rebuilt
+nothing.*
+
+The loop's argument for itself is that it acts, **rebuilds** and re-measures,
+rather than reporting and handing off. That only holds if no measurement can be
+taken on a model whose parameters have moved and whose geometry has not, so the
+whole chain was checked rather than reasoned about.
+
+**Where it was already sound.** Each round applies its changes, calls
+`rebuild`, reads that rebuild's health report to decide whether the values stand
+or are put back, and only then measures. Both undo paths are followed by a
+rebuild too, which matters because the document is the deliverable: a part left
+with parameters that its geometry does not match would be worse than one left
+alone. And `measure` analyses an exported STL rather than Inventor's own mass
+properties, so there is no cached number to go stale — the staleness would be in
+the *file*.
+
+**Where it was not.** Round 0's baseline had no rebuild before it. It measured
+whatever state the caller left the document in, and a baseline taken on an
+un-rebuilt model makes every improvement afterwards a comparison against the
+wrong part. Three routes could deliver such a document: `promote_parameters`
+edits expressions and never rebuilds, `import_geometry` builds a part outside
+the `_batch` that supplies `document.Update()` for every feature call, and
+`set_parameters` accepts `rebuild=False`.
+
+So `measure` rebuilds for itself. Auditing each route in and trusting all of
+them to stay disciplined is the thing `apply_parameter` already records as not
+being a rule at all. A round now rebuilds twice, and the second is worth its
+cost beside writing an STL and running the analyser over it.
+
+**The 53 mutating calls on the COM backend were checked too.** Every public one
+that changes geometry runs inside `_batch`, which is what calls
+`document.Update()`. The rest are private helpers whose caller batches, or touch
+nothing geometric -- `rename_feature`, `write_declaration`. Two are worth
+knowing about:
+
+- **`promote_parameters` reports `identical_geometry` as a claim, not a
+  measurement.** "Each promotion holds the property's current value, so the part
+  is the same shape it was" is almost certainly true and is not checked. In a
+  repository whose rule is measure rather than assume, that is a rebuild and a
+  volume comparison away from being real.
+- **`set_parameters(rebuild=False)` no longer skips all regeneration.** Since
+  defect 9 put `set_parameter` inside `_batch`, the flag skips the explicit
+  `Rebuild()` and its health report, and an `Update()` happens regardless. That
+  is a deliberate consequence and it errs toward measurements being current;
+  the flag's description is about the rebuild report rather than about leaving
+  the model stale.
+
 ## Comparing versions
 
 The question on the second pass is not "is this manufacturable" but "is it better

@@ -285,7 +285,30 @@ def measure(
     gate: Sequence[float] | None = None,
     pull_axis: str = "+z",
 ) -> tuple[DfmReport, dict[str, float], dict[str, str], Path, Path, dict[str, Any]]:
-    """Export the part, analyse it, and return the report with what it was of."""
+    """Export the part, analyse it, and return the report with what it was of.
+
+    **Rebuilt first, always.** The loop's whole argument for itself is that it
+    acts, rebuilds and re-measures rather than reporting and handing off, and
+    every measurement after a change was already taken behind an explicit
+    ``rebuild`` -- but round 0's baseline was not. It measured whatever state the
+    caller left the document in, and a baseline measured on an un-rebuilt model
+    makes every improvement afterwards a comparison against the wrong part.
+
+    That gap was reachable. `promote_parameters` edits expressions and never
+    rebuilds; `import_geometry` builds a part outside the ``_batch`` that
+    supplies `document.Update()` for every feature call; and `set_parameters`
+    takes ``rebuild=False``. Rather than audit each route into the loop and rely
+    on all of them staying disciplined -- the reasoning `apply_parameter` records
+    for the freeze guard, that a rule enforced in one path is not a rule -- the
+    measurement rebuilds for itself.
+
+    The explicit rebuild in the round loop stays where it is: that one is read
+    for its health report, which decides whether the round's values are undone,
+    and it has to happen before the export rather than as part of it. So a round
+    rebuilds twice, and the second is worth its cost next to writing an STL and
+    running the analyser over it.
+    """
+    session.backend.rebuild(context.doc_id)
     values, expressions = current_parameters(session, context)
     stl = workspace / f"{label}.stl"
     session.backend.export(
