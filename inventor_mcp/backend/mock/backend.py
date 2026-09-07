@@ -2462,8 +2462,10 @@ class MockBackend(Backend):
         reported ``(0, 0, 0.5)`` again. A real centroid does neither -- the bores
         remove 1.178097 cm^3 centred on the circle, which at 30 mm puts it
         0.37283 mm off the box centre in X and moves it a further 0.18640 mm at
-        45. Derived and not measured: the live run of 2026-09-07 stopped at
-        defect 8, so no seat has read this figure off Inventor yet.
+        45. Derived and not measured: of the two live runs on 2026-09-07, the
+        first stopped at defect 8 and the second -- past it, with all three work
+        geometry calls executing -- was blocked by Inventor refusing the
+        parameter name ``pcd``. No seat has read this figure off Inventor yet.
 
         `scripts/live_acceptance.py` judges the bolt-circle axis by exactly that
         shift, so the invented centroid did not merely mislead -- it failed a

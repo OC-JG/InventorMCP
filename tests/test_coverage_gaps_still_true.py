@@ -30,7 +30,11 @@ import re
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-COVERAGE = (ROOT / "docs/FEATURE_COVERAGE.md").read_text()
+# `encoding`, because the gap titles below carry em-dashes and this file is
+# matched against them. Without it Windows decodes the markdown as cp1252,
+# the em-dash arrives as three characters, and every lookup keyed by a title
+# raises `KeyError` -- four failures on any Windows checkout, none on CI.
+COVERAGE = (ROOT / "docs/FEATURE_COVERAGE.md").read_text(encoding="utf-8")
 
 # Which recipe operation, if it exists, closes each gap the list names. A gap
 # with no operation that could close it -- sketch fillet, project geometry --
