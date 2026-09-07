@@ -265,6 +265,78 @@ def check_analyser() -> Finding:
         )
 
 
+#: Inventor's version-independent ProgID. The versioned ones -- ``.27``, ``.28``
+#: -- are what an install actually writes; this one is the alias pointing at
+#: whichever is current, which is why ``CurVer`` below is worth reporting.
+PROGID = "Inventor.Application"
+
+
+@dataclass
+class Registration:
+    """Whether a ProgID is registered for COM, and what it points at.
+
+    ``present`` is deliberately three-valued. ``False`` means the registry was
+    read and the key is not there; ``None`` means the question could not be
+    answered, which is **not** the same answer and must not be reported as one.
+    The first version of this check conflated them: it probed with a pythoncom
+    function that does not exist, caught the ``AttributeError`` in a broad
+    ``except``, and told somebody with a working Inventor that their COM
+    registration was missing. A diagnostic that invents a fault is worse than
+    one that admits it cannot tell.
+    """
+
+    progid: str
+    present: bool | None
+    clsid: str | None = None
+    #: What ``CurVer`` points at -- the versioned ProgID of the current install.
+    version: str | None = None
+    #: Why ``present`` is ``None``.
+    reason: str | None = None
+
+
+def _registry_default(registry: Any, path: str) -> str:
+    """The default value of ``HKEY_CLASSES_ROOT\\<path>``."""
+    with registry.OpenKey(registry.HKEY_CLASSES_ROOT, path) as key:
+        value, _ = registry.QueryValueEx(key, "")
+        return str(value)
+
+
+def _progid_registration(progid: str = PROGID, registry: Any = None) -> Registration:
+    """Read the ProgID's COM registration out of the registry.
+
+    ``winreg`` rather than a COM call, because the registry *is* what
+    "registered" means here, it is standard library, and it needs no guessing at
+    an API name -- which is exactly what went wrong the first time. *registry* is
+    injectable so the branches can be tested off Windows, where neither
+    ``winreg`` nor Inventor exists.
+    """
+    if registry is None:
+        try:
+            import winreg
+        except ImportError as exc:  # not Windows
+            return Registration(progid, None, reason=f"no winreg: {exc}")
+        registry = winreg
+    try:
+        clsid = _registry_default(registry, f"{progid}\\CLSID")
+    except FileNotFoundError:
+        # The one answer that is a real "no": the key was looked for and is not
+        # there. FileNotFoundError before OSError -- it is a subclass.
+        return Registration(progid, False)
+    except OSError as exc:
+        return Registration(progid, None, reason=f"could not read the registry: {exc}")
+    except Exception as exc:  # pragma: no cover - an injected registry misbehaving
+        return Registration(progid, None, reason=f"{type(exc).__name__}: {exc}")
+
+    version = None
+    try:
+        version = _registry_default(registry, f"{progid}\\CurVer")
+    except Exception:
+        # Absent on plenty of healthy installs. Not knowing which version is
+        # current is not a fault, so it is not reported as one.
+        pass
+    return Registration(progid, True, clsid=clsid, version=version)
+
+
 #: HRESULTs worth telling apart, because they mean different repairs. Everything
 #: else is reported with whatever text Inventor supplied.
 _MK_E_UNAVAILABLE = -2147221021      # 0x800401E3: nothing in the running-object table
@@ -309,26 +381,26 @@ def check_inventor() -> Finding:
                  "`python -m pip install -e '.[inventor]'`",
         )
 
+    # Asked first and separately: "Inventor is not running" and "Inventor is not
+    # registered" are the same exception from GetActiveObject, and they are not
+    # the same problem.
+    registration = _progid_registration(PROGID)
+    if registration.present is False:
+        return Finding(
+            "inventor", FAIL,
+            f"`{PROGID}` has no COM registration on this machine",
+            hint="Nothing can automate Inventor without it -- the server "
+                 "included. Repair the Inventor install from Autodesk Access, "
+                 "or run Inventor once as administrator to let it re-register "
+                 "itself.",
+        )
+
     pythoncom.CoInitialize()
     try:
-        # Asked first and separately: "Inventor is not running" and "Inventor is
-        # not registered" are the same exception from GetActiveObject, and they
-        # are not the same problem.
         try:
-            pythoncom.CLSIDFromProgID("Inventor.Application")
+            app = win32com.client.GetActiveObject(PROGID)
         except Exception as exc:
-            return Finding(
-                "inventor", FAIL,
-                f"`Inventor.Application` is not registered on this machine: {exc}",
-                hint="Inventor's COM registration is missing, so nothing can "
-                     "automate it -- the server included. Repair the Inventor "
-                     "install from Autodesk Access, or run Inventor once as "
-                     "administrator to let it re-register itself.",
-            )
-        try:
-            app = win32com.client.GetActiveObject("Inventor.Application")
-        except Exception as exc:
-            return _no_running_inventor(exc)
+            return _no_running_inventor(exc, registration)
 
         try:
             version = app.SoftwareVersion.DisplayVersion
@@ -350,12 +422,21 @@ def check_inventor() -> Finding:
             pass
 
 
-def _no_running_inventor(exc: BaseException) -> Finding:
+def _no_running_inventor(
+    exc: BaseException, registration: Registration | None = None
+) -> Finding:
     """``GetActiveObject`` refused. Which of the three reasons it was."""
     code = getattr(exc, "hresult", None)
     if code is None:
         args = getattr(exc, "args", ())
         code = args[0] if args and isinstance(args[0], int) else None
+
+    # Worth saying when it is known: "registered as Inventor.Application.28 but
+    # not running" is a different sentence from "not running", and it rules out
+    # the registration on the spot rather than leaving it as the next suspect.
+    registered = ""
+    if registration is not None and registration.present:
+        registered = f" (registered as {registration.version or registration.clsid})"
 
     if code == _E_ACCESSDENIED:
         return Finding(
@@ -372,7 +453,8 @@ def _no_running_inventor(exc: BaseException) -> Finding:
         )
     if code == _MK_E_UNAVAILABLE or code is None:
         return Finding(
-            "inventor", WARN, "no running Inventor session to attach to",
+            "inventor", WARN,
+            f"no running Inventor session to attach to{registered}",
             hint="Start Inventor and run this again. If Inventor *is* open, it "
                  "is open somewhere this process cannot see it: a different "
                  "Windows user, a different remote-desktop session, or one of "

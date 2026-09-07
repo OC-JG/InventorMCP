@@ -492,3 +492,179 @@ class TestWhenTheServerIsFineAndInventorIsNot:
         printed = out.getvalue()
         assert "cannot reach Inventor" in printed
         assert "will not start" not in printed
+
+
+class FakeRegistry:
+    """Just enough of ``winreg`` to drive the registration probe off Windows.
+
+    *values* maps a key path to its default value. A path that is absent raises
+    ``FileNotFoundError``, which is what ``winreg.OpenKey`` raises for a key that
+    is not there, and *broken* raises ``OSError`` instead -- the registry being
+    unreadable rather than the key being missing.
+    """
+
+    HKEY_CLASSES_ROOT = object()
+
+    def __init__(self, values: dict[str, str] | None = None, broken: bool = False):
+        self.values = values or {}
+        self.broken = broken
+
+    class _Key:
+        def __init__(self, value: str):
+            self.value = value
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+    def OpenKey(self, root, path):  # noqa: N802 - mirrors winreg's own name
+        assert root is FakeRegistry.HKEY_CLASSES_ROOT
+        if self.broken:
+            raise OSError(5, "Access is denied")
+        if path not in self.values:
+            raise FileNotFoundError(2, "The system cannot find the file specified")
+        return FakeRegistry._Key(self.values[path])
+
+    def QueryValueEx(self, key, name):  # noqa: N802 - mirrors winreg's own name
+        assert name == ""
+        return key.value, 1
+
+
+class TestWhetherInventorIsRegisteredAtAll:
+    """The probe that got this wrong on the first attempt.
+
+    It asked ``pythoncom.CLSIDFromProgID``, which does not exist. The
+    ``AttributeError`` was swallowed by a broad ``except`` and reported as
+    `Inventor.Application` is not registered on this machine` — on a machine
+    whose Inventor was registered and working. The report was confident, wrong,
+    and pointed at repairing an install that had nothing wrong with it.
+
+    So the question is answered from the registry, which is what "registered"
+    means, and the answer is three-valued: yes, no, and could-not-tell. The last
+    of those is the one that matters, and every test below exists to keep it from
+    collapsing into "no" again.
+    """
+
+    def test_a_registered_progid_is_found_with_its_version(self):
+        from inventor_mcp import preflight
+
+        registry = FakeRegistry({
+            "Inventor.Application\\CLSID": "{B6B5DC40-96E3-11D2-B774-0060B0F159EF}",
+            "Inventor.Application\\CurVer": "Inventor.Application.28",
+        })
+        got = preflight._progid_registration(registry=registry)
+        assert got.present is True
+        assert got.version == "Inventor.Application.28"
+        assert got.clsid.startswith("{")
+
+    def test_a_missing_curver_is_not_a_fault(self):
+        """Absent on plenty of healthy installs. Not knowing which version is
+        current is not the same as not being registered."""
+        from inventor_mcp import preflight
+
+        registry = FakeRegistry({"Inventor.Application\\CLSID": "{...}"})
+        got = preflight._progid_registration(registry=registry)
+        assert got.present is True
+        assert got.version is None
+
+    def test_an_absent_key_is_the_one_real_no(self):
+        from inventor_mcp import preflight
+
+        got = preflight._progid_registration(registry=FakeRegistry({}))
+        assert got.present is False
+        assert got.reason is None
+
+    def test_an_unreadable_registry_is_not_reported_as_absent(self):
+        """The bug, in the form it would take next time.
+
+        ``present`` must come back ``None``, because that is the truth: the
+        question was not answered. ``False`` here is the false accusation.
+        """
+        from inventor_mcp import preflight
+
+        got = preflight._progid_registration(registry=FakeRegistry(broken=True))
+        assert got.present is None
+        assert got.reason
+
+    def test_a_probe_that_raises_something_unexpected_still_says_it_cannot_tell(self):
+        """Exactly what happened: the probe itself was broken.
+
+        An `AttributeError` from calling a function that does not exist must
+        never become a verdict about the machine.
+        """
+        from inventor_mcp import preflight
+
+        class Hostile:
+            HKEY_CLASSES_ROOT = FakeRegistry.HKEY_CLASSES_ROOT
+
+            def OpenKey(self, root, path):  # noqa: N802
+                raise AttributeError("module 'pythoncom' has no attribute 'nope'")
+
+        got = preflight._progid_registration(registry=Hostile())
+        assert got.present is None
+        assert "AttributeError" in (got.reason or "")
+
+    def test_only_a_definite_no_is_allowed_to_fail_the_check(self):
+        """``check_inventor`` fails on `present is False` and on nothing else.
+
+        Read off the syntax tree: an `if not registration.present` would pass
+        every test above and still turn could-not-tell into a missing install,
+        because `None` is falsey. That is the bug, spelled differently.
+        """
+        tree = ast.parse(
+            (ROOT / "inventor_mcp" / "preflight.py").read_text(encoding="utf-8")
+        )
+        check = next(
+            node for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "check_inventor"
+        )
+        tests = [
+            ast.unparse(node.test) for node in ast.walk(check)
+            if isinstance(node, ast.If)
+        ]
+        assert "registration.present is False" in tests, tests
+        for sloppy in ("not registration.present", "registration.present == False"):
+            assert sloppy not in tests, f"check_inventor branches on `{sloppy}`"
+
+    def test_the_registry_is_read_rather_than_a_com_api_guessed(self):
+        """Why the probe is winreg: it is standard library, it is what
+        "registered" means, and it needs no API name guessed at."""
+        tree = ast.parse(
+            (ROOT / "inventor_mcp" / "preflight.py").read_text(encoding="utf-8")
+        )
+        probe = next(
+            node for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "_progid_registration"
+        )
+        imported = {
+            alias.name for node in ast.walk(probe)
+            if isinstance(node, ast.Import) for alias in node.names
+        }
+        assert imported == {"winreg"}, imported
+
+    def test_a_known_registration_is_named_when_nothing_is_running(self):
+        """"Registered as Inventor.Application.28 but not running" rules the
+        registration out on the spot, rather than leaving it as the next
+        suspect."""
+        from inventor_mcp import preflight
+
+        finding = preflight._no_running_inventor(
+            OSError(preflight._MK_E_UNAVAILABLE, "unavailable"),
+            preflight.Registration(
+                preflight.PROGID, True, clsid="{...}",
+                version="Inventor.Application.28",
+            ),
+        )
+        assert finding.status == preflight.WARN
+        assert "Inventor.Application.28" in finding.detail
+
+    def test_it_says_nothing_about_a_registration_it_does_not_know(self):
+        from inventor_mcp import preflight
+
+        finding = preflight._no_running_inventor(
+            OSError(preflight._MK_E_UNAVAILABLE, "unavailable"),
+            preflight.Registration(preflight.PROGID, None, reason="could not read"),
+        )
+        assert "registered as" not in finding.detail

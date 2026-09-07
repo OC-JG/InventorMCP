@@ -87,7 +87,32 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
   The elevation mismatch is the one that fits "it worked yesterday". Nothing
   about the install has to change for it to start: somebody launching Inventor
-  as administrator once is enough. Twenty-one tests hold the pair of facts together: what `.mcp.json`
+  as administrator once is enough.
+
+  **The first version of that check accused a working install.** It probed the
+  ProgID with `pythoncom.CLSIDFromProgID`, which does not exist. The
+  `AttributeError` was swallowed by a broad `except` and reported as
+  ``` `Inventor.Application` is not registered on this machine ``` — on a
+  machine whose Inventor was registered and working, with a hint recommending an
+  install repair that would have fixed nothing. Confident, wrong, and pointed at
+  the wrong component: the failure mode a diagnostic exists to prevent, produced
+  by the diagnostic.
+
+  Two things were wrong, and the API name was the smaller one. The real defect
+  was a probe whose own breakage was indistinguishable from the fault it looked
+  for. So the question is answered from the registry — `winreg`, standard
+  library, and what "registered" actually *means* here, with no API name to
+  guess — and the answer is three-valued: registered, definitely not registered,
+  and **could not tell**. Only a definite no fails the check; a probe that
+  cannot answer says so. `check_inventor` branches on `present is False` rather
+  than `not present`, because `None` is falsey and that spelling is the same bug
+  again — which is asserted off the syntax tree, since both spellings pass every
+  behavioural test.
+
+  `CurVer` is reported alongside, so a session that is registered but not
+  running reads as "no running Inventor session to attach to (registered as
+  Inventor.Application.28)" — which rules the registration out on the spot
+  instead of leaving it as the next thing to suspect. Twenty-one tests hold the pair of facts together: what `.mcp.json`
   launches, that the README's warning still stands, that nothing importable-only
   on a healthy install sits at the top of `__main__` or `preflight`, and that the
   explanation goes to stderr rather than the stream carrying the protocol.
