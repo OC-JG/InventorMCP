@@ -219,10 +219,39 @@ Each of these was hit while building real parts, and each passed
    Inventor to 0.63%. The simulator is now within 1% of a live build on all
    eleven shipped examples; `examples/expected/README.md` has the table.
 
-3. **`save_part` fails with a bare "Exception occurred" when that path is already
-   open** in Inventor from an earlier build. Since each rebuild leaves another
+3. ~~**`save_part` fails with a bare "Exception occurred" when that path is already
+   open**~~ in Inventor from an earlier build. Since each rebuild leaves another
    document open, saving over the same path fails on the second attempt onward and
    says nothing useful. Fix: name the conflict, and offer to close or version.
+
+   *Fixed 2026-09-07, and the fix is not a better message.* Inventor's refusal
+   is a bare "Exception occurred" with nothing in the ErrorManager, so there is
+   nothing to translate -- but the conflict is **knowable before the write**, so
+   that is where it is answered. `Backend.refuse_a_path_another_document_holds`
+   asks `list_documents` whether any other open document occupies the target
+   path, and refuses with the filename, the handle holding it, and both ways out:
+   `close_part(document=...)`, or a different name.
+
+   Two things make this better than a tool-layer check would have been.
+   **`list_documents` reads Inventor's own `Documents` collection on the COM
+   backend**, so it sees a file the *user* opened in the UI as well as one this
+   session opened -- and the session's own registry cannot. And **the guard sits
+   on `Backend` rather than in either implementation**, so both are held to it
+   and no caller routes around it, which is the reasoning `apply_parameter`
+   records for the freeze guard: a rule enforced on one path is not a rule.
+
+   Saving in place is not checked, because it cannot collide, and neither is
+   saving onto the path the document is already at -- an in-place save written
+   longhand. That case is checked *before* the listing rather than left to the
+   id comparison, because on COM the ids are exactly what cannot be relied on:
+   `document_path`'s own note records that an id-to-id match over that listing
+   once matched nothing at all. Paths are compared through `abspath` and
+   `normcase`, so two names for one file collide.
+
+   `tests/test_saving.py` holds it, including that the mock and COM backends both
+   ask the guard and neither carries a copy of it. The live half is unmeasured,
+   as ever: what a COM run has to confirm is that Inventor accepts the save once
+   the named document is closed.
 
 4. **`capture_view` orientation names do not describe what you get.** On a part
    built on XY and extruded in +Z, `front` and `back` return top and bottom views,

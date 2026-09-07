@@ -15,11 +15,29 @@ expression string Inventor should store alongside it.
 
 from __future__ import annotations
 
+import os
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, Sequence
 
+from ..errors import DocumentError
 from ..plan import SketchPlan
+
+
+def _same_file_key(path: str) -> str:
+    """A form of *path* that compares equal for two names of the same file.
+
+    Absolute, so a relative name matches the absolute one it resolves to, and
+    case-folded through ``normcase`` because the machine that matters here runs
+    Windows -- where `Bracket.ipt` and `bracket.ipt` are one file and comparing
+    them raw would miss the collision this is looking for. ``normcase`` also
+    settles the separators, so a path written with forward slashes matches the
+    backslashed one Inventor hands back.
+
+    Deliberately not ``realpath``: resolving symlinks needs the file to exist,
+    and the interesting case is a path being written for the first time.
+    """
+    return os.path.normcase(os.path.abspath(path))
 
 
 def _clean(value: Any) -> Any:
@@ -632,6 +650,52 @@ class Backend(ABC):
         raise NotImplementedError(
             f"The {self.name} backend cannot import translated geometry."
         )
+
+    def refuse_a_path_another_document_holds(self, doc_id: str, path: str | None) -> None:
+        """Refuse a Save As onto a path some other open document already occupies.
+
+        Defect 3 in ``docs/FEATURE_COVERAGE.md``. Inventor will not write a file
+        it already has open, and says so with a bare "Exception occurred" and
+        nothing in the ErrorManager -- so the second save of a rebuild, onto the
+        path the first one wrote, failed and named neither the file nor the
+        document holding it. Rebuilding leaves the earlier document open, which
+        makes this the normal case rather than an unusual one.
+
+        Asked *before* the write rather than translated after it, because the
+        conflict is knowable and Inventor's own refusal is not readable. It
+        lives here rather than in either backend so both are held to it and no
+        caller routes around it -- the reasoning ``apply_parameter`` records for
+        the freeze guard: a rule enforced in one path is not a rule.
+
+        The listing is the right source on both: ``list_documents`` reads
+        Inventor's own ``Documents`` collection, so it sees a file the user
+        opened in the UI as well as one this session opened. Saving in place
+        (no ``path``, which both backends read as ``Save``) cannot collide and
+        is not checked; neither is saving onto the path this document is already
+        at, which is an in-place save written out longhand and must stay allowed
+        however the ids compare -- so it is settled from the document's own path
+        before the listing is consulted, never by comparing ids.
+        """
+        if not path:
+            return
+        target = _same_file_key(path)
+        own = self.document_path(doc_id)
+        if own and target == _same_file_key(own):
+            return
+        for other in self.list_documents():
+            if other.id == doc_id or not other.path:
+                continue
+            if _same_file_key(other.path) != target:
+                continue
+            raise DocumentError(
+                f"{os.path.basename(path)} is already open in this Inventor "
+                f"session, as document {other.id!r} ({other.name}).",
+                hint="Inventor will not write a file it has open. Close that "
+                     f"document first (`close_part(document={other.id!r})`), or "
+                     "save this one under another name -- a revision suffix on "
+                     "the path is the usual answer when the open copy is still "
+                     "wanted.",
+            )
 
     def document_path(self, doc_id: str) -> str | None:
         """Where this document lives on disk, or ``None`` if nowhere yet.

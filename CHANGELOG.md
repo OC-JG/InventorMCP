@@ -4,6 +4,43 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
 ## Unreleased
 
+### Fixed
+- **A save onto a path Inventor already has open is refused by name** — defect
+  3, and the fix is not a better message. Inventor will not write a file it has
+  open, and says so with a bare "Exception occurred" and nothing in the
+  ErrorManager, so there was nothing to translate. Since each rebuild leaves the
+  earlier document open, this was the *normal* case for a second save, and it
+  named neither the file nor the document holding it.
+
+  The conflict is knowable before the write, so that is where it is answered.
+  `Backend.refuse_a_path_another_document_holds` asks `list_documents` whether
+  another open document occupies the target path, and refuses with the filename,
+  the handle holding it, and both ways out — `close_part(document=...)`, or a
+  different name. Picking one of those for the caller would be guessing which
+  copy they wanted.
+
+  **`list_documents` is why this is not a tool-layer check.** On the COM backend
+  it reads Inventor's own `Documents` collection, so it sees a file the *user*
+  opened in the UI as well as one this session opened — which the session's own
+  registry cannot, and which is the case the defect report came from. And the
+  guard sits on `Backend` rather than in either implementation, so both are held
+  to it and no caller routes around it: the reasoning `apply_parameter` records
+  for the freeze guard.
+
+  Saving in place is not checked, because it cannot collide, and neither is
+  saving onto the path the document is already at. That last case is settled
+  *before* the listing rather than by comparing ids, because on COM the ids are
+  exactly what cannot be relied on — `document_path`'s own note records an
+  id-to-id match over that listing once matching nothing at all — and an
+  in-place save written longhand must keep working however they compare. Paths
+  compare through `abspath` and `normcase`, so two names for one file collide
+  and a Windows case difference does not hide one.
+
+  `tests/test_saving.py` holds it, including that both backends ask the guard and
+  neither carries a copy, and that the own-path case survives a backend whose ids
+  never match. Three mutations were checked and each failed the test written for
+  it. The live half is unmeasured, as with the rest of Phase 2's COM.
+
 ### Added
 - **A pattern axis lying flat in the patterned face is warned about** — defect
   7, found on 2026-09-03 while checking whether the roadmap's reason for wanting

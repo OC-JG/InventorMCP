@@ -1138,6 +1138,9 @@ class ComBackend(Backend):
 
     def save_document(self, doc_id: str, path: str | None = None) -> DocInfo:  # pragma: no cover
         document = self._doc(doc_id)
+        # Before the write, not after: Inventor's refusal to overwrite a file it
+        # has open is a bare "Exception occurred" that names nothing -- defect 3.
+        self.refuse_a_path_another_document_holds(doc_id, path)
         with self._translate_errors("Saving", DocumentError):
             if path:
                 os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)

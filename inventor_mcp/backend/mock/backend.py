@@ -688,6 +688,7 @@ class MockBackend(Backend):
 
     def save_document(self, doc_id: str, path: str | None = None) -> DocInfo:
         document = self._doc(doc_id)
+        self.refuse_a_path_another_document_holds(doc_id, path)
         document.path = path or document.path or f"{document.name}.ipt"
         document.modified = False
         self._record("save_document", path=document.path)

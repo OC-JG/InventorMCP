@@ -371,8 +371,28 @@ actually bitten.
       a correct recipe teaches the reader to ignore the field.
 - [ ] **Sketch-driven pattern, thicken, move face** — Tier 2 in
       `FEATURE_COVERAGE.md`, all with public `Add` methods.
-- [ ] **`save_part` names the conflict** when the path is already open —
-      defect 3.
+- [x] **`save_part` names the conflict** when the path is already open —
+      defect 3. *(2026-09-07.)* The item said "names the conflict" and the fix
+      turned out not to be a message at all: Inventor's refusal to overwrite a
+      file it has open is a bare "Exception occurred" with nothing in the
+      ErrorManager, so there was nothing to translate. The conflict is knowable
+      *before* the write, so it is refused there — with the filename, the
+      document handle holding it, and both ways out.
+
+      Two things worth recording. **The check belongs below the tool layer**, and
+      not only for the usual reason that a rule enforced on one path is not a
+      rule: `list_documents` reads Inventor's own `Documents` collection on the
+      COM backend, so it sees a file the *user* opened in the UI, which the
+      session's own registry never can. So the guard lives on `Backend` and both
+      implementations inherit it. **And the own-path case is checked before the
+      listing rather than by comparing ids**, because on COM the ids are exactly
+      what cannot be trusted — `document_path`'s note records an id-to-id match
+      over that listing once matching nothing at all — and an in-place save
+      written longhand has to keep working however the ids compare. Both are
+      pinned by tests, one of them against a backend whose ids never match.
+
+      Unmeasured live, like the rest of Phase 2's COM: what a run has to confirm
+      is that Inventor takes the save once the named document is closed.
 
 ### Phase 3 — drawings
 

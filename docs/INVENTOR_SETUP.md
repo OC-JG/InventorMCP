@@ -250,7 +250,7 @@ afternoon:
   the measurement fails, and the measured axes are reported on every sketch
   result — `live_smoke.py` prints them.
 
-## Not measured at all: work points and work axes
+## Not measured at all: the Phase 2 COM
 
 Everything else in this file was learned by running against a real Inventor.
 This section is the exception, and is kept separate for that reason: `work_point`
@@ -285,6 +285,30 @@ defect 5, which survived three runs precisely because the volume was correct for
 the half it kept. The carrier-sketch route instead puts every position through
 `build_sketch`, which measures a sketch's own axes rather than deducing them
 from a plane's name, so a call that behaves differently raises instead.
+
+### The other two, added the same way
+
+Both were written without an Inventor to reach and both are listed here rather
+than left in the changelog, because this is the file a person reads before
+spending a CAD seat.
+
+4. **A hole is aimed *after* it is built.** Unlike `extrude` there is no
+   definition object to put `AffectedBodies` on -- `HoleFeatures.Add...` makes
+   the feature in one call -- so the backend sets it on the finished feature and
+   treats a release that refuses as a hard error. What a run has to confirm is
+   the refusal path as much as the success one: the hole exists either way, and
+   one on the wrong body has taken real material out of a part that looks
+   finished. **The total volume cannot show it worked**, either: two equal
+   blocks stay equal whichever one is bored, and only the per-body figures
+   differ.
+5. **A save onto a path another open document holds is refused before the
+   write** -- defect 3. Nothing new is called; the check reads `list_documents`,
+   which is `app.Documents`, and Inventor's own refusal is the bare "Exception
+   occurred" this replaces. What a run has to confirm is the *other* half: that
+   Inventor accepts the save once the named document is closed, so the remedy in
+   the hint is real. Worth confirming too that `Documents` reports a path for a
+   document the user opened in the UI, since that is the case a session-registry
+   check could not have covered.
 
 ## Known-shaky areas
 
