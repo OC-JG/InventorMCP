@@ -328,6 +328,16 @@ actually bitten.
       `WorkAxes.AddByLine` have never executed; `INVENTOR_SETUP.md` has the
       order to check them in, and the test that matters is not "did it run" but
       whether the bolt circle moves when the driving parameter does.
+
+      **The instrument exists as of 2026-09-07 and has not been run**, which is
+      why this stays open. `live_acceptance.py --only work-geometry` runs all
+      five unmeasured Phase 2 behaviours -- the three calls above, the hole
+      aimed with `bodies`, and the save conflict's remedy -- and asserts the
+      bolt circle's centre-of-mass shift against 0.18640 mm derived beforehand
+      rather than merely checking that the pattern ran. Every recipe in it
+      builds against the simulator and every line of it has been executed
+      there, so what is untested is Inventor's half and nothing else. Ticking
+      this needs a seat, and no amount of preparation substitutes for one.
 - [x] **`hole` gains `bodies`**, the multi-body targeting `extrude` already
       has. *(2026-09-03.)* Every piece it needed was already parameterised by
       body -- `charge`, `_through_all_distance`, `_material_spans` and

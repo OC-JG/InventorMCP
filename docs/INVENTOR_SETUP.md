@@ -310,6 +310,49 @@ spending a CAD seat.
    document the user opened in the UI, since that is the case a session-registry
    check could not have covered.
 
+### Running all five
+
+    python scripts/live_acceptance.py --only work-geometry
+
+`check_work_geometry` runs them in the order above and stops after the first if
+it fails, because the two work-axis routes are built on `AddByPoint` and a
+failure there explains every later one. It skips outright on `--backend mock`:
+the simulator implements all five and would pass itself, which is worse than not
+running.
+
+Three of its checks needed a part designed so the answer is visible at all, and
+the reasoning is worth knowing before reading a result:
+
+* **The bolt circle is judged by where the centre of mass went**, against a
+  figure derived beforehand. Six 5 mm bores through a 120x80x10 plate remove
+  1.17810 cm^3 centred on the circle, so moving that centre 15 mm shifts the
+  remaining 94.82190 cm^3 by **0.18640 mm**. Zero means the expressions never
+  reached the carrier sketch's dimensions and the axis is parametric in name
+  only; a different non-zero figure means it moved somewhere other than where
+  `bolt_x` put it. "It built" proves neither, because `_repeat` counts
+  occurrences and never reads the axis.
+* **The two blocks in the hole-targeting check are different thicknesses on
+  purpose**, 10 mm and 6 mm. `FEATURE_COVERAGE.md` notes that a total volume
+  cannot show which body was bored, and for equal blocks it cannot -- the same
+  bore either way is the same volume. Unequal ones make the total say, without a
+  per-body figure the `Backend` contract does not expose.
+* **The save check confirms the remedy, not the refusal.** The refusal is
+  offline logic that `tests/test_saving.py` already holds; what needs Inventor is
+  that the file is writable once the named document is closed, because that is
+  the sentence the hint puts in front of a caller.
+
+The recipes are the shipped ones' patterns, not the unit tests'. The bolt hole is
+`through_all` with no `direction`, because that is what every shipped example does
+and what an acceptance run has actually measured; the unit test for the same
+recipe says `direction: "negative"`, which has never run against Inventor and
+would risk failing this check on the drill direction while reading as a fault in
+the work axis.
+
+For defect 4, `scripts/com_signatures.py` now reads the whole `Camera` interface.
+If it reports the eye and the up vector, the orientation names can be measured as
+numbers rather than judged by looking at renders -- which is what `check_views`
+says is missing before any of it can be asserted.
+
 ## Known-shaky areas
 
 These are the parts of the COM backend most likely to need adjustment, and why:

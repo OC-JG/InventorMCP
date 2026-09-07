@@ -4,6 +4,50 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
 ## Unreleased
 
+### Added
+- **An acceptance check for the five Phase 2 behaviours whose COM half has never
+  executed** — `live_acceptance.py --only work-geometry`. `WorkPoints.AddByPoint`,
+  `WorkAxes.AddByTwoPoints` and `WorkAxes.AddByLine`, the hole aimed with
+  `bodies`, and the save conflict's remedy. **Nothing here has been measured**:
+  this is the instrument, written on a machine with no Inventor to reach, and the
+  roadmap item stays open until a seat runs it.
+
+  What makes it worth more than "did it run": three of the checks needed a part
+  designed so the answer is visible at all.
+
+  * **The bolt circle is judged by where the centre of mass went**, against a
+    figure derived beforehand. Six 5 mm bores through a 120x80x10 plate remove
+    1.17810 cm^3 centred on the circle, so moving that centre 15 mm shifts the
+    remaining 94.82190 cm^3 by 0.18640 mm. Zero means the expressions never
+    reached the carrier sketch's dimensions and the axis is parametric in name
+    only; a different non-zero figure means it moved somewhere other than where
+    `bolt_x` put it. That the pattern built proves neither, because `_repeat`
+    counts occurrences and never reads the axis.
+  * **The two blocks in the hole-targeting check are different thicknesses**, 10
+    mm against 6 mm. `FEATURE_COVERAGE.md` notes a total volume cannot show which
+    body was bored, and for equal blocks it cannot — the same bore either way is
+    the same volume. Unequal ones make the total say, with no per-body figure the
+    `Backend` contract does not expose.
+  * **The save check confirms the remedy rather than the refusal**, since the
+    refusal is offline logic `tests/test_saving.py` already holds and what needs
+    Inventor is that the path is writable once the holder is closed.
+
+  It skips outright on `--backend mock`, because the simulator implements all
+  five and would print five passes that say nothing about Inventor. Every recipe
+  in it was validated and built against the simulator, and every line of it was
+  executed there with the skip lifted, so a typo cannot wait for the CAD seat to
+  surface. The bolt hole uses `through_all` with no `direction` — what every
+  shipped example does and what an acceptance run has measured — rather than the
+  `direction: "negative"` its unit test uses, which has never run against
+  Inventor and would risk failing the check on the drill direction while reading
+  as a fault in the work axis.
+
+  `scripts/com_signatures.py` gains the three unverified calls, whose argument
+  order has never been read from anything, and the `Camera` interface: defect 4's
+  orientation names cannot be asserted until somebody measures what each one
+  produces, and if `Camera` reports the eye and the up vector then they can be
+  measured as numbers instead of judged by eye.
+
 ### Fixed
 - **A save onto a path Inventor already has open is refused by name** — defect
   3, and the fix is not a better message. Inventor will not write a file it has
