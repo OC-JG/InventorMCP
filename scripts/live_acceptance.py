@@ -955,6 +955,14 @@ def check_work_geometry(session: Session, report: Report) -> None:
         {"op": "extrude", "name": "Body", "sketch": "Outline", "distance": 10},
     ]
 
+    # 0. Which parameter names Inventor will take. The 2026-09-07 run refused
+    #    `pcd` -- "Inventor refused the parameter 'pcd' = '30 mm': Exception
+    #    occurred." -- while `bolt_x` in the same recipe was accepted, and
+    #    nothing in `RESERVED_NAMES` or the unit table explains it. Guessing
+    #    would be how a wrong entry gets into a table nobody measured, so this
+    #    asks. Cheap: one document, one parameter each, no geometry.
+    _probe_parameter_names(session, report)
+
     # 1. WorkPoints.AddByPoint -- everything below depends on it.
     recipe = PartRecipe.model_validate({
         "name": "WorkPointProbe", "units": "mm",
@@ -966,10 +974,23 @@ def check_work_geometry(session: Session, report: Report) -> None:
     first_ok = report.check(not broken, "work-geometry: WorkPoints.AddByPoint runs",
                             (broken[0] if broken else "")[:400])
     if context:
-        names = {f.name for f in session.backend.list_features(context.doc_id)}
-        report.check("Datum" in names,
-                     "work-geometry: the work point is a feature in the tree",
-                     f"features: {sorted(names)}")
+        # Not via `list_features`: on 2026-09-07 that returned ['Body'] alone,
+        # because the COM backend walks `ComponentDefinition.Features` and
+        # Inventor keeps work geometry in `WorkPlanes`, `WorkAxes` and
+        # `WorkPoints` instead. The mock puts all of it in one list, so the two
+        # disagree -- recorded as a divergence rather than papered over, and it
+        # cannot be fixed by guessing, because Inventor's *origin* planes and
+        # axes live in those same collections and nothing here has measured how
+        # to tell them apart. So the facts needed to fix it are printed below.
+        _report_work_geometry_collections(session, context, report)
+        # Existence asked the way the code that needs it asks: `two_points`
+        # resolves a work point by name out of `WorkPoints`, so if that finds
+        # it, the thing exists and is reachable.
+        report.check(_work_point_exists(session, context, "Datum"),
+                     "work-geometry: the work point can be found by name",
+                     "`_named_work_point` could not find 'Datum' in WorkPoints, "
+                     "so nothing downstream could reference it either.")
+        _report_carrier_sketches(session, context, report)
         session.backend.close_document(context.doc_id, save=False)
         session.forget(context.doc_id)
     if not first_ok:
@@ -1003,14 +1024,17 @@ def check_work_geometry(session: Session, report: Report) -> None:
             session.forget(context.doc_id)
 
     # 3. The one that matters: does the bolt circle move with its parameter?
+    # `pcd` is deliberately not the name here: Inventor refused it on
+    # 2026-09-07 and the probe above is what will say why. The measurement this
+    # check exists for must not be blocked on an unexplained name.
     recipe = PartRecipe.model_validate({
         "name": "OffCentreBoltCircle", "units": "mm",
         "parameters": [{"name": "bolt_x", "value": 30},
-                       {"name": "pcd", "value": 30}],
+                       {"name": "bolt_spacing", "value": 30}],
         "operations": plate + [
             {"op": "work_axis", "name": "BoltAxis", "plane": "xy", "at": ["bolt_x", 0]},
             {"op": "sketch", "name": "Pilot", "plane": "xy", "entities": [
-                {"type": "point", "position": ["bolt_x + pcd / 2", 0]}]},
+                {"type": "point", "position": ["bolt_x + bolt_spacing / 2", 0]}]},
             # `through_all` with no `direction`, which is what every shipped
             # example does and what the acceptance run has actually measured.
             # The unit test for this recipe says `direction: "negative"`, and
@@ -1083,7 +1107,18 @@ def check_work_geometry(session: Session, report: Report) -> None:
              "through_all": True, "bodies": [2]},
         ]})
     context, broken = build(session, recipe)
-    if broken:
+    if broken and "AffectedBodies" in broken[0]:
+        # Measured 2026-09-07: Inventor 2027.1's HoleFeature has no
+        # AffectedBodies at all, so this is a gap in Inventor's API rather than
+        # a regression to re-report on every run. `rehearse` now warns about
+        # the field, and `FEATURE_COVERAGE.md` records the measurement. A
+        # standing FAIL here would train a reader to skip the summary.
+        report.skip("work-geometry: a hole aimed with `bodies` builds",
+                    "Inventor 2027.1 has no HoleFeature.AffectedBodies -- "
+                    "measured, recorded, and warned about by `rehearse`. Use an "
+                    "`extrude` cut with `bodies`. Re-check on a new release: if "
+                    "this starts passing, the warning should go.")
+    elif broken:
         report.check(False, "work-geometry: a hole aimed with `bodies` builds",
                      broken[0][:400])
     else:
@@ -1145,6 +1180,113 @@ def check_work_geometry(session: Session, report: Report) -> None:
             except Exception:
                 pass
             session.forget(handle)
+
+
+def _probe_parameter_names(session: Session, report: Report) -> None:
+    """Which parameter names Inventor accepts, one document, one at a time.
+
+    The 2026-09-07 run refused ``pcd`` and took ``bolt_x`` in the same recipe,
+    with a bare "Exception occurred" and nothing in `RESERVED_NAMES` or the unit
+    table to explain it. The candidates below are chosen to separate the
+    possible reasons rather than to find something that works: whether the
+    length matters, whether a unit-like fragment does (``cd`` is candela, ``d``
+    is Inventor's own model-parameter prefix), and whether the same letters
+    inside a longer name are refused too.
+
+    Reported, never failed on: this is a measurement of Inventor, and a name it
+    declines is a fact to record rather than a fault in this repository.
+    """
+    candidates = ["bolt_x", "pcd", "PCD", "pcd_1", "bolt_pcd", "cd", "dia",
+                  "pitch", "bolt_spacing"]
+    backend = session.ensure_backend()
+    document = backend.new_part("ParameterNames", units="mm")
+    context = session.register(document, "mm", "deg")
+    accepted, refused = [], []
+    try:
+        for name in candidates:
+            try:
+                apply_parameter(session, context, _spec(name, 30))
+            except Exception as exc:
+                refused.append(f"{name} ({_first_line(exc)})")
+            else:
+                accepted.append(name)
+        report.note(f"parameter names Inventor took: {', '.join(accepted) or '(none)'}")
+        for entry in refused:
+            report.note(f"parameter name REFUSED: {entry}")
+        if refused:
+            report.note("A refused name belongs in `RESERVED_NAMES` with the "
+                        "measurement beside it, and `apply_parameter` should say "
+                        "so before Inventor does.")
+    finally:
+        backend.close_document(context.doc_id, save=False)
+        session.forget(context.doc_id)
+
+
+def _report_work_geometry_collections(session: Session, context,
+                                      report: Report) -> None:
+    """What Inventor keeps in WorkPlanes, WorkAxes and WorkPoints, by name.
+
+    `list_features` walks `ComponentDefinition.Features` and Inventor keeps work
+    geometry elsewhere, so the two backends disagree about whether a work point
+    is a feature. Fixing that needs one fact nobody here has measured: whether
+    the *origin* planes, axes and point sit in these same collections, and if so
+    how a created one is told from them. So the names are printed.
+    """
+    try:
+        component = session.backend._doc(context.doc_id).ComponentDefinition
+    except Exception as exc:
+        report.note(f"work-geometry: could not read the collections ({exc})")
+        return
+    for label in ("WorkPlanes", "WorkAxes", "WorkPoints"):
+        try:
+            collection = getattr(component, label)
+            names = [str(collection.Item(i).Name)
+                     for i in range(1, int(collection.Count) + 1)]
+        except Exception as exc:
+            report.note(f"work-geometry: {label} unreadable ({exc})")
+            continue
+        report.note(f"work-geometry: {label} holds {len(names)}: {names}")
+
+
+def _work_point_exists(session: Session, context, name: str) -> bool:
+    """Whether a work point of that name is reachable the way callers reach it."""
+    from inventor_mcp.backend.com.backend import _named_work_point
+
+    try:
+        component = session.backend._doc(context.doc_id).ComponentDefinition
+        return _named_work_point(component, name) is not None
+    except Exception:
+        return False
+
+
+def _report_carrier_sketches(session: Session, context, report: Report) -> None:
+    """Whether the carrier sketches came out fully constrained.
+
+    The 2026-09-07 run printed ``horizontal_align(__origin__, point1) was
+    refused`` for every carrier sketch, and the message goes on to say the sketch
+    keeps a degree of freedom. That may be over-claiming -- `DECISIONS.md`
+    records that a constraint Inventor refuses is usually one it inferred for
+    itself -- and it matters here more than usual: a carrier point free to move
+    is a work axis that does not track its parameter, which is the whole point
+    of the check below. Inventor gives no degree-of-freedom count, so
+    `fully_constrained` is the answer available.
+    """
+    try:
+        sketches = session.backend.list_sketches(context.doc_id)
+    except Exception as exc:
+        report.note(f"work-geometry: could not list sketches ({exc})")
+        return
+    for info in sketches:
+        if "_carrier" not in info.name:
+            continue
+        report.note(f"work-geometry: carrier sketch {info.name} "
+                    f"fully_constrained={info.fully_constrained}, "
+                    f"dimensions={info.dimensions}, "
+                    f"refused_constraints={info.refused_constraints}")
+
+
+def _first_line(exc: Exception) -> str:
+    return str(exc).splitlines()[0][:160] if str(exc) else type(exc).__name__
 
 
 def _spec(name: str, value: float):

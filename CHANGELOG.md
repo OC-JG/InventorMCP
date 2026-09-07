@@ -4,6 +4,62 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
 ## Unreleased
 
+### Changed
+- **What the first two live runs actually measured.** The work-geometry check
+  ran twice on Inventor 2027.1 on 2026-09-07. After the sketch-label fix below,
+  `WorkPoints.AddByPoint`, `WorkAxes.AddByTwoPoints` and `WorkAxes.AddByLine`
+  **all execute** — and `com_signatures.py` lists none of them, only
+  `AddAtCentroid` and `AddByAnalyticEdge`. makepy writes a module per interface
+  and skips members, so late binding is what makes them reachable: a missing
+  signature is not evidence of a missing call, which is the clearest case yet
+  for the binding choice `INVENTOR_SETUP.md` argues.
+
+  The roadmap item stays open, because "it runs" was never the test. Four things
+  came out of the runs instead:
+
+  * **Inventor refused the parameter name `pcd`** with a bare "Exception
+    occurred", while taking `bolt_x` in the same recipe, and nothing in
+    `RESERVED_NAMES` or the unit table explains it. That blocked the one
+    measurement the check exists for — whether the bolt circle moves when its
+    driving parameter does. The recipe now uses a name Inventor took, and the
+    check probes a spread of candidates chosen to separate the possible reasons,
+    so the next run says which names it declines.
+  * **`hole` + `bodies` cannot work on Inventor.** 2027.1's `HoleFeature` has no
+    `AffectedBodies` property at all. It is structural rather than a version
+    quirk: `extrude` is aimed through a definition object before the feature
+    exists, and `HoleFeatures.Add...` makes the feature in one call, so there is
+    nothing to aim. `rehearse` warns on the field now
+    (`_KNOWN_BROKEN_FIELDS`) and names the substitutes; the gap list records the
+    measurement; the acceptance check skips it with that reason rather than
+    failing every run. The hard error the backend already raised was the right
+    behaviour — a hole on the wrong body takes real material out of a part that
+    looks finished.
+  * **Work geometry does not appear in `list_features`** on the COM backend,
+    which walks `ComponentDefinition.Features` while Inventor keeps work planes,
+    axes and points in their own collections. The mock puts them all in one list,
+    so the two backends disagree. Not fixed by guessing: Inventor's *origin*
+    planes and axes live in those same collections and nothing here has measured
+    how to tell a created one from them, so the check now prints what the three
+    collections hold and asks about the work point the way the code that needs
+    it asks — by name, out of `WorkPoints`.
+  * **The type library has no `Camera` module**, so defect 4's orientation names
+    cannot be measured from a signature read after all. That needs a live probe
+    against the object.
+
+  The carrier sketches also print a refused `horizontal_align`, and the message
+  claims a lost degree of freedom. That may be over-claiming — a constraint
+  Inventor refuses is usually one it inferred for itself — and it matters here
+  because a carrier point free to move is a work axis that does not track its
+  parameter. Inventor gives no degree-of-freedom count, so the check now reports
+  each carrier sketch's `fully_constrained`.
+
+  `tests/test_coverage_gaps_still_true.py` gained a third state to describe this:
+  a gap the schema closed and Inventor did not. It now holds three documents
+  together — the bullet must stay open, the schema must still carry the field,
+  and `_KNOWN_BROKEN_FIELDS` must say Inventor cannot do it — and fails if a
+  field is warned about that the schema does not offer. The old two-state model
+  called the honest bullet stale, which is how the change was noticed.
+
 ### Fixed
 - **The save guard no longer walks every open document.** It asked
   `list_documents`, and the first live connection reported **1033 open
