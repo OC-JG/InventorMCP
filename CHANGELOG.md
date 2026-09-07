@@ -61,6 +61,39 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   called the honest bullet stale, which is how the change was noticed.
 
 ### Fixed
+- **The simulator no longer invents a centre of mass** — `mass_properties`
+  reported the bounding box's centre as the part's centroid, and a box centre is
+  not an approximate centroid but a different quantity: it does not move for a
+  void at all. The plate the work-geometry check below is built around reported
+  `(0, 0, 0.5)` with its bolt circle 30 mm off-axis, and `(0, 0, 0.5)` again at
+  45 mm.
+
+  A real centroid does neither. **Derived, not measured** — from the same
+  arithmetic that check already asserts against, and stated that way because the
+  one live run got nowhere near it: six 5 mm bores remove 1.178097 cm^3 centred
+  on the circle, so at 30 mm the centroid sits 0.37283 mm off the box centre in
+  X, and moving the circle to 45 mm shifts it a further 0.18640 mm. The box
+  centre reports zero and zero.
+
+  That is worse than an approximation, because `check_work_geometry` judges the
+  off-centre bolt-circle axis by exactly that shift and *skips*, with a note,
+  when a backend reports no centroid. A backend reporting a constant one is not
+  skipped: it fails, against a work axis that had done its job. So the number is
+  gone rather than flagged, and `MassProps.center_of_mass_from` says which it is
+  — the simulator's sentence points at `bounding_box` for the box centre, and
+  the COM backend names Inventor's own `MassProperties`.
+
+  Not computed from the volume ledger, though the signed prisms hold what a
+  centroid needs. It would be real for a plate with drilled holes and wrong for
+  this one: a `circular_pattern` moves volume without recording prisms of its
+  own, so the ledger knows one bore of six and would produce a figure that moves
+  by a sixth of the truth. Worth revisiting when a pattern records its
+  occurrences, which is the open `ponytail` on `_repeat`; there is no caller for
+  a centroid until then.
+
+- **The roadmap's `ponytail:` count guard could not pass on Windows** — it keyed
+  the counts by `str(path)` and looked one up by its forward-slash spelling, so
+  the drift test that guards the count only ever reported drift.
 - **The save guard no longer walks every open document.** It asked
   `list_documents`, and the first live connection reported **1033 open
   documents** behind an assembly. On the COM backend that listing reads six
