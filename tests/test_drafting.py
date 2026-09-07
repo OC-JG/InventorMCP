@@ -763,3 +763,182 @@ class TestExportingTheSheet:
         result = session.backend.export(
             drawing.id, ExportRequest(path="/tmp/nope.pdf", format="pdf"))
         assert result["written"] is False and result["simulated"] is True
+
+
+class TestWhatPointingItAtEveryShippedPartFound:
+    """Five defects, found by asking for a drawing of all eleven shipped parts.
+
+    None of them by writing a test first. The fixture at the top of this file is
+    a plate with four well-behaved parameters, and every one of these needed a
+    part shaped some other way: a pulley with a count, a cover plate with
+    counterbored holes, a housing with a draft angle, a pipe bend whose wall is
+    an intermediate parameter. `ARCHITECTURE.md` already argues for keeping the
+    examples executable; this is that argument paying out again.
+
+    The sweep at the end is the harness itself, kept as a test so the next
+    schema change is checked against every shipped part rather than against the
+    plate.
+    """
+
+    ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+    def part(self, stem):
+        return PartRecipe.model_validate(json.loads(
+            (self.ROOT / "examples" / f"{stem}.json").read_text(encoding="utf-8")))
+
+    def drawn(self, session, stem, dimension):
+        from inventor_mcp.drafting import build_drawing
+
+        return build_drawing(session, DrawingRecipe.model_validate({
+            "name": "D", "template": "t.idw", "views": [
+                {"name": "FRONT", "dimension": dimension}]}), self.part(stem))
+
+    def test_an_angle_is_stated_in_degrees_and_not_in_radians(self, session):
+        """The moulded housing's 1.5 degree draft came out as 0.02618 -- its
+        value in radians -- because an angle was divided by the *length* factor.
+        `compare` then read 0.02618 as degrees and called it a number the part
+        does not have, so the sheet was reported wrong and the reason was a unit.
+        """
+        report = rehearse_drawing(
+            DrawingRecipe.model_validate({"name": "D", "template": "t.idw", "views": [
+                {"name": "FRONT", "dimension": ["draft_a"]}]}),
+            self.part("moulded_housing"))
+        entry = report["ledger"]["views"][0]["dimensions"][0]
+        assert entry["value"] == pytest.approx(1.5)
+        assert entry["units"] == "deg"
+        assert report["round_trip"]["states_what_the_part_does_not_have"] == []
+
+    def test_an_angle_in_another_unit_still_reaches_the_reading_as_degrees(self):
+        """`DrawingReading` has no angle unit: `compare` turns the model's
+        radians into degrees and compares numbers, so a sheet stating gradians
+        has to be converted rather than handed over."""
+        from inventor_mcp.drafting import as_reading
+
+        recipe = DrawingRecipe.model_validate({
+            "name": "D", "template": "t.idw", "angle_units": "rad", "views": [
+                {"name": "FRONT", "dimension": ["draft_a"]}]})
+        report = rehearse_drawing(recipe, self.part("moulded_housing"))
+        assert report["ledger"]["views"][0]["dimensions"][0]["value"] == pytest.approx(
+            0.02618, abs=5e-6)
+        reading = as_reading(recipe, report["ledger"])
+        assert reading.dimensions[0].value == pytest.approx(1.5, abs=1e-4)
+
+    def test_a_counterbores_own_sizes_can_be_dimensioned(self, session):
+        """The hole feature recorded its diameter and style and not its
+        counterbore's diameter or depth, so nothing could retrieve them -- and a
+        counterbore's diameter is a dimension any drawing of this plate carries.
+        """
+        report = self.drawn(session, "cover_plate",
+                            ["cbore_d", "cbore_deep", "csink_d", "csink_inc"])
+        placed = {entry["parameter"]: entry["value"]
+                  for entry in report["views"][0]["dimensions"]}
+        assert set(placed) == {"cbore_d", "cbore_deep", "csink_d", "csink_inc"}
+        assert report["ok"] is True
+
+    def test_a_count_is_refused_rather_than_resolved_as_a_length(self, session):
+        """The worst-behaved of the five. The belt pulley's `lighten_count` of 5
+        was resolved as a length and reported as a 50 mm dimension -- a number
+        that appears nowhere on the part or the sheet. It was only caught at all
+        because the part happens to have no 50 mm number either.
+        """
+        report = self.drawn(session, "belt_pulley", ["lighten_count"])
+        assert report["ok"] is False
+        assert "cannot be a dimension" in report["findings"][0]["error"]
+        assert "unitless" in report["findings"][0]["error"]
+
+    def test_the_count_is_refused_before_any_sheet_is_made(self, session):
+        """Building has to check what rehearsing checks. Otherwise a caller who
+        skips the rehearsal gets the category error reported as a dimension that
+        did not arrive -- which is what a typo looks like, and the two have
+        different fixes."""
+        report = self.drawn(session, "belt_pulley", ["lighten_count"])
+        assert "document" not in report
+        assert "read_back" not in report
+
+    def test_the_rehearsal_refuses_it_too(self):
+        report = rehearse_drawing(
+            DrawingRecipe.model_validate({"name": "D", "template": "t.idw", "views": [
+                {"name": "FRONT", "dimension": ["lighten_count"]}]}),
+            self.part("belt_pulley"))
+        assert report["ok"] is False
+        assert "cannot be a dimension" in report["findings"][0]["error"]
+
+    def test_an_expression_mixing_a_count_into_a_length_is_fine(self):
+        """Only bare names are refused: `pitch * holes` is a length by the time
+        it is resolved and is perfectly drawable."""
+        report = rehearse_drawing(
+            DrawingRecipe.model_validate({"name": "D", "template": "t.idw", "views": [
+                {"name": "FRONT", "dimension": ["lighten_pcd / lighten_count"]}]}),
+            self.part("belt_pulley"))
+        assert report["ok"] is True or not report["findings"]
+
+    def test_an_intermediate_parameter_is_explained_by_name(self, session):
+        """`pipe_bend`'s wall appears only in `tube_od = tube_id + 2 * wall`. It
+        drives the part and no dimension states it -- the sketch says `tube_od`
+        -- so there is nothing to retrieve, and the useful answer is the name of
+        the parameter that *is* stated."""
+        report = self.drawn(session, "pipe_bend", ["wall"])
+        why = " ".join(warning["why"] for warning in report["warnings"])
+        assert "wall drives geometry only through tube_od" in why
+        assert "dimension tube_od instead" in why
+
+    def test_a_parameter_driving_nothing_at_all_is_said_differently(self, session):
+        """The two have different fixes, so they get different sentences."""
+        part = PartRecipe.model_validate({
+            "name": "P", "units": "mm",
+            "parameters": [{"name": "w", "value": 50},
+                           {"name": "spare", "value": 3, "comment": "drives nothing"}],
+            "operations": [
+                {"op": "sketch", "name": "O", "plane": "xy", "entities": [
+                    {"type": "rectangle", "center": [0, 0], "width": "w", "height": 30}]},
+                {"op": "extrude", "name": "B", "sketch": "O", "distance": 5},
+            ]})
+        from inventor_mcp.drafting import build_drawing
+
+        report = build_drawing(session, DrawingRecipe.model_validate({
+            "name": "D", "template": "t.idw", "views": [
+                {"name": "FRONT", "dimension": ["w", "spare"]}]}), part)
+        why = " ".join(warning["why"] for warning in report["warnings"])
+        assert "no sketch dimension and no feature value at all" in why
+
+    #: Every shipped part, and what a drawing of it can and cannot state. Held
+    #: as data so a change to the retrieval has to be agreed with here -- which
+    #: is what would have caught three of the five above on the day they landed.
+    #:
+    #: A name in the second element is a parameter no dimension can state, and
+    #: each is a *correct* answer with a reason: `lighten_count` is a count,
+    #: `boss_wall` and `wall` drive geometry only through another parameter, and
+    #: `thread_d`/`thread_pitch` feed a tap designation the same way.
+    SHIPPED = [
+        ("angle_bracket", []),
+        ("belt_pulley", ["lighten_count"]),
+        ("cover_plate", []),
+        ("duct_transition", []),
+        ("enclosure_base", []),
+        ("flanged_shaft", []),
+        ("hex_standoff", []),
+        ("moulded_housing", ["boss_wall"]),
+        ("mounting_plate", []),
+        ("pipe_bend", ["wall"]),
+        ("threaded_boss", ["thread_d", "thread_pitch"]),
+    ]
+
+    @pytest.mark.parametrize("stem,unstatable", SHIPPED, ids=[s for s, _ in SHIPPED])
+    def test_a_drawing_of_every_shipped_part_states_what_it_can(
+            self, session, stem, unstatable):
+        part = self.part(stem)
+        names = [spec.name for spec in part.parameters]
+        report = self.drawn(session, stem, names)
+        if any(name in unstatable for name in names) and report["ok"] is False:
+            # Refused rather than drawn, which is the right answer for a count.
+            assert report["findings"], stem
+            return
+        arrived = {entry["parameter"] for entry in report["read_back"]["dimensions"]
+                   if entry.get("parameter")}
+        assert sorted(set(names) - arrived) == sorted(
+            name for name in unstatable if name in names), stem
+
+    def test_the_list_above_names_every_shipped_part(self):
+        """So a new example cannot quietly stop being drawn."""
+        shipped = {path.stem for path in (self.ROOT / "examples").glob("*.json")}
+        assert {stem for stem, _ in self.SHIPPED} == shipped

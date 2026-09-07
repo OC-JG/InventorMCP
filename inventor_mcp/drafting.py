@@ -32,7 +32,8 @@ a dimension somebody forgot to ask for.
 
 from __future__ import annotations
 
-from typing import Any
+import math
+from typing import Any, Sequence
 
 from .backend.base import DrawingContents, RetrieveRequest, ViewRequest
 from .drawing import DrawingDimension, DrawingReading, DrawingView, compare
@@ -40,7 +41,7 @@ from .errors import InventorMCPError, RecipeError
 from .resolve import Resolver
 from .schema import DrawingRecipe, DrawingViewSpec, PartRecipe
 from .session import Session
-from .units import Dim, Quantity, to_internal
+from .units import Dim, Quantity, from_internal, to_internal
 
 #: A drawing view's direction mapped onto the kind a `DrawingReading` uses.
 #: `rear` and `iso` are spelled differently on the two sides, which is the whole
@@ -145,7 +146,7 @@ def rehearse_drawing(recipe: DrawingRecipe, part: PartRecipe) -> dict[str, Any]:
         return report
 
     resolver = _resolver_for(recipe, part, rehearsed)
-    ledger, findings = _ledger(recipe, resolver)
+    ledger, findings = _ledger(recipe, resolver, rehearsed)
     report["ledger"] = ledger
     report["findings"].extend(findings)
     if findings:
@@ -201,7 +202,12 @@ def as_reading(recipe: DrawingRecipe, ledger: dict[str, Any]) -> DrawingReading:
     """
     dimensions = [
         DrawingDimension(
-            value=entry["value"],
+            # `DrawingReading` compares an angle in degrees -- `compare` calls
+            # `math.degrees` on the model's own radians -- so an angle stated on
+            # the sheet in gradians or radians is converted here rather than
+            # handed over in the sheet's own units and silently mismatched.
+            value=(_in_degrees(entry) if entry["kind"] == "angle"
+                   else entry["value"]),
             label=entry["label"],
             kind=entry["kind"],
             view=view["name"],
@@ -226,6 +232,18 @@ def as_reading(recipe: DrawingRecipe, ledger: dict[str, Any]) -> DrawingReading:
         # than failing the reading's own "say what you could not see" rule.
         unreadable=[] if dimensions else ["nothing was asked to be dimensioned"],
     )
+
+
+def _in_degrees(entry: dict[str, Any]) -> float:
+    """A ledger angle in degrees, whatever unit the sheet states it in.
+
+    `DrawingReading` has no angle unit of its own: `compare` turns the model's
+    radians into degrees and compares the two as numbers, so a reading has to
+    speak degrees. The sheet may not -- `DrawingRecipe.angle_units` is the
+    caller's -- and this is the one place the two meet.
+    """
+    return round(to_internal(entry["value"], entry.get("units") or "deg").value
+                 * 180.0 / math.pi, 6)
 
 
 def _resolver_for(recipe: DrawingRecipe, part: PartRecipe,
@@ -270,8 +288,43 @@ def _layout(recipe: DrawingRecipe,
     return at
 
 
-def _ledger(recipe: DrawingRecipe,
-            resolver: Resolver) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+#: Which quantities a drawing can state as a dimension. Anything else is a
+#: category error rather than a hard case: a *count* is not a length, and asking
+#: to dimension one used to resolve it as though it were -- the belt pulley's
+#: `lighten_count` of 5 came out as a 50 mm dimension nobody had drawn, and the
+#: only reason it was caught at all is that the part has no such number either.
+#: Found by pointing a drawing at every shipped part.
+_DIMENSIONABLE = {Dim.LENGTH, Dim.ANGLE}
+
+
+def _refuse_what_cannot_be_a_dimension(
+        recipe: DrawingRecipe, rehearsed: dict[str, Any]) -> list[dict[str, Any]]:
+    """Requested dimensions naming a parameter no drawing could state.
+
+    Only bare parameter names are checked. An expression is resolved and its own
+    dimension checked there, and one mixing a count into a length -- `pitch *
+    holes` -- is a length by then and perfectly drawable.
+    """
+    kinds = rehearsed.get("parameter_dimensions") or {}
+    findings: list[dict[str, Any]] = []
+    for view in recipe.views:
+        for entry in list(view.dimension) + list(view.reference):
+            kind = kinds.get(entry.strip())
+            if kind is None or Dim(kind) in _DIMENSIONABLE:
+                continue
+            described = "unitless -- a count or a ratio" if kind == "unitless" else kind
+            findings.append({
+                "where": f"view {view.name!r}",
+                "error": f"{entry!r} is {described}, so it cannot be a dimension.",
+                "hint": "A drawing states lengths and angles. A count belongs in "
+                        "a note or a callout -- '4 HOLES EQUALLY SPACED' -- and "
+                        "the dimension to state is the spacing itself.",
+            })
+    return findings
+
+
+def _ledger(recipe: DrawingRecipe, resolver: Resolver,
+            rehearsed: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Every view and every dimension it states, resolved -- and what would not resolve.
 
     A parameter named here that the part does not declare is a finding rather
@@ -281,7 +334,8 @@ def _ledger(recipe: DrawingRecipe,
     per_unit = to_internal(1.0, recipe.units).value
     layout = _layout(recipe, resolver)
     views: list[dict[str, Any]] = []
-    findings: list[dict[str, Any]] = []
+    findings: list[dict[str, Any]] = _refuse_what_cannot_be_a_dimension(
+        recipe, rehearsed)
     dimensioned: set[str] = set()
 
     for view in recipe.views:
@@ -304,8 +358,16 @@ def _ledger(recipe: DrawingRecipe,
                 entries.append({
                     "label": entry,
                     "expression": resolved.expression,
-                    "value": round(resolved.value / (1.0 if angle else per_unit), 6),
+                    # Angles are radians internally, so an angle divided by the
+                    # *length* factor came out as radians labelled `angle` --
+                    # 1.5 deg reported as 0.02618, which `compare` then read as
+                    # 0.02618 degrees and called a number the part does not
+                    # have. Found by pointing a drawing at every shipped part.
+                    "value": round(
+                        from_internal(resolved.value, recipe.angle_units) if angle
+                        else resolved.value / per_unit, 6),
                     "kind": "angle" if angle else "linear",
+                    "units": recipe.angle_units if angle else recipe.units,
                     "reference": is_reference,
                 })
                 if not is_reference:
@@ -506,12 +568,24 @@ def build_drawing(session: Session, recipe: DrawingRecipe, part: PartRecipe, *,
     else:
         report["part"] = {"ok": True, "document": part_doc_id, "reused": True}
 
+    # Checked before any sheet exists, and it has to be here rather than left to
+    # the caller having rehearsed: a category error like dimensioning a count
+    # would otherwise reach the retrieval, find nothing, and be reported as a
+    # dimension that did not arrive -- which is what a typo looks like too. The
+    # two have different fixes, so they need different answers.
+    rehearsed = rehearse_the_part(session, part, part_doc_id)
+    refused = _refuse_what_cannot_be_a_dimension(recipe, rehearsed)
+    if refused:
+        report["ok"] = False
+        report["findings"].extend(refused)
+        return report
+
     document = backend.new_drawing(
         recipe.name, template=recipe.template, sheet=recipe.sheet, units=recipe.units)
     report["document"] = document.id
     report["sheet"] = document.as_dict().get("detail")
 
-    resolver = _resolver_for(recipe, part, rehearse_the_part(session, part, part_doc_id))
+    resolver = _resolver_for(recipe, part, rehearsed)
     at: dict[str, tuple[float, float]] = {}
     for view in _parents_first(recipe):
         try:
@@ -548,12 +622,13 @@ def build_drawing(session: Session, recipe: DrawingRecipe, part: PartRecipe, *,
 
     contents = backend.read_drawing(document.id)
     report["read_back"] = contents.as_dict()
-    report["warnings"].extend(_dimensions_that_did_not_reach_the_sheet(recipe, contents))
+    report["warnings"].extend(_dimensions_that_did_not_reach_the_sheet(
+        recipe, contents, rehearsed))
     report["warnings"].extend(_views_that_are_not_what_they_asked_for(recipe, contents))
     report["warnings"].extend(_dimensions_that_state_something_else(contents))
     reading = reading_of(recipe, contents)
     report["round_trip"] = _translated(
-        compare(reading, rehearse_the_part(session, part, part_doc_id)), recipe,
+        compare(reading, rehearsed), recipe,
         sized=any(view.extent for view in reading.views))
     if not report["round_trip"]["ok"]:
         report["ok"] = False
@@ -585,7 +660,10 @@ def reading_of(recipe: DrawingRecipe, contents: DrawingContents) -> DrawingReadi
     per_unit = to_internal(1.0, recipe.units).value
     dimensions = [
         DrawingDimension(
-            value=round(entry.value / (1.0 if entry.kind == "angle" else per_unit), 6),
+            # Degrees for an angle, for the reason `_in_degrees` gives: a
+            # backend states an angle in radians and a reading compares degrees.
+            value=round(entry.value * 180.0 / math.pi if entry.kind == "angle"
+                        else entry.value / per_unit, 6),
             label=entry.parameter or entry.expression or entry.id,
             kind=entry.kind,
             view=entry.view,
@@ -699,7 +777,8 @@ def _sheet_position(resolver: Resolver, view: DrawingViewSpec) -> tuple[float, f
 
 
 def _dimensions_that_did_not_reach_the_sheet(
-        recipe: DrawingRecipe, contents: DrawingContents) -> list[dict[str, Any]]:
+        recipe: DrawingRecipe, contents: DrawingContents,
+        rehearsed: dict[str, Any]) -> list[dict[str, Any]]:
     """Parameters the recipe asked to dimension that the sheet does not carry.
 
     The check that only exists because the sheet is read back. A retrieval can
@@ -714,15 +793,51 @@ def _dimensions_that_did_not_reach_the_sheet(
     absent = sorted(asked - arrived)
     if not absent:
         return []
+    feeds = _parameters_they_feed(absent, rehearsed)
     return [{
         "where": "the sheet",
         "warning": f"asked for but not on the sheet: {', '.join(absent)}",
-        "why": "A dimension can only be retrieved if the model holds one. A "
-               "parameter that drives no sketch dimension and no feature value "
-               "has nothing to retrieve, so nothing was placed for it -- check "
-               "that the parameter really drives the geometry you meant, since a "
-               "parameter driving nothing is a warning on the part as well.",
+        "why": "A dimension can only be retrieved if the model holds one, and a "
+               "parameter can drive geometry without any dimension stating it."
+               + (" " + "; ".join(
+                   f"{name} drives geometry only through {', '.join(through)}, so "
+                   f"no dimension mentions it -- dimension {through[0]} instead"
+                   for name, through in feeds.items()) if feeds else "")
+               + (" The rest drive no sketch dimension and no feature value at "
+                  "all, which is a warning on the part as well."
+                  if len(feeds) < len(absent) else ""),
     }]
+
+
+def _parameters_they_feed(absent: Sequence[str],
+                          rehearsed: dict[str, Any]) -> dict[str, list[str]]:
+    """For each missing name, the other parameters whose expressions use it.
+
+    The commonest reason a requested dimension never arrives, and it took
+    pointing a drawing at every shipped part to see it: `pipe_bend`'s `wall`
+    appears only in `tube_od = tube_id + 2 * wall`, and `moulded_housing`'s
+    `boss_wall` only in `boss_d = boss_hole_d + 2 * boss_wall`. Both drive the
+    part, neither is stated by any dimension -- the sketch says `tube_od` -- so
+    there is nothing to retrieve and the useful answer is the name of the
+    parameter that *is* stated.
+    """
+    from .expressions import referenced_parameters
+
+    expressions = rehearsed.get("parameter_expressions") or {}
+    feeds: dict[str, list[str]] = {}
+    for name in absent:
+        through = []
+        for other, expression in expressions.items():
+            if other == name or not isinstance(expression, str):
+                continue
+            try:
+                if name in referenced_parameters(expression):
+                    through.append(other)
+            except Exception:
+                continue
+        if through:
+            feeds[name] = sorted(through)
+    return feeds
 
 
 def _dimensions_that_state_something_else(

@@ -4,6 +4,52 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
 ## Unreleased
 
+### Fixed
+- **Five defects in the drawing layer, found by asking for a drawing of all
+  eleven shipped parts.** None of them by writing a test first. The fixture the
+  drawing tests were built on is a plate with four well-behaved parameters, and
+  every one of these needed a part shaped some other way. `ARCHITECTURE.md`
+  already argues for keeping the examples executable — two bugs were found by
+  writing them rather than by writing tests — and this is that argument paying
+  out again, at five for eleven.
+
+  * **A count resolved as a length.** The worst-behaved of the five. Asking to
+    dimension the belt pulley's `lighten_count` of 5 resolved it as a *length*
+    and put a **50 mm dimension** on the sheet — a number that appears nowhere
+    on the part or the drawing. It was caught at all only because that part
+    happens to have no 50 mm number either. A parameter that is not a length or
+    an angle is now refused with the reason: a count belongs in a callout, and
+    the dimension to state is the spacing.
+  * **An angle was stated in radians and labelled as an angle.** The moulded
+    housing's 1.5 degree draft came out as **0.02618** — its value in radians —
+    because an angle was divided by the *length* factor. `compare` then read
+    0.02618 as degrees and reported the sheet as stating a number the part does
+    not have, so a correct drawing was reported wrong and the cause was a unit.
+    The ledger now states an angle in the sheet's own `angle_units`, and the
+    reading converts to degrees, which is what `compare` compares in.
+  * **A counterbore's own sizes could not be dimensioned.** The hole feature
+    recorded its diameter and its style and *not* its counterbore's diameter or
+    depth, or its countersink's, so nothing could retrieve them — and those are
+    dimensions any drawing of the cover plate carries. The cover plate went from
+    6 of its 10 parameters dimensionable to all 10.
+  * **Building did not check what rehearsing checked.** A caller who went
+    straight to `build_drawing_from_recipe` got a category error reported as a
+    dimension that did not arrive — which is what a typo looks like too, and the
+    two have different fixes. The refusal now happens before any sheet exists.
+  * **"Not on the sheet" did not say why.** The commonest reason is an
+    *intermediate parameter*: `pipe_bend`'s `wall` appears only in `tube_od =
+    tube_id + 2 * wall`, and `moulded_housing`'s `boss_wall` only in `boss_d =
+    boss_hole_d + 2 * boss_wall`. Both drive the part; no dimension states
+    either, because the sketch says `tube_od`. So the warning now names the
+    parameter that *is* stated — "dimension `tube_od` instead" — and says
+    separately when a parameter drives nothing at all, since those two have
+    different fixes.
+
+  The sweep is kept as a test rather than thrown away: every shipped part is
+  drawn, and what each one cannot state is held as data with a reason. Three of
+  the five above would have been caught on the day they landed by that test
+  existing.
+
 ### Added
 - **Projected views, which is what makes the projection angle mean anything.**
   Until now every view was a base view at a position the recipe gave, and

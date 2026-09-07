@@ -1511,6 +1511,23 @@ class MockBackend(Backend):
                 "diameter": request.diameter.as_dict(),
                 "style": request.style,
                 "through_all": request.through_all,
+                "depth": request.depth.as_dict() if request.depth else None,
+                # The style's own sizes, which were absent until 2026-09-07 and
+                # were found missing by pointing a drawing at every shipped
+                # part: a counterbore's diameter and depth are dimensions any
+                # drawing of the cover plate carries, and nothing could retrieve
+                # them because the feature never recorded them. Each carries its
+                # expression, so a drawing can dimension it like any other.
+                "cbore_diameter": (request.cbore_diameter.as_dict()
+                                   if request.cbore_diameter else None),
+                "cbore_depth": (request.cbore_depth.as_dict()
+                                if request.cbore_depth else None),
+                "csink_diameter": (request.csink_diameter.as_dict()
+                                   if request.csink_diameter else None),
+                "csink_angle": (request.csink_angle.as_dict()
+                                if request.csink_angle else None),
+                "bottom_angle": (request.bottom_angle.as_dict()
+                                 if request.bottom_angle else None),
                 "tap": request.tap,
                 # The simulator has no thread table, so a tapped hole is sized
                 # by the recipe's diameter. Inventor sizes it from the table,
