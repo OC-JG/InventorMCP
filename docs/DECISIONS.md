@@ -283,7 +283,12 @@ instead, and each cost a real failure:
   roughest -- each marked `ponytail:` by its own author -- had no entry at all,
   so the divergence check was silent in exactly the places somebody had flagged
   as least trustworthy;
-* the DFM job's green tick against whether the analyser ran at all.
+* the DFM job's green tick against whether the analyser ran at all;
+* the Skill's list of rehearsal warnings against the warnings a rehearsal
+  emits: introduced as the ways a recipe passes every schema check and still
+  builds the wrong part, which makes it a list claiming to be complete, and
+  three of the six were missing -- two of them added to it by hand after they
+  had already shipped unlisted.
 
 So the rule, and it is not "be careful": **a fact stated in two places does not
 merge without a test that they still say the same thing.** The tests are cheap

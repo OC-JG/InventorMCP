@@ -35,9 +35,16 @@ still build the wrong part, and these are the ways it does:
 - **`sketch 'X' does not reach the part`** — the profile lies outside the part
   entirely, so the cut will meet nothing. Fix the plane or the coordinates.
 - **`removed no material`** — same conclusion, reached from the volume.
+- **`added 0.4 cm3 instead of removing material`** — a cut that grows the part is
+  on the wrong side of its profile.
+- **`added no material`** — a pattern or mirror whose occurrences moved no
+  volume. An occurrence repeats whatever its seed did, so this means `features`
+  names the wrong feature.
 - **`a, b drive nothing`** — those parameters are declared and never referenced,
   so the part is not revisable through them. Write the sizes that depend on them
   as expressions.
+- **``` `thread` does not work on the Inventor this was measured against ```** —
+  the operation is refused before it reaches Inventor. Use a `hole` with `tap`.
 
 Then read `steps` and check each `volume_change_cm3` against what you meant. A
 9 mm hole 6 mm deep removes π×4.5²×6 = 0.382 cm³. If the rehearsal says
