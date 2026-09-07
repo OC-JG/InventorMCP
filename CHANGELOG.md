@@ -4,6 +4,54 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
 ## Unreleased
 
+### Fixed
+- **The recipe's sketch labels never reached Inventor** — defect 8, found by the
+  first live run of the work-geometry check (2026-09-07, Inventor 2027.1) and
+  fixed the same day. `build_sketch` on the COM backend creates each entity and
+  sets `Construction`, `HoleCenter` and `Centerline`; it has never read
+  `primitive.label`. The labels lived only in the `SketchPlan`, on the Python
+  side, while three places searched Inventor's own `SketchPoints` and
+  `SketchLines` for an entity whose `Name` equalled one — a name no code
+  assigns:
+
+  * `_carrier_point`, which places every `work_point` and every
+    `normal_to_plane` work axis;
+  * `work_axis` with `kind: "sketch_line"`;
+  * `_resolve_axis`, which is how a **revolve** finds a named sketch line.
+
+  The run got no further than its first check and blamed the right place for the
+  wrong reason: "the carrier sketch did not keep a point named
+  `__work_point__`". It was never given that name. Nothing offline could have
+  caught it — the mock resolves labels from the plan, so every test passed, and
+  the whole COM path is `# pragma: no cover`, so no coverage gap showed either.
+
+  The third caller predates the work geometry, and `docs/ROADMAP.md` recorded it
+  as measured: an off-centre bolt circle "was already buildable via a throwaway
+  sketch on a perpendicular plane... That was measured before anything was
+  written, and it builds clean." It builds clean on the **simulator**. The
+  measurement was taken in a session with no Inventor to reach. The roadmap now
+  carries that correction under the original sentence rather than a rewrite,
+  because the mistake is the one worth keeping visible.
+
+  The fix keeps the entity Inventor hands back at creation: `_entities_by_label`
+  builds a label-to-entity map from what `build_sketch` already collected, and
+  `_labelled_entity` reads it. Nothing depends on whether a sketch entity's
+  `Name` can be assigned, which nothing here has measured. All three callers
+  keep the old name search as a fallback, so a stale handle is no worse than the
+  behaviour it replaces and the error then names both routes.
+  `tests/test_sketch_labels.py` holds the bookkeeping, and a test fails if any
+  of the three call sites stops asking.
+
+  **Still unmeasured**: whether `AddByPoint` then works. The run never reached
+  it, so the roadmap item stays open.
+- **`INVENTOR_SETUP.md` names the corrupt-`gen_py` symptom.** The same run could
+  not read the type library —
+  `module 'win32com.gen_py....' has no attribute 'CLSIDToClassMap'` — which put
+  seven enums on unverified fallback values and stopped
+  `scripts/com_signatures.py` starting, while `connect` succeeded and reported
+  2027.1 in the same breath. The error names neither Inventor nor the cache, so
+  the message is now quoted next to the fix that clears it.
+
 ### Added
 - **An acceptance check for the five Phase 2 behaviours whose COM half has never
   executed** — `live_acceptance.py --only work-geometry`. `WorkPoints.AddByPoint`,

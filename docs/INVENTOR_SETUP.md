@@ -63,6 +63,18 @@ when it is available and from a fallback table when it is not. The fallback tabl
 a convenience for machines where the pywin32 cache cannot be generated — a read-only
 `gen_py` directory, a roaming profile, or a stale cache after an Inventor upgrade.
 
+**The symptom to match**, because it names neither Inventor nor the cache and
+cost the 2026-09-07 acceptance run its whole type library:
+
+    Could not add module (IID('{D98A091D-...}'), 0, 1, 0) - <class 'AttributeError'>:
+    module 'win32com.gen_py.D98A091D-...x0x1x0' has no attribute 'CLSIDToClassMap'
+
+That is a corrupt cache, not a missing Inventor — `connect` succeeded and
+reported 2027.1 in the same breath. Every `k...` constant then falls back to the
+table and says so on stderr, and `scripts/com_signatures.py` cannot start at all.
+Clear it as below and re-run; if the fallback warnings are still printed, nothing
+in that run's enum-dependent behaviour is measured.
+
 **If a feature is created with the wrong behaviour** — a cut that joins, a vertical
 dimension that comes out aligned — a fallback value is the first suspect. Fix the
 type library rather than the table:

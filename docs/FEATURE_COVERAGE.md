@@ -374,3 +374,53 @@ Each of these was hit while building real parts, and each passed
    sketch plane really describe the resulting faces. `tests/test_pattern_axis.py`
    holds both directions, including that no shipped example or calibration
    fixture fires it.
+
+8. ~~**The recipe's sketch labels never reached Inventor**, so every lookup by
+   label searched for a name nothing assigns.~~ *Found and fixed 2026-09-07, on
+   the first live run of `live_acceptance.py --only work-geometry`, Inventor
+   2027.1.*
+
+   `build_sketch` on the COM backend creates each entity and sets
+   `Construction`, `HoleCenter` and `Centerline` on it. It has never read
+   `primitive.label`. The labels lived only in the `SketchPlan`, on the Python
+   side -- and three places searched Inventor's own `SketchPoints` and
+   `SketchLines` for an entity whose `Name` equalled one:
+
+   * `_carrier_point`, which is how every `work_point` and every
+     `normal_to_plane` work axis is placed;
+   * `work_axis` with `kind: "sketch_line"`;
+   * `_resolve_axis`, which is how a **revolve** finds a named sketch line.
+
+   The third is the one worth dwelling on, because it long predates the work
+   geometry and `docs/ROADMAP.md` recorded it as *measured*: "an off-centre bolt
+   circle was already buildable via a throwaway sketch on a perpendicular plane
+   carrying a line in that plane's own coordinates. That was measured before
+   anything was written, and it builds clean." It builds clean on the
+   **simulator**, which reads the plan's labels directly. It cannot have built
+   on Inventor. The measurement was taken in a session with no Inventor to
+   reach, and the word for that is not measured. The roadmap now carries the
+   correction under the original sentence rather than a rewrite.
+
+   **What the live run actually said**, and why nothing else caught it:
+
+       [FAIL] work-geometry: WorkPoints.AddByPoint runs
+              op 2 (work_point): The carrier sketch did not keep a point
+              named '__work_point__'.
+
+   The error was accurate and blamed the wrong thing: the point was never given
+   that name, so it could not have been kept. Every offline test passed, because
+   the mock resolves labels from the plan; and the whole COM path is
+   `# pragma: no cover`, so no coverage gap showed either. It took a CAD seat,
+   which is the argument for the acceptance run in one line.
+
+   The fix keeps the entity Inventor hands back at creation --
+   `_entities_by_label` builds a label-to-entity map from what `build_sketch`
+   already collected, and `_labelled_entity` reads it -- so nothing depends on
+   whether a sketch entity's `Name` can be assigned at all, which nothing here
+   has measured. All three callers keep the old name search as a fallback, so a
+   stale handle is no worse than the behaviour it replaces and the error then
+   names both routes. `tests/test_sketch_labels.py` holds the bookkeeping, and a
+   test fails if any of the three call sites stops asking.
+
+   **Still unmeasured**: whether `AddByPoint` then works. The run never reached
+   it. That is the roadmap's open item, not this one.

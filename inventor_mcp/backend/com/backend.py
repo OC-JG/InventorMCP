@@ -371,6 +371,12 @@ class ComBackend(Backend):
         self._constants: Constants = Constants(None)
         self._documents: dict[str, Any] = {}
         self._sketches: dict[str, dict[str, Any]] = {}
+        #: doc_id -> sketch name -> recipe label -> the Inventor entity.
+        #: `build_sketch` is handed a label per named primitive and Inventor
+        #: hands back an entity per primitive; nothing was keeping the two
+        #: together, so every lookup by label went looking for an Inventor
+        #: *name* that no code had ever assigned. See `_labelled_entity`.
+        self._sketch_entities: dict[str, dict[str, dict[str, Any]]] = {}
         self._topology: dict[str, dict[str, Any]] = {}
         self._transactions: dict[str, Any] = {}
         self._ids = count(1)
@@ -466,6 +472,7 @@ class ComBackend(Backend):
         self._app = None
         self._documents.clear()
         self._sketches.clear()
+        self._sketch_entities.clear()
         self._topology.clear()
         if pythoncom is not None:
             try:
@@ -508,6 +515,7 @@ class ComBackend(Backend):
         doc_id = self._next("doc")
         self._documents[doc_id] = document
         self._sketches[doc_id] = {}
+        self._sketch_entities[doc_id] = {}
         return DocInfo(
             id=doc_id,
             name=str(document.DisplayName),
@@ -1167,6 +1175,7 @@ class ComBackend(Backend):
             # because the eviction was the very call that failed.
             self._documents.pop(doc_id, None)
             self._sketches.pop(doc_id, None)
+            self._sketch_entities.pop(doc_id, None)
 
     def set_material(self, doc_id: str, material: str,
                      appearance: str | None = None) -> DocInfo:  # pragma: no cover
@@ -1416,6 +1425,8 @@ class ComBackend(Backend):
                             "; ".join(refused_dimensions[:5]))
 
         self._sketches.setdefault(doc_id, {})[sketch.Name] = sketch
+        self._sketch_entities.setdefault(doc_id, {})[str(sketch.Name)] = \
+            _entities_by_label(plan, objects)
         profiles = _count_profiles(sketch)
         # Whether a refused constraint mattered is a question about the sketch
         # that came out, not about the constraint's kind. A coincidence Inventor
@@ -1878,6 +1889,30 @@ class ComBackend(Backend):
         plane.Visible = False
         return plane
 
+    def _labelled_entity(self, doc_id: str, sketch_name: str,
+                         label: str) -> Any | None:  # pragma: no cover - Windows only
+        """The Inventor entity a recipe label names, from what `build_sketch` kept.
+
+        This exists because the three lookups that used to do this searched
+        Inventor's own ``SketchPoints`` and ``SketchLines`` for an entity whose
+        ``Name`` equalled the recipe's label -- and **nothing ever set those
+        names**. ``_add_primitive`` sets ``Construction``, ``HoleCenter`` and
+        ``Centerline`` and has never read ``primitive.label``, so the labels
+        lived only in the `SketchPlan` on the Python side. Every such lookup was
+        therefore searching for a name that could not be there. The simulator
+        reads the plan's labels directly, which is why all of it passed offline
+        and the first live run failed on the first check.
+
+        Returning the handle Inventor gave us at creation avoids the question of
+        whether a sketch entity's ``Name`` can be assigned at all, which nothing
+        here has measured. Callers keep the old name search as a fallback: if a
+        stored handle has gone stale it is no worse than the behaviour it
+        replaces, and the error then names both routes.
+        """
+        return (self._sketch_entities.get(doc_id, {})
+                .get(sketch_name, {})
+                .get(label))
+
     def _resolve_axis(self, doc_id: str, axis: AxisSpec) -> Any:  # pragma: no cover
         document = self._doc(doc_id)
         component = document.ComponentDefinition
@@ -1892,13 +1927,19 @@ class ComBackend(Backend):
                 raise SelectionError(f"Unknown edge handle {axis.value!r}.")
             return entry["object"]
         sketch = self._sketch(doc_id, axis.sketch or "")
+        kept = self._labelled_entity(doc_id, str(sketch.Name), axis.value)
+        if kept is not None:
+            return kept
         for index in range(1, int(sketch.SketchLines.Count) + 1):
             line = sketch.SketchLines.Item(index)
             if str(getattr(line, "Name", "")) == axis.value:
                 return line
         raise FeatureError(
             f"Sketch {axis.sketch!r} has no line named {axis.value!r} to revolve about.",
-            hint="Give the sketch line a `name` in the recipe and reference it here.",
+            hint="Give the sketch line a `name` in the recipe and reference it here. "
+                 "This session did not keep an entity under that label either, so "
+                 "the sketch was built before the label was recorded, or by a "
+                 "different session.",
         )
 
     # -- features ----------------------------------------------------------
@@ -2936,7 +2977,8 @@ class ComBackend(Backend):
                                abs(driven.value), text_offset=text)
         self.build_sketch(doc_id, plan)
         sketch = self._sketch(doc_id, sketch_name)
-        sketch_point = _named_sketch_point(sketch, _CARRIER_LABEL)
+        sketch_point = (self._labelled_entity(doc_id, str(sketch.Name), _CARRIER_LABEL)
+                        or _named_sketch_point(sketch, _CARRIER_LABEL))
         with self._translate_errors("Work point"):
             work_point = component.WorkPoints.AddByPoint(sketch_point)
             work_point.Visible = False
@@ -2962,7 +3004,9 @@ class ComBackend(Backend):
         with self._batch(document), self._translate_errors("Work axis"):
             if request.kind == "sketch_line":
                 sketch = self._sketch(doc_id, request.sketch or "")
-                axis = axes.AddByLine(_named_sketch_line(sketch, request.line or ""))
+                line = (self._labelled_entity(doc_id, str(sketch.Name), request.line or "")
+                        or _named_sketch_line(sketch, request.line or ""))
+                axis = axes.AddByLine(line)
             elif request.kind == "two_points":
                 first, second = (_named_work_point(component, name) for name in request.points)
                 axis = axes.AddByTwoPoints(first, second)
@@ -3512,6 +3556,29 @@ _CARRIER_LABEL = "__work_point__"
 #: non-zero separation gives the same axis, so this is a literal rather than an
 #: expression -- there is no parameter it could sensibly track.
 _CARRIER_SEPARATION = "10 mm"
+
+
+def _entities_by_label(plan: SketchPlan, objects: dict[str, Any]) -> dict[str, Any]:
+    """The Inventor entities `build_sketch` created, against the recipe's labels.
+
+    ``objects`` is keyed by primitive id, which is what constraints and
+    dimensions resolve through; a caller asking later has only the label the
+    recipe wrote. Nothing was keeping the two together, so every lookup by label
+    searched Inventor for a *name* no code assigns -- see `_labelled_entity`.
+
+    A label can cover several primitives: a rectangle named "Outline" is four
+    lines under one label. The first wins, which is the rule `resolve_axis`
+    already applies when it takes the first `PLine` under a label. A primitive
+    Inventor declined to create has no entry in ``objects`` and contributes
+    nothing, rather than storing ``None`` for a caller to trip over.
+    """
+    by_label: dict[str, Any] = {}
+    for primitive in plan.primitives:
+        label = getattr(primitive, "label", None)
+        entity = objects.get(primitive.id)
+        if label and entity is not None and label not in by_label:
+            by_label[label] = entity
+    return by_label
 
 
 def _named_sketch_point(sketch: Any, label: str) -> Any:  # pragma: no cover - Windows only

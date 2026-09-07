@@ -283,6 +283,17 @@ actually bitten.
       plane's own coordinates. That was measured before anything was written,
       and it builds clean.
 
+      ~~and it builds clean~~ **— against the simulator, and only there.** The
+      first live run, 2026-09-07 on Inventor 2027.1, showed the workaround
+      cannot have built clean on Inventor at all: the COM backend never wrote
+      the recipe's labels onto Inventor's sketch entities, so resolving a named
+      sketch line searched for a name nothing assigns. Defect 8 in
+      `FEATURE_COVERAGE.md`. The paragraph above is left standing with this
+      correction under it rather than rewritten, because the mistake it made is
+      the one worth keeping visible: "measured" was written of a simulator run
+      in a session with no Inventor to reach, in the same file that exists to
+      keep that distinction.
+
       The real reason is geometric and sharper: a circular pattern turns about
       an axis perpendicular to the face it patterns, a sketch line lies *in* its
       own sketch plane, and so no line drawn on a plate's face can ever be that
@@ -329,15 +340,27 @@ actually bitten.
       order to check them in, and the test that matters is not "did it run" but
       whether the bolt circle moves when the driving parameter does.
 
-      **The instrument exists as of 2026-09-07 and has not been run**, which is
-      why this stays open. `live_acceptance.py --only work-geometry` runs all
-      five unmeasured Phase 2 behaviours -- the three calls above, the hole
-      aimed with `bodies`, and the save conflict's remedy -- and asserts the
-      bolt circle's centre-of-mass shift against 0.18640 mm derived beforehand
-      rather than merely checking that the pattern ran. Every recipe in it
-      builds against the simulator and every line of it has been executed
-      there, so what is untested is Inventor's half and nothing else. Ticking
-      this needs a seat, and no amount of preparation substitutes for one.
+      **Run once, 2026-09-07, Inventor 2027.1: it failed on the first check
+      and found defect 8 instead.** `live_acceptance.py --only work-geometry`
+      runs all five unmeasured Phase 2 behaviours -- the three calls above, the
+      hole aimed with `bodies`, and the save conflict's remedy -- and asserts
+      the bolt circle's centre-of-mass shift against 0.18640 mm derived
+      beforehand rather than merely checking that the pattern ran.
+
+      It got no further than `WorkPoints.AddByPoint`, and not because of that
+      call: the carrier sketch's point could not be found, because **the COM
+      backend never wrote the recipe's labels onto Inventor's sketch entities**
+      and three lookups searched for a name nothing assigns. Defect 8, fixed the
+      same day by keeping the entity Inventor hands back at creation. The four
+      checks below it skipped by design, which is what that ordering is for.
+
+      So this stays open, and the three calls stay unmeasured: the run proved
+      the instrument works and the labels did not. What it has not yet done is
+      execute `AddByPoint`. **The same run also could not read the type
+      library** -- a corrupt `gen_py` cache, seven enums on unverified fallback
+      values, and `com_signatures.py` unable to start -- so the next run wants
+      that cleared first, and the enum warnings gone from its output, before any
+      of its numbers are trusted.
 - [x] **`hole` gains `bodies`**, the multi-body targeting `extrude` already
       has. *(2026-09-03.)* Every piece it needed was already parameterised by
       body -- `charge`, `_through_all_distance`, `_material_spans` and
