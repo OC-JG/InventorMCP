@@ -1306,14 +1306,32 @@ def check_drawing(session: Session, report: Report) -> None:
     #    own arithmetic in the simulator. 120 x 80 x 8 mm plate.
     for view in outcome.get("views") or []:
         placed = view["view"]
-        extent = placed.get("extent")
         report.note(
             f"{placed['name']}: reports facing {placed.get('direction')}, spans "
-            f"{extent} cm at scale {placed.get('scale')}")
+            f"{placed.get('extent')} cm at scale {placed.get('scale')}, at "
+            f"{placed.get('at')}")
     report.note(
         "The plate is 120 x 80 x 8 mm. A front view should span 12 x 0.8 cm and a "
         "top view 12 x 8 -- and a view reporting a direction it was not asked "
         "for is defect 4 again, on a different API.")
+
+    # 3b. And the projection angle, which only a projected view can answer.
+    #     This sheet is first angle and TOP is projected from FRONT, so Inventor
+    #     was told a position below the front view and nothing about the
+    #     direction. What it calls that view is its own answer.
+    placed = {view["view"]["name"]: view["view"] for view in outcome.get("views") or []}
+    if "TOP" in placed and "FRONT" in placed:
+        below = placed["TOP"]["at"][1] < placed["FRONT"]["at"][1]
+        report.check(
+            below and placed["TOP"].get("direction") in ("top", "unknown"),
+            "drawing: a first-angle top view sits below the front view and "
+            f"Inventor calls it {placed['TOP'].get('direction')!r}",
+            "The sheet is first angle, so this project put TOP below FRONT and "
+            "told Inventor nothing about which way it faces -- a projected view "
+            "takes no orientation. If Inventor calls it 'bottom', the two "
+            "conventions are the other way round from what "
+            "`drafting._THIRD_ANGLE_STEP` implements, and negating that table "
+            "is the whole fix. This is the reading a base view cannot give.")
 
     # 4. And the whole round trip, which is what the sheet is for.
     trip = outcome.get("round_trip") or {}

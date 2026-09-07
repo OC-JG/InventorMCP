@@ -492,10 +492,17 @@ class ViewRequest:
     name: str
     #: "front" | "rear" | "top" | "bottom" | "left" | "right" | "iso".
     direction: str = "front"
-    #: Sheet position of the view's centre, in cm.
+    #: Sheet position of the view's centre, in cm. Always given: where a
+    #: projected view goes is worked out from its parent and the sheet's
+    #: projection angle before it reaches here, so that the rule lives in one
+    #: place and both backends get the same answer from it.
     at: tuple[float, float] = (0.0, 0.0)
     scale: float = 1.0
     style: str = "hidden_line_removed"
+    #: Name of the view this is projected from, or None for a base view. A
+    #: projected view is a different Inventor call and inherits its parent's
+    #: scale, so the two cannot be collapsed into one request.
+    parent: str | None = None
 
 
 @dataclass

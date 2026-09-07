@@ -126,8 +126,11 @@ def register(server: Any, session: Session) -> None:
     def export_model(
         path: Annotated[str, Field(description="Output file path. The extension is corrected to match the format.")],
         format: Annotated[
-            Literal["step", "stl", "iges", "sat", "dwg", "dxf", "obj", "3mf", "ipt"],
-            Field(description="Output format."),
+            Literal["step", "stl", "iges", "sat", "dwg", "dxf", "obj", "3mf",
+                    "ipt", "pdf"],
+            Field(description="Output format. `pdf` is for a drawing document -- "
+                  "it is what a factory is sent -- and a part has no sheet to "
+                  "print, so it will not produce one."),
         ] = "step",
         document: Annotated[str | None, Field(description="Target part.")] = None,
     ) -> dict[str, Any]:

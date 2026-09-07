@@ -5,6 +5,51 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 ## Unreleased
 
 ### Added
+- **Projected views, which is what makes the projection angle mean anything.**
+  Until now every view was a base view at a position the recipe gave, and
+  `DrawingRecipe.projection` was recorded and applied to nothing — the sheet
+  stated a convention it did not follow. That is worse than picking either
+  convention, because a reader trusts the projection symbol.
+
+  A view with a `parent` is projected from it and takes its parent's scale. It
+  is deliberately **not** positioned by hand: giving both `parent` and `at` is
+  refused, because where a projected view lands *is* what first and third angle
+  mean. Third angle draws the top view above the front view and the right-hand
+  view to the right; first angle puts both on the opposite side. The two are
+  mirror images about the parent, and a test asserts exactly that rather than
+  restating the table.
+
+  An isometric view is exempt from the flip. It is not a projection of
+  anything, so neither convention has an opinion about where it goes, and
+  negating its corner in first angle would move it for no reason.
+
+  **On Inventor this is a different call that names no direction at all.**
+  `AddProjectedView` takes a parent, a position and a style — Inventor is told a
+  place and *infers* which way the view faces, the reverse of a base view. So
+  the angle is applied before the call, in `drafting.projected_position`, which
+  is the one place the recipe's `projection` does any work.
+
+  That has a useful consequence for the live run: **the direction check is
+  sharper for a projected view than a base one.** Nothing asserted a projected
+  view's direction, so what the sheet reports back is Inventor's own answer to a
+  question only the layout asked. A projected top view reading as anything but
+  `top` would mean the convention implemented here and the one Inventor applies
+  are not the same — and since first angle is the third-angle table negated and
+  nothing else distinguishes them, negating it is the whole fix.
+
+  The layout is readable from a rehearsal too, so the angle's effect can be
+  checked before any sheet is made, and the shipped drawing is now a real
+  three-view first-angle sheet: one base view with the top view projected
+  *below* it.
+
+- **PDF export.** `export_model` offers `pdf`, and it is the format a drawing is
+  actually sent in — a sheet exportable only as DWG needs Inventor at the other
+  end to read. It is a drawing format rather than a part one: a part has no
+  sheet to print, and `export`'s written-but-not-there check is what reports
+  both that and a machine whose PDF translator add-in is disabled, since
+  Inventor answers success either way.
+
+### Added
 - **The sheet gets made: four drawing methods on both backends.** `new_drawing`,
   `place_view`, `retrieve_dimensions` and `read_drawing` on the `Backend` ABC —
   so the two implementations cannot drift, which the compiler enforces rather

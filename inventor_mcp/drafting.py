@@ -36,7 +36,7 @@ from typing import Any
 
 from .backend.base import DrawingContents, RetrieveRequest, ViewRequest
 from .drawing import DrawingDimension, DrawingReading, DrawingView, compare
-from .errors import InventorMCPError
+from .errors import InventorMCPError, RecipeError
 from .resolve import Resolver
 from .schema import DrawingRecipe, DrawingViewSpec, PartRecipe
 from .session import Session
@@ -59,6 +59,51 @@ _VIEW_AXES: dict[str, tuple[int, int]] = {
     "top": (0, 1), "bottom": (0, 1),
     "left": (1, 2), "right": (1, 2),
 }
+
+
+#: Which way a projected view sits from its parent in **third angle**, as a unit
+#: step of (across, up). Third angle is the ASME convention and the one this
+#: schema defaults to: a view is drawn on the side you would stand to see it, so
+#: the top view goes above the front view and the right-hand view goes right.
+#:
+#: First angle -- ISO, European -- is the same table negated: you draw the view
+#: on the far side, so the top view goes *below*. That is the whole of the
+#: difference between the two conventions and the whole reason a sheet has to
+#: state which it uses. Reading one as the other mirrors the part, and the part
+#: is not what is wrong.
+_THIRD_ANGLE_STEP: dict[str, tuple[float, float]] = {
+    "top": (0.0, 1.0),
+    "bottom": (0.0, -1.0),
+    "right": (1.0, 0.0),
+    "left": (-1.0, 0.0),
+    # An isometric goes in the free corner rather than on an axis: it is not a
+    # projection of anything and no convention governs it. Up and to the right
+    # is where a drafter puts one, and it is the same corner either way -- so
+    # this entry is deliberately unaffected by the projection angle below.
+    "iso": (1.0, 1.0),
+}
+
+
+def projected_position(direction: str, projection: str,
+                       parent: tuple[float, float],
+                       gap: float) -> tuple[float, float]:
+    """Where a projected view's centre goes, in the parent's own units.
+
+    The one place `DrawingRecipe.projection` does any work, and the reason the
+    field is not decorative. Everything else records it -- the reading carries
+    it so a reader knows which convention the sheet uses -- and this is what
+    makes the sheet actually follow it.
+
+    `iso` is exempt from the flip on purpose: an isometric view is not a
+    projection of anything, so neither convention has an opinion about where it
+    goes, and negating its corner in first angle would move it for no reason.
+    """
+    step = _THIRD_ANGLE_STEP.get(direction)
+    if step is None:  # pragma: no cover - the schema refuses the other directions
+        raise RecipeError(f"A {direction!r} view cannot be projected from another.")
+    if projection == "first_angle" and direction != "iso":
+        step = (-step[0], -step[1])
+    return (parent[0] + step[0] * gap, parent[1] + step[1] * gap)
 
 
 def rehearse_drawing(recipe: DrawingRecipe, part: PartRecipe) -> dict[str, Any]:
@@ -202,6 +247,29 @@ def _resolver_for(recipe: DrawingRecipe, part: PartRecipe,
     return resolver
 
 
+def _layout(recipe: DrawingRecipe,
+            resolver: Resolver) -> dict[str, tuple[float, float]]:
+    """Where every view lands, in the sheet's own units, without making a sheet.
+
+    So that the projection angle's effect is readable from a rehearsal. It is
+    the same rule `build_drawing` applies and the same order -- parents before
+    the views projected from them -- because two ways of working out a layout
+    would be two layouts.
+    """
+    at: dict[str, tuple[float, float]] = {}
+    per_unit = to_internal(1.0, recipe.units).value
+    for view in _parents_first(recipe):
+        if view.parent is None:
+            at[view.name] = tuple(  # type: ignore[assignment]
+                round(value / per_unit, 4) for value in _sheet_position(resolver, view))
+            continue
+        gap = resolver.length(view.gap, f"gap of view {view.name!r}").value / per_unit
+        at[view.name] = tuple(  # type: ignore[assignment]
+            round(value, 4) for value in projected_position(
+                view.direction, recipe.projection, at.get(view.parent, (0.0, 0.0)), gap))
+    return at
+
+
 def _ledger(recipe: DrawingRecipe,
             resolver: Resolver) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Every view and every dimension it states, resolved -- and what would not resolve.
@@ -211,6 +279,7 @@ def _ledger(recipe: DrawingRecipe,
     no version of that which is what the author meant.
     """
     per_unit = to_internal(1.0, recipe.units).value
+    layout = _layout(recipe, resolver)
     views: list[dict[str, Any]] = []
     findings: list[dict[str, Any]] = []
     dimensioned: set[str] = set()
@@ -244,7 +313,10 @@ def _ledger(recipe: DrawingRecipe,
         views.append({
             "name": view.name,
             "direction": view.direction,
-            "scale": _scale_of(resolver, view),
+            "at": list(layout[view.name]),
+            "projected_from": view.parent,
+            "scale": (_parent_scale(recipe, resolver, view.parent) if view.parent
+                      else _scale_of(resolver, view)),
             "dimensions": entries,
         })
 
@@ -440,16 +512,12 @@ def build_drawing(session: Session, recipe: DrawingRecipe, part: PartRecipe, *,
     report["sheet"] = document.as_dict().get("detail")
 
     resolver = _resolver_for(recipe, part, rehearse_the_part(session, part, part_doc_id))
-    for view in recipe.views:
+    at: dict[str, tuple[float, float]] = {}
+    for view in _parents_first(recipe):
         try:
-            placed = backend.place_view(document.id, ViewRequest(
-                part_doc_id=part_doc_id,
-                name=view.name,
-                direction=view.direction,
-                at=_sheet_position(resolver, view),
-                scale=_scale_of(resolver, view),
-                style=view.style,
-            ))
+            request = _view_request(recipe, resolver, view, part_doc_id, at)
+            placed = backend.place_view(document.id, request)
+            at[view.name] = request.at
         except Exception as exc:
             report["ok"] = False
             report["findings"].append({
@@ -553,8 +621,78 @@ def reading_of(recipe: DrawingRecipe, contents: DrawingContents) -> DrawingReadi
     )
 
 
+def _parents_first(recipe: DrawingRecipe) -> list[DrawingViewSpec]:
+    """The views in an order where every parent comes before its children.
+
+    A projected view's position is worked out from where its parent actually
+    went, so the parent has to have gone somewhere first. Recipe order is
+    respected within that, and a view whose parent is unknown or circular is
+    left in place rather than dropped -- `place_view` refuses it with a message
+    naming the sheet's views, which is more use than this quietly reordering
+    around a mistake.
+    """
+    remaining = list(recipe.views)
+    ordered: list[DrawingViewSpec] = []
+    placed: set[str] = set()
+    while remaining:
+        ready = [view for view in remaining
+                 if view.parent is None or view.parent in placed]
+        if not ready:
+            # A parent that does not exist, or two views projected from each
+            # other. Hand the rest over in recipe order and let the backend say
+            # so by name.
+            ordered.extend(remaining)
+            break
+        for view in ready:
+            ordered.append(view)
+            placed.add(view.name)
+            remaining.remove(view)
+    return ordered
+
+
+def _view_request(recipe: DrawingRecipe, resolver: Resolver, view: DrawingViewSpec,
+                  part_doc_id: str, at: dict[str, tuple[float, float]]) -> ViewRequest:
+    """One view's request, with a projected view's position worked out.
+
+    A projected view also takes its *parent's* scale rather than its own: that
+    is what Inventor does, and a request carrying a scale the parent does not
+    have would be refused by both backends. Saying so here means the recipe's
+    own `scale` on a projected view is ignored rather than fought over -- and
+    the schema says as much.
+    """
+    scale = _scale_of(resolver, view)
+    if view.parent is None:
+        return ViewRequest(
+            part_doc_id=part_doc_id, name=view.name, direction=view.direction,
+            at=_sheet_position(resolver, view), scale=scale, style=view.style)
+    parent_at = at.get(view.parent, (0.0, 0.0))
+    gap = resolver.length(view.gap, f"gap of view {view.name!r}").value
+    return ViewRequest(
+        part_doc_id=part_doc_id, name=view.name, direction=view.direction,
+        at=projected_position(view.direction, recipe.projection, parent_at, gap),
+        scale=_parent_scale(recipe, resolver, view.parent),
+        style=view.style, parent=view.parent,
+    )
+
+
+def _parent_scale(recipe: DrawingRecipe, resolver: Resolver, name: str) -> float:
+    """The scale of the named view, since a projected view inherits it."""
+    for view in recipe.views:
+        if view.name == name:
+            return (_parent_scale(recipe, resolver, view.parent)
+                    if view.parent else _scale_of(resolver, view))
+    return 1.0
+
+
 def _sheet_position(resolver: Resolver, view: DrawingViewSpec) -> tuple[float, float]:
-    """Where the view goes, in cm, resolved like every other length here."""
+    """Where a base view goes, in cm, resolved like every other length here.
+
+    A base view without `at` lands at the sheet's origin. Not the sheet's
+    centre, which would be the friendlier answer and needs a sheet size the
+    template decides -- so it would be a guess dressed as a convenience.
+    """
+    if view.at is None:
+        return (0.0, 0.0)
     across, up = view.at
     return (resolver.length(across, f"position of view {view.name!r}").value,
             resolver.length(up, f"position of view {view.name!r}").value)

@@ -591,3 +591,175 @@ class TestWhatARetrievedDimensionActuallyStates:
                   for entry in view["dimensions"]}
         assert ledger["edge_margin"] == pytest.approx(12.0)
         assert self.stated(session)["edge_margin"][0] == pytest.approx(9.6)
+
+
+class TestProjectedViews:
+    """Where a projected view lands is what first and third angle *mean*.
+
+    Before this, `DrawingRecipe.projection` was recorded and applied to nothing:
+    every view was a base view at a position the recipe gave, so the sheet
+    stated a convention it did not follow. A reader trusts the projection
+    symbol, so that was a promise the schema made and did not keep.
+    """
+
+    def sheet(self, projection, views):
+        return {"name": "D", "template": "t.idw", "projection": projection,
+                "views": views}
+
+    THREE = [
+        {"name": "FRONT", "direction": "front", "at": [100, 100],
+         "dimension": ["plate_w", "plate_t"]},
+        {"name": "TOP", "direction": "top", "parent": "FRONT",
+         "dimension": ["plate_d"]},
+        {"name": "RIGHT", "direction": "right", "parent": "FRONT"},
+    ]
+
+    def built(self, session, projection):
+        from inventor_mcp.drafting import build_drawing
+
+        report = build_drawing(
+            session, DrawingRecipe.model_validate(self.sheet(projection, self.THREE)),
+            PART)
+        return {entry["view"]["name"]: tuple(entry["view"]["at"])
+                for entry in report["views"]}
+
+    def test_third_angle_draws_the_top_view_above_the_front(self, session):
+        at = self.built(session, "third_angle")
+        assert at["TOP"][1] > at["FRONT"][1]
+        assert at["RIGHT"][0] > at["FRONT"][0]
+
+    def test_first_angle_draws_it_below_and_the_right_view_left(self, session):
+        """The whole of the difference between the two conventions, and the
+        reason a sheet has to say which it uses: reading one as the other
+        mirrors the part, and the part is not what is wrong."""
+        at = self.built(session, "first_angle")
+        assert at["TOP"][1] < at["FRONT"][1]
+        assert at["RIGHT"][0] < at["FRONT"][0]
+
+    def test_the_two_conventions_are_mirror_images_about_the_parent(self):
+        from inventor_mcp.drafting import projected_position
+
+        for direction in ("top", "bottom", "left", "right"):
+            third = projected_position(direction, "third_angle", (100.0, 100.0), 60.0)
+            first = projected_position(direction, "first_angle", (100.0, 100.0), 60.0)
+            assert (third[0] + first[0], third[1] + first[1]) == (200.0, 200.0), direction
+
+    def test_an_isometric_goes_in_the_same_corner_either_way(self):
+        """It is not a projection of anything, so neither convention has an
+        opinion about where it goes -- and flipping it would move it for no
+        reason."""
+        from inventor_mcp.drafting import projected_position
+
+        assert (projected_position("iso", "third_angle", (0.0, 0.0), 60.0)
+                == projected_position("iso", "first_angle", (0.0, 0.0), 60.0))
+
+    def test_a_projected_view_takes_its_parents_scale(self, session):
+        from inventor_mcp.drafting import build_drawing
+
+        report = build_drawing(session, DrawingRecipe.model_validate(self.sheet(
+            "third_angle", [
+                {"name": "FRONT", "direction": "front", "at": [100, 100],
+                 "scale": 0.5, "dimension": ["plate_w", "plate_d", "plate_t", "hole_d"]},
+                {"name": "TOP", "direction": "top", "parent": "FRONT", "scale": 2.0},
+            ])), PART)
+        scales = {entry["view"]["name"]: entry["view"]["scale"]
+                  for entry in report["views"]}
+        assert scales == {"FRONT": pytest.approx(0.5), "TOP": pytest.approx(0.5)}
+
+    def test_the_gap_is_an_expression_like_every_other_length(self, session):
+        from inventor_mcp.drafting import build_drawing
+
+        report = build_drawing(session, DrawingRecipe.model_validate(self.sheet(
+            "third_angle", [
+                {"name": "FRONT", "direction": "front", "at": [100, 100],
+                 "dimension": ["plate_w", "plate_d", "plate_t", "hole_d"]},
+                {"name": "TOP", "direction": "top", "parent": "FRONT",
+                 "gap": "plate_w / 2"},
+            ])), PART)
+        at = {entry["view"]["name"]: entry["view"]["at"] for entry in report["views"]}
+        # 60 mm above the front view: half of the plate's 120 mm width.
+        assert at["TOP"][1] == pytest.approx(16.0)
+
+    def test_parents_are_placed_before_the_views_projected_from_them(self, session):
+        """Recipe order need not be dependency order, and a projected view's
+        position comes from where its parent actually went."""
+        from inventor_mcp.drafting import build_drawing
+
+        report = build_drawing(session, DrawingRecipe.model_validate(self.sheet(
+            "third_angle", [
+                {"name": "TOP", "direction": "top", "parent": "FRONT",
+                 "dimension": ["plate_d"]},
+                {"name": "FRONT", "direction": "front", "at": [100, 100],
+                 "dimension": ["plate_w", "plate_t", "hole_d"]},
+            ])), PART)
+        assert report["ok"] is True
+        at = {entry["view"]["name"]: entry["view"]["at"] for entry in report["views"]}
+        assert at["TOP"] == pytest.approx([10.0, 16.0])
+
+    def test_a_parent_that_does_not_exist_is_refused_by_name(self, session):
+        from inventor_mcp.drafting import build_drawing
+
+        report = build_drawing(session, DrawingRecipe.model_validate(self.sheet(
+            "third_angle", [
+                {"name": "FRONT", "direction": "front", "at": [100, 100],
+                 "dimension": ["plate_w", "plate_d", "plate_t", "hole_d"]},
+                {"name": "TOP", "direction": "top", "parent": "NOSUCH"},
+            ])), PART)
+        assert report["ok"] is False
+        assert "no view named 'NOSUCH'" in report["findings"][0]["error"]
+
+    def test_the_layout_is_readable_from_a_rehearsal_without_a_sheet(self):
+        """So the projection angle's effect can be checked before anything is made."""
+        third = rehearse_drawing(
+            DrawingRecipe.model_validate(self.sheet("third_angle", self.THREE)), PART)
+        first = rehearse_drawing(
+            DrawingRecipe.model_validate(self.sheet("first_angle", self.THREE)), PART)
+
+        def top_of(report):
+            return next(view["at"] for view in report["ledger"]["views"]
+                        if view["name"] == "TOP")
+
+        assert top_of(third) == [100.0, 160.0]
+        assert top_of(first) == [100.0, 40.0]
+
+    def test_the_shipped_drawing_is_first_angle_and_draws_the_top_view_below(self):
+        root = pathlib.Path(__file__).resolve().parent.parent
+        drawing = DrawingRecipe.model_validate(json.loads(
+            (root / "examples" / "drawings" / "mounting_plate.json").read_text(
+                encoding="utf-8")))
+        part = PartRecipe.model_validate(json.loads(
+            (root / "examples" / "mounting_plate.json").read_text(encoding="utf-8")))
+        assert drawing.projection == "first_angle"
+        at = {view["name"]: view["at"]
+              for view in rehearse_drawing(drawing, part)["ledger"]["views"]}
+        assert at["TOP"][1] < at["FRONT"][1], "first angle puts the top view below"
+
+
+class TestExportingTheSheet:
+    """A drawing that cannot be sent is not finished.
+
+    Only the format table is testable here: the simulator writes no files and
+    says so, and whether Inventor's PDF translator is enabled on a given machine
+    is exactly the sort of thing `export`'s written-but-not-there check exists to
+    report. What matters is that `pdf` is offered at all -- a drawing exportable
+    only as DWG is one the factory needs Inventor to read.
+    """
+
+    def test_pdf_is_an_export_format(self):
+        from inventor_mcp.backend.com.backend import EXPORT_EXTENSIONS
+
+        assert EXPORT_EXTENSIONS["pdf"] == ".pdf"
+
+    def test_the_tool_offers_it(self, server):
+        import asyncio
+
+        tools = {tool.name: tool for tool in asyncio.run(server.list_tools())}
+        assert "pdf" in str(tools["export_model"].input_schema)
+
+    def test_the_simulator_says_it_wrote_nothing(self, session):
+        from inventor_mcp.backend.base import ExportRequest
+
+        drawing = session.backend.new_drawing("D")
+        result = session.backend.export(
+            drawing.id, ExportRequest(path="/tmp/nope.pdf", format="pdf"))
+        assert result["written"] is False and result["simulated"] is True

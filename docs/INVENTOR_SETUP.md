@@ -749,6 +749,21 @@ cheap to check.
    ViewStyle)`** -- the argument order is Inventor's documented one and is a
    proposal. Passed by name through `_call_named`, so the positions are readable
    at the call site.
+2b. **`DrawingViews.AddProjectedView(ParentView, Position, ViewStyle)`**, which
+   is a different call and takes **no orientation and no scale**. Which way a
+   projected view faces is decided by where it sits relative to its parent and
+   by the sheet's projection angle -- Inventor is told a place and infers the
+   direction, the reverse of a base view. So the angle is applied *before* the
+   call, in `drafting.projected_position`, and this is the one place
+   `DrawingRecipe.projection` does any work.
+
+   That makes the direction check in item 3 **sharper for a projected view than
+   for a base one**: nothing was asserted about its direction, so what the sheet
+   reports back is Inventor's own answer to a question only the layout asked. A
+   projected top view that reads as anything but `top` means the convention this
+   project implements and the one Inventor applies are not the same -- and since
+   `_THIRD_ANGLE_STEP` is negated for first angle and nothing else distinguishes
+   the two, one run on each convention settles it.
 3. **Whether a direction's name describes what you get.** This is defect 4's
    drawing-shaped cousin and the reason `read_drawing` reports a view's extent
    and its orientation *as the sheet has them* rather than as they were
@@ -780,7 +795,16 @@ they are worth separating:
   matters;
 * **the direction check** in item 3. The simulator honours the direction it is
   given by construction, so it will never report a view facing the wrong way.
-  That check exists entirely for the live half.
+  That check exists entirely for the live half, and it is the *projected* views
+  it matters most for: theirs is the direction nobody asserted.
+
+And one thing neither can answer, because it is not about the API. **PDF export
+went in with this** -- `export_model` offers `pdf` now, and it is the format a
+drawing is actually sent in, since a sheet exportable only as DWG needs Inventor
+at the other end to read. Whether the PDF translator add-in is enabled is a
+per-machine fact rather than a release fact, and `export`'s
+written-but-not-there check is what reports it: Inventor answers success and no
+file appears.
 
 ## Known-shaky areas
 

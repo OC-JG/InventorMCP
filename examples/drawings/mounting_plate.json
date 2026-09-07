@@ -1,6 +1,6 @@
 {
   "name": "MountingPlateDrawing",
-  "description": "A three-view drawing of examples/mounting_plate.json, dimensioning every parameter that plate declares. Written against a real shipped part rather than a fixture, because a schema nobody has pointed at a whole recipe is a schema whose gaps have not been found yet -- the argument ARCHITECTURE.md makes for keeping the examples executable. Pointing it at this part found one immediately, and it is the most useful thing in this file: asking to dimension `edge_margin` does NOT put 12 mm on the sheet. Dimensions are retrieved from the model, and this model never states 12 anywhere -- the margin is expressed as a hole spacing of `plate_w - 2 * edge_margin`, so what the sheet carries is 96 mm. The holes are pinned either way and the drawing is correct; the number the recipe named is simply not the number a reader sees. `build_drawing_from_recipe` warns about exactly that, and the rehearsal cannot: the rehearsal resolves `edge_margin` to 12 because that is what the parameter is worth, and only a sheet that has actually been made can say which dimension came back. That difference between the two directions is the whole reason the round trip reads the sheet rather than trusting the request.",
+  "description": "A three-view drawing of examples/mounting_plate.json, dimensioning every parameter that plate declares. One base view with the other two projected from it, which is how a drafter builds a sheet and which is what makes the stated projection angle mean something: this sheet is first angle, so the top view is drawn BELOW the front view. In third angle the same recipe puts it above, and nothing else about the recipe changes. Written against a real shipped part rather than a fixture, because a schema nobody has pointed at a whole recipe is a schema whose gaps have not been found yet -- the argument ARCHITECTURE.md makes for keeping the examples executable. Pointing it at this part found one immediately, and it is the most useful thing in this file: asking to dimension `edge_margin` does NOT put 12 mm on the sheet. Dimensions are retrieved from the model, and this model never states 12 anywhere -- the margin is expressed as a hole spacing of `plate_w - 2 * edge_margin`, so what the sheet carries is 96 mm. The holes are pinned either way and the drawing is correct; the number the recipe named is simply not the number a reader sees. `build_drawing_from_recipe` warns about exactly that, and the rehearsal cannot: the rehearsal resolves `edge_margin` to 12 because that is what the parameter is worth, and only a sheet that has actually been made can say which dimension came back. That difference between the two directions is the whole reason the round trip reads the sheet rather than trusting the request.",
   "part": "MountingPlate",
   "units": "mm",
   "sheet": "a3",
@@ -12,8 +12,8 @@
       "name": "FRONT",
       "direction": "front",
       "at": [
-        100,
-        180
+        110,
+        150
       ],
       "dimension": [
         "plate_w",
@@ -23,10 +23,8 @@
     {
       "name": "TOP",
       "direction": "top",
-      "at": [
-        100,
-        80
-      ],
+      "parent": "FRONT",
+      "gap": 70,
       "dimension": [
         "plate_d",
         "hole_d",
@@ -37,11 +35,9 @@
     {
       "name": "ISO",
       "direction": "iso",
-      "at": [
-        280,
-        180
-      ],
-      "scale": 0.5
+      "parent": "FRONT",
+      "gap": 95,
+      "scale": 1.0
     }
   ],
   "notes": [

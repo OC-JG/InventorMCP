@@ -120,6 +120,16 @@ except Exception as exc:  # pragma: no cover - the common case off Windows
 
 #: File extensions Inventor can write directly through ``SaveAs``.
 EXPORT_EXTENSIONS = {
+    # PDF is here for drawings and not for parts, and the distinction is
+    # Inventor's rather than this table's: a drawing SaveAs to .pdf goes through
+    # the PDF translator add-in, and a *part* has no sheet to print, so the same
+    # call on one either fails or writes something nobody asked for. The
+    # written-but-not-there check below is what catches it either way. Added
+    # 2026-09-07 with the drawing surface, unmeasured like the rest of it, and
+    # it is the format a drawing is actually sent to a factory in -- a drawing
+    # that can only be exported as DWG is a drawing the factory has to own
+    # Inventor to read.
+    "pdf": ".pdf",
     "step": ".stp",
     "stp": ".stp",
     "iges": ".igs",
@@ -3127,6 +3137,15 @@ class ComBackend(Backend):
         drawing view is a different API reached through a similarly-named enum.
         So the extent read back off the sheet is the check, and it is why
         `read_drawing` reports one.
+
+        **A projected view is a different call and does not name a direction at
+        all.** `AddProjectedView` is told a position and infers which way the
+        view faces from where it sits relative to its parent, which is the
+        reverse of a base view -- so the projection angle has to be applied
+        before the call, and `drafting.projected_position` is where that
+        happens. It also means the direction check above is sharper for a
+        projected view than a base one: nothing was asserted about the
+        direction, so what the sheet reports is Inventor's own answer.
         """
         document = self._doc(doc_id)
         model = self._doc(request.part_doc_id)
@@ -3134,13 +3153,28 @@ class ComBackend(Backend):
         sheet = document.ActiveSheet
         with self._translate_errors("Placing the view"):
             position = app.TransientGeometry.CreatePoint2d(*request.at)
-            view = _call_named(sheet.DrawingViews.AddBaseView, [
-                ("Model", model),
-                ("Position", position),
-                ("Scale", float(request.scale)),
-                ("ViewOrientation", self._k(self._VIEW_ORIENTATIONS[request.direction])),
-                ("ViewStyle", self._k(self._VIEW_STYLES[request.style])),
-            ])
+            if request.parent is None:
+                view = _call_named(sheet.DrawingViews.AddBaseView, [
+                    ("Model", model),
+                    ("Position", position),
+                    ("Scale", float(request.scale)),
+                    ("ViewOrientation",
+                     self._k(self._VIEW_ORIENTATIONS[request.direction])),
+                    ("ViewStyle", self._k(self._VIEW_STYLES[request.style])),
+                ])
+            else:
+                # A projected view takes no orientation and no scale: which way
+                # it faces is decided by where it sits relative to its parent
+                # and by the sheet's projection angle, and its scale is its
+                # parent's. That is why `drafting.projected_position` works out
+                # the position from the angle -- Inventor is told a place and
+                # infers the direction, which is the reverse of a base view and
+                # the reason the two are separate calls here.
+                view = _call_named(sheet.DrawingViews.AddProjectedView, [
+                    ("ParentView", self._drawing_view(document, request.parent)),
+                    ("Position", position),
+                    ("ViewStyle", self._k(self._VIEW_STYLES[request.style])),
+                ])
             try:
                 view.Name = request.name
             except Exception:  # pragma: no cover - version-specific

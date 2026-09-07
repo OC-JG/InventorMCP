@@ -1227,9 +1227,23 @@ class DrawingViewSpec(Base):
     direction: ViewDirection = Field(
         "front", description="Which way this view looks at the part."
     )
-    at: Point2D = Field(
-        default_factory=lambda: [0.0, 0.0],
-        description="Where on the sheet the view's centre goes, in sheet units.",
+    at: Point2D | None = Field(
+        None,
+        description="Where on the sheet the view's centre goes, in sheet units. "
+        "For a base view; a projected view is positioned by `parent` and `gap` "
+        "instead, and giving both is refused.",
+    )
+    parent: str | None = Field(
+        None,
+        description="Name of the view this is projected from. A projected view "
+        "inherits its parent's scale and stays aligned with it, which is how a "
+        "multi-view drawing is actually built -- and which side it lands on is "
+        "decided by the sheet's projection angle rather than by a position.",
+    )
+    gap: ValueSpec = Field(
+        60.0,
+        description="For a projected view: how far from the parent's centre, in "
+        "sheet units.",
     )
     scale: ValueSpec = Field(
         1.0,
@@ -1249,6 +1263,42 @@ class DrawingViewSpec(Base):
     style: Literal["hidden_line", "hidden_line_removed", "shaded"] = Field(
         "hidden_line_removed", description="How the view is drawn."
     )
+
+    @model_validator(mode="after")
+    def _positioned_one_way_or_the_other(self) -> "DrawingViewSpec":
+        """A projected view is not positioned by hand, and that is the point.
+
+        Where a projected view lands is what first and third angle *mean*: the
+        top view goes below the front view in first angle and above it in third.
+        A recipe that gave a projected view an explicit position would be
+        deciding that for itself, and the sheet's stated projection angle would
+        then be a label on a layout that need not match it -- which is worse
+        than either convention, because a reader trusts the symbol.
+        """
+        if self.parent is not None and self.at is not None:
+            raise ValueError(
+                f"View {self.name!r} is projected from {self.parent!r} and also "
+                "given a position. Which side a projected view lands on is "
+                "decided by the sheet's projection angle; drop `at`, or drop "
+                "`parent` to place it by hand as a base view.")
+        return self
+
+    @model_validator(mode="after")
+    def _projected_views_are_not_the_front(self) -> "DrawingViewSpec":
+        """`front` and `rear` are not projected from anything here.
+
+        A front view is the one everything else is projected *from*, and a rear
+        view is two projections away -- Inventor will place one and where it goes
+        is a drafting convention this project has not measured. Both are
+        available as base views, which is how a second one would be drawn
+        anyway.
+        """
+        if self.parent is not None and self.direction in ("front", "rear"):
+            raise ValueError(
+                f"A {self.direction!r} view is not projected from another view. "
+                "A front view is what the others project from; place it, and a "
+                "rear view, as base views with `at`.")
+        return self
 
 
 class DrawingRecipe(Base):

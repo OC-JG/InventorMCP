@@ -712,14 +712,34 @@ The market's 2026 feature, and a gap in the whole open-source field.
       static check could know, because the parameter exists and resolves
       perfectly well. And it closed the round trip's shape — the sheet is read
       back and checked, rather than the request being trusted.
+- [x] **Projected views, so the projection angle means something.**
+      *(2026-09-07.)* Until this, every view was a base view at a position the
+      recipe gave, and `DrawingRecipe.projection` was recorded and applied to
+      nothing — the sheet stated a convention it did not follow, which is worse
+      than either convention because a reader trusts the symbol.
+
+      A view with a `parent` is projected from it, takes its parent's scale, and
+      is **not** positioned by hand: giving both `parent` and `at` is refused,
+      because where a projected view lands is what first and third angle *mean*.
+      Third angle draws the top view above the front view; first angle below,
+      and the right-hand view swaps sides with it. The two are mirror images
+      about the parent and a test says so. An isometric is exempt from the flip:
+      it is not a projection of anything, so neither convention has an opinion
+      and negating its corner would move it for no reason.
+
+      Also here: **PDF export**, which is the format a drawing is actually sent
+      in — a sheet exportable only as DWG needs Inventor at the other end.
 - [ ] **Measure the drawing surface against a live Inventor** — `python
       scripts/com_signatures.py GeneralDimension` first, then `--only drawing`.
-      Five things in order, in `INVENTOR_SETUP.md`, and two of them are checks
-      the simulator can never be evidence for: whether a view's *extent* agrees
-      with the part (in the simulator the extent is computed from the part, so
-      the check compares it with itself), and whether a direction's name
+      The ordered list is in `INVENTOR_SETUP.md`, and three of its checks are
+      ones the simulator can never be evidence for: whether a view's *extent*
+      agrees with the part (in the simulator the extent is computed from the
+      part, so the check compares it with itself); whether a direction's name
       describes what you get — defect 4's drawing-shaped cousin, where
-      `capture_view`'s `front` returns a top view.
+      `capture_view`'s `front` returns a top view; and whether Inventor's idea of
+      first and third angle is the one implemented here, which a *projected*
+      view answers in a way a base view cannot, because nothing asserted its
+      direction.
 
 ### Phase 4 — assemblies
 

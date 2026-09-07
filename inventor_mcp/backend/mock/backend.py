@@ -382,6 +382,8 @@ class _View:
     extent: tuple[float, float] | None
     #: The document id of the part this view is of.
     part: str = ""
+    #: The view this one is projected from, or None for a base view.
+    parent: str | None = None
 
 
 @dataclass
@@ -2118,6 +2120,18 @@ class MockBackend(Backend):
                 hint="A view is a view of a part. Pass the part's document id.")
         if any(view.name == request.name for view in drawing.views):
             raise DocumentError(f"This sheet already has a view named {request.name!r}.")
+        if request.parent is not None:
+            # Checked here rather than trusted from the caller, because Inventor
+            # will refuse the same thing and a simulator that accepted it would
+            # let a recipe through that cannot be built.
+            parent = self._view(drawing, request.parent)
+            if parent.scale != request.scale:
+                raise DocumentError(
+                    f"View {request.name!r} is projected from {parent.name!r} and "
+                    f"asks for scale {request.scale} where its parent is at "
+                    f"{parent.scale}.",
+                    hint="A projected view takes its parent's scale. Drop the "
+                    "scale here, or place it as a base view with `at`.")
 
         extent: tuple[float, float] | None = None
         span = self._VIEW_SPAN.get(request.direction)
@@ -2135,6 +2149,7 @@ class MockBackend(Backend):
             style=request.style,
             extent=extent,
             part=request.part_doc_id,
+            parent=request.parent,
         )
         drawing.views.append(view)
         drawing.modified = True
