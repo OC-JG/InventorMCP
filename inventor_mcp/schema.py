@@ -609,6 +609,48 @@ class CircularPatternOp(OpBase):
     fitted: bool = Field(True, description="Spread occurrences evenly over `angle`.")
 
 
+class SketchDrivenPatternOp(OpBase):
+    """Copy features to a set of sketch points, wherever they are.
+
+    The irregular pattern. `rectangular_pattern` and `circular_pattern` cover
+    the regular cases and a bolt circle; this one takes positions as data, so a
+    layout that follows nothing in particular -- mounting points dictated by
+    somebody else's PCB -- is expressible.
+
+    **Read this before reaching for it, because the alternative is often
+    better.** `hole` already takes a list of points and `boss` a list of
+    positions, so an irregular set of holes or bosses needs no pattern at all:
+    put the points in one sketch and drill them in one operation. What this adds
+    is patterning a feature whose definition is *not* already a list of
+    positions -- a pocket, a rib, a filleted detail -- which is the narrower and
+    real gap.
+
+    The seed is assumed to sit on one of the points, named by `reference`, and
+    the occurrences go on the others. That is one point per occurrence plus the
+    seed's own, which means a sketch of N points describes a part with N of the
+    feature on it.
+    """
+
+    op: Literal["sketch_driven_pattern"] = "sketch_driven_pattern"
+    features: list[str] = Field(
+        default_factory=list,
+        description="Features to copy. Empty means the most recent one.",
+    )
+    sketch: str | None = Field(
+        None,
+        description="Sketch holding the positions; defaults to the most recent sketch.",
+    )
+    points: list[str] = Field(
+        default_factory=list,
+        description="Named point entities to use. Empty means every hole-centre "
+        "point in the sketch -- a `point`, `point_grid` or `bolt_circle`.",
+    )
+    reference: str | None = Field(
+        None,
+        description="The point the seed feature already sits on; the occurrences go "
+        "on the others. Defaults to the first point in the sketch.",
+    )
+
 class MirrorOp(OpBase):
     op: Literal["mirror"] = "mirror"
     features: list[str] = Field(default_factory=list)
@@ -757,6 +799,95 @@ class DraftOp(OpBase):
     flip: bool = Field(False, description="Reverse the pull direction.")
 
 
+class MoveFaceOp(OpBase):
+    """Translate faces of a solid that already exists, along a direction.
+
+    The only operation here that changes geometry it did not create, which is
+    what makes it the one way into imported material: a translated STEP body has
+    no sketches and no parameters, so every other operation in this schema has
+    nothing to take hold of. `import_geometry` could read a part for DFM and
+    then change nothing about it; this is the answer to that.
+
+    Inventor's move-face feature also offers a planar drag and a rotation about
+    a line. Only the direction-and-distance move is here, and deliberately: it
+    is the one a wall thickness or a clearance is expressed in, and it is the
+    one whose result is predictable -- a planar face of area A moved by `d`
+    along its own normal changes the part by exactly `A*d`, which is a number
+    the rehearsal can check Inventor against. A free drag is not.
+
+    `distance` is an expression like every other length, so a face moved by
+    `wall_t` moves when that parameter does -- on a part built here. On imported
+    geometry there is no parameter to drive and the expression is worth only the
+    number it evaluates to, which is the honest limit of this operation on the
+    material it exists for.
+    """
+
+    op: Literal["move_face"] = "move_face"
+    faces: Selector = Field(
+        default_factory=lambda: Selector(kind="face"),
+        description="Faces to move. A wall's outer face, a boss's top.",
+    )
+    direction: AxisRef = Field(
+        "z",
+        description="Which way they go: 'x'|'y'|'z', a named work axis, the name of a "
+        "sketch line, or 'edge:<handle>'.",
+    )
+    distance: ValueSpec = Field(
+        1.0, description="How far along `direction`. Always positive -- use `flip` to reverse."
+    )
+    flip: bool = Field(False, description="Move against `direction` rather than along it.")
+
+
+class ThickenOp(OpBase):
+    """Add or remove a layer of material on faces, each along its own normal.
+
+    The wall-thickness operation. Where `move_face` translates faces along one
+    direction the caller names, this thickens each face along its *own* normal,
+    which is what "make every wall 0.5 mm thicker" means and what a single
+    direction cannot say: the four walls of a box point four different ways.
+
+    **What each direction and operation pair does to a solid**, which is set
+    algebra rather than an Inventor quirk -- the layer is a slab swept from the
+    face and the operation is a boolean, so:
+
+    * `positive` + `join` grows the part by area times thickness. The usual one.
+    * `negative` + `cut` removes that much from behind the faces. Thinning.
+    * `symmetric` straddles the face, so half the layer is already material and
+      the net change is half the thickness either way.
+    * `positive` + `cut` and `negative` + `join` change **nothing** -- the layer
+      is where the material already is not, or already is. They are warned
+      about at rehearsal rather than refused, because that is a claim about
+      Inventor nobody here has measured yet.
+
+    Inventor's offset mode, its `intersect` and `new_body` operations and its
+    surface output are all deliberately absent. Offset and surface output both
+    produce a surface body, and this server has no surface anywhere -- nothing
+    downstream could take one. `intersect` on a layer outside the solid leaves
+    nothing at all, which is a way to delete a part rather than an operation.
+
+    The other half of what Inventor's Thicken does -- **turning a surface into
+    a wall** -- is out of reach for the same reason as the offset mode, and not
+    because of this schema: no operation here creates a surface, so the only
+    surface a part could hold is one that arrived through `import_geometry`.
+    """
+
+    op: Literal["thicken"] = "thicken"
+    faces: Selector = Field(
+        default_factory=lambda: Selector(kind="face"),
+        description="Faces to thicken. Each grows along its own normal.",
+    )
+    thickness: ValueSpec = Field(
+        1.0, description="How thick a layer. Always positive -- `direction` says which way."
+    )
+    direction: Direction = Field(
+        "positive",
+        description="'positive' outward along each face's normal, 'negative' inward, "
+        "'symmetric' half either side.",
+    )
+    operation: Literal["join", "cut"] = Field(
+        "join", description="Add the layer or remove it."
+    )
+
 class RibOp(OpBase):
     """A rib: a thin web standing on the part, in a plane you choose.
 
@@ -861,6 +992,7 @@ Operation = Annotated[
         ShellOp,
         RectangularPatternOp,
         CircularPatternOp,
+        SketchDrivenPatternOp,
         MirrorOp,
         WorkPlaneOp,
         WorkPointOp,
@@ -868,6 +1000,8 @@ Operation = Annotated[
         ThreadOp,
         EmbossOp,
         DraftOp,
+        MoveFaceOp,
+        ThickenOp,
         RibOp,
         CombineOp,
         SplitOp,
@@ -1059,3 +1193,188 @@ class PartRecipe(Base):
 def recipe_json_schema() -> dict:
     """The recipe JSON Schema, published as an MCP resource."""
     return PartRecipe.model_json_schema()
+
+
+# ---------------------------------------------------------------------------
+# Drawings
+# ---------------------------------------------------------------------------
+
+#: Which way a base view looks at the part. The names are the ones a drawing
+#: uses, and they are checked against the part rather than trusted: defect 4 in
+#: `docs/FEATURE_COVERAGE.md` is `capture_view`'s orientation names not
+#: describing what they return, and a drawing view is a different API reached
+#: the same way -- through a name nobody here has measured.
+ViewDirection = Literal["front", "rear", "top", "bottom", "left", "right", "iso"]
+
+
+class DrawingViewSpec(Base):
+    """One view on the sheet, and which of the part's parameters it dimensions.
+
+    `dimension` is the differentiator and the reason this schema exists. A
+    drawing generator has to decide which dimensions matter, and the field's
+    tools guess -- reaching 80-90% by inference from the geometry. A recipe does
+    not have to guess: the part's parameters *are* its design intent, so naming
+    them is saying "these are the numbers that matter", which is a statement the
+    author already made when they wrote the part.
+
+    So an entry here is normally a parameter name. An expression of parameters
+    is accepted too, for the dimension a drawing states that the model derives
+    -- an overall width of `plate_w + 2 * wall`, say -- and it is resolved
+    through the same evaluator as every other number here.
+    """
+
+    name: Name = Field(description="The view's label on the sheet: 'FRONT', 'TOP'.")
+    direction: ViewDirection = Field(
+        "front", description="Which way this view looks at the part."
+    )
+    at: Point2D | None = Field(
+        None,
+        description="Where on the sheet the view's centre goes, in sheet units. "
+        "For a base view; a projected view is positioned by `parent` and `gap` "
+        "instead, and giving both is refused.",
+    )
+    parent: str | None = Field(
+        None,
+        description="Name of the view this is projected from. A projected view "
+        "inherits its parent's scale and stays aligned with it, which is how a "
+        "multi-view drawing is actually built -- and which side it lands on is "
+        "decided by the sheet's projection angle rather than by a position.",
+    )
+    gap: ValueSpec = Field(
+        60.0,
+        description="For a projected view: how far from the parent's centre, in "
+        "sheet units.",
+    )
+    scale: ValueSpec = Field(
+        1.0,
+        description="View scale as a factor: 0.5 is half size. Written on the "
+        "sheet as a ratio; given here as a number so it can be an expression.",
+    )
+    dimension: list[str] = Field(
+        default_factory=list,
+        description="Parameters to dimension on this view, or expressions of them. "
+        "A parameter named here must exist in the part.",
+    )
+    reference: list[str] = Field(
+        default_factory=list,
+        description="The same, for dimensions shown in brackets: they restate "
+        "something fixed elsewhere and drive nothing.",
+    )
+    style: Literal["hidden_line", "hidden_line_removed", "shaded"] = Field(
+        "hidden_line_removed", description="How the view is drawn."
+    )
+
+    @model_validator(mode="after")
+    def _positioned_one_way_or_the_other(self) -> "DrawingViewSpec":
+        """A projected view is not positioned by hand, and that is the point.
+
+        Where a projected view lands is what first and third angle *mean*: the
+        top view goes below the front view in first angle and above it in third.
+        A recipe that gave a projected view an explicit position would be
+        deciding that for itself, and the sheet's stated projection angle would
+        then be a label on a layout that need not match it -- which is worse
+        than either convention, because a reader trusts the symbol.
+        """
+        if self.parent is not None and self.at is not None:
+            raise ValueError(
+                f"View {self.name!r} is projected from {self.parent!r} and also "
+                "given a position. Which side a projected view lands on is "
+                "decided by the sheet's projection angle; drop `at`, or drop "
+                "`parent` to place it by hand as a base view.")
+        return self
+
+    @model_validator(mode="after")
+    def _projected_views_are_not_the_front(self) -> "DrawingViewSpec":
+        """`front` and `rear` are not projected from anything here.
+
+        A front view is the one everything else is projected *from*, and a rear
+        view is two projections away -- Inventor will place one and where it goes
+        is a drafting convention this project has not measured. Both are
+        available as base views, which is how a second one would be drawn
+        anyway.
+        """
+        if self.parent is not None and self.direction in ("front", "rear"):
+            raise ValueError(
+                f"A {self.direction!r} view is not projected from another view. "
+                "A front view is what the others project from; place it, and a "
+                "rear view, as base views with `at`.")
+        return self
+
+
+class DrawingRecipe(Base):
+    """A description of a drawing *of* a part, which is a different noun.
+
+    The second root in this schema, and the reason there had to be one:
+    `PartRecipe` describes a solid, and a drawing describes views of one. Nothing
+    below the schema changes -- the resolver, the expression evaluator and the
+    unit table are the same, and a dimension's value is `Resolved` like every
+    other number, carrying the expression that produced it.
+
+    What this does *not* do is draw anything. It says what a drawing should say,
+    which is enough to check it against the part before a CAD seat is spent on
+    it -- the same argument `validate_recipe` makes for a part. Producing the
+    sheet in Inventor is a separate piece of work and is not written yet.
+    """
+
+    name: str = Field("Drawing", description="Drawing name, also the default file name.")
+    description: str = Field("", description="What the drawing is for, in one line.")
+    part: str | None = Field(
+        None,
+        description="Name of the part this draws. Informational: the part is "
+        "supplied to the rehearsal as its own recipe.",
+    )
+    units: LengthUnit = Field(
+        "mm", description="Unit the dimensions on this sheet are read in."
+    )
+    angle_units: AngleUnit = Field("deg", description="Unit for angle dimensions.")
+    sheet: Literal["a0", "a1", "a2", "a3", "a4", "custom"] = Field(
+        "a3", description="Sheet size. 'custom' needs `sheet_size`."
+    )
+    sheet_size: Point2D | None = Field(
+        None, description="For 'custom': [width, height] in `units`."
+    )
+    template: str | None = Field(
+        None,
+        description="Path to a .dwg or .idw template carrying the title block. "
+        "Without one the sheet has no title block, which is not a drawing "
+        "anybody can send to a factory.",
+    )
+    projection: Literal["first_angle", "third_angle"] = Field(
+        "third_angle",
+        description="Which side of the front view the right-hand view goes on. "
+        "There is no 'unknown' here: a drawing being *produced* has to pick one, "
+        "and getting it wrong mirrors the part for whoever reads it.",
+    )
+    scale: str = Field("1:1", description="The sheet's stated scale, as written.")
+    views: Annotated[list[DrawingViewSpec], Field(min_length=1)] = Field(
+        description="At least one view. A drawing with no view is a title block."
+    )
+    notes: list[str] = Field(
+        default_factory=list,
+        description="The note block: finishes, general tolerances, 'ALL FILLETS R2 "
+        "UNLESS STATED'.",
+    )
+
+    @model_validator(mode="after")
+    def _custom_sheets_have_a_size(self) -> "DrawingRecipe":
+        if self.sheet == "custom" and self.sheet_size is None:
+            raise ValueError("A 'custom' sheet needs `sheet_size` as [width, height].")
+        if self.sheet != "custom" and self.sheet_size is not None:
+            raise ValueError(
+                f"`sheet_size` only means something on a 'custom' sheet, not {self.sheet!r}."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _view_names_are_distinct(self) -> "DrawingRecipe":
+        """Two views with one name cannot both be referred to, or told apart.
+
+        A dimension is reported against the view it appears on, so duplicate
+        names would make the report ambiguous about a sheet that is itself fine
+        -- which is worse than refusing it.
+        """
+        seen = [view.name for view in self.views]
+        repeated = sorted({name for name in seen if seen.count(name) > 1})
+        if repeated:
+            raise ValueError(f"Two or more views share a name: {', '.join(repeated)}.")
+        return self

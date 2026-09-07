@@ -73,6 +73,15 @@ from ..base import (
     ScreenshotRequest,
     CombineRequest,
     DraftRequest,
+    MoveFaceRequest,
+    ThickenRequest,
+    THICKEN_SHARE,
+    SketchDrivenPatternRequest,
+    DimensionInfo,
+    DrawingContents,
+    RetrieveRequest,
+    ViewInfo,
+    ViewRequest,
     EmbossRequest,
     ShellRequest,
     SplitRequest,
@@ -111,6 +120,16 @@ except Exception as exc:  # pragma: no cover - the common case off Windows
 
 #: File extensions Inventor can write directly through ``SaveAs``.
 EXPORT_EXTENSIONS = {
+    # PDF is here for drawings and not for parts, and the distinction is
+    # Inventor's rather than this table's: a drawing SaveAs to .pdf goes through
+    # the PDF translator add-in, and a *part* has no sheet to print, so the same
+    # call on one either fails or writes something nobody asked for. The
+    # written-but-not-there check below is what catches it either way. Added
+    # 2026-09-07 with the drawing surface, unmeasured like the rest of it, and
+    # it is the format a drawing is actually sent to a factory in -- a drawing
+    # that can only be exported as DWG is a drawing the factory has to own
+    # Inventor to read.
+    "pdf": ".pdf",
     "step": ".stp",
     "stp": ".stp",
     "iges": ".igs",
@@ -2461,6 +2480,19 @@ class ComBackend(Backend):
 
     def _topology_collection(self, doc_id: str, selector: ResolvedSelector, *,
                              required: bool = True) -> Any:  # pragma: no cover
+        return self._topology_selection(doc_id, selector, required=required)[0]
+
+    def _topology_selection(self, doc_id: str, selector: ResolvedSelector, *,
+                            required: bool = True
+                            ) -> tuple[Any, list[TopoInfo]]:  # pragma: no cover
+        """The collection Inventor wants, and what was matched, from one select.
+
+        Split out for `thicken`, which needs the faces' *areas* as well as the
+        faces: what it predicts Inventor will do is the sum of those areas times
+        the layer, and checking the result against that prediction is what makes
+        a mis-called COM method loud. Two selects would be two chances to match
+        differently, so both come out of one.
+        """
         matches = self.select(doc_id, selector)
         if not matches and required:
             raise SelectionError(
@@ -2471,7 +2503,7 @@ class ComBackend(Backend):
         collection = self._new_collection(selector.kind)
         for match in matches:
             collection.Add(self._topology[match.id]["object"])
-        return collection
+        return collection, matches
 
     #: AddSimple's trailing options, in declaration order. They are
     #: optional-with-a-default, and leaving them out makes pywin32 send a
@@ -2782,6 +2814,551 @@ class ComBackend(Backend):
             "angle": request.angle.as_dict(),
         })
 
+    #: How a move-face definition might be told a direction and a distance,
+    #: tried in this order. Every other feature in this file names one call it
+    #: was measured making; this one names three, because nobody has read the
+    #: signature off a type library yet -- `docs/FEATURE_COVERAGE.md` records
+    #: only that `MoveFaceFeatures` has `Add` and `CreateDefinition`, and not
+    #: what the definition's setter is called.
+    #:
+    #: A list of attempts is the shape `_profiles` already uses for a call whose
+    #: arguments Inventor accepts in more than one form, and it is safe here for
+    #: a reason worth stating: the two arguments cannot be swapped silently. A
+    #: direction is a COM object and a distance is an expression string, so a
+    #: wrong order is a type mismatch rather than a part that builds wrongly.
+    #: Every candidate here therefore means *direction and distance* and nothing
+    #: else -- a free-drag or point-to-point setter takes different arguments
+    #: with different meanings, and one of those accepting these two by accident
+    #: is exactly the quietly wrong part this file refuses to risk.
+    #: What a list cannot rule out is a *third* argument whose default means
+    #: something, which is why `scripts/com_signatures.py --search MoveFace` is
+    #: named in the failure and in `docs/INVENTOR_SETUP.md`.
+    _MOVE_FACE_SETTERS = (
+        "SetDirectionAndDistance",
+        "SetDirectionMove",
+        "SetDirectionAndDistanceMoveData",
+    )
+
+    def move_face(self, doc_id: str, request: MoveFaceRequest) -> FeatureInfo:  # pragma: no cover
+        """Translate faces of an existing solid along a direction.
+
+        **Never executed against a real Inventor.** `docs/INVENTOR_SETUP.md`
+        keeps this with the other unmeasured COM, and the reason it is written
+        this way rather than as one call is there too: the definition object is
+        measured to exist and its setter is not, so the setter is discovered and
+        the failure names every spelling that was tried.
+
+        The volume before and after is read and reported, because a move-face
+        that moved nothing is this operation's version of a cut that met no
+        material -- Inventor builds the feature either way. It is reported
+        rather than raised on: a face slid along its own plane legitimately
+        changes no volume, and the simulator is the half that knows which case
+        this is.
+        """
+        document = self._doc(doc_id)
+        faces = self._topology_collection(doc_id, request.faces)
+        if int(faces.Count) == 0:
+            raise FeatureError(
+                "No faces matched, so there is nothing to move.",
+                hint="Run `select_topology` with the same selector to see what it matches.",
+            )
+        direction = self._resolve_axis(doc_id, request.direction)
+        distance = request.distance.expression
+        if request.flip:
+            distance = f"-({distance})"
+        before = _solid_volume(document)
+        features = document.ComponentDefinition.Features.MoveFaceFeatures
+        with self._batch(document), self._translate_errors("MoveFace"):
+            definition, made_by = self._move_face_definition(features, faces)
+            failures: list[str] = []
+            for setter_name in self._MOVE_FACE_SETTERS:
+                setter = getattr(definition, setter_name, None)
+                if setter is None:
+                    failures.append(f"{setter_name}: the definition has no such method")
+                    continue
+                try:
+                    setter(direction, distance)
+                except Exception as exc:
+                    failures.append(f"{setter_name}: {_com_message(exc)}")
+                    continue
+                break
+            else:
+                raise FeatureError(
+                    "Nothing on this release's MoveFaceDefinition would take a "
+                    f"direction and a distance: {'; '.join(failures)}",
+                    hint="Read the real signature with `python scripts/com_signatures.py "
+                    "--search MoveFace` and follow it here. This is the one call in "
+                    "this backend that has never run against an Inventor -- "
+                    "docs/INVENTOR_SETUP.md says so and says what to confirm.",
+                )
+            try:
+                feature = features.Add(definition)
+            except Exception as exc:
+                raise FeatureError(
+                    f"Move face failed: {self._explain(exc)}",
+                    hint=f"{int(faces.Count)} face(s) {distance!r} along "
+                    f"{request.direction.value!r}, with a definition from "
+                    f"{made_by}. A move that would make the solid "
+                    "self-intersecting, or that carries a face away from the "
+                    "neighbours it has to stretch, will refuse.",
+                ) from exc
+            if request.name:
+                feature.Name = request.name
+        after = _solid_volume(document)
+        return _feature_info(feature, "move_face", {
+            "faces": int(faces.Count),
+            "direction": request.direction.value,
+            "distance": request.distance.as_dict(),
+            "flip": request.flip,
+            "definition_from": made_by,
+            "volume_change_cm3": (
+                None if before is None or after is None else round(after - before, 6)
+            ),
+        })
+
+    def _move_face_definition(self, features: Any, faces: Any) -> tuple[Any, str]:  # pragma: no cover
+        """A `MoveFaceDefinition` for *faces*, and which call produced it.
+
+        Two spellings are tried for the same reason the setters are: what is
+        recorded about this collection is that it has a `CreateDefinition`, and
+        Inventor's other definition factories are named for their feature
+        (`CreateShellDefinition`, `CreateFaceDraftDefinition`), so the longer
+        name is as likely as the short one on any given release.
+        """
+        failures: list[str] = []
+        for name in ("CreateDefinition", "CreateMoveFaceDefinition"):
+            factory = getattr(features, name, None)
+            if factory is None:
+                failures.append(f"{name}: MoveFaceFeatures has no such method")
+                continue
+            try:
+                return factory(faces), name
+            except Exception as exc:
+                failures.append(f"{name}: {_com_message(exc)}")
+        raise FeatureError(
+            f"Could not create a move-face definition: {'; '.join(failures)}",
+            hint="Read what this release really offers with `python "
+            "scripts/com_signatures.py MoveFaceFeatures`.",
+        )
+
+    #: How far Inventor's thicken may differ from the area-times-thickness
+    #: prediction before the feature is treated as a mis-call and deleted.
+    #:
+    #: Deliberately enormous, because of what it is guarding against. This
+    #: method's argument order has never been read off a type library, and
+    #: `Distance` is a variant while `Direction` is an enum *integer* -- so an
+    #: argument order that is wrong in the way `_profiles` is safe from would
+    #: not be a type mismatch here: it would hand Inventor a thickness of
+    #: 20,481 cm and build a part the size of a house. A factor of four catches
+    #: that and nothing subtler. The fine end is the divergence check's job,
+    #: where a disagreement is reported rather than refused.
+    _THICKEN_SANITY = 4.0
+
+    def thicken(self, doc_id: str, request: ThickenRequest) -> FeatureInfo:  # pragma: no cover
+        """Add or remove a layer on faces, each along its own normal.
+
+        **Never executed against a real Inventor**, and its signature has never
+        been read either -- `docs/INVENTOR_SETUP.md` has the ordered list of
+        what a run must settle. What is recorded is that `ThickenFeatures.Add`
+        is public; the argument order is Inventor's documented one and is a
+        proposal.
+
+        Two things make this riskier than `move_face` and are handled here
+        rather than left to the run. Its arguments are a variant and two enums,
+        so a wrong *order* need not raise -- it can be accepted and build
+        something enormous. And the direction-and-operation meaning is a claim
+        about Inventor: the simulator derives it from set algebra, which is
+        sound for a boolean against a slab and says nothing about whether
+        Inventor's "negative" means the same side. So the result is measured
+        against the prediction and a wild disagreement is refused, with the
+        feature deleted rather than left in the part.
+        """
+        document = self._doc(doc_id)
+        faces, matched = self._topology_selection(doc_id, request.faces)
+        if int(faces.Count) == 0:
+            raise FeatureError(
+                "No faces matched, so there is nothing to thicken.",
+                hint="Run `select_topology` with the same selector to see what it matches.",
+            )
+        share = THICKEN_SHARE[(request.direction, request.operation)]
+        area = sum(info.area or 0.0 for info in matched)
+        predicted = share * area * request.thickness.value
+        before = _solid_volume(document)
+        features = document.ComponentDefinition.Features.ThickenFeatures
+        with self._batch(document), self._translate_errors("Thicken"):
+            feature, made_by = self._add_thicken(features, faces, request)
+            if request.name:
+                feature.Name = request.name
+            moved = None if before is None else _volume_change(document, before)
+            if (predicted and moved is not None
+                    and not _within_a_factor(moved, predicted, self._THICKEN_SANITY)):
+                _delete_quietly(feature)
+                raise FeatureError(
+                    f"Thicken moved {moved:.4f} cm^3 where {predicted:.4f} was "
+                    f"predicted from {area:.4f} cm^2 of face and a "
+                    f"{request.thickness.expression} layer, which is too far out "
+                    "to be a disagreement about geometry.",
+                    hint=f"The feature was built by {made_by} and has been deleted "
+                    "again. This call's argument order has never been read from a "
+                    "type library -- `python scripts/com_signatures.py "
+                    "ThickenFeatures` is how to settle it, and an order that puts "
+                    "the direction enum where the distance goes looks exactly like "
+                    "this.",
+                )
+        return _feature_info(feature, "thicken", {
+            "faces": int(faces.Count),
+            "thickness": request.thickness.as_dict(),
+            "direction": request.direction,
+            "operation": request.operation,
+            "area_cm2": round(area, 6),
+            "predicted_cm3": round(predicted, 6),
+            "built_by": made_by,
+        })
+
+    def _add_thicken(self, features: Any, faces: Any,
+                     request: ThickenRequest) -> tuple[Any, str]:  # pragma: no cover
+        """Build the thicken feature, by whichever route this release offers.
+
+        The definition route is tried first where it exists, because a
+        definition's properties are named and so cannot be filled in the wrong
+        order -- which is the specific failure this whole method is careful
+        about. `Add`'s arguments are then Inventor's documented order and are
+        never permuted: a permutation that Inventor accepts is a part built
+        wrongly, and unlike `_profiles`'s two forms there is nothing here to
+        tell the two apart at the call.
+
+        What *is* tried twice is the trailing `VerifyResults`, present and
+        absent. That is the same optional-with-a-default problem `AddForSolid`
+        had, where leaving it out sends a missing variant Inventor rejects as a
+        type mismatch, and appending an optional flag cannot change what the
+        earlier arguments mean.
+        """
+        direction = self._k(EXTENT_DIRECTIONS[request.direction])
+        operation = self._k(BOOLEAN_OPERATIONS[request.operation])
+        thickness = request.thickness.expression
+        failures: list[str] = []
+
+        factory = getattr(features, "CreateThickenDefinition", None)
+        if factory is not None:
+            try:
+                definition = factory(faces, thickness, direction, operation)
+                return features.Add(definition), "CreateThickenDefinition + Add"
+            except Exception as exc:
+                failures.append(f"CreateThickenDefinition: {_com_message(exc)}")
+
+        # IsOffset is False throughout: the offset mode produces a surface body
+        # and nothing in this server can hold one. `schema.ThickenOp` says so.
+        for arguments in ((faces, thickness, direction, operation, False),
+                          (faces, thickness, direction, operation, False, True)):
+            try:
+                return features.Add(*arguments), f"Add with {len(arguments)} arguments"
+            except Exception as exc:
+                failures.append(f"Add/{len(arguments)}: {_com_message(exc)}")
+
+        raise FeatureError(
+            f"No route to a thicken feature on this release: {'; '.join(failures)}",
+            hint="Read what it really takes with `python scripts/com_signatures.py "
+            "ThickenFeatures`. This call has never run against an Inventor -- "
+            "docs/INVENTOR_SETUP.md says so and says what to confirm.",
+        )
+
+    # -- drawings ----------------------------------------------------------
+    #: A view direction mapped onto Inventor's own orientation enum name. The
+    #: *names* are documented; the values are never guessed -- `_k` reads them
+    #: from the type library and raises a message naming the fix when it cannot,
+    #: so nothing here can be off by a wrong number the way the extrude extents
+    #: were before they were measured.
+    #:
+    #: `iso` is `kIsoTopLeftViewOrientation` rather than a bare "isometric":
+    #: Inventor has four isometric corners and no default among them, so one has
+    #: to be chosen. Top-left is the one Inventor's own base-view dialog offers
+    #: first.
+    _VIEW_ORIENTATIONS = {
+        "front": "kFrontViewOrientation",
+        "rear": "kBackViewOrientation",
+        "top": "kTopViewOrientation",
+        "bottom": "kBottomViewOrientation",
+        "left": "kLeftViewOrientation",
+        "right": "kRightViewOrientation",
+        "iso": "kIsoTopLeftViewOrientation",
+    }
+
+    #: The same for the style. `hidden_line_removed` is the default a recipe
+    #: gets, because it is what an engineering drawing is.
+    _VIEW_STYLES = {
+        "hidden_line": "kHiddenLineDrawingViewStyle",
+        "hidden_line_removed": "kHiddenLineRemovedDrawingViewStyle",
+        "shaded": "kShadedDrawingViewStyle",
+    }
+
+    def new_drawing(self, name: str, *, template: str | None = None,
+                    sheet: str = "a3", units: str = "mm") -> DocInfo:  # pragma: no cover
+        """A new drawing document, which is `new_part` with a different enum.
+
+        The one call in this whole drawing surface that carries no risk:
+        `Documents.Add` is measured and `kDrawingDocumentObject` has been in the
+        constants table since before anything used it. A template given here is
+        the title block, and without one Inventor's default drawing template is
+        used -- which has one, so a sheet is at least sendable.
+
+        `sheet` is recorded and not applied. Inventor takes the sheet size from
+        the template, and overriding it means finding the sheet and setting its
+        size, which is one more unread call for a thing a template already
+        decides. Recorded so the ledger and the sheet agree about what was
+        asked for.
+        """
+        app = self._require_app()
+        with self._translate_errors("Creating the drawing document", DocumentError):
+            drawing_type = self._k("kDrawingDocumentObject")
+            path = template or app.FileManager.GetTemplateFile(drawing_type)
+            document = _specialise(app.Documents.Add(drawing_type, path, True))
+            try:
+                document.DisplayName = name
+            except Exception:
+                pass
+        info = self._register(document, units, "deg")
+        info.detail = {"sheet_asked_for": sheet,
+                       "sheet_from": "the template" if template else "Inventor's default"}
+        return info
+
+    def place_view(self, doc_id: str, request: ViewRequest) -> ViewInfo:  # pragma: no cover
+        """A base view of a part, on this drawing's active sheet.
+
+        **Never executed.** `AddBaseView`'s argument order is Inventor's
+        documented one and is a proposal; `docs/INVENTOR_SETUP.md` says what a
+        run has to settle. The arguments are passed by name through
+        `_call_named` so the positions are readable at the call, and the two
+        enums come from `_k`, so a wrong *name* raises and a wrong *number* is
+        not possible.
+
+        What this cannot rule out is the thing defect 4 is about: that a
+        direction's name describes what you get. `capture_view`'s orientations
+        do not -- `front` returns a top view on a part built on XY -- and a
+        drawing view is a different API reached through a similarly-named enum.
+        So the extent read back off the sheet is the check, and it is why
+        `read_drawing` reports one.
+
+        **A projected view is a different call and does not name a direction at
+        all.** `AddProjectedView` is told a position and infers which way the
+        view faces from where it sits relative to its parent, which is the
+        reverse of a base view -- so the projection angle has to be applied
+        before the call, and `drafting.projected_position` is where that
+        happens. It also means the direction check above is sharper for a
+        projected view than a base one: nothing was asserted about the
+        direction, so what the sheet reports is Inventor's own answer.
+        """
+        document = self._doc(doc_id)
+        model = self._doc(request.part_doc_id)
+        app = self._require_app()
+        sheet = document.ActiveSheet
+        with self._translate_errors("Placing the view"):
+            position = app.TransientGeometry.CreatePoint2d(*request.at)
+            if request.parent is None:
+                view = _call_named(sheet.DrawingViews.AddBaseView, [
+                    ("Model", model),
+                    ("Position", position),
+                    ("Scale", float(request.scale)),
+                    ("ViewOrientation",
+                     self._k(self._VIEW_ORIENTATIONS[request.direction])),
+                    ("ViewStyle", self._k(self._VIEW_STYLES[request.style])),
+                ])
+            else:
+                # A projected view takes no orientation and no scale: which way
+                # it faces is decided by where it sits relative to its parent
+                # and by the sheet's projection angle, and its scale is its
+                # parent's. That is why `drafting.projected_position` works out
+                # the position from the angle -- Inventor is told a place and
+                # infers the direction, which is the reverse of a base view and
+                # the reason the two are separate calls here.
+                view = _call_named(sheet.DrawingViews.AddProjectedView, [
+                    ("ParentView", self._drawing_view(document, request.parent)),
+                    ("Position", position),
+                    ("ViewStyle", self._k(self._VIEW_STYLES[request.style])),
+                ])
+            try:
+                view.Name = request.name
+            except Exception:  # pragma: no cover - version-specific
+                logger.info("Could not name the drawing view %r.", request.name)
+        return ViewInfo(
+            id=request.name,
+            name=str(getattr(view, "Name", request.name)),
+            direction=request.direction,
+            at=tuple(request.at),
+            scale=float(getattr(view, "Scale", request.scale)),
+            style=request.style,
+            extent=_view_extent(view),
+        )
+
+    def retrieve_dimensions(self, doc_id: str,
+                            request: RetrieveRequest) -> list[DimensionInfo]:  # pragma: no cover
+        """Bring the part's own model dimensions onto a view, then keep the asked-for ones.
+
+        **Retrieval rather than placement, and that is the design.** Every sketch
+        dimension this server creates carries a parameter's expression and every
+        driven feature value is a named parameter, so Inventor's own "retrieve
+        model dimensions" produces dimensions that *are* the parameters. Placing
+        a dimension by geometry would mean working out which two drawing curves
+        a parameter drives, which is the guessing a recipe exists to avoid.
+
+        **The whole approach rests on one unmeasured fact**: that a retrieved
+        dimension can be asked which model parameter it came from. If it cannot,
+        there is no way to keep the asked-for dimensions and drop the rest, and
+        this method has to fail loudly rather than leave a sheet carrying every
+        dimension the model happens to hold. `_dimension_parameter` is where
+        that is asked, and the error names it.
+        """
+        document = self._doc(doc_id)
+        view = self._drawing_view(document, request.view)
+        wanted = {name: False for name in request.parameters}
+        wanted.update({name: True for name in request.reference})
+        with self._translate_errors("Retrieving dimensions"):
+            retrieved = self._retrieve_onto(document, view)
+            named = [(entry, self._dimension_parameter(entry)) for entry in retrieved]
+            if retrieved and not any(name for _, name in named):
+                for entry, _ in named:
+                    _delete_quietly(entry)
+                raise FeatureError(
+                    f"{len(retrieved)} dimension(s) were retrieved onto view "
+                    f"{request.view!r} and none of them could say which model "
+                    "parameter it came from, so there is no way to keep the ones "
+                    "this drawing asked for.",
+                    hint="This is the fact the whole retrieve-and-filter approach "
+                    "rests on -- see the drawing section of docs/INVENTOR_SETUP.md. "
+                    "Read what a DrawingDimension really offers with `python "
+                    "scripts/com_signatures.py GeneralDimension`. The retrieved "
+                    "dimensions have been removed again rather than left on a "
+                    "sheet nobody dimensioned.",
+                )
+            kept: list[DimensionInfo] = []
+            for entry, name in named:
+                if name is None or name not in wanted:
+                    _delete_quietly(entry)
+                    continue
+                kept.append(self._dimension_info(entry, request.view, name, wanted[name]))
+        return kept
+
+    def read_drawing(self, doc_id: str) -> DrawingContents:  # pragma: no cover
+        """The sheet as Inventor now has it, which is what closes the round trip.
+
+        Read off the sheet rather than reported from the request, and that is the
+        entire point: a dimension the retrieval could not find is absent here,
+        and a view whose direction did not mean what its name said has an extent
+        that says so.
+        """
+        document = self._doc(doc_id)
+        sheet = document.ActiveSheet
+        views: list[ViewInfo] = []
+        for index in range(1, int(sheet.DrawingViews.Count) + 1):
+            view = sheet.DrawingViews.Item(index)
+            views.append(ViewInfo(
+                id=str(getattr(view, "Name", index)),
+                name=str(getattr(view, "Name", f"view{index}")),
+                # Asked of the view rather than remembered from the request: a
+                # sheet read back has to be able to disagree with what was asked
+                # for, or reading it back proves nothing.
+                direction=_view_orientation_name(
+                    view, self._VIEW_ORIENTATIONS, self._k),
+                at=_view_position(view),
+                scale=float(getattr(view, "Scale", 1.0)),
+                extent=_view_extent(view),
+            ))
+        dimensions: list[DimensionInfo] = []
+        for index in range(1, int(sheet.DrawingDimensions.Count) + 1):
+            entry = sheet.DrawingDimensions.Item(index)
+            name = self._dimension_parameter(entry)
+            dimensions.append(self._dimension_info(
+                entry, _dimension_view_name(entry), name, _is_reference(entry)))
+        return DrawingContents(
+            views=views, dimensions=dimensions,
+            sheet=str(getattr(sheet, "Name", "")) or "a3",
+            detail={"read_from": "the sheet"},
+        )
+
+    #: How a retrieved dimension might name the model parameter it came from,
+    #: as attribute paths tried in order. Nothing in this repository has ever
+    #: held a `DrawingDimension`, so these are documented property paths and a
+    #: proposal -- and unlike an argument order, a wrong guess here cannot build
+    #: anything wrongly: it either names a parameter or it does not.
+    _DIMENSION_PARAMETER_PATHS = (
+        ("ModelDimension", "Parameter", "Name"),
+        ("ModelDimension", "Name"),
+        ("Parameter", "Name"),
+        ("ModelValue", "Parameter", "Name"),
+    )
+
+    def _dimension_parameter(self, entry: Any) -> str | None:  # pragma: no cover
+        """Which model parameter this dimension came from, or None if it will not say."""
+        for path in self._DIMENSION_PARAMETER_PATHS:
+            current: Any = entry
+            for step in path:
+                current = getattr(current, step, None)
+                if current is None:
+                    break
+            if isinstance(current, str) and current:
+                return current
+        return None
+
+    def _dimension_info(self, entry: Any, view: str | None, parameter: str | None,
+                        reference: bool) -> DimensionInfo:  # pragma: no cover
+        return DimensionInfo(
+            id=str(getattr(entry, "Name", "") or id(entry)),
+            value=float(getattr(entry, "ModelValue", 0.0) or 0.0),
+            kind=_dimension_kind(entry),
+            view=view,
+            parameter=parameter,
+            expression=_dimension_expression(entry),
+            reference=reference,
+        )
+
+    #: How a release might offer "retrieve the model's dimensions onto this
+    #: view", tried in order. Every candidate takes the view and nothing else
+    #: that could be misread, so unlike `thicken` there is no argument-order
+    #: risk to guard against -- a wrong name raises and a wrong object is a type
+    #: mismatch.
+    _RETRIEVAL_ROUTES = ("RetrieveDimensions", "AddRetrievedDimensions")
+
+    def _retrieve_onto(self, document: Any, view: Any) -> list[Any]:  # pragma: no cover
+        """Every dimension retrieval put on the sheet, by whichever route works.
+
+        The returned collection is turned into a plain list immediately: the
+        filter that follows deletes some of them, and deleting out of a live COM
+        collection while iterating it is how a loop silently skips half its
+        members.
+        """
+        dimensions = document.ActiveSheet.DrawingDimensions
+        failures: list[str] = []
+        for name in self._RETRIEVAL_ROUTES:
+            route = getattr(dimensions, name, None)
+            if route is None:
+                failures.append(f"{name}: DrawingDimensions has no such method")
+                continue
+            try:
+                result = route(view)
+            except Exception as exc:
+                failures.append(f"{name}: {_com_message(exc)}")
+                continue
+            return _as_list(result)
+        raise FeatureError(
+            "No route to retrieving this part's model dimensions onto the view: "
+            + "; ".join(failures),
+            hint="Read what this release offers with `python "
+            "scripts/com_signatures.py DrawingDimensions`. Retrieval is how this "
+            "server dimensions a drawing at all -- see the drawing section of "
+            "docs/INVENTOR_SETUP.md for why, and what to do if the answer is "
+            "that no such method exists.",
+        )
+
+    def _drawing_view(self, document: Any, name: str) -> Any:  # pragma: no cover
+        sheet = document.ActiveSheet
+        found = []
+        for index in range(1, int(sheet.DrawingViews.Count) + 1):
+            view = sheet.DrawingViews.Item(index)
+            if str(getattr(view, "Name", "")) == name:
+                return view
+            found.append(str(getattr(view, "Name", index)))
+        raise DocumentError(f"This sheet has no view named {name!r}.",
+                            hint=f"Views on it: {', '.join(found) or '(none)'}.")
+
     def combine(self, doc_id: str, request: CombineRequest) -> FeatureInfo:  # pragma: no cover
         document = self._doc(doc_id)
         component = document.ComponentDefinition
@@ -2950,6 +3527,89 @@ class ComBackend(Backend):
                 feature.Name = request.name
         return _feature_info(feature, "circular_pattern",
                              {"count": request.count, "compute": compute})
+
+    def sketch_driven_pattern(self, doc_id: str,
+                              request: SketchDrivenPatternRequest
+                              ) -> FeatureInfo:  # pragma: no cover
+        """Copy features to a sketch's points.
+
+        **Never executed against a real Inventor**, and its signature has never
+        been read -- the third such call, after `move_face` and `thicken`.
+        `docs/INVENTOR_SETUP.md` has what a run must settle, and the question
+        that matters is not the signature: it is **whether Inventor puts an
+        occurrence on the reference point as well**, because that is an
+        off-by-one occurrence in the volume and a duplicate feature sitting
+        exactly on the seed.
+
+        `_patterned` does the work, which is why this is short. It carries the
+        argument names beside their values so the positions are documented at
+        the call, and it already handles the compute-type question a pattern of
+        a hole needs -- measured on 2027.1, where patterning a hole fails
+        outright until the compute type is `kAdjustToModelCompute`. There is no
+        reason to think a sketch-driven pattern of a hole differs.
+
+        No result guard here, unlike `thicken`. The arguments are a collection,
+        a sketch and a point, so a wrong order is a type mismatch rather than a
+        part built wrongly -- and the occurrence-count question is caught by the
+        divergence check instead: `PREDICTED["sketch_driven_pattern"]` is 0.02,
+        and one occurrence too many on a three-point pattern is 33% out.
+        """
+        document = self._doc(doc_id)
+        parents = self._feature_collection(doc_id, request.features)
+        sketch = self._sketch(doc_id, request.sketch)
+        reference = self._sketch_point(sketch, request.reference_index)
+        features = document.ComponentDefinition.Features.SketchDrivenPatternFeatures
+        with self._batch(document), self._translate_errors("Sketch driven pattern"):
+            feature, compute = _patterned(features.Add, self._k, [
+                ("ParentFeatures", parents),
+                ("Sketch", sketch),
+                # Inventor's own dialog offers the seed's centroid or a point
+                # you pick, and the recipe always names a point: a centroid is
+                # not something the simulator has, so a default that used one
+                # could not be rehearsed. See `_NO_CENTROID` in the mock.
+                ("ReferencePoint", reference),
+            ])
+            if request.name:
+                feature.Name = request.name
+        return _feature_info(feature, "sketch_driven_pattern", {
+            "features": list(request.features),
+            "sketch": request.sketch,
+            "points": len(request.point_indices) or None,
+            "reference_index": request.reference_index,
+            "compute": compute,
+        })
+
+    def _sketch_point(self, sketch: Any, index: int) -> Any:  # pragma: no cover
+        """The *index*-th hole-centre point of a sketch, counted as the plan counts.
+
+        `SketchPoints` holds every point in creation order, hole centre or not,
+        and the recipe's indices are into the hole centres alone -- the same
+        indices `hole` uses, so the two operations agree about which point a
+        caller meant. `HoleCenter` is the property that separates them, and a
+        release that does not offer it falls back to every point rather than
+        refusing: the two lists are the same whenever the sketch was built by
+        this server, which puts nothing but hole centres in a positions sketch.
+        """
+        points = sketch.SketchPoints
+        centres = []
+        for position in range(1, int(points.Count) + 1):
+            point = points.Item(position)
+            try:
+                if not bool(point.HoleCenter):
+                    continue
+            except Exception:  # pragma: no cover - version-specific
+                pass
+            centres.append(point)
+        if not centres:
+            centres = [points.Item(position)
+                       for position in range(1, int(points.Count) + 1)]
+        if not 0 <= index < len(centres):
+            raise FeatureError(
+                f"Sketch {sketch.Name!r} has {len(centres)} point(s) to pattern to; "
+                f"there is no point {index} for the seed to sit on.",
+                hint="Add `point`, `point_grid` or `bolt_circle` entities to the sketch.",
+            )
+        return centres[index]
 
     def mirror(self, doc_id: str, request: MirrorRequest) -> FeatureInfo:  # pragma: no cover
         document = self._doc(doc_id)
@@ -3879,9 +4539,11 @@ _FEATURE_TYPES: dict[str, str] = {
     "kRectangularPatternFeatureObject": "rectangular_pattern",
     "kCircularPatternFeatureObject": "circular_pattern",
     "kMirrorFeatureObject": "mirror",
+    "kSketchDrivenPatternFeatureObject": "sketch_driven_pattern",
     # Measured: 2027.1's type library has no kDraftFeatureObject -- the face
     # draft feature's enum is this one.
     "kFaceDraftFeatureObject": "draft",
+    "kMoveFaceFeatureObject": "move_face",
     "kSplitFeatureObject": "split",
     "kCoilFeatureObject": "coil",
     "kEmbossFeatureObject": "emboss",
@@ -4604,6 +5266,163 @@ def _driven_parameters(plan: SketchPlan, applied: Sequence[str]) -> list[str]:
             continue
     return sorted(names)
 
+
+
+def _volume_change(document: Any, before: float) -> float | None:  # pragma: no cover
+    """How much the part's volume moved since *before*, or None if unreadable."""
+    after = _solid_volume(document)
+    return None if after is None else after - before
+
+
+def _within_a_factor(measured: float, predicted: float, factor: float) -> bool:
+    """Whether *measured* is the same sign as *predicted* and within *factor* of it.
+
+    Both halves matter. A layer that grew the part where one was predicted to
+    shrink it is the wrong side, which no magnitude test sees; and a factor
+    rather than a percentage is what catches an argument handed in as an enum
+    integer without faulting an honest disagreement about curvature.
+    """
+    if (measured < 0) != (predicted < 0):
+        return False
+    ratio = abs(measured) / abs(predicted)
+    return 1 / factor <= ratio <= factor
+
+
+# ---------------------------------------------------------------------------
+# Drawings
+# ---------------------------------------------------------------------------
+#
+# Everything below reads a drawing object rather than creating one, and every
+# one of them is written to answer None rather than raise. That is deliberate
+# and is the difference between reading a sheet and building one: a sheet read
+# back is evidence, and a reader that raises on the first property a release
+# spells differently produces no evidence at all. A missing answer is recorded
+# as missing and the caller can say so.
+
+
+def _as_list(result: Any) -> list[Any]:  # pragma: no cover - Windows only
+    """A COM collection or a single object as a plain Python list.
+
+    Taken out of the collection immediately, because the caller deletes some of
+    what it is given: removing an item from a live COM collection while
+    iterating it is how a loop silently skips half its members.
+    """
+    if result is None:
+        return []
+    try:
+        count = int(result.Count)
+    except Exception:
+        return [result]
+    return [result.Item(index) for index in range(1, count + 1)]
+
+
+def _view_extent(view: Any) -> tuple[float, float] | None:  # pragma: no cover
+    """What the view spans on the sheet, in cm, if it will say.
+
+    The check on defect 4's drawing-shaped cousin: a view whose direction did
+    not mean what its name said has an extent that does not match the part's on
+    those axes, and this is the number that shows it.
+    """
+    try:
+        return (float(view.Width), float(view.Height))
+    except Exception:
+        return None
+
+
+def _view_position(view: Any) -> tuple[float, float]:  # pragma: no cover
+    """Where the view's centre sits on the sheet, in cm."""
+    try:
+        centre = view.Center
+        return (float(centre.X), float(centre.Y))
+    except Exception:
+        return (0.0, 0.0)
+
+
+def _view_orientation_name(view: Any, orientations: dict[str, str],
+                           resolve: Callable[[str], int]) -> str:  # pragma: no cover
+    """Which direction this view is, asked of the view.
+
+    Asked rather than remembered, because a sheet read back has to be able to
+    disagree with what was requested or reading it back proves nothing. Falls
+    back to naming the raw enum rather than to the request: a direction this
+    cannot read is not evidence that the request was honoured.
+
+    The enum values come through `resolve` -- the backend's `_k` -- and not from
+    the fallback table, because these are exactly the names the table does not
+    carry. So the comparison works on a machine whose type library is readable
+    and reports the raw number where it is not, which is the honest answer.
+    """
+    try:
+        value = int(view.ViewOrientationType)
+    except Exception:
+        return "unknown"
+    for direction, enum in orientations.items():
+        try:
+            if value == resolve(enum):
+                return direction
+        except Exception:
+            continue
+    return f"orientation {value}"
+
+
+#: How a drawing dimension's type might announce itself. Read as a string
+#: because the enum names are what distinguish a diameter from a length, and a
+#: number would have to be mapped through a table nobody here has measured.
+_DIMENSION_KIND_HINTS = (
+    ("diameter", "diameter"), ("radius", "radius"), ("angular", "angle"),
+    ("angle", "angle"), ("linear", "linear"),
+)
+
+
+def _dimension_kind(entry: Any) -> str:  # pragma: no cover
+    """Whether this is a length, a diameter, a radius or an angle.
+
+    From the object's own type name, which pywin32 exposes for a specialised
+    object and which reads `DiameterGeneralDimension` or `LinearGeneralDimension`
+    -- so the answer is in the name rather than in an enum whose numbering would
+    have to be measured. Defaults to linear, which is what most dimensions are
+    and what a wrong answer costs least on.
+    """
+    described = f"{type(entry).__name__} {getattr(entry, 'Type', '')}".lower()
+    for hint, kind in _DIMENSION_KIND_HINTS:
+        if hint in described:
+            return kind
+    return "linear"
+
+
+def _dimension_expression(entry: Any) -> str | None:  # pragma: no cover
+    """The expression behind the dimension, where it has one to give."""
+    for path in (("ModelDimension", "Parameter", "Expression"),
+                 ("Parameter", "Expression"), ("Text", "Text")):
+        current: Any = entry
+        for step in path:
+            current = getattr(current, step, None)
+            if current is None:
+                break
+        if isinstance(current, str) and current:
+            return current
+    return None
+
+
+def _dimension_view_name(entry: Any) -> str | None:  # pragma: no cover
+    """Which view the dimension is attached to, if it will say."""
+    for path in (("Parent", "Name"), ("DrawingView", "Name")):
+        current: Any = entry
+        for step in path:
+            current = getattr(current, step, None)
+            if current is None:
+                break
+        if isinstance(current, str) and current:
+            return current
+    return None
+
+
+def _is_reference(entry: Any) -> bool:  # pragma: no cover
+    """Whether the dimension is shown as a reference -- bracketed, driving nothing."""
+    try:
+        return bool(entry.IsReferenceDimension)
+    except Exception:
+        return False
 
 def _solid_volume(document: Any) -> float | None:
     """The current volume, or None if it cannot be measured.

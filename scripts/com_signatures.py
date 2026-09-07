@@ -58,6 +58,42 @@ INTERESTING = [
     "WorkPoints.AddByPoint",
     "WorkAxes.AddByTwoPoints",
     "WorkAxes.AddByLine",
+    # `move_face`, added 2026-09-07, and the only entry here that is a question
+    # rather than a dependency: what is recorded about MoveFaceFeatures is that
+    # it has `Add` and `CreateDefinition`, and not what the definition's setter
+    # for a direction and a distance is called. The backend tries three
+    # spellings and names them all when none works; this is how that stops being
+    # necessary. Read the collection whole -- `python scripts/com_signatures.py
+    # MoveFaceFeatures` -- since the definition's own class is what is missing.
+    "MoveFaceFeatures.CreateDefinition",
+    "MoveFaceFeatures.Add",
+    # `thicken`, added the same day and riskier than move_face for one
+    # reason: its arguments are a variant and two enum integers, so an order
+    # that is wrong would not be a type mismatch -- it would hand Inventor a
+    # thickness of 20,481 cm. The backend refuses a result that is not within a
+    # factor of its own prediction, which catches that; reading the signature
+    # makes the guard unnecessary. `CreateThickenDefinition` is tried first
+    # where it exists, because a definition's properties are named.
+    "ThickenFeatures.Add",
+    "ThickenFeatures.CreateThickenDefinition",
+    # `sketch_driven_pattern`, the third unread call. Lower risk than the two
+    # above -- its arguments are a collection, a sketch and a point, so a wrong
+    # order is a type mismatch rather than a part built wrongly -- and what a
+    # signature would settle is whether there is a reference-point argument at
+    # all, and whether an occurrence lands on it.
+    "SketchDrivenPatternFeatures.Add",
+    # Drawings, added 2026-09-07 and the largest unmeasured surface here. The
+    # first two are calls the backend makes; the third is the one that decides
+    # whether the whole retrieve-and-filter design works -- a retrieved
+    # dimension has to be able to name the model parameter it came from, and
+    # nothing here has ever held a DrawingDimension. Read the classes whole:
+    # `python scripts/com_signatures.py GeneralDimension` and
+    # `... DrawingDimensions`, since the properties are what matter and a
+    # property has no signature to print.
+    "DrawingViews.AddBaseView",
+    "DrawingDimensions.RetrieveDimensions",
+    "GeneralDimension",
+    "DrawingDimensions",
     # Not a call this server makes, but the object behind defect 4: `capture_view`
     # orientation names do not describe what you get, and `check_views` says there
     # is nothing to assert until somebody measures what each one produces. Reading

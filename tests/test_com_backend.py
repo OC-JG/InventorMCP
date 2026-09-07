@@ -1518,7 +1518,27 @@ class TestEveryMutatingCallRebuilds:
     #: Methods that change the model and must therefore rebuild it.
     MUTATORS = ["set_parameter", "build_sketch", "extrude", "revolve", "hole",
                 "fillet", "chamfer", "shell", "work_plane", "work_point",
-                "work_axis"]
+                "work_axis", "move_face", "thicken",
+                "sketch_driven_pattern"]
+
+    #: The drawing methods are deliberately absent from the list above, and it
+    #: is worth saying why rather than leaving a gap. `_batch` suspends redraw
+    #: and calls `document.Update()`, which is a *part* document's rebuild; a
+    #: drawing has no features to regenerate and Inventor updates its views as
+    #: the sheet changes. `new_drawing` creates a document rather than editing
+    #: one, and `read_drawing` edits nothing at all.
+    NOT_BATCHED = ["new_drawing", "place_view", "retrieve_dimensions",
+                   "read_drawing"]
+
+    @pytest.mark.parametrize("method", NOT_BATCHED)
+    def test_a_drawing_method_is_not_expected_to_batch(self, method):
+        """So that the exemption above is a decision and not an oversight."""
+        import inspect
+
+        source = inspect.getsource(getattr(com.ComBackend, method))
+        assert "self._batch(" not in source, (
+            f"{method} batches after all -- move it into MUTATORS, since the "
+            "reason it is exempt was that it does not")
 
     @pytest.mark.parametrize("method", MUTATORS)
     def test_it_runs_inside_a_batch(self, method):

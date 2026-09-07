@@ -1,0 +1,64 @@
+{
+  "name": "CalibrationWidenedWall",
+  "description": "The same plate with one side wall pushed 1 mm outward instead of its top face lifted. The second reading on `move_face`, and it is a different question rather than a second helping of the first: the top face is what a cap-and-distance mistake would still get right, while a side wall is picked out of four by a selector and moved along an axis that is not the extrude's own. True answer 40 x 6 x 1 mm = 0.24 cm^3, exact for the same reason as its partner. Two things could make a live run disagree here while `lifted_face` passes -- the selector reaching a different face on Inventor than in the simulator, and a direction argument Inventor reads relative to the face rather than to the model -- and a run that agrees on both fixtures has ruled out both. The volume is deliberately small next to the plate it sits on, so a move that quietly took the whole wall with it is a large fraction rather than a rounding error.",
+  "units": "mm",
+  "parameters": [
+    {
+      "name": "plate_w",
+      "value": 80
+    },
+    {
+      "name": "plate_d",
+      "value": 40
+    },
+    {
+      "name": "plate_t",
+      "value": 6
+    },
+    {
+      "name": "grow",
+      "value": 1,
+      "comment": "how much wider the plate becomes on one side only"
+    }
+  ],
+  "operations": [
+    {
+      "op": "sketch",
+      "name": "Outline",
+      "plane": "xy",
+      "entities": [
+        {
+          "type": "rectangle",
+          "center": [
+            0,
+            0
+          ],
+          "width": "plate_w",
+          "height": "plate_d"
+        }
+      ]
+    },
+    {
+      "op": "extrude",
+      "name": "Plate",
+      "sketch": "Outline",
+      "distance": "plate_t"
+    },
+    {
+      "op": "move_face",
+      "name": "Widen",
+      "faces": {
+        "kind": "face",
+        "filter": "vertical",
+        "near": [
+          40,
+          0,
+          3
+        ],
+        "limit": 1
+      },
+      "direction": "x",
+      "distance": "grow"
+    }
+  ]
+}

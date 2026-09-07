@@ -29,7 +29,8 @@ README = (ROOT / "README.md").read_text(encoding="utf-8")
 ARCHITECTURE = (ROOT / "docs/ARCHITECTURE.md").read_text(encoding="utf-8")
 
 WORDS = {"nineteen": 19, "twenty": 20, "thirty": 30, "forty": 40,
-         "twenty-nine": 29, "thirty-one": 31, "thirty-two": 32}
+         "twenty-nine": 29, "thirty-one": 31, "thirty-two": 32,
+         "thirty-three": 33, "thirty-four": 34, "thirty-five": 35}
 
 
 @pytest.fixture(scope="module")
@@ -60,6 +61,27 @@ def test_the_readme_table_lists_every_tool(registered_tools):
     assert not missing, f"registered but absent from the README table: {sorted(missing)}"
     invented = documented - registered_tools
     assert not invented, f"in the README table and not registered: {sorted(invented)}"
+
+
+
+def test_the_coverage_count_matches_the_list_it_introduces():
+    """`FEATURE_COVERAGE.md` states its own count and then lists the names.
+
+    Two spellings of one fact, so the rule from `DECISIONS.md` applies. This is
+    not a check that the server covers those collections -- the tier sections
+    below it are that, in prose no test can grade. It is the arithmetic only,
+    which is the half that goes stale: `move_face` landed on 2026-09-07 and the
+    sentence said seventeen for as long as it took to notice.
+    """
+    coverage = (ROOT / "docs" / "FEATURE_COVERAGE.md").read_text(encoding="utf-8")
+    match = re.search(r"\*\*Covered today, (\d+) of the 53 collections:\*\*(.*?)\.",
+                      coverage, re.DOTALL)
+    assert match, "the coverage sentence has moved; update this test with it"
+    claimed = int(match.group(1))
+    listed = [name.strip() for name in match.group(2).replace("\n", " ").split(",")]
+    assert claimed == len(listed), (
+        f"the document claims {claimed} covered collections and lists "
+        f"{len(listed)}: {listed}")
 
 
 def test_the_readme_names_every_shipped_example():

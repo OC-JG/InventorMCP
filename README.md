@@ -328,6 +328,9 @@ See [docs/DFM.md](docs/DFM.md).
 | `part_recipe_schema` | Full JSON Schema plus the quick reference |
 | `validate_recipe` | Static checks; no Inventor needed |
 | `drawing_reading_schema` | The shape of a drawing reading, and how to record one |
+| `drawing_recipe_schema` | The shape of a drawing recipe -- a drawing *of* a part |
+| `rehearse_drawing_recipe` | What a drawing would say, held against the part it draws |
+| `build_drawing_from_recipe` | Place the views, retrieve the dimensions, read the sheet back and check it |
 | `check_against_drawing` | Compare a recipe against what a drawing says, dimension by dimension |
 | `build_part_from_recipe` | The main text-to-model entry point |
 | `apply_operations` | Append operations to an open part |

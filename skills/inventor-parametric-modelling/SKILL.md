@@ -56,6 +56,17 @@ still build the wrong part, and these are the ways it does:
   on; a 180-degree flip is a `mirror`. **The volume will look right either
   way** — the simulator counts occurrences and never reads the axis — so this
   warning is the only thing that says so.
+- **`N occurrence(s) of this pattern cut nothing: points [...]`** — a
+  `sketch_driven_pattern` whose seed is a cut and whose occurrences land clear
+  of the part. They remove nothing, and the volume has been charged for them
+  anyway, so the step will diverge too. Move the points, or check the sketch
+  plane. This is the one pattern the simulator places rather than counts, which
+  is why it can tell you at all.
+- **`this layer changes nothing: ...`** — a `thicken` whose `direction` and
+  `operation` cancel: the layer lies where the material already is, or already
+  is not, so the boolean has nothing to do. `positive` + `join` grows the part,
+  `negative` + `cut` thins it, `symmetric` does half either way. Which side
+  Inventor calls `negative` has not been measured against a live seat.
 - **``` `thread` does not work on the Inventor this was measured against ```** —
   the operation is refused before it reaches Inventor. Use a `hole` with `tap`.
 - **``` `hole.bodies` does not work on the Inventor this was measured against ```**
@@ -555,4 +566,29 @@ fastener rather than deriving one.
   and `columns` accept an expression, so `"count": "bolts_per_side * 2"` works
   and a count is revisable like a length. A fractional result is refused rather
   than rounded, since 4.5 holes is a mistake.
+- **`sketch_driven_pattern` has never run against a live Inventor either.**
+  Reach for it only when the feature is not already position-shaped: `hole`
+  takes a list of points and `boss` a list of positions, so irregular holes and
+  bosses need no pattern. The seed sits on `reference` and the occurrences go on
+  the other points, so N points means N of the feature — whether Inventor also
+  patterns the reference point onto itself is the one thing unconfirmed, and it
+  would show as a duplicate feature rather than a wrong volume. It is the only
+  pattern the simulator places rather than counts, so a rehearsal of it can tell
+  you an occurrence landed off the part.
+- **`thicken` has never run against a live Inventor either**, and what is
+  unmeasured about it is not a number: the arithmetic is exact per planar face,
+  and what nobody has confirmed is which side of a face a `negative` layer lies
+  on. So `positive` + `join` to grow a part and `negative` + `cut` to thin it
+  are the pairs to write; if a rehearsal warns that a layer changes nothing,
+  believe it. It is the way to grow every wall of a box at once, which
+  `move_face` cannot say with a single direction. Turning a *surface* into a
+  wall — Inventor's other use for this feature — is not reachable here at all,
+  because nothing in this server creates a surface.
+- **`move_face` has never run against a live Inventor**, and unlike the
+  operations above it the COM signature itself is unconfirmed rather than just
+  the behaviour. It is exact in the simulator -- a planar face moved along its
+  own normal changes the part by area times distance -- so a rehearsal of it
+  means something; a live success does not, yet. It is the only way to alter
+  imported geometry, which is why it exists. Check the `measured` block against
+  the arithmetic by hand before reporting such a part finished.
 - Assemblies, drawings and sheet metal are not supported at all.

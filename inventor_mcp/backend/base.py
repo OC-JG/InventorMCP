@@ -358,6 +358,175 @@ class DraftRequest:
 
 
 @dataclass
+class MoveFaceRequest:
+    """Faces of an existing solid, and where they go.
+
+    `distance` is always positive and `flip` is the only way to reverse it, so
+    there is one spelling of a given move rather than two that have to agree.
+    """
+
+    faces: ResolvedSelector
+    direction: AxisSpec
+    distance: Driven
+    flip: bool = False
+    name: str | None = None
+
+
+#: What one unit of `area * thickness` does to a solid, per thicken direction
+#: and operation. Set algebra rather than a table of Inventor's behaviour: the
+#: layer is a slab swept from the face along its own normal, the operation is a
+#: boolean against the solid, and a face's normal points out of it. So the
+#: outward half of the slab is air and the inward half is material:
+#:
+#: * `positive`/`join` -- the whole slab is air, and joining adds all of it: +1.
+#: * `negative`/`cut` -- the whole slab is material, and cutting takes it: -1.
+#: * `symmetric` -- half either side, so a join adds the outward half and a cut
+#:   removes the inward one: +/-0.5.
+#: * `positive`/`cut` -- the slab is air; there is nothing there to remove: 0.
+#: * `negative`/`join` -- the slab is material; a union with material changes
+#:   nothing: 0.
+#:
+#: It lives here, above both backends, rather than in each of them. The two
+#: disagreeing about which side a layer goes on is the `trim` inversion again --
+#: defect 5, which survived three runs because each half was self-consistent --
+#: and one table cannot disagree with itself. What is *not* settled by set
+#: algebra is whether Inventor's "negative" means this side, which is what
+#: `live_acceptance.py --only thicken` is for.
+THICKEN_SHARE: dict[tuple[str, str], float] = {
+    ("positive", "join"): 1.0,
+    ("positive", "cut"): 0.0,
+    ("negative", "join"): 0.0,
+    ("negative", "cut"): -1.0,
+    ("symmetric", "join"): 0.5,
+    ("symmetric", "cut"): -0.5,
+}
+
+
+@dataclass
+class ThickenRequest:
+    """Faces, a layer thickness, and which side of them it goes on.
+
+    `thickness` is always positive; `direction` is the only thing that says
+    which way, so a given layer has one spelling rather than two.
+    """
+
+    faces: ResolvedSelector
+    thickness: Driven
+    direction: str = "positive"
+    operation: str = "join"
+    name: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Drawings
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ViewInfo(Info):
+    """A view placed on a sheet."""
+
+    id: str
+    name: str
+    #: "front" | "rear" | "top" | "bottom" | "left" | "right" | "iso".
+    direction: str
+    #: Where the view's centre sits on the sheet, in cm.
+    at: tuple[float, float] = (0.0, 0.0)
+    scale: float = 1.0
+    style: str = "hidden_line_removed"
+    #: What the view spans on the sheet, in cm, if the backend can say.
+    extent: tuple[float, float] | None = None
+    detail: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class DimensionInfo(Info):
+    """A dimension on a sheet, as the sheet has it.
+
+    `parameter` is what makes a retrieved dimension worth retrieving: it is the
+    model parameter the dimension came from, so a sheet read back says which of
+    the part's numbers it states rather than only which numbers appear on it.
+    None where the dimension is not a model dimension, or where the backend
+    cannot say which parameter drove it.
+    """
+
+    id: str
+    #: In cm for a length, radians for an angle -- the backend's own units.
+    value: float
+    #: "linear" | "diameter" | "radius" | "angle".
+    kind: str = "linear"
+    view: str | None = None
+    parameter: str | None = None
+    expression: str | None = None
+    reference: bool = False
+
+
+@dataclass
+class DrawingContents(Info):
+    """A sheet as read back off it, which is the point of reading it back.
+
+    Deliberately not a `DrawingReading`: that is a pydantic model in the recipe
+    layer, and the backend contract is dataclasses all the way down.
+    `drafting.py` turns one of these into a reading, so the same conversion
+    serves a sheet the simulator made and a sheet Inventor made.
+    """
+
+    views: list[ViewInfo] = field(default_factory=list)
+    dimensions: list[DimensionInfo] = field(default_factory=list)
+    sheet: str = "a3"
+    #: Anything worth saying about how the sheet came to be -- which retrieval
+    #: route worked, what was dropped. Absent when there is nothing to say.
+    detail: dict[str, Any] | None = None
+
+
+@dataclass
+class ViewRequest:
+    """A base view of a part, on a drawing sheet.
+
+    `part_doc_id` is a document rather than a file: a drawing is normally made
+    of the part that is already open, and requiring a saved path first would
+    make the commonest case the awkward one.
+    """
+
+    part_doc_id: str
+    name: str
+    #: "front" | "rear" | "top" | "bottom" | "left" | "right" | "iso".
+    direction: str = "front"
+    #: Sheet position of the view's centre, in cm. Always given: where a
+    #: projected view goes is worked out from its parent and the sheet's
+    #: projection angle before it reaches here, so that the rule lives in one
+    #: place and both backends get the same answer from it.
+    at: tuple[float, float] = (0.0, 0.0)
+    scale: float = 1.0
+    style: str = "hidden_line_removed"
+    #: Name of the view this is projected from, or None for a base view. A
+    #: projected view is a different Inventor call and inherits its parent's
+    #: scale, so the two cannot be collapsed into one request.
+    parent: str | None = None
+
+
+@dataclass
+class RetrieveRequest:
+    """Which of a part's model dimensions to bring onto a view.
+
+    Retrieval rather than placement, and the reason is the parts this server
+    builds. Every sketch dimension it creates carries a parameter's expression,
+    so Inventor's own "retrieve model dimensions" produces dimensions that *are*
+    the parameters -- where placing a dimension by geometry would mean working
+    out which two edges on the view are the ones a parameter drives, which is
+    the guessing a recipe exists to avoid.
+
+    `parameters` is what to keep. Everything else retrieved is removed again,
+    because a sheet carrying every dimension the model happens to hold is not a
+    drawing anybody dimensioned.
+    """
+
+    view: str
+    parameters: Sequence[str] = ()
+    reference: Sequence[str] = ()
+
+
+@dataclass
 class CombineRequest:
     base: int
     tools: Sequence[int]
@@ -395,6 +564,25 @@ class CircularPatternRequest:
     count: int
     angle: Driven
     fitted: bool = True
+    name: str | None = None
+
+
+@dataclass
+class SketchDrivenPatternRequest:
+    """Features, the sketch whose points position them, and which point the seed is on.
+
+    Points are 0-based indices into the sketch's hole-centre points, in creation
+    order, exactly as `HoleRequest` carries them -- the same entities lay out a
+    set of holes and a set of occurrences, and resolving names to indices is the
+    builder's job in both cases. Empty means every hole centre in the sketch.
+    """
+
+    sketch: str
+    point_indices: Sequence[int] = ()
+    #: Which hole centre the seed already sits on, indexed the same way. The
+    #: occurrences go on the others.
+    reference_index: int = 0
+    features: Sequence[str] = ()
     name: str | None = None
 
 
@@ -572,6 +760,10 @@ class Backend(ABC):
     def circular_pattern(self, doc_id: str, request: CircularPatternRequest) -> FeatureInfo: ...
 
     @abstractmethod
+    def sketch_driven_pattern(self, doc_id: str,
+                              request: SketchDrivenPatternRequest) -> FeatureInfo: ...
+
+    @abstractmethod
     def mirror(self, doc_id: str, request: MirrorRequest) -> FeatureInfo: ...
 
     @abstractmethod
@@ -585,6 +777,27 @@ class Backend(ABC):
 
     @abstractmethod
     def draft(self, doc_id: str, request: DraftRequest) -> FeatureInfo: ...
+
+    @abstractmethod
+    def move_face(self, doc_id: str, request: MoveFaceRequest) -> FeatureInfo: ...
+
+    @abstractmethod
+    def thicken(self, doc_id: str, request: ThickenRequest) -> FeatureInfo: ...
+
+    # -- drawings ----------------------------------------------------------
+    @abstractmethod
+    def new_drawing(self, name: str, *, template: str | None = None,
+                    sheet: str = "a3", units: str = "mm") -> DocInfo: ...
+
+    @abstractmethod
+    def place_view(self, doc_id: str, request: ViewRequest) -> ViewInfo: ...
+
+    @abstractmethod
+    def retrieve_dimensions(self, doc_id: str,
+                            request: RetrieveRequest) -> list[DimensionInfo]: ...
+
+    @abstractmethod
+    def read_drawing(self, doc_id: str) -> DrawingContents: ...
 
     @abstractmethod
     def combine(self, doc_id: str, request: CombineRequest) -> FeatureInfo: ...

@@ -169,7 +169,10 @@ def test_the_readme_quotes_the_numbers_the_simulator_produces():
     # The table is prose, so it uses a typographic minus (U+2212) rather than a
     # hyphen. Matching only the hyphen read every removal as an addition and the
     # sign error was in the test, not in the thing it was checking.
-    rows = re.findall(r"^\| `([a-z_]+)` \| `([a-z]+)` \| ([\u2212+-]?[\d.]+) cm³ \|",
+    # Both columns take an underscore: the operation column did not, until
+    # `move_face` became the first operation here whose name carries one --
+    # and a row that does not match is a row this test silently stops reading.
+    rows = re.findall(r"^\| `([a-z_]+)` \| `([a-z_]+)` \| ([\u2212+-]?[\d.]+) cm³ \|",
                       readme, re.MULTILINE)
     described = {stem for stem, _, _ in rows}
     assert described == {path.stem for path in RECIPES}, (

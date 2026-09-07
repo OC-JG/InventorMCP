@@ -1,0 +1,123 @@
+{
+  "name": "CalibrationSpreadPockets",
+  "description": "A plate with one pocket cut in it, then that pocket copied to three more sketch points. The instrument for `sketch_driven_pattern`, and what it measures is not the arithmetic: an occurrence does whatever its seed did, which is the same rule `rectangular_pattern` and `circular_pattern` use and which is already measured against Inventor at 0.02 on the pulley and the threaded boss. What has never been measured is a semantic question -- WHETHER INVENTOR ALSO PUTS AN OCCURRENCE ON THE REFERENCE POINT. The recipe assumes it does not: the seed already sits at (-35, -20), that point is named as the reference, and the three other points get one occurrence each, so a sketch of four points describes a plate with four pockets in it and 1.6 cm^3 removed in total. If Inventor instead places an occurrence at every point including the reference there are five pockets, one of them sitting exactly on top of the seed and removing nothing extra -- so the volume would still be 58.4 and the answer would be visible only as a duplicate feature in the browser. And if it places five where the fifth lands somewhere else, the volume comes back 58.0. So the readings are: 58.4 with four pockets on the part confirms the recipe's assumption, 58.0 says an occurrence went somewhere unaccounted for, and 58.4 with five features in the browser says the reference is patterned onto itself. The occurrence count is what to read, not just the volume -- which is why the live check counts the features as well as measuring the part.",
+  "units": "mm",
+  "parameters": [
+    {
+      "name": "plate_w",
+      "value": 100
+    },
+    {
+      "name": "plate_d",
+      "value": 60
+    },
+    {
+      "name": "plate_t",
+      "value": 10
+    },
+    {
+      "name": "pocket",
+      "value": 10
+    },
+    {
+      "name": "pocket_deep",
+      "value": 4,
+      "comment": "each pocket removes 10 x 10 x 4 mm = 0.4 cm^3"
+    }
+  ],
+  "operations": [
+    {
+      "op": "sketch",
+      "name": "Outline",
+      "plane": "xy",
+      "entities": [
+        {
+          "type": "rectangle",
+          "center": [
+            0,
+            0
+          ],
+          "width": "plate_w",
+          "height": "plate_d"
+        }
+      ]
+    },
+    {
+      "op": "extrude",
+      "name": "Plate",
+      "sketch": "Outline",
+      "distance": "plate_t"
+    },
+    {
+      "op": "sketch",
+      "name": "Seed",
+      "plane": "xy",
+      "entities": [
+        {
+          "type": "rectangle",
+          "center": [
+            -35,
+            -20
+          ],
+          "width": "pocket",
+          "height": "pocket"
+        }
+      ]
+    },
+    {
+      "op": "extrude",
+      "name": "Slot",
+      "sketch": "Seed",
+      "distance": "pocket_deep",
+      "operation": "cut"
+    },
+    {
+      "op": "sketch",
+      "name": "Spots",
+      "plane": "xy",
+      "entities": [
+        {
+          "type": "point",
+          "name": "home",
+          "position": [
+            -35,
+            -20
+          ]
+        },
+        {
+          "type": "point",
+          "name": "a",
+          "position": [
+            0,
+            0
+          ]
+        },
+        {
+          "type": "point",
+          "name": "b",
+          "position": [
+            35,
+            20
+          ]
+        },
+        {
+          "type": "point",
+          "name": "c",
+          "position": [
+            -35,
+            20
+          ]
+        }
+      ]
+    },
+    {
+      "op": "sketch_driven_pattern",
+      "name": "Spread",
+      "features": [
+        "Slot"
+      ],
+      "sketch": "Spots",
+      "reference": "home"
+    }
+  ]
+}

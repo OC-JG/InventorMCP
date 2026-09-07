@@ -13,15 +13,21 @@ Revolve Rib RuleFillet RuledSurface Sculpt Shell Simplify SketchDrivenPattern
 Slot SnapFit Split Sweep Thicken Thread Trim Unwrap iFeatures
 ```
 
-**Covered today, 17 of the 53 collections:** Extrude, Revolve, Sweep, Loft,
+**Covered today, 20 of the 53 collections:** Extrude, Revolve, Sweep, Loft,
 Coil, Hole, Fillet, Chamfer, Shell, RectangularPattern, CircularPattern, Mirror,
-Thread, Emboss, FaceDraft, Combine, Split. Work planes, work axes, work points
-and material are covered too and are not `Features` collections, so they sit
-outside the count. `boss` and
+Thread, Emboss, FaceDraft, Combine, Split, MoveFace, Thicken,
+SketchDrivenPattern. Work planes, work axes, work points and material are
+covered too and are not `Features`
+collections, so they sit outside the count. `boss` and
 `rib` exist as recipe operations but are built from primitives, because neither
-Inventor feature can be created through the API -- see below.
+Inventor feature can be created through the API -- see below. **MoveFace,
+Thicken and SketchDrivenPattern are the three on that list whose COM calls have
+never executed** -- all added 2026-09-07, measured in the simulator, unmeasured
+live, and kept in the count rather than out of it because the schema offers them
+to a caller either way. Tier 1c below says what that means, and for Thicken it
+also says which half of Inventor's feature is reachable at all.
 
-Seventeen of fifty-three flatters the gap in one direction and overstates it in
+Twenty of fifty-three flatters the gap in one direction and overstates it in
 the other: the covered ones are the high-frequency core of solid
 modelling, and a good half of what is missing is surfacing and repair work that a
 text-to-part server has no business doing.
@@ -112,18 +118,156 @@ also passes the simulator rehearsal.
     were already implemented and are confirmed here: 1.9792 cm^3 for a 6 circle
     swept 70 mm, and 13.6136 cm^3 for a 30-to-10 loft over 40 mm.
 
-### Tier 2 -- frequently wanted, no current workaround
+### Tier 1c -- landed in the simulator, unmeasured against Inventor
 
-5. **SketchDrivenPattern.** Pattern by sketch points. Rectangular and circular
-   patterns cover the regular cases; anything irregular currently has to be
-   enumerated by hand.
-6. **Thicken.** Turning a surface into a wall. `ThickenFeatures.Add` is public.
-   `FaceOffsetFeatures` only exposes `_Add`, and Inventor's leading underscore
-   means internal, so plain face offset is not on the table.
-7. **MoveFace.** `MoveFaceFeatures` has `Add` and `CreateDefinition`, so this is
-   buildable, and it is the only route to changing imported geometry -- the
-   server reads STEP for DFM analysis and can then alter nothing, because
-   translated geometry has no parameters.
+7. **MoveFace.** *Added 2026-09-07 as `{"op":"move_face",...}`. Exact in the
+   simulator; its COM half has never executed.* Taken ahead of the other two
+   Tier 2 items because it is the only one that adds a kind of reach rather than
+   a feature: it is the one route to changing imported geometry, and the server
+   could read a STEP part for DFM analysis and then alter nothing about it,
+   because translated geometry has no sketches and no parameters for anything
+   else here to take hold of.
+
+   **The arithmetic is a dot product, not an estimate**, which is why this can
+   be a prediction rather than a measurement: a planar face of area A translated
+   by v changes the solid by `A*(v.n)`, its own normal doing the projecting. So a
+   face pushed along its normal changes the part by area times distance, and one
+   slid along its own plane changes nothing, both out of the same expression.
+   `examples/calibration/lifted_face.json` and `widened_wall.json` say +6.4000
+   and +0.2400 cm^3, each agreeing with the hand derivation to the digit.
+
+   Exact while the moved face keeps its area, which is true of a wall on a prism
+   and is what a wall-thickness or clearance move is. It is not true of a face
+   bounded by a fillet or a draft, and the `ponytail` on the simulator's
+   `move_face` says so along with the other limit: the ledger is not updated, so
+   a cut driven through a moved face is charged the thickness the part had
+   before the move.
+
+   Only the direction-and-distance move is offered. Inventor's planar drag and
+   rotate-about-a-line are deliberately absent: this is the shape a wall
+   thickness or a clearance is expressed in, and it is the one whose result the
+   rehearsal can predict at all.
+
+   **What is unmeasured here is unusual, and worth naming exactly.** Every other
+   COM call in this server was read off a type library before it was written.
+   This one was not: what is recorded above is that `MoveFaceFeatures` has `Add`
+   and `CreateDefinition`, and *not* what the definition's setter is called. So
+   the backend tries three spellings, each of which can only mean direction and
+   distance, and names every one it tried when none of them work -- rather than
+   one guess that comes back as a bare "Exception occurred". A free-drag or
+   point-to-point setter is deliberately not among them: one of those accepting
+   a direction and a distance by accident is exactly the quietly wrong part this
+   file exists to catch. `docs/INVENTOR_SETUP.md` has what a live run must
+   confirm, and `scripts/com_signatures.py --search MoveFace` is where it starts.
+
+6. **Thicken.** *Added 2026-09-07 as `{"op":"thicken",...}`, and it closes half
+   of what this item asked for.* The half it closes is the wall-thickness one: a
+   layer of material added to or removed from faces, each along **its own**
+   normal, which is what makes it a different operation from `move_face` rather
+   than a spelling of it. A box's four walls point four ways, so `positive` +
+   `join` grows all four outward in one operation where a single named direction
+   would push two out and two in. `negative` + `cut` thins them. That is the DFM
+   wall remedy, and `dfm/discover.py` has expected a thicken feature's thickness
+   to count as evidence of the `wall` role since before one could be built.
+
+   **The half it does not close is the headline one: turning a surface into a
+   wall.** Not because of the schema -- because *no operation in this server
+   creates a surface*. `extrude`, `loft` and `sweep` all produce solids; there is
+   no surface body anywhere, and Inventor's `kSurfaceOperation` is not offered
+   for that reason. So the only surface a part here could hold is one that
+   arrived through `import_geometry`, and thickening it would work today if it
+   did. Inventor's offset mode is absent for the same reason: it *produces* a
+   surface, and nothing downstream could take one. `FaceOffsetFeatures` only
+   exposes `_Add`, and Inventor's leading underscore means internal, so plain
+   face offset was never on the table either.
+
+   **Exact per planar face, first-order on a curved one.** A planar face's area
+   times the layer is a prism; a cylinder of radius r thickened by t gains
+   `pi*((r+t)^2 - r^2)*h` where `area*t` is `2*pi*r*h*t`, so the missing term is
+   `pi*t^2*h` -- second order, and small while the layer is thin next to the
+   radius, which is what a wall is. It is charged rather than declined, unlike
+   the same face under `move_face`, and the difference is real: there the move's
+   direction is arbitrary relative to the face so the dot product has no answer,
+   while here the direction *is* the face's own normal.
+
+   **What is genuinely unmeasured is a side and a corner, not a number.**
+   `THICKEN_SHARE` in `backend/base.py` says which side of a face a `negative`
+   layer lies on, and therefore that `positive` + `cut` and `negative` + `join`
+   do nothing at all -- the layer is where the material already is not, or
+   already is. That is sound set algebra about a boolean against a slab and it
+   is silent on whether Inventor agrees, so the two cancelling pairs are warned
+   about at rehearsal rather than refused: a refusal would prevent the run that
+   settles it. And four walls grown outward leave a 1 x 1 x 6 mm notch at each
+   corner belonging to no wall, so the answer is 1.4400 cm^3 if Inventor leaves
+   them and 1.4640 if it closes them. `examples/calibration/thickened_walls.json`
+   and `thinned_wall.json` isolate one question each; a tolerance cannot catch
+   being wrong about a side, which is what defect 5 was.
+
+   The COM call has never executed and its signature has never been read, the
+   same as `move_face` -- with one difference that is handled in the code rather
+   than left to a run. Its arguments are a variant and two enum *integers*, so a
+   wrong order need not raise: it would be accepted and build something
+   enormous. So the backend measures the result against the area-times-thickness
+   prediction and refuses anything outside a factor of four, deleting the
+   feature rather than leaving it in the part.
+
+5. **SketchDrivenPattern.** *Added 2026-09-07 as
+   `{"op":"sketch_driven_pattern",...}`. The simulator **places** its
+   occurrences, which no other pattern here does; the COM call has never
+   executed.*
+
+   **The gap was narrower than this entry used to claim.** It said anything
+   irregular "has to be enumerated by hand", and that reads as a bigger absence
+   than it was: `hole` already takes a list of points and `boss` a list of
+   positions, so an irregular set of holes or bosses needs no pattern at all --
+   put the points in one sketch and drill them in one operation. What was
+   genuinely missing is patterning a feature whose definition is *not* already a
+   list of positions: a pocket, a rib, a filleted detail. That is the real gap
+   and it is the smallest of the three items in this tier, which is the opposite
+   of what the ordering implied.
+
+   **It is the only pattern that places its occurrences rather than counting
+   them**, and the reason is what its input is. `_repeat` charges the seed's
+   volume once per extra occurrence and records no prism, which is exact while
+   the copies neither overlap nor run off the part -- and the three shipped
+   examples that pattern or mirror agree with Inventor to 0.003% on exactly
+   that. But a rectangular pattern's count and spacing already say it did
+   something, while this one is handed positions and nothing else, so a version
+   that counted them could not tell a correct recipe from one whose points all
+   miss the part.
+
+   Placement is exact because a translation is: a `_Slab` is an outline in one
+   of three origin planes plus a sweep along the normal, so shifting one is
+   shifting those. A rotation or a reflection is only representable that way in
+   special cases, which is why `circular_pattern` and `mirror` still count --
+   and why doing them is a separate change that has to *reproduce* the 0.003%
+   rather than improve on it.
+
+   Two things fall out of the placement, and they are what paid for it. A cut
+   driven through where an occurrence went is measured against what the pattern
+   left rather than what the seed started with -- a 6 mm hole through a copied
+   4 mm pocket in a 10 mm plate is charged 6 mm of material, not 10. And an
+   occurrence of a *cutting* seed that stands over air is reported, which is a
+   recipe whose points are in the wrong place. That second check is deliberately
+   narrow: it is only asked where every feature that added material recorded
+   prisms for it, because `_material_spans` answers None both for "no material
+   here" and for "this part's material was never modelled as prisms", and
+   reporting the second as a miss would fire a warning on a correct recipe.
+
+   Slabs now carry the name of the feature that created them. `source` could
+   not answer "which prisms are the seed's" -- a part with two extrudes has two
+   sets of slabs both saying "extrude" -- and a pattern that copies a seed's
+   prisms has to know. An unattributed prism is not copied, which today means a
+   shell's cavity, and a shell is not a thing anyone patterns.
+
+   `PREDICTED["sketch_driven_pattern"]` is **0.02 rather than the placeholder**,
+   which looks inconsistent beside the other two unmeasured operations and is
+   not. Its arithmetic is the rule the other patterns use and is measured. What
+   is unmeasured is whether Inventor also places an occurrence on the reference
+   point -- an off-by-one *occurrence*, 33% on a three-point pattern -- and a
+   tight tolerance reports that where 0.5 would hide it.
+
+### Tier 2 -- frequently wanted, no current workaround
 
 Not tier 2 after all, checked against the type library rather than the docs:
 **Lip, SnapFit, Grill, Rest** and **DirectEdit** are all read-only collections
