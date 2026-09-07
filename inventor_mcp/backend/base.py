@@ -177,6 +177,12 @@ class MassProps(Info):
     density: float | None = None
     material: str | None = None
     center_of_mass: tuple[float, float, float] | None = None
+    #: Where the centroid came from, when one is reported at all. Read it: the
+    #: simulator has no centroid to give and says so here rather than handing
+    #: back the bounding box's centre, which ignores every void the part has and
+    #: so does not move when a bolt circle does. ``None`` from a backend that
+    #: never said.
+    center_of_mass_from: str | None = None
     bounding_box: tuple[float, float, float, float, float, float] | None = None
 
 

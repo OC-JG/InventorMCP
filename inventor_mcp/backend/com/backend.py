@@ -3181,6 +3181,7 @@ class ComBackend(Backend):
                 float(properties.CenterOfMass.Y),
                 float(properties.CenterOfMass.Z),
             ),
+            center_of_mass_from="Inventor's MassProperties",
             bounding_box=(
                 float(box.MinPoint.X), float(box.MinPoint.Y), float(box.MinPoint.Z),
                 float(box.MaxPoint.X), float(box.MaxPoint.Y), float(box.MaxPoint.Z),

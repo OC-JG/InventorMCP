@@ -49,6 +49,33 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   measured as numbers instead of judged by eye.
 
 ### Fixed
+- **The simulator no longer invents a centre of mass** — `mass_properties`
+  reported the bounding box's centre as the part's centroid, and a box centre is
+  not an approximate centroid but a different quantity: it does not move for a
+  void at all. The plate the acceptance check above is built around reported
+  `(0, 0, 0.5)` with its bolt circle 30 mm off-axis, and `(0, 0, 0.5)` again at
+  45 mm, where Inventor differs by 0.37 mm in X between the two.
+
+  That is worse than an approximation, because `check_work_geometry` judges the
+  off-centre bolt-circle axis by exactly this shift and *skips*, with a note,
+  when a backend reports no centroid. A backend reporting a constant one is not
+  skipped: it fails, against a work axis that had done its job. So the number is
+  gone rather than flagged, and `MassProps.center_of_mass_from` says which it is
+  — the simulator's sentence points at `bounding_box` for the box centre, and
+  the COM backend names Inventor's own `MassProperties`.
+
+  Not computed from the volume ledger, though the signed prisms hold what a
+  centroid needs. It would be real for a plate with drilled holes and wrong for
+  this one: a `circular_pattern` moves volume without recording prisms of its
+  own, so the ledger knows one bore of six and would produce a figure that moves
+  by a sixth of the truth. Worth revisiting when a pattern records its
+  occurrences, which is the open `ponytail` on `_repeat`; there is no caller for
+  a centroid until then.
+
+- **The roadmap's `ponytail:` count guard could not pass on Windows** — it keyed
+  the counts by `str(path)` and looked one up by its forward-slash spelling, so
+  the drift test that guards the count only ever reported drift.
+
 - **A save onto a path Inventor already has open is refused by name** — defect
   3, and the fix is not a better message. Inventor will not write a file it has
   open, and says so with a bare "Exception occurred" and nothing in the

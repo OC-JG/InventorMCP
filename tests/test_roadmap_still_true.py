@@ -62,7 +62,11 @@ def ponytail_markers() -> dict[str, int]:
     for path in sorted((ROOT / "inventor_mcp").rglob("*.py")):
         found = sum(1 for line in path.read_text().splitlines() if "ponytail:" in line)
         if found:
-            counts[str(path.relative_to(ROOT))] = found
+            # `as_posix`, not `str`: on Windows the key came out with
+            # backslashes, the lookup below asked for the forward-slash spelling
+            # and got `None`, and the assertion could not pass whatever the
+            # roadmap said -- a drift guard that only ever reported drift.
+            counts[path.relative_to(ROOT).as_posix()] = found
     return counts
 
 
