@@ -49,6 +49,7 @@ from ...plan import (
 )
 from ...units import from_internal, inventor_symbol, unit_from_inventor
 from ..base import (
+    _same_file_key,
     AppInfo,
     AxisSpec,
     Backend,
@@ -1138,6 +1139,42 @@ class ComBackend(Backend):
                 )
             )
         return results
+
+    def document_at_path(self, path: str) -> tuple[str | None, str] | None:  # pragma: no cover
+        """Which open document occupies *path*, cheaply.
+
+        One ``FullFileName`` read per open document and nothing else on the miss
+        path, which is the normal one. ``list_documents`` cannot be used here:
+        it reads six properties per document, scans the held handles by COM
+        identity for each, and registers every document it did not recognise --
+        so on the session this was found on, with 1033 documents open behind an
+        assembly, a single save would have minted a thousand handles and left
+        the next call comparing a million COM identities.
+
+        Only a match costs more, and then only for that one document: its
+        display name, and a scan of the *held* handles -- a handful -- to see
+        whether this session has an id for it. No id means the user opened it in
+        Inventor's UI, which the caller reports differently because there is no
+        handle to close by.
+        """
+        app = self._require_app()
+        target = _same_file_key(path)
+        documents = app.Documents
+        for index in range(1, int(documents.Count) + 1):
+            document = documents.Item(index)
+            try:
+                full = str(document.FullFileName)
+            except Exception:
+                # An unsaved document has no file name on some releases and
+                # raises rather than returning empty. It cannot hold a path.
+                continue
+            if not full or _same_file_key(full) != target:
+                continue
+            for held_id, held in self._documents.items():
+                if _same_com_object(document, held):
+                    return held_id, str(document.DisplayName)
+            return None, str(document.DisplayName)
+        return None
 
     def activate_document(self, doc_id: str) -> DocInfo:  # pragma: no cover - Windows only
         document = self._doc(doc_id)

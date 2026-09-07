@@ -38,8 +38,25 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 - **The roadmap's `ponytail:` count guard could not pass on Windows** — it keyed
   the counts by `str(path)` and looked one up by its forward-slash spelling, so
   the drift test that guards the count only ever reported drift.
+- **The save guard no longer walks every open document.** It asked
+  `list_documents`, and the first live connection reported **1033 open
+  documents** behind an assembly. On the COM backend that listing reads six
+  properties per document, scans the held handles by COM identity for each, and
+  *registers every document it did not recognise* — so a single `save_part` with
+  a path would have minted a thousand session handles and left the next call
+  comparing a million COM identities. Caught by reading the connection's own
+  reply, not by anything failing.
 
-### Fixed
+  The guard now asks `document_at_path`, one narrow question each backend
+  answers as cheaply as it can: on COM, one `FullFileName` read per document on
+  the miss path and nothing else, with the display name and the held-handle scan
+  paid only for a real match. The rule itself stays shared on `Backend`; only
+  the enumeration is per-backend, and a test holds that split.
+
+  It also surfaced a case the first version could not name: a document open
+  because the *user* opened it in Inventor's UI has no session handle, so the
+  refusal now says "opened outside this session" and says to close it in
+  Inventor, rather than offering `close_part(document=None)`.
 - **The recipe's sketch labels never reached Inventor** — defect 8, found by the
   first live run of the work-geometry check (2026-09-07, Inventor 2027.1) and
   fixed the same day. `build_sketch` on the COM backend creates each entity and

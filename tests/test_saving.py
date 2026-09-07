@@ -246,3 +246,144 @@ class TestTheGuardIsOnTheContract:
             source = inspect.getsource(implementation.save_document)
             assert "refuse_a_path_another_document_holds" in source, (
                 f"{implementation.__name__}.save_document does not ask the guard")
+
+
+class TestTheCostOfAsking:
+    """Why the guard does not go through `list_documents`.
+
+    The first live run reported 1033 open documents behind an assembly. On the
+    COM backend `list_documents` reads six properties per document, scans the
+    held handles by COM identity for each, **and registers every document it did
+    not recognise** -- so one save would have minted a thousand session handles
+    and left the next call comparing a million COM identities. The guard asks
+    one narrow question instead, and each backend answers it as cheaply as it
+    can.
+    """
+
+    def test_the_com_backend_does_not_use_the_listing_here(self):
+        import inspect
+
+        from inventor_mcp.backend.com.backend import ComBackend
+
+        source = inspect.getsource(ComBackend.document_at_path)
+        # The docstring names `list_documents` to explain why it is avoided, so
+        # the check has to be on the code rather than on the text.
+        body = source.replace(ComBackend.document_at_path.__doc__ or "", "")
+        assert "list_documents" not in body, (
+            "the whole reason document_at_path exists is that list_documents is "
+            "unbounded in cost and registers what it walks")
+        assert "FullFileName" in body
+
+    def test_the_com_backend_overrides_it_on_purpose(self):
+        """The guard itself stays shared; only the enumeration is per-backend."""
+        from inventor_mcp.backend.com.backend import ComBackend
+
+        assert "document_at_path" in vars(ComBackend)
+        assert "refuse_a_path_another_document_holds" not in vars(ComBackend)
+
+    def test_the_mock_is_happy_with_the_shared_default(self):
+        """Its listing is a dict walk, so there is nothing to save."""
+        assert "document_at_path" not in vars(MockBackend)
+
+    def test_the_guard_asks_document_at_path_exactly_once(self):
+        """A guard that asked twice would double whatever it costs."""
+        calls: list[str] = []
+
+        class _Counting(MockBackend):
+            def document_at_path(self, path):
+                calls.append(path)
+                return super().document_at_path(path)
+
+        backend = _Counting()
+        backend.connect()
+        first = backend.new_part("Bracket")
+        second = backend.new_part("Other")
+        backend.save_document(first.id, "out/bracket.ipt")
+        calls.clear()  # that save asked once too; the conflicting one is the subject
+        with pytest.raises(DocumentError):
+            backend.save_document(second.id, "out/bracket.ipt")
+        assert len(calls) == 1, calls
+
+    def test_an_in_place_save_does_not_ask_at_all(self):
+        """No path means `Save`, which cannot collide, so it must not pay for a
+        walk over every open document."""
+        calls: list[str] = []
+
+        class _Counting(MockBackend):
+            def document_at_path(self, path):
+                calls.append(path)
+                return super().document_at_path(path)
+
+        backend = _Counting()
+        backend.connect()
+        document = backend.new_part("Bracket")
+        backend.save_document(document.id, "out/bracket.ipt")
+        calls.clear()
+        backend.save_document(document.id)
+        assert calls == []
+
+    def test_saving_onto_its_own_path_does_not_ask_either(self):
+        """Settled from the document's own path before anything is walked."""
+        calls: list[str] = []
+
+        class _Counting(MockBackend):
+            def document_at_path(self, path):
+                calls.append(path)
+                return super().document_at_path(path)
+
+        backend = _Counting()
+        backend.connect()
+        document = backend.new_part("Bracket")
+        backend.save_document(document.id, "out/bracket.ipt")
+        calls.clear()
+        backend.save_document(document.id, "out/bracket.ipt")
+        assert calls == []
+
+
+class TestADocumentOpenedOutsideThisSession:
+    """The case a session-registry check could never have seen.
+
+    On COM the file may be open because the user opened it in Inventor's UI.
+    There is no handle to close by, so the message and the remedy both have to
+    read differently -- telling someone to call `close_part(document=None)`
+    would be worse than saying nothing.
+    """
+
+    class _UserOpened(MockBackend):
+        def document_at_path(self, path):
+            return None, "bracket.ipt"
+
+    def test_it_is_still_refused(self):
+        backend = self._UserOpened()
+        backend.connect()
+        document = backend.new_part("Bracket")
+        with pytest.raises(DocumentError) as raised:
+            backend.save_document(document.id, "somewhere/else.ipt")
+        assert "opened outside this session" in str(raised.value)
+
+    def test_the_hint_does_not_offer_a_handle_it_has_not_got(self):
+        backend = self._UserOpened()
+        backend.connect()
+        document = backend.new_part("Bracket")
+        with pytest.raises(DocumentError) as raised:
+            backend.save_document(document.id, "somewhere/else.ipt")
+        hint = raised.value.hint or ""
+        assert "close_part" not in hint
+        assert "Close bracket.ipt in Inventor" in hint
+
+    def test_a_holder_that_turns_out_to_be_this_document_is_not_a_conflict(self):
+        """`document_path` could not answer -- COM has raised on it before -- and
+        reporting a document as blocking itself would be worse than the bare
+        exception this replaces."""
+
+        class _ItsOwnHolder(MockBackend):
+            def document_path(self, doc_id):
+                return None
+
+            def document_at_path(self, path):
+                return self._active, "Bracket"
+
+        backend = _ItsOwnHolder()
+        backend.connect()
+        document = backend.new_part("Bracket")
+        assert backend.save_document(document.id, "out/bracket.ipt").path
