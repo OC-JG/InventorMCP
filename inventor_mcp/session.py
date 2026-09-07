@@ -33,6 +33,14 @@ class DocumentContext:
     feature_names: list[str] = field(default_factory=list)
     last_sketch: str | None = None
     last_feature: str | None = None
+    #: Names of the work axes and work points created here. An `axis` reference
+    #: has to be told apart from a sketch line's label before it can be resolved,
+    #: and only the caller's own history says which it is. Work planes are
+    #: deliberately not tracked beside them: a `plane` reference is passed
+    #: through to the backend as a bare name and resolved there, and has been
+    #: since before there was a context to remember it in.
+    work_axes: set[str] = field(default_factory=set)
+    work_points: set[str] = field(default_factory=set)
     recipe: dict[str, Any] | None = None
     #: Which parameters are key geometry and may not be changed automatically.
     #: Built from the recipe once its parameters are declared; ``None`` until

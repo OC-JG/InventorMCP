@@ -168,6 +168,22 @@ Each of these was hit while building real parts, and each passed
    that as a disagreement instead of the two errors cancelling into a plausible
    number.
 
+   *Warned about since 2026-09-03, and not fixed.* The two fixes offered above
+   are not equally available: **Inventor's hole extent has no both-directions
+   option** -- Distance, Through All and To, with Through All taking a side --
+   so there is nothing to reach for, and the roadmap's first suggestion is not
+   implementable rather than merely unimplemented. So the second one is what
+   landed. The simulator was already counting the pieces of material each
+   drill axis crosses in order to decide which way the hole goes; a count above
+   one is the whole of the condition, and `rehearse` now says so, names the
+   `extrude` cut with `direction: "symmetric"` as the substitute, and warns that
+   the step will diverge on volume too.
+
+   It fires on the reproduction and on none of the eleven shipped examples --
+   including the enclosure this defect was found on, which has been built with
+   the substitute since. A warning that cries on a correct recipe is worse than
+   no warning, so the quiet cases are tested as carefully as the loud one.
+
 2. ~~**The simulator's `shell` does not update `document.slabs`.**~~ *Fixed.* The
    slab list is now a signed ledger: a shell records the cavity it hollowed out,
    a cut records the prism it swept, a hole records its bore, and the list is read
@@ -261,3 +277,28 @@ Each of these was hit while building real parts, and each passed
    before the cut -- and with the box unchanged its centre could not move, which
    is the only signal that distinguishes keeping this half from keeping the
    other.
+
+7. **A circular pattern about an axis lying in the patterned face's own plane
+   passes every check and means nothing.** Found on 2026-09-03 while checking
+   whether the roadmap's reason for wanting a work axis was true. A
+   `circular_pattern` turns about an axis perpendicular to the face it patterns;
+   a sketch line lies *in* its own sketch plane; so a plate sketched on XY with
+   its pattern axis given as a line drawn on XY is asking Inventor to revolve
+   the holes about an axis lying flat in the plate. `validate_recipe` reports no
+   findings, `check_recipe` reports no findings, and the simulator returns
+   `ok: true` with a plausible volume, because the mock's `_repeat` accounts for
+   occurrences by multiplying the seed's volume delta and never looks at the
+   axis at all.
+
+   The `work_axis` operation added the same day gives the correct thing to
+   reach for, and its schema and cheat-sheet entries both say why a sketch line
+   cannot serve. That makes the mistake avoidable, not detectable: the recipe
+   above is still accepted.
+
+   Fixing it properly means the simulator placing occurrences rather than
+   counting them, which is the `ponytail` already recorded on `_repeat` -- the
+   occurrence moves volume but records no prism, so the ledger knows about the
+   seed and not the copies. Placing them would also let the divergence check's
+   `centre_shift_mm` catch a pattern about the wrong axis, which is the same
+   signal that caught the `trim` inversion. That is a ledger-sized change and
+   is not attempted here.

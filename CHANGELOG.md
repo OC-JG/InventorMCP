@@ -4,7 +4,101 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
 ## Unreleased
 
+### Fixed
+- **The roadmap is under the drift rule it was written in.** `DECISIONS.md`'s
+  rule is that a fact stated in two places does not merge without a test that
+  they agree. `ROADMAP.md` is where that rule was written down, and was the last
+  document exempt from it — and it had drifted three ways: it said thirteen of
+  fourteen `ponytail:` markers lived in `backend/mock/` when there were sixteen,
+  fifteen of them there; it quoted four calibrated tolerances with nothing
+  holding them against `PREDICTED`; and one ticked item was dated "the same day"
+  without saying which. Found by going looking, not by anything failing.
+
+  `tests/test_roadmap_still_true.py` holds the countable claims, and its
+  docstring says which claims it deliberately leaves alone — dated
+  measurements, the landscape section, and the phase count, which is a framing
+  choice rather than a fact.
+
+  Each claim was then mutated to check the test could actually fail, and each
+  mutation was caught by exactly one test. Three of the tests were wrong when
+  first written — one called five sound entries undated by reading line by line
+  where an item spans several — which is the same false-positive habit the run
+  warnings are written to avoid, and is now recorded in `DECISIONS.md` as what a
+  drift test has to earn.
+
 ### Added
+- **A through hole that will drill the near wall only is warned about** —
+  defect 1, open since it cost the PCB enclosure a cable route. Inventor's
+  through-all extent stops where it first exits material, so a hole across a
+  hollow box leaves the far wall solid and the part looks built.
+
+  The roadmap offered two fixes and they were not equally available: **Inventor's
+  hole extent has no both-directions option** — Distance, Through All and To,
+  with Through All taking a side — so there is nothing to add a knob to. The
+  warning is what landed, and it was nearly free: the simulator already counts
+  the separate pieces of material each drill axis crosses, because it needs them
+  to decide which way the hole goes, and a count above one *is* the condition.
+  `rehearse` now reports it, names the substitute (`extrude` with
+  `direction: "symmetric"`) and says the step will diverge on volume too, since
+  the simulator charges every wall the axis meets.
+
+  Fires on the reproduction and on none of the eleven shipped examples — the
+  enclosure included, which has been built with the substitute since. Both
+  directions are tested: a warning that fires on a correct recipe teaches the
+  reader to ignore the field.
+- **`hole` gains `bodies`**, the multi-body targeting `extrude` already had. A
+  hole aimed at a second body used to land on the first, which removes real
+  material from the wrong place and reports success.
+
+  The simulator needed no new arithmetic: `charge`, `_through_all_distance`,
+  `_material_spans` and `_Slab.body` were all already parameterised by body, so
+  this threads an argument four functions were waiting for. `extrude`'s inline
+  body-number check became a shared `_aimed_body` instead of a second copy.
+
+  A hole is aimed *after* it is built, unlike an extrude: `HoleFeatures.Add...`
+  makes the feature in one call, so there is no definition object to put
+  `AffectedBodies` on. The COM backend sets it on the finished feature and
+  treats a release that refuses as a hard error rather than a warning — the hole
+  exists either way, and one on the wrong body has cut a part that looks
+  finished. Unmeasured, for the same reason as the work axis below.
+
+  Worth recording because a test went looking for it: the *total* volume cannot
+  show that aiming worked. `_through_all_distance` deliberately falls back to
+  the bounding box over a point no prism covers, so a bore aimed at the wrong
+  body is still charged its full depth and two runs agree to the digit. Per body
+  they do not, which is the ledger's reason for never aggregating.
+- **Work axis and work point.** A named axis in space, so a circular pattern can
+  turn about something other than an origin axis, and a named point to hang one
+  on. `kind: "normal_to_plane"` is the bolt-circle case and the default:
+  perpendicular to a plane, through a point given in that plane's own
+  coordinates, with `at` carrying expressions like every other number here.
+  `two_points` and `sketch_line` name geometry that already exists.
+
+  **The roadmap's reason for wanting this was wrong, and checking it first was
+  worth more than the feature.** It said a circular pattern could only turn
+  about an origin axis. It never could: `resolve_axis` has always resolved named
+  sketch lines, so an off-centre bolt circle was already buildable through a
+  throwaway sketch on a perpendicular plane -- measured before a line was
+  written, and it builds clean. The real reason is geometric: the axis must
+  stand perpendicular to the face being patterned, a sketch line lies flat in
+  its own sketch plane, and so the workaround asks the caller to do the axis
+  mapping in their head on a plane they are not otherwise using.
+
+  Probing that claim turned up **defect 7**: the recipe that gets it wrong --
+  a pattern axis lying in the patterned face's own plane -- passes
+  `check_recipe`, passes `validate_recipe`, and returns `ok: true` with a
+  plausible volume, because the simulator's `_repeat` counts occurrences and
+  never reads the axis. This operation makes the mistake avoidable, not
+  detectable; `docs/FEATURE_COVERAGE.md` records what detecting it would take.
+
+  **The COM side is unmeasured.** Written in a session with no Inventor to
+  reach, so `WorkPoints.AddByPoint`, `WorkAxes.AddByTwoPoints` and
+  `WorkAxes.AddByLine` have never executed. The simulator side is measured and
+  tested (32 tests). The shorter implementation -- offsetting two origin planes
+  and intersecting them -- was rejected for needing the sign of an origin
+  plane's normal, which nothing here has measured and which would fail the way
+  the `trim` inversion did: silently, with a part that looks right.
+  `docs/INVENTOR_SETUP.md` says what a live run must confirm and in what order.
 - **Draft, combine, split and boss.** Four more operations, and one that could not
   be built at all.
 

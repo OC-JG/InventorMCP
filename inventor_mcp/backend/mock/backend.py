@@ -71,7 +71,9 @@ from ..base import (
     SweepRequest,
     ThreadRequest,
     TopoInfo,
+    WorkAxisRequest,
     WorkPlaneRequest,
+    WorkPointRequest,
 )
 
 #: Plane name -> (axis index and sign for sketch u, sketch v and the plane
@@ -114,6 +116,61 @@ def map3d(plane: str, u: float, v: float, w: float) -> tuple[float, float, float
 
 def plane_normal(plane: str) -> tuple[float, float, float]:
     return _PLANES[plane][1]
+
+
+def _walls_on_the_axis(document: "_Document", plane: str, offset: float,
+                       centres: Sequence[tuple[float, float]],
+                       body: int | None) -> int:
+    """The most separate pieces of material any hole centre's axis crosses.
+
+    One is the ordinary case: a plate, a boss, a solid block. Two or more means
+    the axis leaves the near wall into air and re-enters, which is what a
+    through hole across a hollow box does -- and what Inventor will not drill,
+    because its through-all extent stops when it first exits material.
+
+    The maximum rather than the sum, because one hole of a set standing over a
+    hollow is enough to make the feature wrong, and reporting the total would
+    make a grid of twelve good holes look worse than a single bad one.
+    """
+    normal = plane_normal(plane)
+    axis = max(range(3), key=lambda index: abs(normal[index]))
+    most = 0
+    for u, v in centres:
+        spans = _material_spans(document, axis, map3d(plane, u, v, offset), body)
+        most = max(most, len(spans or ()))
+    return most
+
+
+def _aimed_body(document: "_Document", bodies: Sequence[int]) -> int | None:
+    """Which body a feature is aimed at, 0-based, or None for Inventor's default.
+
+    Inventor lands a feature on the first body unless it is aimed somewhere
+    else, and a feature aimed at the wrong body removes nothing -- which is the
+    mistake the rehearsal exists to catch, and why a body number the part does
+    not have is refused here rather than passed on.
+    """
+    if not bodies:
+        return None
+    available = len(document.bodies)
+    for index in bodies:
+        if index < 1 or index > available:
+            raise FeatureError(
+                f"There is no body {index}: the part has {available}.",
+                hint="A second body comes from an `extrude` with operation 'new_body'.",
+            )
+    return bodies[0] - 1
+
+
+def _unit_vector(vector: Sequence[float]) -> tuple[float, float, float] | None:
+    """*vector* scaled to length one, or None if it has no length to scale.
+
+    A degenerate direction is returned rather than raised on, because the
+    caller knows which two things coincided and can say so; this does not.
+    """
+    length = math.sqrt(sum(component * component for component in vector))
+    if length < 1e-9:
+        return None
+    return tuple(component / length for component in vector)  # type: ignore[return-value]
 
 
 def to_sketch(plane: str, point: Sequence[float]) -> tuple[float, float, float]:
@@ -311,6 +368,15 @@ class _Document:
     sketches: list[_Sketch] = field(default_factory=list)
     features: list[_Feature] = field(default_factory=list)
     work_planes: dict[str, tuple[str, float]] = field(default_factory=dict)
+    #: Work points by name, as a model-space position in cm.
+    work_points: dict[str, tuple[float, float, float]] = field(default_factory=dict)
+    #: Work axes by name, as a model-space point on the axis and a unit
+    #: direction. Both are kept because a circular pattern needs the position
+    #: and a revolve needs the direction, and an axis that only knew one of them
+    #: would answer half the questions asked of it.
+    work_axes: dict[str, tuple[tuple[float, float, float], tuple[float, float, float]]] = field(
+        default_factory=dict
+    )
     topology: list[_Topo] = field(default_factory=list)
     bounds: list[float] | None = None  # xmin, ymin, zmin, xmax, ymax, zmax
     #: The signed prisms the part is made of, in creation order: what extrudes
@@ -812,19 +878,7 @@ class MockBackend(Backend):
             )
 
         plane = sketch.base_plane
-        if request.bodies:
-            available = len(document.bodies)
-            for index in request.bodies:
-                if index < 1 or index > available:
-                    raise FeatureError(
-                        f"There is no body {index}: the part has {available}.",
-                        hint="A second body comes from an `extrude` with "
-                        "operation 'new_body'.",
-                    )
-        # Inventor lands a feature on the first body unless it is aimed
-        # somewhere else, and a cut aimed at the wrong body removes nothing --
-        # which is the mistake the rehearsal exists to catch.
-        aimed = (request.bodies[0] - 1) if request.bodies else None
+        aimed = _aimed_body(document, request.bodies)
         centre = _loop_center(sketch.plan, loops[0])
         over = map3d(plane, centre[0], centre[1], sketch.offset)
         if request.extent == "distance":
@@ -910,7 +964,7 @@ class MockBackend(Backend):
 
     def _record_bores(self, document: _Document, plane: str, offset: float,
                       centres: Sequence[tuple[float, float]], radius: float,
-                      depth: float) -> None:
+                      depth: float, *, body: int | None = None) -> None:
         """Record each drilled hole as a void, so later features see through it.
 
         Which way the drill goes is measured rather than assumed, the same way
@@ -931,7 +985,7 @@ class MockBackend(Backend):
         ]
         for u, v in centres:
             over = map3d(plane, u, v, offset)
-            spans = _material_spans(document, axis, over)
+            spans = _material_spans(document, axis, over, body)
             side = 1.0
             if spans:
                 here = over[axis]
@@ -943,7 +997,7 @@ class MockBackend(Backend):
                 plane=plane,
                 outline=[(u + du, v + dv) for du, dv in circle],
                 near=offset, far=offset + side * depth,
-                sign=-1.0, source="hole"))
+                sign=-1.0, body=body or 0, source="hole"))
 
     def _cut_reach(self, document: _Document, plane: str, sketch: _Sketch,
                    loops: Sequence[Sequence[str]], distance: float,
@@ -1333,6 +1387,7 @@ class MockBackend(Backend):
             )
         plane = sketch.base_plane
         radius = request.diameter.value / 2
+        aimed = _aimed_body(document, request.bodies)
         if request.depth:
             depth = request.depth.value
         else:
@@ -1343,10 +1398,15 @@ class MockBackend(Backend):
             # material.
             first = centers[0]
             depth = _through_all_distance(
-                document, plane, over=map3d(plane, first[0], first[1], sketch.offset))
+                document, plane, over=map3d(plane, first[0], first[1], sketch.offset),
+                body=aimed)
         removed = (math.pi * radius**2 * depth + _style_volume(request, radius)) * len(centers)
-        moved = document.charge(-removed)
-        self._record_bores(document, plane, sketch.offset, centers, radius, depth)
+        # Counted before the bores are recorded: afterwards the hole's own void
+        # has cut the material it passed through into more pieces, and the
+        # question is how many pieces there were to begin with.
+        walls = _walls_on_the_axis(document, plane, sketch.offset, centers, aimed)
+        moved = document.charge(-removed, aimed if aimed is not None else 0)
+        self._record_bores(document, plane, sketch.offset, centers, radius, depth, body=aimed)
 
         name = self._feature_name(document, request.name, "hole")
         for index, (u, v) in enumerate(centers):
@@ -1388,6 +1448,13 @@ class MockBackend(Backend):
                 # by the recipe's diameter. Inventor sizes it from the table,
                 # which is why the recipe should give the tap-drill diameter.
                 "tap_sized_by": "the recipe's diameter" if request.tap else None,
+                "bodies": list(request.bodies) or None,
+                # How many separate pieces of material the drill axis crosses.
+                # More than one means a through hole exits the near wall into
+                # air and Inventor stops there -- defect 1 in
+                # `docs/FEATURE_COVERAGE.md`. The simulator charges every piece,
+                # so this is also why the two disagree on the volume.
+                "walls_on_the_axis": walls,
             },
         )
         document.features.append(feature)
@@ -2162,6 +2229,122 @@ class MockBackend(Backend):
         document.features.append(feature)
         self._record("work_plane", name=name)
         return _feature_info(feature)
+
+    def _base_plane_of(self, document: _Document, reference: str,
+                       what: str) -> tuple[str, float]:
+        """Which origin plane a bare plane reference means, and its offset.
+
+        The same rule `_plane_and_offset` applies to a sketch, for the callers
+        that have a plane name and no `SketchPlan` to carry it.
+        """
+        named = reference.split(":")[0]
+        if named in _PLANES:
+            return named, 0.0
+        if reference in document.work_planes:
+            return document.work_planes[reference]
+        raise FeatureError(
+            f"Unknown plane {reference!r} for {what}.",
+            hint="Use 'xy', 'xz', 'yz' or the name of a work plane created earlier.",
+        )
+
+    def work_point(self, doc_id: str, request: WorkPointRequest) -> FeatureInfo:
+        document = self._doc(doc_id)
+        base, plane_offset = self._base_plane_of(document, request.plane, "a work point")
+        name = self._feature_name(document, request.name, "workpoint")
+        u, v = (component.value for component in request.at)
+        offset = (request.offset.value if request.offset else 0.0) + plane_offset
+        position = map3d(base, u, v, offset)
+        document.work_points[name] = position
+        feature = _Feature(
+            id=self._next("feat"),
+            name=name,
+            kind="work_point",
+            detail={
+                "plane": request.plane,
+                "at": [component.as_dict() for component in request.at],
+                "offset": request.offset.as_dict() if request.offset else None,
+                "position_cm": [round(value, 6) for value in position],
+            },
+        )
+        document.features.append(feature)
+        self._record("work_point", name=name)
+        return _feature_info(feature)
+
+    def work_axis(self, doc_id: str, request: WorkAxisRequest) -> FeatureInfo:
+        document = self._doc(doc_id)
+        name = self._feature_name(document, request.name, "workaxis")
+        origin, direction, described = self._axis_geometry(document, request)
+        document.work_axes[name] = (origin, direction)
+        feature = _Feature(
+            id=self._next("feat"),
+            name=name,
+            kind="work_axis",
+            detail={
+                "kind": request.kind,
+                "through": [round(value, 6) for value in origin],
+                "direction": [round(value, 6) for value in direction],
+                **described,
+            },
+        )
+        document.features.append(feature)
+        self._record("work_axis", name=name)
+        return _feature_info(feature)
+
+    def _axis_geometry(
+        self, document: _Document, request: WorkAxisRequest
+    ) -> tuple[tuple[float, float, float], tuple[float, float, float], dict[str, Any]]:
+        """A point on the axis, its unit direction, and what to say about it."""
+        if request.kind == "normal_to_plane":
+            base, plane_offset = self._base_plane_of(document, request.plane, "a work axis")
+            u, v = (component.value for component in request.at)
+            origin = map3d(base, u, v, plane_offset)
+            return origin, plane_normal(base), {
+                "plane": request.plane,
+                "at": [component.as_dict() for component in request.at],
+            }
+
+        if request.kind == "two_points":
+            positions = []
+            for point_name in request.points:
+                if point_name not in document.work_points:
+                    known = ", ".join(sorted(document.work_points)) or "(none)"
+                    raise FeatureError(
+                        f"No work point named {point_name!r} to run a work axis through.",
+                        hint=f"Work points in this part: {known}.",
+                    )
+                positions.append(document.work_points[point_name])
+            origin, other = positions
+            direction = _unit_vector(tuple(b - a for a, b in zip(origin, other)))
+            if direction is None:
+                raise FeatureError(
+                    f"Work points {request.points[0]!r} and {request.points[1]!r} are at the "
+                    "same place, so they do not define an axis.",
+                    hint="Move one of them, or give the axis a plane and a point instead.",
+                )
+            return origin, direction, {"points": list(request.points)}
+
+        # sketch_line
+        sketch = document.find_sketch(request.sketch) if request.sketch else (
+            document.sketches[-1] if document.sketches else None
+        )
+        if sketch is None:
+            raise FeatureError("There is no sketch to take a work axis from.")
+        lines = [p for p in sketch.plan.resolve_label(request.line or "") if isinstance(p, PLine)]
+        if not lines:
+            named = ", ".join(sorted(sketch.plan.labels)) or "(none)"
+            raise FeatureError(
+                f"Sketch {sketch.name!r} has no line named {request.line!r}.",
+                hint=f"Named entities in that sketch: {named}.",
+            )
+        line = lines[0]
+        start = map3d(sketch.base_plane, line.start[0], line.start[1], sketch.offset)
+        end = map3d(sketch.base_plane, line.end[0], line.end[1], sketch.offset)
+        direction = _unit_vector(tuple(b - a for a, b in zip(start, end)))
+        if direction is None:
+            raise FeatureError(
+                f"Sketch line {request.line!r} has zero length, so it does not define an axis."
+            )
+        return start, direction, {"sketch": sketch.name, "line": request.line}
 
     def thread(self, doc_id: str, request: ThreadRequest) -> FeatureInfo:
         document = self._doc(doc_id)
