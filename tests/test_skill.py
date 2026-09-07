@@ -20,7 +20,7 @@ SKILL = ROOT / "skills" / "inventor-parametric-modelling" / "SKILL.md"
 
 @pytest.fixture(scope="module")
 def skill() -> str:
-    return SKILL.read_text()
+    return SKILL.read_text(encoding="utf-8")
 
 
 class TestItIsAWellFormedSkill:
@@ -136,7 +136,7 @@ class TestTheClaimsAboutBehaviourHold:
         assert "reads the style back" in skill
 
     def test_the_unproven_operations_it_lists_match_the_documentation(self, skill):
-        setup = (SKILL.parent.parent.parent / "docs" / "INVENTOR_SETUP.md").read_text()
+        setup = (SKILL.parent.parent.parent / "docs" / "INVENTOR_SETUP.md").read_text(encoding="utf-8")
         lowered, setup = skill.lower(), setup.lower()
         for operation in ("revolve", "sweep", "loft", "patterns", "threads"):
             assert operation in lowered
@@ -212,7 +212,7 @@ class TestTheStandardParts:
 
     @pytest.fixture(scope="class")
     def reference(self) -> str:
-        return self.REFERENCE.read_text()
+        return self.REFERENCE.read_text(encoding="utf-8")
 
     def recipes(self, text: str) -> dict:
         out = {}
@@ -321,7 +321,7 @@ class TestTheSnapshotPolicy:
 
     @pytest.fixture(scope="class")
     def coverage(self) -> str:
-        return self.COVERAGE.read_text()
+        return self.COVERAGE.read_text(encoding="utf-8")
 
     def test_the_skill_says_to_run_it_every_time(self, skill):
         section = skill[skill.index("## Look at it"):]
@@ -431,7 +431,7 @@ class TestTheRehearsalWarningsAreAllListed:
         found: dict[str, str | None] = {}
         for module in self.MODULES:
             path = ROOT / "inventor_mcp" / f"{module}.py"
-            for node in ast.walk(ast.parse(path.read_text())):
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
                 if not isinstance(node, ast.Dict):
                     continue
                 for key, value in zip(node.keys, node.values):

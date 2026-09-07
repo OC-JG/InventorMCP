@@ -486,7 +486,7 @@ class TestReorientingCarriesDimensions:
         session = Session(backend_kind="mock")
         session.ensure_backend().connect()
         recipe = PartRecipe.model_validate(
-            json.loads((_ROOT / "examples" / "angle_bracket.json").read_text()))
+            json.loads((_ROOT / "examples" / "angle_bracket.json").read_text(encoding="utf-8")))
         build_part(session, recipe)
         plan = session.backend._doc(session.active).sketches[0].plan
         assert plan.plane == "xz"

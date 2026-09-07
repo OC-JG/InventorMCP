@@ -287,10 +287,10 @@ class TestTheEnclosureItself:
 
     def recipe(self) -> PartRecipe:
         return PartRecipe.model_validate(
-            json.loads((ROOT / "examples/enclosure_base.json").read_text()))
+            json.loads((ROOT / "examples/enclosure_base.json").read_text(encoding="utf-8")))
 
     def expected(self) -> dict:
-        return json.loads((ROOT / "examples/expected/enclosure_base.json").read_text())
+        return json.loads((ROOT / "examples/expected/enclosure_base.json").read_text(encoding="utf-8"))
 
     def test_it_now_agrees_with_the_arithmetic_that_was_done_by_hand(self, session):
         """46.896177 cm^3, derived term by term before any of this was written.

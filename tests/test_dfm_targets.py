@@ -281,7 +281,7 @@ class TestTheSkipCiKeysOn:
         from conftest import DFM_UNAVAILABLE
 
         workflow = (Path(__file__).resolve().parent.parent
-                    / ".github/workflows/tests.yml").read_text()
+                    / ".github/workflows/tests.yml").read_text(encoding="utf-8")
         assert f'"{DFM_UNAVAILABLE}"' in workflow, (
             "the workflow and tests/conftest.py disagree about the sentinel, so "
             "the guard matches nothing and the job is green again")
@@ -291,7 +291,7 @@ class TestTheSkipCiKeysOn:
         """`pytest.skip` here without the sentinel is invisible to CI."""
         import ast
 
-        source = (Path(__file__).resolve().parent / name).read_text()
+        source = (Path(__file__).resolve().parent / name).read_text(encoding="utf-8")
         loose = [
             node.lineno for node in ast.walk(ast.parse(source))
             if isinstance(node, ast.Call)

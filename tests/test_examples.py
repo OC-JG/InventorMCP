@@ -19,7 +19,7 @@ EXAMPLES = sorted((Path(__file__).parent.parent / "examples").glob("*.json"))
 
 
 def load(path: Path) -> PartRecipe:
-    return PartRecipe.model_validate(json.loads(path.read_text()))
+    return PartRecipe.model_validate(json.loads(path.read_text(encoding="utf-8")))
 
 
 def test_there_are_examples():
@@ -87,7 +87,7 @@ def test_the_cover_plates_hole_styles_remove_what_the_geometry_says(session):
     assert measured == pytest.approx(by_hand, rel=1e-9)
 
     recorded = json.loads(
-        (root / "examples" / "expected" / "cover_plate.json").read_text())
+        (root / "examples" / "expected" / "cover_plate.json").read_text(encoding="utf-8"))
     assert recorded["volume_cm3"] == pytest.approx(by_hand, abs=5e-7), (
         "the recorded expectation no longer matches the derivation it came from")
 
@@ -150,7 +150,7 @@ class TestEveryParameterActuallyDrivesSomething:
         from inventor_mcp.builder import build_part
         from inventor_mcp.schema import PartRecipe
 
-        recipe = PartRecipe.model_validate(json.loads(path.read_text()))
+        recipe = PartRecipe.model_validate(json.loads(path.read_text(encoding="utf-8")))
         build_part(session, recipe)
         declared = {spec.name for spec in recipe.parameters}
         plans = {name: sketch.plan for name, sketch in
