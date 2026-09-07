@@ -111,7 +111,7 @@ class TestThroughTheBuild:
 
     def recipe(self) -> PartRecipe:
         return PartRecipe.model_validate(
-            json.loads((EXAMPLES / "mounting_plate.json").read_text()))
+            json.loads((EXAMPLES / "mounting_plate.json").read_text(encoding="utf-8")))
 
     def test_the_simulator_is_not_compared_with_itself(self, session):
         result = build_part(session, self.recipe())
@@ -191,7 +191,7 @@ class TestAHollowPartIsNotJudged:
         from inventor_mcp.builder import rehearse
 
         recipe = PartRecipe.model_validate(
-            json.loads((EXAMPLES / "enclosure_base.json").read_text()))
+            json.loads((EXAMPLES / "enclosure_base.json").read_text(encoding="utf-8")))
         report = rehearse(recipe)
         assert report["ok"], report["findings"]
         return report
@@ -292,7 +292,7 @@ class TestTheGuardCoversWhatIsGuessedAt:
         import re
 
         source = (pathlib.Path(__file__).resolve().parent.parent
-                  / "inventor_mcp/backend/mock/backend.py").read_text()
+                  / "inventor_mcp/backend/mock/backend.py").read_text(encoding="utf-8")
         lines = source.splitlines()
         found = set()
         for index, line in enumerate(lines):

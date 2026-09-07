@@ -122,7 +122,7 @@ def build(session: Session, recipe: PartRecipe):
 def check_example(session: Session, path: Path, report: Report, record: bool) -> None:
     name = path.stem
     print(f"\n--- {name}")
-    recipe = PartRecipe.model_validate(json.loads(path.read_text()))
+    recipe = PartRecipe.model_validate(json.loads(path.read_text(encoding="utf-8")))
     context, broken = build(session, recipe)
     for failure in broken:
         report.check(False, f"{name}: {failure}")
@@ -147,7 +147,8 @@ def check_example(session: Session, path: Path, report: Report, record: bool) ->
         baseline = dict(seen)
         if name in KNOWN and not record:
             baseline["volume_cm3"] = KNOWN[name]
-        wanted.write_text(json.dumps(baseline, indent=2) + "\n")
+        wanted.write_text(json.dumps(baseline, indent=2) + "\n",
+                          encoding="utf-8")
         # Not report.check. Seeding a baseline compares nothing -- it writes down
         # whatever this run produced and agrees with it -- so counting it as a
         # passed check makes a first run on a new machine read as a verification
@@ -157,7 +158,7 @@ def check_example(session: Session, path: Path, report: Report, record: bool) ->
                       "nothing was compared; check the arithmetic before trusting it")
         return
 
-    expected = json.loads(wanted.read_text())
+    expected = json.loads(wanted.read_text(encoding="utf-8"))
     drift = seen["volume_cm3"] - expected["volume_cm3"]
     if session.backend.name == "mock":
         # These are Inventor's numbers. The simulator gets close on an extruded
@@ -199,7 +200,7 @@ def check_parameter_edit(session: Session, report: Report) -> None:
                     "the simulator records new values without re-solving")
         return
     path = ROOT / "examples" / "angle_bracket.json"
-    recipe = PartRecipe.model_validate(json.loads(path.read_text()))
+    recipe = PartRecipe.model_validate(json.loads(path.read_text(encoding="utf-8")))
     context, broken = build(session, recipe)
     if broken:
         report.check(False, "the bracket did not build", broken[0])
@@ -327,7 +328,7 @@ def check_rollback(session: Session, report: Report) -> None:
         return ok
 
     path = ROOT / "examples" / "mounting_plate.json"
-    recipe = PartRecipe.model_validate(json.loads(path.read_text()))
+    recipe = PartRecipe.model_validate(json.loads(path.read_text(encoding="utf-8")))
     good = build_part(session, recipe)
     if not good["ok"]:
         verdict(False, "the plate did not build", json.dumps(good["errors"][:1]))
@@ -337,7 +338,7 @@ def check_rollback(session: Session, report: Report) -> None:
 
     # The same recipe again, with its last operation pointed at a sketch that is
     # not there: everything before it succeeds, so there is something to undo.
-    broken = json.loads(path.read_text())
+    broken = json.loads(path.read_text(encoding="utf-8"))
     broken["operations"] = [
         {"op": "sketch", "name": "Pocket", "plane": "xy", "entities": [
             {"type": "rectangle", "center": [0, 0], "width": 40, "height": 20}]},
@@ -827,7 +828,7 @@ def check_calibration(session: Session, report: Report) -> None:
 
     for path in recipes:
         print(f"\n--- calibration: {path.stem}")
-        recipe = PartRecipe.model_validate(json.loads(path.read_text()))
+        recipe = PartRecipe.model_validate(json.loads(path.read_text(encoding="utf-8")))
         predicted = rehearse(recipe)
         if not predicted.get("ok"):
             report.check(False, f"{path.stem}: the recipe rehearses",

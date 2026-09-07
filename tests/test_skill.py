@@ -7,19 +7,20 @@ none, because it is believed.
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 from pathlib import Path
 
 import pytest
 
-SKILL = (Path(__file__).resolve().parent.parent / "skills"
-         / "inventor-parametric-modelling" / "SKILL.md")
+ROOT = Path(__file__).resolve().parent.parent
+SKILL = ROOT / "skills" / "inventor-parametric-modelling" / "SKILL.md"
 
 
 @pytest.fixture(scope="module")
 def skill() -> str:
-    return SKILL.read_text()
+    return SKILL.read_text(encoding="utf-8")
 
 
 class TestItIsAWellFormedSkill:
@@ -135,7 +136,7 @@ class TestTheClaimsAboutBehaviourHold:
         assert "reads the style back" in skill
 
     def test_the_unproven_operations_it_lists_match_the_documentation(self, skill):
-        setup = (SKILL.parent.parent.parent / "docs" / "INVENTOR_SETUP.md").read_text()
+        setup = (SKILL.parent.parent.parent / "docs" / "INVENTOR_SETUP.md").read_text(encoding="utf-8")
         lowered, setup = skill.lower(), setup.lower()
         for operation in ("revolve", "sweep", "loft", "patterns", "threads"):
             assert operation in lowered
@@ -211,7 +212,7 @@ class TestTheStandardParts:
 
     @pytest.fixture(scope="class")
     def reference(self) -> str:
-        return self.REFERENCE.read_text()
+        return self.REFERENCE.read_text(encoding="utf-8")
 
     def recipes(self, text: str) -> dict:
         out = {}
@@ -320,7 +321,7 @@ class TestTheSnapshotPolicy:
 
     @pytest.fixture(scope="class")
     def coverage(self) -> str:
-        return self.COVERAGE.read_text()
+        return self.COVERAGE.read_text(encoding="utf-8")
 
     def test_the_skill_says_to_run_it_every_time(self, skill):
         section = skill[skill.index("## Look at it"):]
@@ -371,3 +372,226 @@ class TestTheSnapshotPolicy:
             "docs/FEATURE_COVERAGE.md defect 4 and the Skill's snapshot section "
             "disagree about whether capture_view's orientation names work. "
             "Whichever changed, change the other.")
+
+
+class TestTheRehearsalWarningsAreAllListed:
+    """The Skill's list of rehearsal warnings against the ones the code emits.
+
+    `### What to read in the rehearsal` introduces its bullets as the ways a
+    recipe passes every schema check and still builds the wrong part, which
+    makes it a list claiming to be complete. It has drifted three times -- the
+    far-wall warning and the pattern-axis one both shipped unlisted and were
+    added by hand afterwards, the second of them arriving with its wording
+    truncated, which this caught on the merge that brought it in -- and when
+    this was written three of the eight were missing outright. A ninth -- `hole.bodies`,
+    which Inventor ignores -- arrived unlisted while this branch was open
+    and was caught by CI on the merge that brought it in.
+
+    Nothing to import: the warnings are inline f-strings at their call sites.
+    So the templates are read out of the source instead. A `{"where": ...,
+    "warning": ...}` literal is a warning, and the literal halves of its
+    f-string become the pattern its bullet has to match, with `.*` where a
+    value is interpolated -- which pins the wording and not merely the count,
+    because the bullet is held against the format string that produces it.
+
+    Two things left alone on purpose:
+
+    * `drawing.py`'s three warnings. They belong to `check_against_drawing`'s
+      report, not to a rehearsal, and this section is about the rehearsal. A
+      warning listed where nobody reading it has that report is noise.
+    * the wrong-side warning's *runtime* wording. No recipe has been found that
+      provokes it: an `extrude` cut is measured against the simulator's ledger
+      of prisms and so is never charged a positive volume. The other eight each
+      have a recipe below; that one is pinned by its source alone.
+    """
+
+    #: Where `rehearse` composes its warnings from. Nothing else feeds them.
+    MODULES = ("rehearsal", "checks")
+
+    #: The sentence the list hangs off. Anchored on the sentence rather than on
+    #: the heading because the same section holds a second list -- the two things
+    #: a rehearsal *cannot* tell you -- which is not a list of warnings.
+    INTRO = "and these are the ways it does:\n\n"
+
+    @staticmethod
+    def pattern(node: ast.expr) -> str | None:
+        """A warning's wording as a regex, or None if it is not a literal."""
+        out = []
+        for piece in (node.values if isinstance(node, ast.JoinedStr) else [node]):
+            if isinstance(piece, ast.Constant) and isinstance(piece.value, str):
+                out.append(re.escape(piece.value))
+            elif isinstance(piece, ast.FormattedValue):
+                out.append(".*")
+            else:
+                return None
+        return "".join(out)
+
+    def templates(self) -> dict[str, str | None]:
+        """Every warning the rehearsal can emit, by where it is written."""
+        found: dict[str, str | None] = {}
+        for module in self.MODULES:
+            path = ROOT / "inventor_mcp" / f"{module}.py"
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if not isinstance(node, ast.Dict):
+                    continue
+                for key, value in zip(node.keys, node.values):
+                    if isinstance(key, ast.Constant) and key.value == "warning":
+                        found[f"inventor_mcp/{module}.py:{value.lineno}"] = \
+                            self.pattern(value)
+        return found
+
+    def listing(self, skill: str) -> str:
+        assert self.INTRO in skill, (
+            "the rehearsal-warnings list has moved; update this test with it")
+        return skill.split(self.INTRO, 1)[1].split("\n\n", 1)[0]
+
+    def bullets(self, skill: str) -> list[str]:
+        """What each bullet quotes, unpadded: a code span may be fenced in more
+        than one backtick, because one of the warnings contains them."""
+        return [text.strip() for _, text in
+                re.findall(r"^- \*\*(`+)(.+?)\1\*\*", self.listing(skill), re.M)]
+
+    def readable(self) -> dict[str, str]:
+        return {where: pattern for where, pattern
+                in self.templates().items() if pattern}
+
+    def test_no_warning_is_written_in_a_way_this_cannot_read(self):
+        """Otherwise the two tests below would quietly not be checking it."""
+        opaque = sorted(where for where, pattern
+                        in self.templates().items() if pattern is None)
+        assert not opaque, (
+            f"the warning at {opaque} is not a literal, so its wording cannot be "
+            "compared against the Skill. Write it as an f-string at the call "
+            "site, or exempt it here and say why.")
+
+    def test_every_warning_the_code_can_emit_is_listed(self, skill):
+        """The drift that keeps happening, always in this direction.
+
+        The count is checked alongside, because two of the warnings share a
+        shape: `` `thread` `` and `` `hole.bodies` `` differ only in the dot,
+        and the looser of the two patterns matches either bullet. Patterns
+        alone would then read a deleted bullet as a doubled match.
+        """
+        bullets = self.bullets(skill)
+        assert len(bullets) == len(self.readable()), (
+            f"{len(self.readable())} warnings, {len(bullets)} bullets")
+        unlisted = sorted(
+            f"{where} ({pattern})" for where, pattern in self.readable().items()
+            if not any(re.fullmatch(pattern, bullet) for bullet in bullets))
+        assert not unlisted, (
+            f"a rehearsal can emit these and the Skill does not list them: "
+            f"{unlisted}. The list is introduced as the ways a valid recipe "
+            "builds the wrong part, so one missing from it is a way nobody "
+            "reading the Skill has been told about.")
+
+    def test_the_list_names_no_warning_the_code_cannot_emit(self, skill):
+        patterns = self.readable().values()
+        invented = [bullet for bullet in self.bullets(skill)
+                    if not any(re.fullmatch(p, bullet) for p in patterns)]
+        assert not invented, (
+            f"the Skill quotes these and nothing emits them: {invented}. Either "
+            "the wording changed in the code, or the warning was removed.")
+
+    PLATE = [
+        {"op": "sketch", "name": "Base", "plane": "xy", "entities": [
+            {"type": "rectangle", "center": [0, 0], "width": 40, "height": 40}]},
+        {"op": "extrude", "name": "Plate", "sketch": "Base", "distance": 5},
+    ]
+
+    #: A shelled box with a cut inside its cavity. The simulator has no
+    #: booleans, so a cut that misses the part still subtracts its own prism --
+    #: which is why the bounding-box check exists -- but an `extrude` asks the
+    #: ledger how much material lies inside its sweep, and in the cavity there
+    #: is none.
+    HOLLOW = [
+        {"op": "sketch", "name": "Base", "plane": "xy", "entities": [
+            {"type": "rectangle", "center": [0, 0], "width": 60, "height": 60}]},
+        {"op": "extrude", "name": "Box", "sketch": "Base", "distance": 30},
+        {"op": "shell", "faces": {"kind": "face", "filter": "top"}, "thickness": 2},
+        {"op": "work_plane", "name": "Mid", "kind": "offset", "base": "xy",
+         "offset": 15},
+        {"op": "sketch", "name": "In", "plane": "Mid", "entities": [
+            {"type": "circle", "center": [0, 0], "diameter": 6}]},
+        {"op": "extrude", "name": "Void", "sketch": "In", "distance": 5,
+         "operation": "cut"},
+    ]
+
+    STRAY = {"op": "sketch", "name": "F", "plane": "xy", "entities": [
+        {"type": "circle", "center": [0, 500], "diameter": 6}]}
+
+    #: A box shelled from the top with a bore straight through it. Inventor's
+    #: through-all extent stops where it first leaves material, so the near wall
+    #: is drilled and the far one is left solid.
+    BORED = [
+        {"op": "sketch", "name": "Outline", "plane": "xy", "entities": [
+            {"type": "rectangle", "center": [0, 0], "width": 60, "height": 40}]},
+        {"op": "extrude", "name": "Body", "sketch": "Outline", "distance": 20},
+        {"op": "shell", "name": "Hollow", "thickness": 2.5,
+         "faces": {"kind": "face", "filter": "top"}},
+        {"op": "sketch", "name": "Route", "plane": "yz", "entities": [
+            {"type": "point", "position": [0, 10]}]},
+        {"op": "hole", "name": "Cable", "sketch": "Route", "diameter": 6,
+         "through_all": True},
+    ]
+
+    #: A recipe that provokes each warning, and the words it should come back
+    #: saying. Eight of the nine; the ninth is in the class docstring.
+    PROVOKES = [
+        ("a cut whose profile misses the part",
+         PLATE + [STRAY, {"op": "extrude", "sketch": "F", "distance": 20,
+                          "operation": "cut"}],
+         [], "does not reach the part"),
+        ("a cut in the cavity of a shelled box",
+         HOLLOW, [], "removed no material"),
+        ("a pattern of a feature that moved nothing",
+         HOLLOW + [{"op": "rectangular_pattern", "features": ["Void"],
+                    "axis1": "x", "count1": 3, "spacing1": 10}],
+         [], "added no material"),
+        ("a parameter nothing refers to",
+         PLATE, [{"name": "unused", "value": 3}], "drive nothing"),
+        ("a through hole across a hollow box",
+         BORED, [], "will drill the near one only"),
+        ("a circular pattern about an axis flat in the patterned face",
+         PLATE + [{"op": "sketch", "name": "Pilot", "plane": "xy", "entities": [
+                       {"type": "point", "position": [12, 0]}]},
+                  {"op": "hole", "name": "Bolt1", "sketch": "Pilot",
+                   "diameter": 5, "through_all": True, "direction": "negative"},
+                  {"op": "circular_pattern", "features": ["Bolt1"],
+                   "axis": "x", "count": 6}],
+         [], "the pattern axis"),
+        ("an operation this Inventor refuses",
+         PLATE + [{"op": "thread",
+                   "faces": {"kind": "face", "filter": "cylindrical"},
+                   "designation": "M5x0.8"}],
+         [], "`thread` does not work on the Inventor"),
+        ("a field on an operation this Inventor ignores",
+         PLATE + [{"op": "sketch", "name": "Pilot", "plane": "xy", "entities": [
+                       {"type": "point", "position": [0, 0]}]},
+                  {"op": "hole", "name": "Bore", "sketch": "Pilot",
+                   "diameter": 6, "through_all": True, "bodies": [1]}],
+         [], "`hole.bodies` does not work on the Inventor"),
+    ]
+
+    @pytest.mark.parametrize("label,operations,parameters,phrase", PROVOKES,
+                             ids=[row[0] for row in PROVOKES])
+    def test_the_wording_it_quotes_is_the_wording_a_rehearsal_produces(
+            self, label, operations, parameters, phrase):
+        """Which is what makes the patterns above worth trusting.
+
+        The tests above read the code rather than run it, so a mistake in the
+        reading would agree with itself. These five run the recipe.
+        """
+        from inventor_mcp.builder import rehearse
+        from inventor_mcp.schema import PartRecipe
+
+        report = rehearse(PartRecipe.model_validate({
+            "name": "Part", "units": "mm",
+            "parameters": parameters, "operations": operations}))
+        emitted = [warning["warning"] for warning in report["warnings"]]
+        assert any(phrase in warning for warning in emitted), (
+            f"{label} no longer warns about it: {emitted}")
+        patterns = self.readable().values()
+        for warning in emitted:
+            assert any(re.fullmatch(p, warning) for p in patterns), (
+                f"{warning!r} matches no template read out of the source, so "
+                "the reading is wrong somewhere")

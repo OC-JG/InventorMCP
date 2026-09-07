@@ -35,15 +35,20 @@ still build the wrong part, and these are the ways it does:
 - **`sketch 'X' does not reach the part`** — the profile lies outside the part
   entirely, so the cut will meet nothing. Fix the plane or the coordinates.
 - **`removed no material`** — same conclusion, reached from the volume.
+- **`added 0.4 cm3 instead of removing material`** — a cut that grows the part is
+  on the wrong side of its profile.
+- **`added no material`** — a pattern or mirror whose occurrences moved no
+  volume. An occurrence repeats whatever its seed did, so this means `features`
+  names the wrong feature.
 - **`a, b drive nothing`** — those parameters are declared and never referenced,
   so the part is not revisable through them. Write the sizes that depend on them
   as expressions.
-- **`a through hole whose axis crosses N walls`** — Inventor's through-all
-  extent stops where it first leaves material, so a hole across a hollow box
-  drills the near wall and leaves the far one solid. Use an `extrude` cut with
-  `direction: "symmetric"` and `extent: "through_all"` instead. Expect the
-  volume on that step to disagree too: the simulator charges every wall the axis
-  meets and Inventor drills one.
+- **`a through hole whose axis crosses N walls will drill the near one only`**
+  — Inventor's through-all extent stops where it first leaves material, so a
+  hole across a hollow box drills the near wall and leaves the far one solid.
+  Use an `extrude` cut with `direction: "symmetric"` and
+  `extent: "through_all"` instead. Expect the volume on that step to disagree
+  too: the simulator charges every wall the axis meets and Inventor drills one.
 - **`the pattern axis 'X' lies in ...`** — a `circular_pattern` turns about an
   axis perpendicular to the face it patterns, and this one is flat in that face,
   so the occurrences revolve out of the material rather than around it. Use
@@ -51,6 +56,14 @@ still build the wrong part, and these are the ways it does:
   on; a 180-degree flip is a `mirror`. **The volume will look right either
   way** — the simulator counts occurrences and never reads the axis — so this
   warning is the only thing that says so.
+- **``` `thread` does not work on the Inventor this was measured against ```** —
+  the operation is refused before it reaches Inventor. Use a `hole` with `tap`.
+- **``` `hole.bodies` does not work on the Inventor this was measured against ```**
+  — a hole is made in one call, with no definition object to aim first, so
+  Inventor drills the primary body whatever `bodies` says. The simulator
+  honours it, so the volumes will agree and the part will be wrong. Cut the
+  second body with an `extrude` carrying `bodies`, or `combine` with
+  `operation: "cut"`.
 
 Then read `steps` and check each `volume_change_cm3` against what you meant. A
 9 mm hole 6 mm deep removes π×4.5²×6 = 0.382 cm³. If the rehearsal says

@@ -32,7 +32,7 @@ def session() -> Session:
 
 def recipe(**changes) -> PartRecipe:
     """The mounting plate, optionally broken in a stated way."""
-    data = json.loads((EXAMPLES / "mounting_plate.json").read_text())
+    data = json.loads((EXAMPLES / "mounting_plate.json").read_text(encoding="utf-8"))
     data.update(changes)
     return PartRecipe.model_validate(data)
 
@@ -44,7 +44,7 @@ def breaks_at_the_last_operation() -> PartRecipe:
     succeeds -- which is the case worth testing, since a build that fails on
     step one has nothing to roll back.
     """
-    data = json.loads((EXAMPLES / "mounting_plate.json").read_text())
+    data = json.loads((EXAMPLES / "mounting_plate.json").read_text(encoding="utf-8"))
     data["operations"][-1]["sketch"] = "NoSuchSketch"
     return PartRecipe.model_validate(data)
 

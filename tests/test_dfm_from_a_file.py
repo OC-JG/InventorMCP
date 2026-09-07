@@ -835,7 +835,8 @@ class TestFreezingAFeatureFreezesItsShape:
 
     def _housing(self, server):
         import json
-        recipe = json.load(open("examples/moulded_housing.json"))
+        with open("examples/moulded_housing.json", encoding="utf-8") as handle:
+            recipe = json.load(handle)
         out = call(server, "build_part_from_recipe", recipe=recipe)
         assert out["ok"], out.get("errors")
         return out["document"]

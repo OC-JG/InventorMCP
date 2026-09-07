@@ -111,12 +111,12 @@ def properties(path: Path) -> list[str]:
     Worth listing separately: a method that is missing may just be a property,
     and looking only at methods once made `EdgeUse` look absent entirely.
     """
-    match = _PROP_MAP.search(path.read_text(errors="replace"))
+    match = _PROP_MAP.search(path.read_text(encoding="utf-8", errors="replace"))
     return sorted(set(_PROP_NAME.findall(match.group("body")))) if match else []
 
 
 def describe(path: Path, method: str | None) -> None:
-    source = path.read_text(errors="replace")
+    source = path.read_text(encoding="utf-8", errors="replace")
     name_pattern = method or r"\w+"
     # Parameter lists wrap across lines once a method takes more than a few,
     # so the parameter group has to span newlines.
@@ -187,7 +187,7 @@ def search(root, needle: str) -> None:
     makers = []
     for path in sorted(root.glob("*.py")):
         try:
-            text = path.read_text(errors="ignore")
+            text = path.read_text(encoding="utf-8", errors="ignore")
         except OSError:  # pragma: no cover - unreadable cache entry
             continue
         for line in text.splitlines():

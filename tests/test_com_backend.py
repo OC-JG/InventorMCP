@@ -1613,7 +1613,7 @@ class TestWorkGeometryIsAskedOfTheBackend:
         import ast
 
         source = (pathlib.Path(__file__).resolve().parent.parent
-                  / "scripts" / "live_acceptance.py").read_text()
+                  / "scripts" / "live_acceptance.py").read_text(encoding="utf-8")
         reached = [node.attr for node in ast.walk(ast.parse(source))
                    if isinstance(node, ast.Attribute)
                    and node.attr in ("ComponentDefinition", "MassProperties",
@@ -1649,7 +1649,7 @@ class TestGeometryIsBuiltWhereItGoes:
         import pathlib as _pathlib
 
         source = (_pathlib.Path(com.__file__).resolve().parent.parent.parent
-                  / "geometry.py").read_text()
+                  / "geometry.py").read_text(encoding="utf-8")
         bare = []
         for node in ast.walk(ast.parse(source)):
             if not (isinstance(node, ast.Call)
@@ -1671,6 +1671,6 @@ class TestGeometryIsBuiltWhereItGoes:
         against a pattern about `z`, which is what a misplaced axis imitates.
         """
         text = (pathlib.Path(__file__).resolve().parent.parent
-                / "scripts" / "live_acceptance.py").read_text()
+                / "scripts" / "live_acceptance.py").read_text(encoding="utf-8")
         assert "_compare_axis_against_z" in text
         assert "an off-centre axis is not the same as Z" in text
