@@ -684,13 +684,42 @@ The market's 2026 feature, and a gap in the whole open-source field.
       number the model asserts and the drawing does not give is not an invention
       when the drawing is the thing being produced, it is a dimension nobody
       asked for.
-- [ ] **Produce the sheet in Inventor.** A `DrawingDocument`, sheets, base and
-      projected views, and dimensions placed against the geometry a named
-      parameter drives. None of it is written and none of that API has been read
-      here — `DocInfo.kind` already carries a document kind and
-      `kDrawingDocumentObject` is already in the constants table, which is the
-      whole of the groundwork. This is the largest single piece left in the
-      project and it is what closes the round trip above.
+- [x] **Produce the sheet.** *(2026-09-07. Four `Backend` methods —
+      `new_drawing`, `place_view`, `retrieve_dimensions`, `read_drawing` — on
+      both backends, with the simulator's half measured and tested and the COM
+      half never executed.)*
+
+      **Dimensions are retrieved, not placed**, and that is the design decision
+      worth recording. The item above imagined "dimensions placed against the
+      geometry a named parameter drives", which would mean working out which two
+      drawing curves a parameter drives — the guessing a recipe exists to avoid.
+      The parts this server builds make a better route available: every sketch
+      dimension carries a parameter's expression and every driven feature value
+      is a named parameter, so Inventor's own retrieve-model-dimensions produces
+      dimensions that *are* the parameters, and a dimension on the sheet cannot
+      then disagree with the part.
+
+      The price is that retrieval brings *every* model dimension onto the view,
+      so the asked-for ones have to be kept and the rest removed — which
+      requires asking a retrieved dimension which parameter it came from.
+      **Nothing here has ever held a `DrawingDimension`**, so that is the one
+      fact the whole approach rests on and the first thing a live run must
+      settle. If it cannot be asked, the design goes back to placing against
+      geometry, which is a much larger piece of work.
+
+      What the simulator's half is worth on its own: it catches a parameter that
+      drives nothing and so has *no model dimension to retrieve*, which no
+      static check could know, because the parameter exists and resolves
+      perfectly well. And it closed the round trip's shape — the sheet is read
+      back and checked, rather than the request being trusted.
+- [ ] **Measure the drawing surface against a live Inventor** — `python
+      scripts/com_signatures.py GeneralDimension` first, then `--only drawing`.
+      Five things in order, in `INVENTOR_SETUP.md`, and two of them are checks
+      the simulator can never be evidence for: whether a view's *extent* agrees
+      with the part (in the simulator the extent is computed from the part, so
+      the check compares it with itself), and whether a direction's name
+      describes what you get — defect 4's drawing-shaped cousin, where
+      `capture_view`'s `front` returns a top view.
 
 ### Phase 4 — assemblies
 

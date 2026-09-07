@@ -103,6 +103,40 @@ def register(server: Any, session: Session) -> None:
         return result
 
     @server.tool(
+        description="Build a drawing OF a part: place the views, retrieve the "
+        "dimensions the recipe asks for, then read the sheet back and check it.\n\n"
+        "Dimensions are RETRIEVED from the model, not placed by geometry. Every "
+        "sketch dimension this server creates carries a parameter's expression, "
+        "so Inventor's own retrieve-model-dimensions produces dimensions that "
+        "ARE the parameters -- and a dimension on the sheet cannot then disagree "
+        "with the part.\n\n"
+        "The report is read off the finished sheet rather than from the request, "
+        "which is the whole point: a parameter that drives no sketch dimension "
+        "and no feature value has no model dimension to retrieve, so nothing is "
+        "placed for it and `warnings` says so. A view whose direction did not "
+        "mean what its name said has an extent that says so too.\n\n"
+        "**The Inventor half of this has never run.** The simulator implements "
+        "it and is worth trusting about the recipe; a live success is not yet "
+        "evidence of anything. See the drawing section of docs/INVENTOR_SETUP.md.",
+    )
+    @guard
+    def build_drawing_from_recipe(
+        drawing: Annotated[dict[str, Any], Field(
+            description="The drawing recipe. See `drawing_recipe_schema`.")],
+        recipe: Annotated[dict[str, Any], Field(
+            description="The part recipe the drawing is of.")],
+        part_document: Annotated[str | None, Field(
+            description="Id of an already-open part to draw instead of building "
+            "one. Use it when the part took a while to build.")] = None,
+    ) -> dict[str, Any]:
+        from ..drafting import build_drawing
+        from ..schema import DrawingRecipe
+
+        return build_drawing(
+            session, DrawingRecipe.model_validate(drawing),
+            PartRecipe.model_validate(recipe), part_doc_id=part_document)
+
+    @server.tool(
         description="Rehearse a DRAWING of a part, against the part it draws.\n\n"
         "The other direction from `check_against_drawing`, which reads a sheet "
         "somebody else produced. This takes a `drawing` recipe -- sheet, "

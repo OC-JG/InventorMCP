@@ -77,6 +77,11 @@ from ..base import (
     ThickenRequest,
     THICKEN_SHARE,
     SketchDrivenPatternRequest,
+    DimensionInfo,
+    DrawingContents,
+    RetrieveRequest,
+    ViewInfo,
+    ViewRequest,
     EmbossRequest,
     ShellRequest,
     SplitRequest,
@@ -3047,6 +3052,279 @@ class ComBackend(Backend):
             "docs/INVENTOR_SETUP.md says so and says what to confirm.",
         )
 
+    # -- drawings ----------------------------------------------------------
+    #: A view direction mapped onto Inventor's own orientation enum name. The
+    #: *names* are documented; the values are never guessed -- `_k` reads them
+    #: from the type library and raises a message naming the fix when it cannot,
+    #: so nothing here can be off by a wrong number the way the extrude extents
+    #: were before they were measured.
+    #:
+    #: `iso` is `kIsoTopLeftViewOrientation` rather than a bare "isometric":
+    #: Inventor has four isometric corners and no default among them, so one has
+    #: to be chosen. Top-left is the one Inventor's own base-view dialog offers
+    #: first.
+    _VIEW_ORIENTATIONS = {
+        "front": "kFrontViewOrientation",
+        "rear": "kBackViewOrientation",
+        "top": "kTopViewOrientation",
+        "bottom": "kBottomViewOrientation",
+        "left": "kLeftViewOrientation",
+        "right": "kRightViewOrientation",
+        "iso": "kIsoTopLeftViewOrientation",
+    }
+
+    #: The same for the style. `hidden_line_removed` is the default a recipe
+    #: gets, because it is what an engineering drawing is.
+    _VIEW_STYLES = {
+        "hidden_line": "kHiddenLineDrawingViewStyle",
+        "hidden_line_removed": "kHiddenLineRemovedDrawingViewStyle",
+        "shaded": "kShadedDrawingViewStyle",
+    }
+
+    def new_drawing(self, name: str, *, template: str | None = None,
+                    sheet: str = "a3", units: str = "mm") -> DocInfo:  # pragma: no cover
+        """A new drawing document, which is `new_part` with a different enum.
+
+        The one call in this whole drawing surface that carries no risk:
+        `Documents.Add` is measured and `kDrawingDocumentObject` has been in the
+        constants table since before anything used it. A template given here is
+        the title block, and without one Inventor's default drawing template is
+        used -- which has one, so a sheet is at least sendable.
+
+        `sheet` is recorded and not applied. Inventor takes the sheet size from
+        the template, and overriding it means finding the sheet and setting its
+        size, which is one more unread call for a thing a template already
+        decides. Recorded so the ledger and the sheet agree about what was
+        asked for.
+        """
+        app = self._require_app()
+        with self._translate_errors("Creating the drawing document", DocumentError):
+            drawing_type = self._k("kDrawingDocumentObject")
+            path = template or app.FileManager.GetTemplateFile(drawing_type)
+            document = _specialise(app.Documents.Add(drawing_type, path, True))
+            try:
+                document.DisplayName = name
+            except Exception:
+                pass
+        info = self._register(document, units, "deg")
+        info.detail = {"sheet_asked_for": sheet,
+                       "sheet_from": "the template" if template else "Inventor's default"}
+        return info
+
+    def place_view(self, doc_id: str, request: ViewRequest) -> ViewInfo:  # pragma: no cover
+        """A base view of a part, on this drawing's active sheet.
+
+        **Never executed.** `AddBaseView`'s argument order is Inventor's
+        documented one and is a proposal; `docs/INVENTOR_SETUP.md` says what a
+        run has to settle. The arguments are passed by name through
+        `_call_named` so the positions are readable at the call, and the two
+        enums come from `_k`, so a wrong *name* raises and a wrong *number* is
+        not possible.
+
+        What this cannot rule out is the thing defect 4 is about: that a
+        direction's name describes what you get. `capture_view`'s orientations
+        do not -- `front` returns a top view on a part built on XY -- and a
+        drawing view is a different API reached through a similarly-named enum.
+        So the extent read back off the sheet is the check, and it is why
+        `read_drawing` reports one.
+        """
+        document = self._doc(doc_id)
+        model = self._doc(request.part_doc_id)
+        app = self._require_app()
+        sheet = document.ActiveSheet
+        with self._translate_errors("Placing the view"):
+            position = app.TransientGeometry.CreatePoint2d(*request.at)
+            view = _call_named(sheet.DrawingViews.AddBaseView, [
+                ("Model", model),
+                ("Position", position),
+                ("Scale", float(request.scale)),
+                ("ViewOrientation", self._k(self._VIEW_ORIENTATIONS[request.direction])),
+                ("ViewStyle", self._k(self._VIEW_STYLES[request.style])),
+            ])
+            try:
+                view.Name = request.name
+            except Exception:  # pragma: no cover - version-specific
+                logger.info("Could not name the drawing view %r.", request.name)
+        return ViewInfo(
+            id=request.name,
+            name=str(getattr(view, "Name", request.name)),
+            direction=request.direction,
+            at=tuple(request.at),
+            scale=float(getattr(view, "Scale", request.scale)),
+            style=request.style,
+            extent=_view_extent(view),
+        )
+
+    def retrieve_dimensions(self, doc_id: str,
+                            request: RetrieveRequest) -> list[DimensionInfo]:  # pragma: no cover
+        """Bring the part's own model dimensions onto a view, then keep the asked-for ones.
+
+        **Retrieval rather than placement, and that is the design.** Every sketch
+        dimension this server creates carries a parameter's expression and every
+        driven feature value is a named parameter, so Inventor's own "retrieve
+        model dimensions" produces dimensions that *are* the parameters. Placing
+        a dimension by geometry would mean working out which two drawing curves
+        a parameter drives, which is the guessing a recipe exists to avoid.
+
+        **The whole approach rests on one unmeasured fact**: that a retrieved
+        dimension can be asked which model parameter it came from. If it cannot,
+        there is no way to keep the asked-for dimensions and drop the rest, and
+        this method has to fail loudly rather than leave a sheet carrying every
+        dimension the model happens to hold. `_dimension_parameter` is where
+        that is asked, and the error names it.
+        """
+        document = self._doc(doc_id)
+        view = self._drawing_view(document, request.view)
+        wanted = {name: False for name in request.parameters}
+        wanted.update({name: True for name in request.reference})
+        with self._translate_errors("Retrieving dimensions"):
+            retrieved = self._retrieve_onto(document, view)
+            named = [(entry, self._dimension_parameter(entry)) for entry in retrieved]
+            if retrieved and not any(name for _, name in named):
+                for entry, _ in named:
+                    _delete_quietly(entry)
+                raise FeatureError(
+                    f"{len(retrieved)} dimension(s) were retrieved onto view "
+                    f"{request.view!r} and none of them could say which model "
+                    "parameter it came from, so there is no way to keep the ones "
+                    "this drawing asked for.",
+                    hint="This is the fact the whole retrieve-and-filter approach "
+                    "rests on -- see the drawing section of docs/INVENTOR_SETUP.md. "
+                    "Read what a DrawingDimension really offers with `python "
+                    "scripts/com_signatures.py GeneralDimension`. The retrieved "
+                    "dimensions have been removed again rather than left on a "
+                    "sheet nobody dimensioned.",
+                )
+            kept: list[DimensionInfo] = []
+            for entry, name in named:
+                if name is None or name not in wanted:
+                    _delete_quietly(entry)
+                    continue
+                kept.append(self._dimension_info(entry, request.view, name, wanted[name]))
+        return kept
+
+    def read_drawing(self, doc_id: str) -> DrawingContents:  # pragma: no cover
+        """The sheet as Inventor now has it, which is what closes the round trip.
+
+        Read off the sheet rather than reported from the request, and that is the
+        entire point: a dimension the retrieval could not find is absent here,
+        and a view whose direction did not mean what its name said has an extent
+        that says so.
+        """
+        document = self._doc(doc_id)
+        sheet = document.ActiveSheet
+        views: list[ViewInfo] = []
+        for index in range(1, int(sheet.DrawingViews.Count) + 1):
+            view = sheet.DrawingViews.Item(index)
+            views.append(ViewInfo(
+                id=str(getattr(view, "Name", index)),
+                name=str(getattr(view, "Name", f"view{index}")),
+                # Asked of the view rather than remembered from the request: a
+                # sheet read back has to be able to disagree with what was asked
+                # for, or reading it back proves nothing.
+                direction=_view_orientation_name(
+                    view, self._VIEW_ORIENTATIONS, self._k),
+                at=_view_position(view),
+                scale=float(getattr(view, "Scale", 1.0)),
+                extent=_view_extent(view),
+            ))
+        dimensions: list[DimensionInfo] = []
+        for index in range(1, int(sheet.DrawingDimensions.Count) + 1):
+            entry = sheet.DrawingDimensions.Item(index)
+            name = self._dimension_parameter(entry)
+            dimensions.append(self._dimension_info(
+                entry, _dimension_view_name(entry), name, _is_reference(entry)))
+        return DrawingContents(
+            views=views, dimensions=dimensions,
+            sheet=str(getattr(sheet, "Name", "")) or "a3",
+            detail={"read_from": "the sheet"},
+        )
+
+    #: How a retrieved dimension might name the model parameter it came from,
+    #: as attribute paths tried in order. Nothing in this repository has ever
+    #: held a `DrawingDimension`, so these are documented property paths and a
+    #: proposal -- and unlike an argument order, a wrong guess here cannot build
+    #: anything wrongly: it either names a parameter or it does not.
+    _DIMENSION_PARAMETER_PATHS = (
+        ("ModelDimension", "Parameter", "Name"),
+        ("ModelDimension", "Name"),
+        ("Parameter", "Name"),
+        ("ModelValue", "Parameter", "Name"),
+    )
+
+    def _dimension_parameter(self, entry: Any) -> str | None:  # pragma: no cover
+        """Which model parameter this dimension came from, or None if it will not say."""
+        for path in self._DIMENSION_PARAMETER_PATHS:
+            current: Any = entry
+            for step in path:
+                current = getattr(current, step, None)
+                if current is None:
+                    break
+            if isinstance(current, str) and current:
+                return current
+        return None
+
+    def _dimension_info(self, entry: Any, view: str | None, parameter: str | None,
+                        reference: bool) -> DimensionInfo:  # pragma: no cover
+        return DimensionInfo(
+            id=str(getattr(entry, "Name", "") or id(entry)),
+            value=float(getattr(entry, "ModelValue", 0.0) or 0.0),
+            kind=_dimension_kind(entry),
+            view=view,
+            parameter=parameter,
+            expression=_dimension_expression(entry),
+            reference=reference,
+        )
+
+    #: How a release might offer "retrieve the model's dimensions onto this
+    #: view", tried in order. Every candidate takes the view and nothing else
+    #: that could be misread, so unlike `thicken` there is no argument-order
+    #: risk to guard against -- a wrong name raises and a wrong object is a type
+    #: mismatch.
+    _RETRIEVAL_ROUTES = ("RetrieveDimensions", "AddRetrievedDimensions")
+
+    def _retrieve_onto(self, document: Any, view: Any) -> list[Any]:  # pragma: no cover
+        """Every dimension retrieval put on the sheet, by whichever route works.
+
+        The returned collection is turned into a plain list immediately: the
+        filter that follows deletes some of them, and deleting out of a live COM
+        collection while iterating it is how a loop silently skips half its
+        members.
+        """
+        dimensions = document.ActiveSheet.DrawingDimensions
+        failures: list[str] = []
+        for name in self._RETRIEVAL_ROUTES:
+            route = getattr(dimensions, name, None)
+            if route is None:
+                failures.append(f"{name}: DrawingDimensions has no such method")
+                continue
+            try:
+                result = route(view)
+            except Exception as exc:
+                failures.append(f"{name}: {_com_message(exc)}")
+                continue
+            return _as_list(result)
+        raise FeatureError(
+            "No route to retrieving this part's model dimensions onto the view: "
+            + "; ".join(failures),
+            hint="Read what this release offers with `python "
+            "scripts/com_signatures.py DrawingDimensions`. Retrieval is how this "
+            "server dimensions a drawing at all -- see the drawing section of "
+            "docs/INVENTOR_SETUP.md for why, and what to do if the answer is "
+            "that no such method exists.",
+        )
+
+    def _drawing_view(self, document: Any, name: str) -> Any:  # pragma: no cover
+        sheet = document.ActiveSheet
+        found = []
+        for index in range(1, int(sheet.DrawingViews.Count) + 1):
+            view = sheet.DrawingViews.Item(index)
+            if str(getattr(view, "Name", "")) == name:
+                return view
+            found.append(str(getattr(view, "Name", index)))
+        raise DocumentError(f"This sheet has no view named {name!r}.",
+                            hint=f"Views on it: {', '.join(found) or '(none)'}.")
+
     def combine(self, doc_id: str, request: CombineRequest) -> FeatureInfo:  # pragma: no cover
         document = self._doc(doc_id)
         component = document.ComponentDefinition
@@ -4974,6 +5252,143 @@ def _within_a_factor(measured: float, predicted: float, factor: float) -> bool:
         return False
     ratio = abs(measured) / abs(predicted)
     return 1 / factor <= ratio <= factor
+
+
+# ---------------------------------------------------------------------------
+# Drawings
+# ---------------------------------------------------------------------------
+#
+# Everything below reads a drawing object rather than creating one, and every
+# one of them is written to answer None rather than raise. That is deliberate
+# and is the difference between reading a sheet and building one: a sheet read
+# back is evidence, and a reader that raises on the first property a release
+# spells differently produces no evidence at all. A missing answer is recorded
+# as missing and the caller can say so.
+
+
+def _as_list(result: Any) -> list[Any]:  # pragma: no cover - Windows only
+    """A COM collection or a single object as a plain Python list.
+
+    Taken out of the collection immediately, because the caller deletes some of
+    what it is given: removing an item from a live COM collection while
+    iterating it is how a loop silently skips half its members.
+    """
+    if result is None:
+        return []
+    try:
+        count = int(result.Count)
+    except Exception:
+        return [result]
+    return [result.Item(index) for index in range(1, count + 1)]
+
+
+def _view_extent(view: Any) -> tuple[float, float] | None:  # pragma: no cover
+    """What the view spans on the sheet, in cm, if it will say.
+
+    The check on defect 4's drawing-shaped cousin: a view whose direction did
+    not mean what its name said has an extent that does not match the part's on
+    those axes, and this is the number that shows it.
+    """
+    try:
+        return (float(view.Width), float(view.Height))
+    except Exception:
+        return None
+
+
+def _view_position(view: Any) -> tuple[float, float]:  # pragma: no cover
+    """Where the view's centre sits on the sheet, in cm."""
+    try:
+        centre = view.Center
+        return (float(centre.X), float(centre.Y))
+    except Exception:
+        return (0.0, 0.0)
+
+
+def _view_orientation_name(view: Any, orientations: dict[str, str],
+                           resolve: Callable[[str], int]) -> str:  # pragma: no cover
+    """Which direction this view is, asked of the view.
+
+    Asked rather than remembered, because a sheet read back has to be able to
+    disagree with what was requested or reading it back proves nothing. Falls
+    back to naming the raw enum rather than to the request: a direction this
+    cannot read is not evidence that the request was honoured.
+
+    The enum values come through `resolve` -- the backend's `_k` -- and not from
+    the fallback table, because these are exactly the names the table does not
+    carry. So the comparison works on a machine whose type library is readable
+    and reports the raw number where it is not, which is the honest answer.
+    """
+    try:
+        value = int(view.ViewOrientationType)
+    except Exception:
+        return "unknown"
+    for direction, enum in orientations.items():
+        try:
+            if value == resolve(enum):
+                return direction
+        except Exception:
+            continue
+    return f"orientation {value}"
+
+
+#: How a drawing dimension's type might announce itself. Read as a string
+#: because the enum names are what distinguish a diameter from a length, and a
+#: number would have to be mapped through a table nobody here has measured.
+_DIMENSION_KIND_HINTS = (
+    ("diameter", "diameter"), ("radius", "radius"), ("angular", "angle"),
+    ("angle", "angle"), ("linear", "linear"),
+)
+
+
+def _dimension_kind(entry: Any) -> str:  # pragma: no cover
+    """Whether this is a length, a diameter, a radius or an angle.
+
+    From the object's own type name, which pywin32 exposes for a specialised
+    object and which reads `DiameterGeneralDimension` or `LinearGeneralDimension`
+    -- so the answer is in the name rather than in an enum whose numbering would
+    have to be measured. Defaults to linear, which is what most dimensions are
+    and what a wrong answer costs least on.
+    """
+    described = f"{type(entry).__name__} {getattr(entry, 'Type', '')}".lower()
+    for hint, kind in _DIMENSION_KIND_HINTS:
+        if hint in described:
+            return kind
+    return "linear"
+
+
+def _dimension_expression(entry: Any) -> str | None:  # pragma: no cover
+    """The expression behind the dimension, where it has one to give."""
+    for path in (("ModelDimension", "Parameter", "Expression"),
+                 ("Parameter", "Expression"), ("Text", "Text")):
+        current: Any = entry
+        for step in path:
+            current = getattr(current, step, None)
+            if current is None:
+                break
+        if isinstance(current, str) and current:
+            return current
+    return None
+
+
+def _dimension_view_name(entry: Any) -> str | None:  # pragma: no cover
+    """Which view the dimension is attached to, if it will say."""
+    for path in (("Parent", "Name"), ("DrawingView", "Name")):
+        current: Any = entry
+        for step in path:
+            current = getattr(current, step, None)
+            if current is None:
+                break
+        if isinstance(current, str) and current:
+            return current
+    return None
+
+
+def _is_reference(entry: Any) -> bool:  # pragma: no cover
+    """Whether the dimension is shown as a reference -- bracketed, driving nothing."""
+    try:
+        return bool(entry.IsReferenceDimension)
+    except Exception:
+        return False
 
 def _solid_volume(document: Any) -> float | None:
     """The current volume, or None if it cannot be measured.

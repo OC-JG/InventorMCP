@@ -5,6 +5,90 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 ## Unreleased
 
 ### Added
+- **The sheet gets made: four drawing methods on both backends.** `new_drawing`,
+  `place_view`, `retrieve_dimensions` and `read_drawing` on the `Backend` ABC —
+  so the two implementations cannot drift, which the compiler enforces rather
+  than anybody's discipline. The simulator's half is measured and tested; **the
+  COM half has never executed**, and it is the largest unmeasured surface in the
+  project.
+
+  `build_drawing_from_recipe` places the views, retrieves the dimensions the
+  recipe asks for, then **reads the sheet back and checks that**. Reading back
+  what you just asked for proves nothing; reading back what is *there* is the
+  test, and it is what the round trip has needed all along.
+
+  **Dimensions are retrieved from the model, not placed by geometry**, and that
+  is the design decision worth arguing. The roadmap imagined "dimensions placed
+  against the geometry a named parameter drives", which means working out which
+  two drawing curves a parameter drives — the guessing a recipe exists to avoid.
+  The parts this server builds make a better route available: every sketch
+  dimension carries a parameter's expression and every driven feature value is a
+  named parameter, so Inventor's own retrieve-model-dimensions produces
+  dimensions that *are* the parameters, and a dimension on the sheet cannot then
+  disagree with the part.
+
+  The price is that retrieval brings *every* model dimension onto the view, so
+  the asked-for ones must be kept and the rest removed — which needs a retrieved
+  dimension to name the parameter it came from. **Nothing here has ever held a
+  `DrawingDimension`**, so that is the single fact the whole approach rests on
+  and the first thing a live run must settle. `retrieve_dimensions` deletes what
+  it retrieved and fails loudly if none of them will say, rather than leaving a
+  sheet carrying every dimension the model happens to hold.
+
+  **No enum value is guessed anywhere in it.** The view orientations and styles
+  are named — `kFrontViewOrientation`, `kHiddenLineRemovedDrawingViewStyle` —
+  and `_k` reads their values from the type library, raising a message that names
+  the fix when it cannot. A wrong name raises; a wrong number is not possible.
+  That is a better starting position than the extrude extents had, where 32 of
+  51 fallback values turned out wrong.
+
+  **Two checks exist only because the sheet is read back**, and neither could be
+  static:
+
+  * **a parameter with no model dimension cannot be retrieved.** Inventor can
+    place a dimension only if the model holds one, so a parameter driving
+    neither a sketch dimension nor a feature value has nothing to retrieve. No
+    static check could know that — the parameter exists and resolves perfectly
+    well;
+  * **a view that reports facing a way it was not asked to.** Defect 4's
+    drawing-shaped cousin: `capture_view`'s `front` returns a top view on a part
+    built on XY, and a drawing view reaches Inventor through a similarly-named
+    enum. `read_drawing` asks the *sheet* for each view's orientation and extent
+    rather than remembering the request, which is the only way that check could
+    work.
+
+### Changed
+- **Pointing the drawing schema at a shipped part found the thing worth knowing,
+  and it took a real recipe to find it.** Asking to dimension the mounting
+  plate's `edge_margin` does **not** put 12 mm on the sheet. Dimensions are
+  retrieved, and that model never states 12 anywhere — the margin exists only as
+  a hole spacing of `plate_w - 2 * edge_margin`, so the sheet carries **96 mm**.
+  The holes are pinned either way and the drawing is correct; the number the
+  recipe named is simply not the number a reader sees.
+
+  Three consequences, all landed here:
+
+  * `build_drawing` **says so** rather than leaving it to be noticed, and the
+    warning names the expression that came back;
+  * an **exact match is preferred** over one that merely refers. `plate_w` is
+    referenced by the outline's width *and* by that same hole spacing, so
+    without a preference the answer was whichever the iteration reached first —
+    a drawing asking for the plate's width would sometimes have got its hole
+    pitch;
+  * the rehearsal and the built sheet **disagree about it on purpose**, and a
+    test pins that. The rehearsal resolves `edge_margin` to 12, because that is
+    what the parameter is worth; only a sheet that has been made can say which
+    dimension came back. That difference is the whole reason the round trip
+    reads the sheet rather than trusting the request.
+
+  Also from that first run: looking only at sketch dimensions was the
+  simulator's first answer about what can be retrieved, and it reported a
+  plate's *thickness* as impossible to dimension — the one dimension a plate
+  drawing certainly carries. Inventor retrieves feature dimensions as readily as
+  sketch ones, an extrude's distance being a parameter in the model browser, so
+  the retrieval reads both.
+
+### Added
 - **Phase 3 opens: `DrawingRecipe`, a second root beside `PartRecipe`.** A
   drawing describes *views of* a solid rather than a solid, which is a different
   noun at the top of the document — the first thing in this project that

@@ -333,3 +333,261 @@ class TestTheShippedDrawing:
         derived = {entry["model"]
                    for entry in rehearse_drawing(drawing, part)["round_trip"]["derived"]}
         assert any("plate_w - 2 * edge_margin" in name for name in derived)
+
+
+class TestBuildingTheDrawing:
+    """The round trip through a backend, which is what `build_drawing` adds.
+
+    `rehearse_drawing` computes what a sheet would say. This makes one and then
+    reads it back, and the difference is the whole value: a dimension the
+    retrieval could not find is absent from the check rather than assumed
+    present, and a view's direction is asked of the sheet rather than
+    remembered from the request.
+
+    Only the simulator's half is testable here. The COM half has never run --
+    `docs/INVENTOR_SETUP.md` has what a live seat must settle, and the first
+    thing on that list is whether a retrieved dimension can be asked which model
+    parameter it came from, because the whole approach rests on it.
+    """
+
+    def build(self, session, drawing, part=PART, **kwargs):
+        from inventor_mcp.drafting import build_drawing
+
+        return build_drawing(session, DrawingRecipe.model_validate(drawing),
+                             part, **kwargs)
+
+    def test_the_views_are_placed_and_measured_from_the_part(self, session):
+        """A front view of a 120 x 80 x 8 plate spans 120 by 8."""
+        report = self.build(session, COMPLETE)
+        placed = {entry["view"]["name"]: entry["view"] for entry in report["views"]}
+        assert placed["FRONT"]["extent"] == pytest.approx([12.0, 0.8])
+        assert placed["TOP"]["extent"] == pytest.approx([12.0, 8.0])
+
+    def test_a_views_scale_shrinks_what_it_spans(self, session):
+        report = self.build(session, {"name": "D", "template": "t.idw", "views": [
+            {"name": "FRONT", "scale": 0.5, "dimension": ["plate_w"]}]})
+        assert report["views"][0]["view"]["extent"] == pytest.approx([6.0, 0.4])
+
+    def test_the_dimensions_are_retrieved_by_parameter(self, session):
+        report = self.build(session, COMPLETE)
+        retrieved = [entry["parameter"]
+                     for view in report["views"] for entry in view["dimensions"]]
+        assert retrieved == ["plate_w", "plate_t", "plate_d", "hole_d"]
+
+    def test_a_retrieved_dimension_carries_the_models_own_value(self, session):
+        """Which is the property that makes reading the sheet back a check on
+        the recipe rather than on the arithmetic: the number on the sheet came
+        from the model, so it cannot disagree with it."""
+        report = self.build(session, COMPLETE)
+        first = report["views"][0]["dimensions"][0]
+        assert first["value"] == pytest.approx(12.0)  # 120 mm, in cm
+        assert first["expression"] == "plate_w"
+
+    def test_the_sheet_is_read_back_and_the_round_trip_reconciles(self, session):
+        report = self.build(session, COMPLETE)
+        assert report["ok"] is True
+        assert len(report["read_back"]["views"]) == 2
+        assert len(report["read_back"]["dimensions"]) == 4
+        assert report["round_trip"]["undimensioned_count"] == 0
+
+    def test_a_parameter_with_no_model_dimension_cannot_be_retrieved(self, session):
+        """The check that only exists because the sheet is read back.
+
+        Inventor can retrieve a dimension only if the model holds one, so a
+        parameter driving neither a sketch dimension nor a feature value has
+        nothing to retrieve -- and no static check could know that, because the
+        parameter exists and resolves perfectly well.
+        """
+        part = PartRecipe.model_validate({
+            "name": "Plate", "units": "mm",
+            "parameters": [
+                {"name": "plate_w", "value": 120},
+                {"name": "plate_t", "value": 8},
+                {"name": "spare", "value": 3, "comment": "drives nothing, on purpose"},
+            ],
+            "operations": [
+                {"op": "sketch", "name": "O", "plane": "xy", "entities": [
+                    {"type": "rectangle", "center": [0, 0],
+                     "width": "plate_w", "height": 80}]},
+                {"op": "extrude", "name": "B", "sketch": "O", "distance": "plate_t"},
+            ]})
+        report = self.build(session, {"name": "D", "template": "t.idw", "views": [
+            {"name": "FRONT", "dimension": ["plate_w", "plate_t", "spare"]}]}, part)
+        assert any("not on the sheet: spare" in warning["warning"]
+                   for warning in report["warnings"])
+        placed = [entry["parameter"] for entry in report["views"][0]["dimensions"]]
+        assert placed == ["plate_w", "plate_t"]
+
+    def test_a_parameter_driving_a_feature_is_retrievable(self, session):
+        """`plate_t` drives an extrude's distance and not a sketch dimension.
+
+        Inventor retrieves feature dimensions as readily as sketch ones -- an
+        extrude's distance is a parameter in the model browser. Looking only at
+        sketches was this simulator's first answer and it reported a plate's
+        thickness as impossible to dimension, which is the one dimension a
+        plate drawing certainly carries.
+        """
+        report = self.build(session, {"name": "D", "template": "t.idw", "views": [
+            {"name": "FRONT", "dimension": ["plate_t"]}]})
+        assert [e["parameter"] for e in report["views"][0]["dimensions"]] == ["plate_t"]
+        assert report["views"][0]["dimensions"][0]["value"] == pytest.approx(0.8)
+
+    def test_a_part_that_does_not_build_stops_before_any_sheet_is_made(self, session):
+        broken = PartRecipe.model_validate({
+            "name": "Broken", "units": "mm", "operations": [
+                {"op": "extrude", "name": "E", "sketch": "Nope", "distance": 5}]})
+        report = self.build(session, COMPLETE, broken)
+        assert report["ok"] is False
+        assert "nothing to draw" in report["findings"][0]["error"]
+        assert "document" not in report
+
+    def test_an_already_open_part_is_drawn_without_rebuilding_it(self, session):
+        from inventor_mcp.builder import build_part
+
+        built = build_part(session, PART)
+        report = self.build(session, COMPLETE, part_doc_id=built["document"])
+        assert report["part"]["reused"] is True
+        assert report["ok"] is True
+
+    def test_the_overall_size_check_has_extents_to_work_from(self, session):
+        """Unlike the ledger's reading, a built sheet's views carry a size --
+        so `compare`'s cheapest check is live rather than skipped."""
+        from inventor_mcp.drafting import reading_of
+
+        report = self.build(session, COMPLETE)
+        session.backend.read_drawing(report["document"])
+        reading = reading_of(
+            DrawingRecipe.model_validate(COMPLETE),
+            session.backend.read_drawing(report["document"]))
+        assert [view.extent for view in reading.views] == [
+            pytest.approx([120.0, 8.0]), pytest.approx([120.0, 80.0])]
+        assert not any("overall size" in warning.get("warning", "")
+                       for warning in report["round_trip"]["warnings"])
+
+
+class TestTheBackendContract:
+    """Both backends implement the drawing methods, which the ABC enforces.
+
+    Not a test of behaviour so much as a record of why the two cannot drift: a
+    backend missing one of these will not instantiate, which is the property
+    `ARCHITECTURE.md` calls construction rather than discipline.
+    """
+
+    def test_the_four_drawing_methods_are_abstract(self):
+        from inventor_mcp.backend.base import Backend
+
+        for name in ("new_drawing", "place_view", "retrieve_dimensions",
+                     "read_drawing"):
+            assert getattr(Backend, name).__isabstractmethod__, name
+
+    def test_a_backend_missing_one_will_not_instantiate(self):
+        """Re-declared as abstract rather than deleted, because an inherited
+        method cannot be deleted -- and re-declaring is what a half-written
+        backend looks like anyway."""
+        import abc
+
+        from inventor_mcp.backend.mock.backend import MockBackend
+
+        class Forgetful(MockBackend):
+            @abc.abstractmethod
+            def read_drawing(self, doc_id):  # pragma: no cover - never called
+                ...
+
+        with pytest.raises(TypeError, match="read_drawing"):
+            Forgetful()
+
+    def test_a_drawing_document_reports_itself_as_one(self, session):
+        info = session.backend.new_drawing("D", sheet="a3")
+        assert info.kind == "drawing"
+
+    def test_a_view_of_a_drawing_is_refused(self, session):
+        from inventor_mcp.backend.base import ViewRequest
+
+        drawing = session.backend.new_drawing("D")
+        with pytest.raises(Exception, match="nothing to draw"):
+            session.backend.place_view(drawing.id, ViewRequest(
+                part_doc_id=drawing.id, name="FRONT"))
+
+    def test_two_views_cannot_share_a_name_on_one_sheet(self, session):
+        from inventor_mcp.backend.base import ViewRequest
+        from inventor_mcp.builder import build_part
+
+        built = build_part(session, PART)
+        drawing = session.backend.new_drawing("D")
+        request = ViewRequest(part_doc_id=built["document"], name="FRONT")
+        session.backend.place_view(drawing.id, request)
+        with pytest.raises(Exception, match="already has a view named"):
+            session.backend.place_view(drawing.id, request)
+
+
+class TestWhatARetrievedDimensionActuallyStates:
+    """The subtlety the shipped example found, and the reason to read the sheet.
+
+    Asking to dimension a parameter does not guarantee the sheet shows that
+    parameter's value. Retrieval can only place a dimension the model *holds*,
+    so a parameter the model never states on its own comes back as the dimension
+    it drives. The mounting plate is the case: an `edge_margin` of 12 exists
+    only as a hole spacing of `plate_w - 2 * edge_margin`, so a sheet asking for
+    the margin carries 96 mm and 12 appears nowhere.
+
+    The rehearsal cannot see this -- it resolves the parameter to 12, because
+    that is what the parameter is worth -- and only a sheet that has been made
+    can say which dimension came back. That is the difference the round trip
+    exists for.
+    """
+
+    ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+    def built(self, session):
+        from inventor_mcp.drafting import build_drawing
+
+        drawing = DrawingRecipe.model_validate(json.loads(
+            (self.ROOT / "examples" / "drawings" / "mounting_plate.json").read_text(
+                encoding="utf-8")))
+        part = PartRecipe.model_validate(json.loads(
+            (self.ROOT / "examples" / "mounting_plate.json").read_text(encoding="utf-8")))
+        return build_drawing(session, drawing, part)
+
+    def stated(self, session):
+        return {entry["parameter"]: (entry["value"], entry.get("expression"))
+                for entry in self.built(session)["read_back"]["dimensions"]}
+
+    def test_the_margin_comes_back_as_the_spacing_it_drives(self, session):
+        value, expression = self.stated(session)["edge_margin"]
+        assert value == pytest.approx(9.6)  # 96 mm, in cm
+        assert expression == "plate_w - 2 * edge_margin"
+
+    def test_and_that_is_said_rather_than_left_to_be_noticed(self, session):
+        assert any("rather than the parameter" in warning["warning"]
+                   for warning in self.built(session)["warnings"])
+
+    def test_a_parameter_the_model_states_directly_comes_back_as_itself(self, session):
+        """Otherwise the warning above would be on everything and mean nothing."""
+        stated = self.stated(session)
+        for name in ("plate_w", "plate_d", "thk", "hole_d", "corner_r"):
+            assert stated[name][1] == name, name
+
+    def test_an_exact_match_is_preferred_over_one_that_merely_refers(self, session):
+        """`plate_w` is referenced by the outline's width *and* by the hole
+        spacing, so without a preference the answer would be whichever the
+        iteration reached first -- and a drawing asking for the plate's width
+        would sometimes get its hole pitch."""
+        value, expression = self.stated(session)["plate_w"]
+        assert expression == "plate_w"
+        assert value == pytest.approx(12.0)
+
+    def test_the_rehearsal_and_the_sheet_disagree_about_it_on_purpose(self, session):
+        """The one place the two directions give different answers, and the
+        reason `build_drawing` reads the sheet instead of trusting the ledger."""
+        rehearsed = rehearse_drawing(
+            DrawingRecipe.model_validate(json.loads(
+                (self.ROOT / "examples" / "drawings" / "mounting_plate.json").read_text(
+                    encoding="utf-8"))),
+            PartRecipe.model_validate(json.loads(
+                (self.ROOT / "examples" / "mounting_plate.json").read_text(
+                    encoding="utf-8"))))
+        ledger = {entry["label"]: entry["value"]
+                  for view in rehearsed["ledger"]["views"]
+                  for entry in view["dimensions"]}
+        assert ledger["edge_margin"] == pytest.approx(12.0)
+        assert self.stated(session)["edge_margin"][0] == pytest.approx(9.6)

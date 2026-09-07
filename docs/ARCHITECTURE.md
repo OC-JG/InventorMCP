@@ -170,7 +170,7 @@ number that says how much a rehearsal is worth.
 
 ### `tools/` — the MCP surface
 
-Thirty-two tools rather than one per feature type -- thirty-three when the
+Thirty-three tools rather than one per feature type -- thirty-four when the
 escape hatch is on. Feature creation goes through `apply_operations` with the same
 operation objects a recipe uses, which keeps the tool list small and means there
 is one syntax to learn instead of two. Most of the count is not modelling: seven

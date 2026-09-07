@@ -271,10 +271,12 @@ reach, so **three COM calls in `backend/com/backend.py` have never executed**.
 The simulator side is measured and tested; the live side is a proposal.
 
 Those three have since been measured -- see *Running all five*, below, and the
-six runs it took. **`move_face`, `thicken` and `sketch_driven_pattern`, all
-added 2026-09-07, are the section's current occupants** and are a step worse
-than they were: those three had signatures read off a type library, and these
-do not. Each has its own subsection at the end.
+six runs it took. **`move_face`, `thicken`, `sketch_driven_pattern` and the
+whole drawing surface, all added 2026-09-07, are the section's current
+occupants** and are a step worse than they were: those three had signatures read
+off a type library, and these do not. Each has its own subsection at the end,
+and the drawing one is much the largest -- it is four calls rather than one, and
+one fact it rests on has never been asked of Inventor at all.
 
 What a live run has to confirm, in this order:
 
@@ -685,6 +687,100 @@ an occurrence of a cutting seed standing over air is reported. Both are held by
 claims about the ledger, not about the API. What Inventor decides is only how
 many occurrences there are and where -- and if the count is wrong, everything
 the placement then says is wrong with it.
+
+
+### Drawings, the largest unmeasured surface in the project
+
+Added 2026-09-07. Four `Backend` methods -- `new_drawing`, `place_view`,
+`retrieve_dimensions`, `read_drawing` -- implemented on both backends, with the
+simulator's half measured and tested and the COM half never executed. What makes
+this different from the three above is not only its size:
+
+**One of the four carries no risk at all.** `new_drawing` is `new_part` with a
+different enum: `Documents.Add` is measured, and `kDrawingDocumentObject` has
+been in the constants table since before anything used it. If the rest of this
+fails, that call will not be why.
+
+**No enum value is guessed anywhere in it.** The view orientations and styles
+are referred to by their documented *names* -- `kFrontViewOrientation`,
+`kHiddenLineRemovedDrawingViewStyle` -- and `_k` reads their values from the
+type library, raising a message that names the fix when it cannot. So a wrong
+name raises and a wrong number is not possible. That is a better position than
+the extrude extents were in before they were measured, where 32 of 51 fallback
+values turned out wrong.
+
+**And one fact underneath it has never been asked of Inventor.**
+
+#### The fact the whole approach rests on
+
+Dimensions are **retrieved** from the model, not placed by geometry. The reason
+is the parts this server builds: every sketch dimension it creates carries a
+parameter's expression, and every driven feature value is a named parameter, so
+Inventor's own retrieve-model-dimensions produces dimensions that *are* the
+parameters. Placing a dimension by geometry would mean working out which two
+drawing curves a parameter drives, which is exactly the guessing a recipe exists
+to avoid.
+
+Retrieval brings *every* model dimension onto the view, so the asked-for ones
+have to be kept and the rest removed. **That requires asking a retrieved
+dimension which model parameter it came from, and nothing here has ever held a
+`DrawingDimension`.** `_dimension_parameter` tries four documented property
+paths -- `ModelDimension.Parameter.Name` and three others -- and if none of them
+answers, `retrieve_dimensions` deletes what it retrieved and fails, rather than
+leaving a sheet carrying every dimension the model happens to hold.
+
+So the first thing a live run must settle, before anything else is worth
+reading:
+
+    python scripts/com_signatures.py GeneralDimension
+    python scripts/com_signatures.py DrawingDimensions
+
+If a retrieved dimension cannot name its parameter, the retrieve-and-filter
+design does not work and the alternative is placing dimensions against
+`DrawingCurve` geometry -- a different and much larger piece of work. That is
+the one outcome that would send this back to the drawing board, and it is
+cheap to check.
+
+#### What the run has to answer, in order
+
+1. **`new_drawing`** -- that a drawing document is created and a template given
+   as a path is honoured. Lowest risk; everything below needs it.
+2. **`DrawingViews.AddBaseView(Model, Position, Scale, ViewOrientation,
+   ViewStyle)`** -- the argument order is Inventor's documented one and is a
+   proposal. Passed by name through `_call_named`, so the positions are readable
+   at the call site.
+3. **Whether a direction's name describes what you get.** This is defect 4's
+   drawing-shaped cousin and the reason `read_drawing` reports a view's extent
+   and its orientation *as the sheet has them* rather than as they were
+   requested. `capture_view`'s orientation names do not describe what they
+   return -- `front` gives a top view on a part built on XY -- and a drawing
+   view reaches Inventor through a similarly-named enum. `build_drawing` warns
+   when a view reports facing a way it was not asked to, and that warning can
+   only come from the sheet.
+4. **Retrieval**, per the section above: which route exists
+   (`RetrieveDimensions` or `AddRetrievedDimensions`), and whether the result
+   can be filtered.
+5. **`read_drawing`** -- that a sheet can be walked and its dimensions read
+   with values. Everything the round trip concludes comes through here.
+
+    python scripts/live_acceptance.py --only drawing
+
+#### What a live run would prove that the simulator cannot
+
+The simulator implements all four and is worth trusting about the *recipe*: it
+catches a parameter that drives nothing and so has no dimension to retrieve, and
+it holds the sheet against the part. Two things it cannot be evidence for, and
+they are worth separating:
+
+* **the overall-size check.** A built sheet's view extents are Inventor's own,
+  measured off the view it placed, so comparing them with the part is a real
+  check. In the simulator the extent is *computed from* the part's bounding box,
+  so there the same check compares the part with itself and can only fail if the
+  scale arithmetic is wrong. `drafting.reading_of` says so at the point where it
+  matters;
+* **the direction check** in item 3. The simulator honours the direction it is
+  given by construction, so it will never report a view facing the wrong way.
+  That check exists entirely for the live half.
 
 ## Known-shaky areas
 

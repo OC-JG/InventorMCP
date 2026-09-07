@@ -82,6 +82,18 @@ INTERESTING = [
     # signature would settle is whether there is a reference-point argument at
     # all, and whether an occurrence lands on it.
     "SketchDrivenPatternFeatures.Add",
+    # Drawings, added 2026-09-07 and the largest unmeasured surface here. The
+    # first two are calls the backend makes; the third is the one that decides
+    # whether the whole retrieve-and-filter design works -- a retrieved
+    # dimension has to be able to name the model parameter it came from, and
+    # nothing here has ever held a DrawingDimension. Read the classes whole:
+    # `python scripts/com_signatures.py GeneralDimension` and
+    # `... DrawingDimensions`, since the properties are what matter and a
+    # property has no signature to print.
+    "DrawingViews.AddBaseView",
+    "DrawingDimensions.RetrieveDimensions",
+    "GeneralDimension",
+    "DrawingDimensions",
     # Not a call this server makes, but the object behind defect 4: `capture_view`
     # orientation names do not describe what you get, and `check_views` says there
     # is nothing to assert until somebody measures what each one produces. Reading

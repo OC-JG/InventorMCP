@@ -417,6 +417,108 @@ class ThickenRequest:
     name: str | None = None
 
 
+# ---------------------------------------------------------------------------
+# Drawings
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ViewInfo(Info):
+    """A view placed on a sheet."""
+
+    id: str
+    name: str
+    #: "front" | "rear" | "top" | "bottom" | "left" | "right" | "iso".
+    direction: str
+    #: Where the view's centre sits on the sheet, in cm.
+    at: tuple[float, float] = (0.0, 0.0)
+    scale: float = 1.0
+    style: str = "hidden_line_removed"
+    #: What the view spans on the sheet, in cm, if the backend can say.
+    extent: tuple[float, float] | None = None
+    detail: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class DimensionInfo(Info):
+    """A dimension on a sheet, as the sheet has it.
+
+    `parameter` is what makes a retrieved dimension worth retrieving: it is the
+    model parameter the dimension came from, so a sheet read back says which of
+    the part's numbers it states rather than only which numbers appear on it.
+    None where the dimension is not a model dimension, or where the backend
+    cannot say which parameter drove it.
+    """
+
+    id: str
+    #: In cm for a length, radians for an angle -- the backend's own units.
+    value: float
+    #: "linear" | "diameter" | "radius" | "angle".
+    kind: str = "linear"
+    view: str | None = None
+    parameter: str | None = None
+    expression: str | None = None
+    reference: bool = False
+
+
+@dataclass
+class DrawingContents(Info):
+    """A sheet as read back off it, which is the point of reading it back.
+
+    Deliberately not a `DrawingReading`: that is a pydantic model in the recipe
+    layer, and the backend contract is dataclasses all the way down.
+    `drafting.py` turns one of these into a reading, so the same conversion
+    serves a sheet the simulator made and a sheet Inventor made.
+    """
+
+    views: list[ViewInfo] = field(default_factory=list)
+    dimensions: list[DimensionInfo] = field(default_factory=list)
+    sheet: str = "a3"
+    #: Anything worth saying about how the sheet came to be -- which retrieval
+    #: route worked, what was dropped. Absent when there is nothing to say.
+    detail: dict[str, Any] | None = None
+
+
+@dataclass
+class ViewRequest:
+    """A base view of a part, on a drawing sheet.
+
+    `part_doc_id` is a document rather than a file: a drawing is normally made
+    of the part that is already open, and requiring a saved path first would
+    make the commonest case the awkward one.
+    """
+
+    part_doc_id: str
+    name: str
+    #: "front" | "rear" | "top" | "bottom" | "left" | "right" | "iso".
+    direction: str = "front"
+    #: Sheet position of the view's centre, in cm.
+    at: tuple[float, float] = (0.0, 0.0)
+    scale: float = 1.0
+    style: str = "hidden_line_removed"
+
+
+@dataclass
+class RetrieveRequest:
+    """Which of a part's model dimensions to bring onto a view.
+
+    Retrieval rather than placement, and the reason is the parts this server
+    builds. Every sketch dimension it creates carries a parameter's expression,
+    so Inventor's own "retrieve model dimensions" produces dimensions that *are*
+    the parameters -- where placing a dimension by geometry would mean working
+    out which two edges on the view are the ones a parameter drives, which is
+    the guessing a recipe exists to avoid.
+
+    `parameters` is what to keep. Everything else retrieved is removed again,
+    because a sheet carrying every dimension the model happens to hold is not a
+    drawing anybody dimensioned.
+    """
+
+    view: str
+    parameters: Sequence[str] = ()
+    reference: Sequence[str] = ()
+
+
 @dataclass
 class CombineRequest:
     base: int
@@ -674,6 +776,21 @@ class Backend(ABC):
 
     @abstractmethod
     def thicken(self, doc_id: str, request: ThickenRequest) -> FeatureInfo: ...
+
+    # -- drawings ----------------------------------------------------------
+    @abstractmethod
+    def new_drawing(self, name: str, *, template: str | None = None,
+                    sheet: str = "a3", units: str = "mm") -> DocInfo: ...
+
+    @abstractmethod
+    def place_view(self, doc_id: str, request: ViewRequest) -> ViewInfo: ...
+
+    @abstractmethod
+    def retrieve_dimensions(self, doc_id: str,
+                            request: RetrieveRequest) -> list[DimensionInfo]: ...
+
+    @abstractmethod
+    def read_drawing(self, doc_id: str) -> DrawingContents: ...
 
     @abstractmethod
     def combine(self, doc_id: str, request: CombineRequest) -> FeatureInfo: ...

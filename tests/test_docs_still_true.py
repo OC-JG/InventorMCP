@@ -29,7 +29,8 @@ README = (ROOT / "README.md").read_text(encoding="utf-8")
 ARCHITECTURE = (ROOT / "docs/ARCHITECTURE.md").read_text(encoding="utf-8")
 
 WORDS = {"nineteen": 19, "twenty": 20, "thirty": 30, "forty": 40,
-         "twenty-nine": 29, "thirty-one": 31, "thirty-two": 32}
+         "twenty-nine": 29, "thirty-one": 31, "thirty-two": 32,
+         "thirty-three": 33, "thirty-four": 34, "thirty-five": 35}
 
 
 @pytest.fixture(scope="module")

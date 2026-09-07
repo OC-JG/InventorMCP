@@ -34,10 +34,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from .backend.base import DrawingContents, RetrieveRequest, ViewRequest
 from .drawing import DrawingDimension, DrawingReading, DrawingView, compare
 from .errors import InventorMCPError
 from .resolve import Resolver
 from .schema import DrawingRecipe, DrawingViewSpec, PartRecipe
+from .session import Session
 from .units import Dim, Quantity, to_internal
 
 #: A drawing view's direction mapped onto the kind a `DrawingReading` uses.
@@ -352,8 +354,17 @@ _TRANSLATED = {
 }
 
 
-def _translated(comparison: dict[str, Any], recipe: DrawingRecipe) -> dict[str, Any]:
-    """`compare`'s report, with its vocabulary turned round."""
+def _translated(comparison: dict[str, Any], recipe: DrawingRecipe, *,
+                sized: bool = False) -> dict[str, Any]:
+    """`compare`'s report, with its vocabulary turned round.
+
+    `sized` says whether the reading carried view extents. It decides one
+    warning's fate and not by taste: "no overall size to check the model
+    against" is a real finding about a sheet whose views give no size, and it is
+    noise on a ledger that was never going to give one -- `as_reading` supplies
+    no extents on purpose, so the warning would fire every time and mean
+    nothing.
+    """
     out: dict[str, Any] = {"ok": comparison["ok"], "matched": comparison["matched"]}
     for key, renamed in _TRANSLATED.items():
         out[renamed] = comparison.get(key) or []
@@ -365,7 +376,7 @@ def _translated(comparison: dict[str, Any], recipe: DrawingRecipe) -> dict[str, 
         # A produced sheet always has one -- `DrawingRecipe.projection` has no
         # "unknown" -- so that warning cannot apply and would only confuse.
         if "projection" not in warning.get("warning", "")
-        and "overall size" not in warning.get("warning", "")
+        and (sized or "overall size" not in warning.get("warning", ""))
     ]
     for entry in out["undimensioned"]:
         entry["why"] = (
@@ -378,3 +389,261 @@ def _translated(comparison: dict[str, Any], recipe: DrawingRecipe) -> dict[str, 
     out["undimensioned_count"] = len(out["undimensioned"])
     out["sheet"] = recipe.name
     return out
+
+
+def build_drawing(session: Session, recipe: DrawingRecipe, part: PartRecipe, *,
+                  part_doc_id: str | None = None) -> dict[str, Any]:
+    """Make the drawing, then read it back off the sheet and check it.
+
+    The round trip, and the order matters: the sheet is read from the backend
+    rather than reported from the recipe, so a dimension the retrieval could not
+    find is absent from the check and a view whose direction did not mean what
+    its name said has an extent that says so. Reading back what you just asked
+    for proves nothing; reading back what is *there* is the test.
+
+    The part is built first unless `part_doc_id` names one already open. Both
+    are useful: a drawing of a part built in the same call is the ordinary case,
+    and a drawing of a part somebody has open is what you want when the part
+    took a minute to build.
+    """
+    from .builder import build_part
+
+    backend = session.backend
+    report: dict[str, Any] = {
+        "ok": True,
+        "name": recipe.name,
+        "units": recipe.units,
+        "views": [],
+        "findings": [],
+        "warnings": [],
+    }
+    if part_doc_id is None:
+        built = build_part(session, part)
+        report["part"] = {"ok": built["ok"], "document": built.get("document"),
+                          "errors": built.get("errors")}
+        if not built["ok"]:
+            report["ok"] = False
+            report["findings"].append({
+                "where": "the part",
+                "error": "the part did not build, so there is nothing to draw",
+                "hint": "The part's own errors are under `part`. A drawing of a "
+                        "part that failed would be a sheet of empty views.",
+            })
+            return report
+        part_doc_id = built["document"]
+    else:
+        report["part"] = {"ok": True, "document": part_doc_id, "reused": True}
+
+    document = backend.new_drawing(
+        recipe.name, template=recipe.template, sheet=recipe.sheet, units=recipe.units)
+    report["document"] = document.id
+    report["sheet"] = document.as_dict().get("detail")
+
+    resolver = _resolver_for(recipe, part, rehearse_the_part(session, part, part_doc_id))
+    for view in recipe.views:
+        try:
+            placed = backend.place_view(document.id, ViewRequest(
+                part_doc_id=part_doc_id,
+                name=view.name,
+                direction=view.direction,
+                at=_sheet_position(resolver, view),
+                scale=_scale_of(resolver, view),
+                style=view.style,
+            ))
+        except Exception as exc:
+            report["ok"] = False
+            report["findings"].append({
+                "where": f"view {view.name!r}",
+                "error": str(exc),
+                "hint": getattr(exc, "hint", None),
+            })
+            continue
+        entry: dict[str, Any] = {"view": placed.as_dict(), "dimensions": []}
+        report["views"].append(entry)
+        if not view.dimension and not view.reference:
+            continue
+        try:
+            entry["dimensions"] = [
+                info.as_dict() for info in backend.retrieve_dimensions(
+                    document.id,
+                    RetrieveRequest(view=view.name,
+                                    parameters=list(view.dimension),
+                                    reference=list(view.reference)))
+            ]
+        except Exception as exc:
+            report["ok"] = False
+            report["findings"].append({
+                "where": f"view {view.name!r}",
+                "error": str(exc),
+                "hint": getattr(exc, "hint", None),
+            })
+
+    contents = backend.read_drawing(document.id)
+    report["read_back"] = contents.as_dict()
+    report["warnings"].extend(_dimensions_that_did_not_reach_the_sheet(recipe, contents))
+    report["warnings"].extend(_views_that_are_not_what_they_asked_for(recipe, contents))
+    report["warnings"].extend(_dimensions_that_state_something_else(contents))
+    reading = reading_of(recipe, contents)
+    report["round_trip"] = _translated(
+        compare(reading, rehearse_the_part(session, part, part_doc_id)), recipe,
+        sized=any(view.extent for view in reading.views))
+    if not report["round_trip"]["ok"]:
+        report["ok"] = False
+    return report
+
+
+def rehearse_the_part(session: Session, part: PartRecipe,
+                      part_doc_id: str) -> dict[str, Any]:
+    """The part's rehearsal, for the comparison to have resolved numbers to use.
+
+    Rehearsed in the simulator rather than measured off the built part, and the
+    reason is what the comparison is for: it asks whether the sheet states the
+    numbers the *recipe* says the part has. Measuring the built part instead
+    would fold a modelling fault into a drawing check and report it in the wrong
+    place -- `build_part`'s own divergence check is what catches that.
+    """
+    from .builder import rehearse
+
+    return rehearse(part)
+
+
+def reading_of(recipe: DrawingRecipe, contents: DrawingContents) -> DrawingReading:
+    """A sheet that exists, as a `DrawingReading`.
+
+    The counterpart of :func:`as_reading`, which reads a ledger the sheet was
+    never made from. This one reads the sheet itself, so a dimension the
+    retrieval could not place is simply not here.
+    """
+    per_unit = to_internal(1.0, recipe.units).value
+    dimensions = [
+        DrawingDimension(
+            value=round(entry.value / (1.0 if entry.kind == "angle" else per_unit), 6),
+            label=entry.parameter or entry.expression or entry.id,
+            kind=entry.kind,
+            view=entry.view,
+            reference=entry.reference,
+        )
+        for entry in contents.dimensions
+    ]
+    return DrawingReading(
+        title=recipe.name,
+        units=recipe.units,
+        projection=recipe.projection,
+        scale=recipe.scale,
+        views=[
+            DrawingView(name=view.name,
+                        kind=_VIEW_KINDS.get(view.direction, "front"),
+                        # The extent comes off the sheet, so the overall-size
+                        # check has something to compare -- and how much that is
+                        # worth depends on which backend drew it, which is worth
+                        # being exact about. On Inventor the size is Inventor's,
+                        # measured from the view it actually placed, and the
+                        # check is real. On the simulator the extent is computed
+                        # from the part's own bounding box, so there the check
+                        # compares the part with itself and can only fail if the
+                        # scale arithmetic is wrong. `as_reading` supplies no
+                        # extent at all rather than that weaker version.
+                        extent=[round(value / per_unit / view.scale, 4)
+                                for value in view.extent] if view.extent else None)
+            for view in contents.views
+        ],
+        dimensions=dimensions,
+        notes=list(recipe.notes),
+        unreadable=[] if dimensions else ["the sheet carries no dimension"],
+    )
+
+
+def _sheet_position(resolver: Resolver, view: DrawingViewSpec) -> tuple[float, float]:
+    """Where the view goes, in cm, resolved like every other length here."""
+    across, up = view.at
+    return (resolver.length(across, f"position of view {view.name!r}").value,
+            resolver.length(up, f"position of view {view.name!r}").value)
+
+
+def _dimensions_that_did_not_reach_the_sheet(
+        recipe: DrawingRecipe, contents: DrawingContents) -> list[dict[str, Any]]:
+    """Parameters the recipe asked to dimension that the sheet does not carry.
+
+    The check that only exists because the sheet is read back. A retrieval can
+    come up empty for a reason nothing static could know: Inventor can only
+    retrieve a dimension the model actually holds, so a parameter that drives no
+    sketch dimension and no feature value has nothing to retrieve -- and the
+    caller has asked for something no sheet can show.
+    """
+    asked = {name for view in recipe.views
+             for name in list(view.dimension) + list(view.reference)}
+    arrived = {entry.parameter for entry in contents.dimensions if entry.parameter}
+    absent = sorted(asked - arrived)
+    if not absent:
+        return []
+    return [{
+        "where": "the sheet",
+        "warning": f"asked for but not on the sheet: {', '.join(absent)}",
+        "why": "A dimension can only be retrieved if the model holds one. A "
+               "parameter that drives no sketch dimension and no feature value "
+               "has nothing to retrieve, so nothing was placed for it -- check "
+               "that the parameter really drives the geometry you meant, since a "
+               "parameter driving nothing is a warning on the part as well.",
+    }]
+
+
+def _dimensions_that_state_something_else(
+        contents: DrawingContents) -> list[dict[str, Any]]:
+    """Dimensions retrieved for a parameter whose value is not that parameter's.
+
+    Not a fault, and worth saying anyway. Retrieval can only offer dimensions the
+    model *holds*, so a parameter the model never states on its own comes back as
+    the dimension it drives: the mounting plate expresses an `edge_margin` of 12
+    as a hole spacing of `plate_w - 2 * edge_margin`, and a drawing asking to
+    dimension the margin gets 96 mm. The sheet is right, the holes are pinned,
+    and the number the author named is nowhere on it -- which is exactly the
+    thing somebody should be told rather than left to notice.
+    """
+    indirect = [
+        f"{entry.parameter} is stated as {entry.expression!r}"
+        for entry in contents.dimensions
+        if entry.parameter and entry.expression
+        and entry.expression.strip() != entry.parameter
+    ]
+    if not indirect:
+        return []
+    return [{
+        "where": "the sheet",
+        "warning": "a dimension states the value its parameter drives rather "
+                   "than the parameter: " + "; ".join(indirect),
+        "why": "Retrieval can only place a dimension the model holds. Where a "
+               "parameter is never stated on its own -- a margin expressed as a "
+               "spacing, say -- the sheet carries the dimension it drives "
+               "instead. The geometry is pinned either way; what changes is "
+               "which number a reader of the drawing sees, and it is not the one "
+               "the recipe named.",
+    }]
+
+
+def _views_that_are_not_what_they_asked_for(
+        recipe: DrawingRecipe, contents: DrawingContents) -> list[dict[str, Any]]:
+    """Views the sheet reports as facing a different way than was asked.
+
+    Worth its own check because of defect 4: `capture_view`'s orientation names
+    do not describe what they return, and a drawing view reaches Inventor
+    through a similarly-named enum. If the same thing is true here, this is what
+    says so -- and it says it from the sheet rather than from the request, which
+    is the only way it could.
+    """
+    wanted = {view.name: view.direction for view in recipe.views}
+    wrong = [
+        f"{view.name} asked for {wanted[view.name]} and reports {view.direction}"
+        for view in contents.views
+        if view.name in wanted and view.direction not in (wanted[view.name], "unknown")
+    ]
+    if not wrong:
+        return []
+    return [{
+        "where": "views",
+        "warning": "a view is not facing the way it was asked to: " + "; ".join(wrong),
+        "why": "Read off the sheet rather than from the request. Defect 4 is the "
+               "same failure on `capture_view`, where `front` returns a top view, "
+               "so a drawing view's orientation enum meaning something else is "
+               "exactly the thing worth checking. The part is not wrong; the "
+               "sheet shows it from somewhere else.",
+    }]

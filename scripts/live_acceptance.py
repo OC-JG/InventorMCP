@@ -37,7 +37,8 @@ from inventor_mcp.builder import (  # noqa: E402
     build_part,
     measure,
 )
-from inventor_mcp.schema import ExtrudeOp, PartRecipe, SketchOp  # noqa: E402
+from inventor_mcp.drafting import build_drawing  # noqa: E402
+from inventor_mcp.schema import DrawingRecipe, ExtrudeOp, PartRecipe, SketchOp  # noqa: E402
 from inventor_mcp.session import Session  # noqa: E402
 
 EXPECTED = ROOT / "examples" / "expected"
@@ -1218,6 +1219,113 @@ def check_sketch_driven_pattern(session: Session, report: Report) -> None:
         session.forget(context.doc_id)
 
 
+def check_drawing(session: Session, report: Report) -> None:
+    """The whole drawing surface, whose COM half has never executed.
+
+    Four calls and one fact underneath them. ``docs/INVENTOR_SETUP.md`` has the
+    ordered list; the short version is that `new_drawing` is `new_part` with a
+    different enum and carries no risk, no enum value is guessed anywhere
+    (`_k` reads them from the type library and raises when it cannot), and the
+    thing that decides whether the design works at all is whether **a retrieved
+    dimension can name the model parameter it came from**. Nothing in this
+    repository has ever held a `DrawingDimension`.
+
+    Two of the readings here cannot be got from the simulator at all, and they
+    are the reason this check exists rather than a test:
+
+    * **a view's extent**, which on a real sheet is Inventor's own measurement
+      of the view it placed. In the simulator it is computed from the part's
+      bounding box, so there the same comparison checks the part against itself;
+    * **whether a direction's name describes what you get** -- defect 4's
+      drawing-shaped cousin. `capture_view`'s `front` returns a top view on a
+      part built on XY, and a drawing view reaches Inventor through a
+      similarly-named enum. The simulator honours the direction it is given by
+      construction, so it can never report this.
+    """
+    print("\n--- drawings: the COM half, which has never run")
+    if session.backend.name == "mock":
+        report.skip("drawing: not run",
+                    "the simulator honours every direction by construction and "
+                    "measures view extents from the part, so the two readings "
+                    "that matter cannot come from it. Use --backend inventor.")
+        return
+
+    path = ROOT / "examples" / "drawings" / "mounting_plate.json"
+    part_path = ROOT / "examples" / "mounting_plate.json"
+    drawing = DrawingRecipe.model_validate(json.loads(path.read_text(encoding="utf-8")))
+    part = PartRecipe.model_validate(json.loads(part_path.read_text(encoding="utf-8")))
+
+    try:
+        outcome = build_drawing(session, drawing, part)
+    except Exception as exc:
+        hint = getattr(exc, "hint", None)
+        report.check(False, "drawing: the sheet was made",
+                     f"{type(exc).__name__}: {exc}"
+                     + (f"\n         hint: {hint}" if hint else ""))
+        return
+
+    made = report.check(bool(outcome.get("document")), "drawing: a drawing document exists",
+                        str(outcome.get("findings"))[:400])
+    report.check(len(outcome.get("views") or []) == len(drawing.views),
+                 f"drawing: all {len(drawing.views)} views were placed",
+                 str(outcome.get("findings"))[:400])
+    if not made:
+        return
+
+    # 1. The fact everything rests on. Reported first because a failure here
+    #    means the design needs changing rather than the code fixing.
+    read_back = outcome.get("read_back") or {}
+    dimensions = read_back.get("dimensions") or []
+    named = [entry for entry in dimensions if entry.get("parameter")]
+    report.check(
+        bool(dimensions) and bool(named),
+        f"drawing: a retrieved dimension names its model parameter "
+        f"({len(named)} of {len(dimensions)} do)",
+        "This is what the retrieve-and-filter design rests on: without it there "
+        "is no way to keep the dimensions the recipe asked for and drop the "
+        "rest. If it fails, the alternative is placing dimensions against "
+        "DrawingCurve geometry, which is a much larger piece of work. Read what "
+        "a dimension really offers with `python scripts/com_signatures.py "
+        "GeneralDimension` before changing anything.")
+
+    # 2. Every parameter the recipe asked for, on the sheet.
+    asked = sorted({name for view in drawing.views
+                    for name in list(view.dimension) + list(view.reference)})
+    arrived = sorted({entry["parameter"] for entry in named})
+    report.check(
+        arrived == asked,
+        f"drawing: every parameter asked for reached the sheet ({len(arrived)} of "
+        f"{len(asked)})",
+        f"asked for {asked}, and the sheet carries {arrived}. A dimension can "
+        "only be retrieved if the model holds one, so a parameter missing here "
+        "either drives nothing or Inventor does not treat it as a model "
+        "dimension -- and which of those it is decides whether this is a recipe "
+        "fault or a gap in the approach.")
+
+    # 3. The extent, which is Inventor's own measurement here and is the part's
+    #    own arithmetic in the simulator. 120 x 80 x 8 mm plate.
+    for view in outcome.get("views") or []:
+        placed = view["view"]
+        extent = placed.get("extent")
+        report.note(
+            f"{placed['name']}: reports facing {placed.get('direction')}, spans "
+            f"{extent} cm at scale {placed.get('scale')}")
+    report.note(
+        "The plate is 120 x 80 x 8 mm. A front view should span 12 x 0.8 cm and a "
+        "top view 12 x 8 -- and a view reporting a direction it was not asked "
+        "for is defect 4 again, on a different API.")
+
+    # 4. And the whole round trip, which is what the sheet is for.
+    trip = outcome.get("round_trip") or {}
+    report.check(
+        trip.get("ok") is True and not trip.get("undimensioned"),
+        "drawing: the sheet reconciles with the part it was drawn from",
+        f"undimensioned: {trip.get('undimensioned')}; states what the part does "
+        f"not have: {trip.get('states_what_the_part_does_not_have')}")
+    for warning in outcome.get("warnings") or []:
+        report.note(f"warning: {warning['warning']}")
+
+
 def check_work_geometry(session: Session, report: Report) -> None:
     """The five Phase 2 behaviours whose COM half has never executed.
 
@@ -1857,6 +1965,7 @@ CHECKS = {
     "move-face": check_move_face,
     "thicken": check_thicken,
     "sketch-driven-pattern": check_sketch_driven_pattern,
+    "drawing": check_drawing,
     "views": check_views,
 }
 

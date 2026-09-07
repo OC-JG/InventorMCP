@@ -67,6 +67,11 @@ from ..base import (
     MoveFaceRequest,
     ThickenRequest,
     SketchDrivenPatternRequest,
+    DimensionInfo,
+    DrawingContents,
+    RetrieveRequest,
+    ViewInfo,
+    ViewRequest,
     THICKEN_SHARE,
     EmbossRequest,
     ShellRequest,
@@ -364,6 +369,35 @@ class _Feature:
 
 
 @dataclass
+class _View:
+    """A view placed on a sheet."""
+
+    id: str
+    name: str
+    direction: str
+    at: tuple[float, float]
+    scale: float
+    style: str
+    #: What the view spans on the sheet in cm, measured from the part it draws.
+    extent: tuple[float, float] | None
+    #: The document id of the part this view is of.
+    part: str = ""
+
+
+@dataclass
+class _Dimension:
+    """A dimension on a sheet, retrieved from a part's own model dimension."""
+
+    id: str
+    value: float
+    kind: str
+    view: str
+    parameter: str
+    expression: str
+    reference: bool = False
+
+
+@dataclass
 class _Document:
     id: str
     name: str
@@ -391,6 +425,15 @@ class _Document:
     )
     topology: list[_Topo] = field(default_factory=list)
     bounds: list[float] | None = None  # xmin, ymin, zmin, xmax, ymax, zmax
+    #: "part" or "drawing". A part leaves the three fields below alone and a
+    #: drawing leaves everything above them alone -- one dataclass rather than
+    #: two because `_doc` returns documents by id and a caller asking for one
+    #: should not have to know which kind it is before it can be told.
+    kind: str = "part"
+    sheet: str | None = None
+    template: str | None = None
+    views: list["_View"] = field(default_factory=list)
+    dimensions: list["_Dimension"] = field(default_factory=list)
     #: The signed prisms the part is made of, in creation order: what extrudes
     #: added and what cuts, shells and holes took out. Enough to answer "how
     #: thick is the part here", which is what a cut has to know.
@@ -724,6 +767,10 @@ class MockBackend(Backend):
             id=document.id,
             name=document.name,
             path=document.path,
+            # Reported rather than defaulted, for the reason the COM backend
+            # asks Inventor: a drawing described as a part in the same result
+            # that lists its views is a contradiction somebody has to notice.
+            kind=document.kind,
             units=document.units,
             angle_units=document.angle_units,
             active=document.id == self._active,
@@ -2032,6 +2079,135 @@ class MockBackend(Backend):
         self._record("thicken", name=name, faces=len(faces))
         return _feature_info(feature)
 
+    # -- drawings ----------------------------------------------------------
+    #: Which of the part's axes a view of each direction shows across and up,
+    #: and which it looks along. The same table `drafting.py` and
+    #: `drawing._overall_from` use -- a view's extent is the part's own extent on
+    #: two axes, so this is the whole of what the simulator needs to know about
+    #: what a direction means. `iso` is absent: it shows all three foreshortened,
+    #: which is not two numbers.
+    _VIEW_SPAN = {
+        "front": (0, 2), "rear": (0, 2),
+        "top": (0, 1), "bottom": (0, 1),
+        "left": (1, 2), "right": (1, 2),
+    }
+
+    def new_drawing(self, name: str, *, template: str | None = None,
+                    sheet: str = "a3", units: str = "mm") -> DocInfo:
+        document = _Document(id=self._next("doc"), name=name, units=units,
+                             kind="drawing", sheet=sheet, template=template)
+        self._documents[document.id] = document
+        self._active = document.id
+        self._record("new_drawing", name=name, sheet=sheet, template=template)
+        return self._doc_info(document)
+
+    def place_view(self, doc_id: str, request: ViewRequest) -> ViewInfo:
+        """Put a base view of a part on the sheet.
+
+        The extent is the useful part and it is measured rather than invented:
+        the part's own bounding box, on the two axes this direction shows,
+        scaled. So a sheet read back says how big each view is, and a view of a
+        part that does not fit its sheet is answerable without a renderer --
+        which is the argument for a ledger over a picture.
+        """
+        drawing = self._drawing(doc_id)
+        part = self._doc(request.part_doc_id)
+        if part.kind != "part":
+            raise DocumentError(
+                f"{part.name!r} is a {part.kind}, so there is nothing to draw.",
+                hint="A view is a view of a part. Pass the part's document id.")
+        if any(view.name == request.name for view in drawing.views):
+            raise DocumentError(f"This sheet already has a view named {request.name!r}.")
+
+        extent: tuple[float, float] | None = None
+        span = self._VIEW_SPAN.get(request.direction)
+        if span is not None and part.bounds:
+            extent = tuple(  # type: ignore[assignment]
+                abs(part.bounds[axis + 3] - part.bounds[axis]) * request.scale
+                for axis in span
+            )
+        view = _View(
+            id=self._next("view"),
+            name=request.name,
+            direction=request.direction,
+            at=request.at,
+            scale=request.scale,
+            style=request.style,
+            extent=extent,
+            part=request.part_doc_id,
+        )
+        drawing.views.append(view)
+        drawing.modified = True
+        self._record("place_view", name=request.name, direction=request.direction)
+        return _view_info(view)
+
+    def retrieve_dimensions(self, doc_id: str,
+                            request: RetrieveRequest) -> list[DimensionInfo]:
+        """Bring the part's own dimensions for these parameters onto a view.
+
+        Retrieval, not placement, and the simulator models exactly that: a
+        dimension can be retrieved only if the model *has* one. So a parameter
+        that exists and drives no sketch dimension comes back missing rather
+        than drawn, which is a real limit and not a shortcoming of the
+        simulator -- Inventor cannot retrieve a dimension the model does not
+        hold either, and the caller has asked for something no sheet can show.
+
+        The value is the model's, so a dimension on the sheet cannot disagree
+        with the part: that is the property that makes reading the sheet back a
+        check on the recipe rather than on the arithmetic.
+        """
+        drawing = self._drawing(doc_id)
+        view = self._view(drawing, request.view)
+        part = self._doc(view.part)
+        found: list[DimensionInfo] = []
+        for names, is_reference in ((request.parameters, False),
+                                    (request.reference, True)):
+            for name in names:
+                candidate = _model_dimension_for(part, name)
+                if candidate is None:
+                    continue
+                value, kind, expression = candidate
+                entry = _Dimension(
+                    id=self._next("dim"), value=value, kind=kind, view=view.name,
+                    parameter=name, expression=expression, reference=is_reference,
+                )
+                drawing.dimensions.append(entry)
+                found.append(_dimension_info(entry))
+        drawing.modified = True
+        self._record("retrieve_dimensions", view=request.view, kept=len(found))
+        return found
+
+    def read_drawing(self, doc_id: str) -> DrawingContents:
+        """The sheet as it now is, which is what closes the round trip.
+
+        Read back from the recorded views and dimensions rather than from the
+        recipe that asked for them, so that a dimension the retrieval could not
+        find is absent here -- the whole point of reading a sheet rather than
+        trusting the request.
+        """
+        drawing = self._drawing(doc_id)
+        return DrawingContents(
+            views=[_view_info(view) for view in drawing.views],
+            dimensions=[_dimension_info(entry) for entry in drawing.dimensions],
+            sheet=drawing.sheet or "a3",
+        )
+
+    def _drawing(self, doc_id: str) -> _Document:
+        document = self._doc(doc_id)
+        if document.kind != "drawing":
+            raise DocumentError(
+                f"{document.name!r} is a {document.kind}, not a drawing.",
+                hint="Create one with `new_drawing` first.")
+        return document
+
+    def _view(self, drawing: _Document, name: str) -> _View:
+        for view in drawing.views:
+            if view.name == name:
+                return view
+        known = ", ".join(view.name for view in drawing.views) or "(none)"
+        raise DocumentError(f"This sheet has no view named {name!r}.",
+                            hint=f"Views on it: {known}.")
+
     def combine(self, doc_id: str, request: CombineRequest) -> FeatureInfo:
         document = self._doc(doc_id)
         bodies = list(document.bodies)
@@ -3030,6 +3206,107 @@ def _feature_info(feature: _Feature) -> FeatureInfo:
         detail=feature.detail,
     )
 
+
+
+
+#: Which sketch-dimension kinds a drawing shows as what. A horizontal or
+#: vertical distance is a linear dimension on the sheet like any other.
+_DIMENSION_KINDS = {"diameter": "diameter", "radius": "radius", "angle": "angle"}
+
+#: Feature detail keys that hold a driven value, and the dimension kind each
+#: becomes on a sheet. The key names the quantity, which is what decides whether
+#: a retrieved dimension reads as a diameter or a length -- an 8 mm extrude and
+#: an 8 mm bore are not the same dimension to anybody reading the drawing.
+_FEATURE_DIMENSIONS = {
+    "diameter": "diameter", "cbore_diameter": "diameter",
+    "csink_diameter": "diameter", "hole_diameter": "diameter",
+    "radius": "radius", "radius_end": "radius", "corner_radius": "radius",
+    "angle": "angle", "taper": "angle", "csink_angle": "angle",
+    "bottom_angle": "angle", "included_angle": "angle",
+}
+
+
+def _model_dimension_for(part: _Document,
+                         name: str) -> tuple[float, str, str] | None:
+    """The part's own dimension for *name*: its value, its kind and its expression.
+
+    Sketch dimensions first, then feature values, because that is the order a
+    reader of the drawing would expect a size to come from -- an outline's width
+    is the outline's, and a depth is the extrude's.
+
+    Both count as model dimensions, and Inventor retrieves both: an extrude's
+    distance and a hole's diameter are parameters in the model browser exactly
+    as a sketch's width is. Looking only at sketches was this simulator's first
+    answer and it was wrong in a way worth recording -- it reported a plate's
+    thickness as impossible to dimension, which is the one dimension a plate
+    drawing certainly carries.
+
+    None where the part has no dimension driven by that parameter at all. That
+    is a real limit rather than a gap here: Inventor cannot retrieve a dimension
+    the model does not hold, so a caller asking for one has asked for something
+    no sheet can show.
+
+    **And the dimension found need not be the parameter's own value.** A
+    dimension whose expression *is* the parameter is preferred, but where none
+    exists the one it drives is returned instead: the mounting plate expresses
+    its `edge_margin` of 12 as a hole spacing of `plate_w - 2 * edge_margin`, so
+    a drawing asking to dimension the margin gets the 96 mm spacing, because 12
+    is a number that model never states anywhere. That is faithful -- retrieval
+    can only offer dimensions the model holds -- and it is not obvious, so the
+    expression is returned alongside the value and `build_drawing` says so.
+    """
+    # An exact match first, and this ordering is not a nicety. `plate_w` is
+    # referenced by the outline's width dimension *and* by the hole spacing
+    # `plate_w - 2 * edge_margin`, so without a preference the answer would be
+    # whichever the iteration reached first -- and a drawing asking for the
+    # plate's width would sometimes get its hole pitch instead.
+    for exact in (True, False):
+        for sketch in part.sketches:
+            for dimension in sketch.plan.dimensions:
+                if exact:
+                    if dimension.expression.strip() != name:
+                        continue
+                elif name not in referenced_parameters(dimension.expression):
+                    continue
+                return (dimension.value,
+                        _DIMENSION_KINDS.get(dimension.kind, "linear"),
+                        dimension.expression)
+    for feature in part.features:
+        for key, kind in _FEATURE_DIMENSIONS.items():
+            driven = feature.detail.get(key)
+            if _drives(driven, name):
+                return (driven["value"], kind, driven["expression"])
+        for key, driven in feature.detail.items():
+            if key not in _FEATURE_DIMENSIONS and _drives(driven, name):
+                return (driven["value"], "linear", driven["expression"])
+    return None
+
+
+def _drives(driven: Any, name: str) -> bool:
+    """Whether a feature detail entry is a driven value referring to *name*."""
+    if not isinstance(driven, dict):
+        return False
+    expression, value = driven.get("expression"), driven.get("value")
+    if not isinstance(expression, str) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return name in referenced_parameters(expression)
+    except Exception:
+        return False
+
+def _view_info(view: _View) -> ViewInfo:
+    return ViewInfo(
+        id=view.id, name=view.name, direction=view.direction, at=view.at,
+        scale=view.scale, style=view.style, extent=view.extent,
+    )
+
+
+def _dimension_info(entry: _Dimension) -> DimensionInfo:
+    return DimensionInfo(
+        id=entry.id, value=entry.value, kind=entry.kind, view=entry.view,
+        parameter=entry.parameter, expression=entry.expression,
+        reference=entry.reference,
+    )
 
 def _selected_loops(sketch: _Sketch, profiles: Sequence[int] | str) -> list[list[str]]:
     if profiles == "all":
