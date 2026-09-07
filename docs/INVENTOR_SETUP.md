@@ -271,10 +271,10 @@ reach, so **three COM calls in `backend/com/backend.py` have never executed**.
 The simulator side is measured and tested; the live side is a proposal.
 
 Those three have since been measured -- see *Running all five*, below, and the
-six runs it took. **`move_face` and `thicken`, both added 2026-09-07, are the
-section's current occupants** and are a step worse than they were: those three
-had signatures read off a type library, and these two do not. Each has its own
-subsection at the end.
+six runs it took. **`move_face`, `thicken` and `sketch_driven_pattern`, all
+added 2026-09-07, are the section's current occupants** and are a step worse
+than they were: those three had signatures read off a type library, and these
+do not. Each has its own subsection at the end.
 
 What a live run has to confirm, in this order:
 
@@ -636,6 +636,55 @@ not because of the schema: no operation in this server creates a surface, so the
 only surface a part could hold is one that arrived through `import_geometry`.
 Thickening that would work today. `docs/FEATURE_COVERAGE.md` records it under
 Tier 1c rather than as a gap in this file, since it is a fact about this server.
+
+
+### `sketch_driven_pattern`, where the question is a count
+
+The third and the lowest-risk of the three, and worth reading for what it is
+*not* worried about as much as for what it is.
+
+**Its arguments cannot be silently misordered.** A collection, a sketch and a
+point are three different COM types, so a wrong order is a type mismatch rather
+than a part built wrongly -- unlike `thicken`, whose variant-and-two-enums has
+its own factor-of-four guard for exactly that reason. And it goes through
+`_patterned`, which carries each argument's name beside its value at the call
+site and already handles the compute-type question a pattern of a hole needs
+(measured on 2027.1: patterning a hole fails outright until the compute type is
+`kAdjustToModelCompute`). So there is no attempt list and no result guard here.
+
+**Its arithmetic is not new either.** An occurrence does whatever its seed did,
+which is the rule `rectangular_pattern` and `circular_pattern` use and which the
+pulley and the threaded boss confirm at 0.02. `PREDICTED` is 0.02 accordingly,
+not the placeholder the other two unmeasured operations sit at.
+
+**What a run has to settle is a semantic question, and its answer is a count.**
+Does Inventor also place an occurrence on the reference point? The recipe
+assumes not: the seed sits on the reference and the other points get one
+occurrence each, so a sketch of N points describes a part with N of the feature
+on it. Two of the three possible answers are the same volume:
+
+| what comes back | what it means |
+|---|---|
+| -1.2000 cm^3, four pockets | the assumption holds |
+| -1.2000 cm^3, **five** features | the reference was patterned onto itself; the duplicate lands exactly on the seed and removes nothing extra |
+| -1.6000 cm^3 | five occurrences, the fifth somewhere unaccounted for |
+
+    python scripts/com_signatures.py SketchDrivenPatternFeatures
+    python scripts/live_acceptance.py --only sketch-driven-pattern
+
+The check measures the part *and prints its feature list*, because that middle
+row is invisible to a volume. If it turns out to be the middle row, two things
+change together: this section, and the `elsewhere` filter in the mock's
+`sketch_driven_pattern` that excludes the reference.
+
+**One thing this run cannot check, because it is the simulator's own.** The mock
+*places* the occurrences -- it is the only pattern here that does -- so a cut
+through where an occurrence went is measured against what the pattern left, and
+an occurrence of a cutting seed standing over air is reported. Both are held by
+`tests/test_sketch_driven_pattern.py`, and neither needs Inventor: they are
+claims about the ledger, not about the API. What Inventor decides is only how
+many occurrences there are and where -- and if the count is wrong, everything
+the placement then says is wrong with it.
 
 ## Known-shaky areas
 

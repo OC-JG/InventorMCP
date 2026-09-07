@@ -239,6 +239,7 @@ every time. Measured on the last two that went in:
 | `draft`, `combine`, `split`, `boss` | the same five (+ guide, docs, tests) | 726 |
 | `move_face` | the same five, plus guide and the tolerance table | 376 |
 | `thicken` | the same five, plus guide, tolerance table and one shared table | 407 |
+| `sketch_driven_pattern` | the same five, plus guide, tolerance table and the ledger | 443 |
 
 Nothing in `units`, `expressions`, `geometry`, `plan`, `session` or `tools` had
 to move for either, and the tool count did not change. That is the layering
@@ -268,8 +269,17 @@ them:
   a circular pattern cannot turn about anything but an origin axis is that
   nothing creates one. One request type, one abstract method, two
   implementations — the `coil` shape exactly.
-- **Sketch-driven pattern, thicken, move face.** Also the `coil` shape. `hole`
-  gaining the `bodies` targeting that `extrude` already has is smaller still.
+- ~~**Sketch-driven pattern, thicken, move face.** Also the `coil` shape.~~
+  *All three landed 2026-09-07, and this entry was two-thirds right.* `move_face`
+  and `thicken` were the `coil` shape exactly, five files each. The sketch-driven
+  pattern was not: it is the first operation whose entire input is a set of
+  *positions*, and the simulator counted pattern occurrences without placing
+  them. So it places them -- alone among the four patterns, because a
+  translation is exact in the ledger where a rotation and a reflection are not --
+  and the ledger's prisms now carry the name of the feature that made them,
+  because "which prisms are the seed's" was not a question `source` could
+  answer. `hole` gaining the `bodies` targeting that `extrude` already has was
+  smaller still, and did land that way.
 - **Sheet metal.** A parallel feature set with its own document subtype and its
   own rules. Mechanically the same shape, repeated forty times, and the
   simulator would have to learn what a bend is.
@@ -314,9 +324,14 @@ if live acceptance runs keep happening. The four that once sat at a placeholder
 `move_face` and `thicken` sit there now for a different reason: their COM calls
 have never executed, so there is no run behind any number for either.
 `scripts/live_acceptance.py` is where that debt is paid — `--only calibration`,
-`--only move-face` and `--only thicken`. `thicken` is the one where a tolerance
-is not the point: what is unmeasured about it is which side of a face a
-`negative` layer lies on, and a percentage cannot catch a side.
+`--only move-face`, `--only thicken` and `--only sketch-driven-pattern`. Two of
+those are cases where a tolerance is not the point at all. What is unmeasured
+about `thicken` is which side of a face a `negative` layer lies on, and a
+percentage cannot catch a side. What is unmeasured about
+`sketch_driven_pattern` is an occurrence *count*, whose wrong answers include
+one that leaves the volume unchanged — so that check prints the part's feature
+list, and its tolerance is 0.02 rather than the placeholder precisely so an
+off-by-one occurrence is reported instead of absorbed.
 
 **The DFM analyser.** A pinned submodule with thresholds this project restates
 rather than imports, because the tool states them inline and does not export

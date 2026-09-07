@@ -135,12 +135,24 @@ from .session import DocumentContext
 #: 1.2% out while keeping the opposite half of the part -- so what guards it is
 #: the centroid check and the COM backend refusing a result that is not within a
 #: factor of its prediction, not this entry.
+#: `sketch_driven_pattern` is 0.02 rather than the placeholder, and the reason
+#: is worth stating because it looks inconsistent beside the two above. Its COM
+#: call has never run either -- but its *arithmetic* is not new: an occurrence
+#: does whatever its seed did, which is the same rule `rectangular_pattern` and
+#: `circular_pattern` use and which is measured against Inventor at 0.02 on the
+#: pulley and the threaded boss. What is unmeasured is a semantic question
+#: instead: whether Inventor also puts an occurrence on the reference point, so
+#: that a sketch of N points makes N occurrences plus the seed rather than N-1
+#: plus the seed. That is an off-by-one *occurrence* -- 33% on a three-point
+#: pattern -- so a tight tolerance reports it and the placeholder 0.5 would hide
+#: it. The looser number would be the less honest one here.
 PREDICTED = {
     "extrude": 0.02,
     "hole": 0.02,
     "mirror": 0.02,
     "rectangular_pattern": 0.02,
     "circular_pattern": 0.02,
+    "sketch_driven_pattern": 0.02,
     "shell": 0.02,
     "split": 0.05,
     "revolve": 0.15,
@@ -610,6 +622,24 @@ def _warn_about(warnings: list[dict[str, Any]], where: str, op: Operation,
                    "`symmetric` does half either way. Whether Inventor agrees "
                    "which side `negative` is has not been measured -- see the "
                    "thicken section of docs/INVENTOR_SETUP.md.",
+        })
+
+    # An occurrence of a cutting seed that stands over no material. The volume
+    # has already been charged for it, so this is a wrong number -- but the
+    # useful reading is that the recipe's points are in the wrong place, which is
+    # what a pattern that only counted its points could never say.
+    adrift = (outcome.get("detail") or {}).get("occurrences_over_nothing") or []
+    if adrift:
+        warnings.append({
+            "where": where,
+            "warning": f"{len(adrift)} occurrence(s) of this pattern cut nothing: "
+                       f"points {adrift}",
+            "why": "Those occurrences stand clear of the part, so Inventor will "
+                   "remove nothing there while the simulator has charged the seed's "
+                   "volume for each -- expect this step to diverge as well. Counted "
+                   "from the points as the recipe lists them, the reference "
+                   "excluded. Move the points onto the part, or check the sketch "
+                   "plane is the one you meant.",
         })
 
     subtractive = op.op in _SUBTRACTIVE or getattr(op, "operation", None) == "cut"

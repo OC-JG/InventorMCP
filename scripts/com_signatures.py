@@ -76,6 +76,12 @@ INTERESTING = [
     # where it exists, because a definition's properties are named.
     "ThickenFeatures.Add",
     "ThickenFeatures.CreateThickenDefinition",
+    # `sketch_driven_pattern`, the third unread call. Lower risk than the two
+    # above -- its arguments are a collection, a sketch and a point, so a wrong
+    # order is a type mismatch rather than a part built wrongly -- and what a
+    # signature would settle is whether there is a reference-point argument at
+    # all, and whether an occurrence lands on it.
+    "SketchDrivenPatternFeatures.Add",
     # Not a call this server makes, but the object behind defect 4: `capture_view`
     # orientation names do not describe what you get, and `check_views` says there
     # is nothing to assert until somebody measures what each one produces. Reading

@@ -459,6 +459,25 @@ class CircularPatternRequest:
 
 
 @dataclass
+class SketchDrivenPatternRequest:
+    """Features, the sketch whose points position them, and which point the seed is on.
+
+    Points are 0-based indices into the sketch's hole-centre points, in creation
+    order, exactly as `HoleRequest` carries them -- the same entities lay out a
+    set of holes and a set of occurrences, and resolving names to indices is the
+    builder's job in both cases. Empty means every hole centre in the sketch.
+    """
+
+    sketch: str
+    point_indices: Sequence[int] = ()
+    #: Which hole centre the seed already sits on, indexed the same way. The
+    #: occurrences go on the others.
+    reference_index: int = 0
+    features: Sequence[str] = ()
+    name: str | None = None
+
+
+@dataclass
 class MirrorRequest:
     features: Sequence[str]
     plane: str
@@ -630,6 +649,10 @@ class Backend(ABC):
 
     @abstractmethod
     def circular_pattern(self, doc_id: str, request: CircularPatternRequest) -> FeatureInfo: ...
+
+    @abstractmethod
+    def sketch_driven_pattern(self, doc_id: str,
+                              request: SketchDrivenPatternRequest) -> FeatureInfo: ...
 
     @abstractmethod
     def mirror(self, doc_id: str, request: MirrorRequest) -> FeatureInfo: ...

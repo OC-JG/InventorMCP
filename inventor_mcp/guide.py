@@ -170,6 +170,15 @@ split       {"op":"split","tool":"Mid","style":"trim|split|faces","remove_positi
              Cuts the part with a plane. `trim` throws a side away -- this is how a
              lid comes off a tray. `split` keeps both halves as bodies. `faces` only
              divides the faces the plane crosses.
+sketch_driven_pattern
+            {"op":"sketch_driven_pattern","features":["Pocket"],"sketch":"Spots",
+             "reference":"home"}
+             Copies features to a sketch's points, for a layout that follows nothing
+             in particular. The seed sits on `reference` and the occurrences go on
+             the other points, so N points means N of the feature. Reach for it only
+             when the feature is not already position-shaped: `hole` takes a list of
+             points and `boss` a list of positions, so irregular holes and bosses
+             need no pattern at all. Its COM half has never run against Inventor.
 patterns    {"op":"rectangular_pattern","features":["Hole1"],"axis1":"x","count1":4,"spacing1":25}
             {"op":"circular_pattern","features":["Hole1"],"axis":"z","count":6}
             {"op":"mirror","features":["Rib"],"plane":"yz"}

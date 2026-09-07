@@ -501,8 +501,31 @@ actually bitten.
       the enclosure included, the part this defect was found on, which has used
       the substitute since. Both directions are tested: a warning that fires on
       a correct recipe teaches the reader to ignore the field.
-- [ ] **Sketch-driven pattern, thicken, move face** — Tier 2 in
-      `FEATURE_COVERAGE.md`, all with public `Add` methods.
+- [x] **Sketch-driven pattern, thicken, move face** — Tier 2 in
+      `FEATURE_COVERAGE.md`, all with public `Add` methods. *(All three landed
+      2026-09-07. Measured in the simulator; none of the three COM calls has
+      executed, and each has its own item below for that — the same split the
+      work axis got, for the same reason.)*
+
+      **The ordering in this item was wrong, and it is worth saying how.** It
+      reads as three equal-sized additions of the `coil` shape, and
+      `ARCHITECTURE.md` said so too. Two of them were: `move_face` and `thicken`
+      are five files each. The third is the smallest in *value* and was the
+      largest in thought, and both halves of that are worth recording.
+
+      Smallest in value because the gap was narrower than Tier 2 claimed. It
+      said anything irregular "has to be enumerated by hand", when `hole`
+      already takes a list of points and `boss` a list of positions — so
+      irregular holes and bosses never needed a pattern. What was missing is
+      patterning a feature that is not already position-shaped: a pocket, a rib.
+
+      Largest in thought because it is the first operation whose entire input is
+      *positions*, put to a simulator that counted occurrences without placing
+      them — the `ponytail` on `_repeat` and the open half of defect 7. So it
+      places them, alone among the four patterns, and the reason it can is that
+      a translation is exact in the ledger where a rotation and a reflection are
+      not. That leaves the ledger deliberately asymmetric, with the reason
+      written where both halves are.
 
       **`move_face` landed on 2026-09-07 and this item stays open for the
       other two.** It was taken first of the three because it is the only one
@@ -568,6 +591,15 @@ actually bitten.
       `Add`'s arguments are never permuted, and the result is measured against
       the area-times-thickness prediction and refused outside a factor of four,
       with the feature deleted rather than left in the part.
+- [ ] **Measure `sketch_driven_pattern` against a live Inventor** — `python
+      scripts/com_signatures.py SketchDrivenPatternFeatures`, then `--only
+      sketch-driven-pattern`. The lowest-risk of the three: its arguments are
+      three different COM types so a wrong order raises, it goes through
+      `_patterned`, and its arithmetic is the rule the other patterns already
+      confirm at 0.02. What needs a seat is one semantic question whose answer
+      is a *count* rather than a volume — whether Inventor also places an
+      occurrence on the reference point — and two of its three readings are the
+      same volume, so the check prints the feature list.
 - [ ] **Measure `thicken` against a live Inventor** — `python
       scripts/com_signatures.py ThickenFeatures`, then `--only thicken`. Two
       questions, one fixture each, and neither is the magnitude: on a single

@@ -609,6 +609,48 @@ class CircularPatternOp(OpBase):
     fitted: bool = Field(True, description="Spread occurrences evenly over `angle`.")
 
 
+class SketchDrivenPatternOp(OpBase):
+    """Copy features to a set of sketch points, wherever they are.
+
+    The irregular pattern. `rectangular_pattern` and `circular_pattern` cover
+    the regular cases and a bolt circle; this one takes positions as data, so a
+    layout that follows nothing in particular -- mounting points dictated by
+    somebody else's PCB -- is expressible.
+
+    **Read this before reaching for it, because the alternative is often
+    better.** `hole` already takes a list of points and `boss` a list of
+    positions, so an irregular set of holes or bosses needs no pattern at all:
+    put the points in one sketch and drill them in one operation. What this adds
+    is patterning a feature whose definition is *not* already a list of
+    positions -- a pocket, a rib, a filleted detail -- which is the narrower and
+    real gap.
+
+    The seed is assumed to sit on one of the points, named by `reference`, and
+    the occurrences go on the others. That is one point per occurrence plus the
+    seed's own, which means a sketch of N points describes a part with N of the
+    feature on it.
+    """
+
+    op: Literal["sketch_driven_pattern"] = "sketch_driven_pattern"
+    features: list[str] = Field(
+        default_factory=list,
+        description="Features to copy. Empty means the most recent one.",
+    )
+    sketch: str | None = Field(
+        None,
+        description="Sketch holding the positions; defaults to the most recent sketch.",
+    )
+    points: list[str] = Field(
+        default_factory=list,
+        description="Named point entities to use. Empty means every hole-centre "
+        "point in the sketch -- a `point`, `point_grid` or `bolt_circle`.",
+    )
+    reference: str | None = Field(
+        None,
+        description="The point the seed feature already sits on; the occurrences go "
+        "on the others. Defaults to the first point in the sketch.",
+    )
+
 class MirrorOp(OpBase):
     op: Literal["mirror"] = "mirror"
     features: list[str] = Field(default_factory=list)
@@ -950,6 +992,7 @@ Operation = Annotated[
         ShellOp,
         RectangularPatternOp,
         CircularPatternOp,
+        SketchDrivenPatternOp,
         MirrorOp,
         WorkPlaneOp,
         WorkPointOp,

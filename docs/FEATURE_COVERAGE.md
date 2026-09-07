@@ -13,20 +13,21 @@ Revolve Rib RuleFillet RuledSurface Sculpt Shell Simplify SketchDrivenPattern
 Slot SnapFit Split Sweep Thicken Thread Trim Unwrap iFeatures
 ```
 
-**Covered today, 19 of the 53 collections:** Extrude, Revolve, Sweep, Loft,
+**Covered today, 20 of the 53 collections:** Extrude, Revolve, Sweep, Loft,
 Coil, Hole, Fillet, Chamfer, Shell, RectangularPattern, CircularPattern, Mirror,
-Thread, Emboss, FaceDraft, Combine, Split, MoveFace, Thicken. Work planes, work
-axes, work points and material are covered too and are not `Features`
+Thread, Emboss, FaceDraft, Combine, Split, MoveFace, Thicken,
+SketchDrivenPattern. Work planes, work axes, work points and material are
+covered too and are not `Features`
 collections, so they sit outside the count. `boss` and
 `rib` exist as recipe operations but are built from primitives, because neither
-Inventor feature can be created through the API -- see below. **MoveFace and
-Thicken are the two on that list whose COM calls have never executed** -- both
-added 2026-09-07, exact in the simulator, unmeasured live, and kept in the count
-rather than out of it because the schema offers them to a caller either way.
-Tier 1c below says what that means, and for Thicken it also says which half of
-Inventor's feature is reachable at all.
+Inventor feature can be created through the API -- see below. **MoveFace,
+Thicken and SketchDrivenPattern are the three on that list whose COM calls have
+never executed** -- all added 2026-09-07, measured in the simulator, unmeasured
+live, and kept in the count rather than out of it because the schema offers them
+to a caller either way. Tier 1c below says what that means, and for Thicken it
+also says which half of Inventor's feature is reachable at all.
 
-Nineteen of fifty-three flatters the gap in one direction and overstates it in
+Twenty of fifty-three flatters the gap in one direction and overstates it in
 the other: the covered ones are the high-frequency core of solid
 modelling, and a good half of what is missing is surfacing and repair work that a
 text-to-part server has no business doing.
@@ -210,11 +211,63 @@ also passes the simulator rehearsal.
    prediction and refuses anything outside a factor of four, deleting the
    feature rather than leaving it in the part.
 
-### Tier 2 -- frequently wanted, no current workaround
+5. **SketchDrivenPattern.** *Added 2026-09-07 as
+   `{"op":"sketch_driven_pattern",...}`. The simulator **places** its
+   occurrences, which no other pattern here does; the COM call has never
+   executed.*
 
-5. **SketchDrivenPattern.** Pattern by sketch points. Rectangular and circular
-   patterns cover the regular cases; anything irregular currently has to be
-   enumerated by hand.
+   **The gap was narrower than this entry used to claim.** It said anything
+   irregular "has to be enumerated by hand", and that reads as a bigger absence
+   than it was: `hole` already takes a list of points and `boss` a list of
+   positions, so an irregular set of holes or bosses needs no pattern at all --
+   put the points in one sketch and drill them in one operation. What was
+   genuinely missing is patterning a feature whose definition is *not* already a
+   list of positions: a pocket, a rib, a filleted detail. That is the real gap
+   and it is the smallest of the three items in this tier, which is the opposite
+   of what the ordering implied.
+
+   **It is the only pattern that places its occurrences rather than counting
+   them**, and the reason is what its input is. `_repeat` charges the seed's
+   volume once per extra occurrence and records no prism, which is exact while
+   the copies neither overlap nor run off the part -- and the three shipped
+   examples that pattern or mirror agree with Inventor to 0.003% on exactly
+   that. But a rectangular pattern's count and spacing already say it did
+   something, while this one is handed positions and nothing else, so a version
+   that counted them could not tell a correct recipe from one whose points all
+   miss the part.
+
+   Placement is exact because a translation is: a `_Slab` is an outline in one
+   of three origin planes plus a sweep along the normal, so shifting one is
+   shifting those. A rotation or a reflection is only representable that way in
+   special cases, which is why `circular_pattern` and `mirror` still count --
+   and why doing them is a separate change that has to *reproduce* the 0.003%
+   rather than improve on it.
+
+   Two things fall out of the placement, and they are what paid for it. A cut
+   driven through where an occurrence went is measured against what the pattern
+   left rather than what the seed started with -- a 6 mm hole through a copied
+   4 mm pocket in a 10 mm plate is charged 6 mm of material, not 10. And an
+   occurrence of a *cutting* seed that stands over air is reported, which is a
+   recipe whose points are in the wrong place. That second check is deliberately
+   narrow: it is only asked where every feature that added material recorded
+   prisms for it, because `_material_spans` answers None both for "no material
+   here" and for "this part's material was never modelled as prisms", and
+   reporting the second as a miss would fire a warning on a correct recipe.
+
+   Slabs now carry the name of the feature that created them. `source` could
+   not answer "which prisms are the seed's" -- a part with two extrudes has two
+   sets of slabs both saying "extrude" -- and a pattern that copies a seed's
+   prisms has to know. An unattributed prism is not copied, which today means a
+   shell's cavity, and a shell is not a thing anyone patterns.
+
+   `PREDICTED["sketch_driven_pattern"]` is **0.02 rather than the placeholder**,
+   which looks inconsistent beside the other two unmeasured operations and is
+   not. Its arithmetic is the rule the other patterns use and is measured. What
+   is unmeasured is whether Inventor also places an occurrence on the reference
+   point -- an off-by-one *occurrence*, 33% on a three-point pattern -- and a
+   tight tolerance reports that where 0.5 would hide it.
+
+### Tier 2 -- frequently wanted, no current workaround
 
 Not tier 2 after all, checked against the type library rather than the docs:
 **Lip, SnapFit, Grill, Rest** and **DirectEdit** are all read-only collections

@@ -76,6 +76,7 @@ from ..base import (
     MoveFaceRequest,
     ThickenRequest,
     THICKEN_SHARE,
+    SketchDrivenPatternRequest,
     EmbossRequest,
     ShellRequest,
     SplitRequest,
@@ -3215,6 +3216,89 @@ class ComBackend(Backend):
         return _feature_info(feature, "circular_pattern",
                              {"count": request.count, "compute": compute})
 
+    def sketch_driven_pattern(self, doc_id: str,
+                              request: SketchDrivenPatternRequest
+                              ) -> FeatureInfo:  # pragma: no cover
+        """Copy features to a sketch's points.
+
+        **Never executed against a real Inventor**, and its signature has never
+        been read -- the third such call, after `move_face` and `thicken`.
+        `docs/INVENTOR_SETUP.md` has what a run must settle, and the question
+        that matters is not the signature: it is **whether Inventor puts an
+        occurrence on the reference point as well**, because that is an
+        off-by-one occurrence in the volume and a duplicate feature sitting
+        exactly on the seed.
+
+        `_patterned` does the work, which is why this is short. It carries the
+        argument names beside their values so the positions are documented at
+        the call, and it already handles the compute-type question a pattern of
+        a hole needs -- measured on 2027.1, where patterning a hole fails
+        outright until the compute type is `kAdjustToModelCompute`. There is no
+        reason to think a sketch-driven pattern of a hole differs.
+
+        No result guard here, unlike `thicken`. The arguments are a collection,
+        a sketch and a point, so a wrong order is a type mismatch rather than a
+        part built wrongly -- and the occurrence-count question is caught by the
+        divergence check instead: `PREDICTED["sketch_driven_pattern"]` is 0.02,
+        and one occurrence too many on a three-point pattern is 33% out.
+        """
+        document = self._doc(doc_id)
+        parents = self._feature_collection(doc_id, request.features)
+        sketch = self._sketch(doc_id, request.sketch)
+        reference = self._sketch_point(sketch, request.reference_index)
+        features = document.ComponentDefinition.Features.SketchDrivenPatternFeatures
+        with self._batch(document), self._translate_errors("Sketch driven pattern"):
+            feature, compute = _patterned(features.Add, self._k, [
+                ("ParentFeatures", parents),
+                ("Sketch", sketch),
+                # Inventor's own dialog offers the seed's centroid or a point
+                # you pick, and the recipe always names a point: a centroid is
+                # not something the simulator has, so a default that used one
+                # could not be rehearsed. See `_NO_CENTROID` in the mock.
+                ("ReferencePoint", reference),
+            ])
+            if request.name:
+                feature.Name = request.name
+        return _feature_info(feature, "sketch_driven_pattern", {
+            "features": list(request.features),
+            "sketch": request.sketch,
+            "points": len(request.point_indices) or None,
+            "reference_index": request.reference_index,
+            "compute": compute,
+        })
+
+    def _sketch_point(self, sketch: Any, index: int) -> Any:  # pragma: no cover
+        """The *index*-th hole-centre point of a sketch, counted as the plan counts.
+
+        `SketchPoints` holds every point in creation order, hole centre or not,
+        and the recipe's indices are into the hole centres alone -- the same
+        indices `hole` uses, so the two operations agree about which point a
+        caller meant. `HoleCenter` is the property that separates them, and a
+        release that does not offer it falls back to every point rather than
+        refusing: the two lists are the same whenever the sketch was built by
+        this server, which puts nothing but hole centres in a positions sketch.
+        """
+        points = sketch.SketchPoints
+        centres = []
+        for position in range(1, int(points.Count) + 1):
+            point = points.Item(position)
+            try:
+                if not bool(point.HoleCenter):
+                    continue
+            except Exception:  # pragma: no cover - version-specific
+                pass
+            centres.append(point)
+        if not centres:
+            centres = [points.Item(position)
+                       for position in range(1, int(points.Count) + 1)]
+        if not 0 <= index < len(centres):
+            raise FeatureError(
+                f"Sketch {sketch.Name!r} has {len(centres)} point(s) to pattern to; "
+                f"there is no point {index} for the seed to sit on.",
+                hint="Add `point`, `point_grid` or `bolt_circle` entities to the sketch.",
+            )
+        return centres[index]
+
     def mirror(self, doc_id: str, request: MirrorRequest) -> FeatureInfo:  # pragma: no cover
         document = self._doc(doc_id)
         parents = self._feature_collection(doc_id, request.features)
@@ -4143,6 +4227,7 @@ _FEATURE_TYPES: dict[str, str] = {
     "kRectangularPatternFeatureObject": "rectangular_pattern",
     "kCircularPatternFeatureObject": "circular_pattern",
     "kMirrorFeatureObject": "mirror",
+    "kSketchDrivenPatternFeatureObject": "sketch_driven_pattern",
     # Measured: 2027.1's type library has no kDraftFeatureObject -- the face
     # draft feature's enum is this one.
     "kFaceDraftFeatureObject": "draft",

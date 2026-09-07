@@ -22,6 +22,15 @@ example reaches them, but that their COM halves have never executed at all.** So
 there is no Inventor column for their four fixtures yet.
 `docs/INVENTOR_SETUP.md` says what a run has to confirm for each.
 
+**`spread_pockets` is here for a third reason and is not calibrating a
+tolerance at all.** `sketch_driven_pattern`'s COM half has never run either,
+but its arithmetic is the rule the other two patterns use and is already
+measured at 0.02, so it sits at 0.02 rather than the placeholder. What its
+fixture asks is a *semantic* question -- whether Inventor also places an
+occurrence on the reference point -- and the answer is an occurrence count
+rather than a volume. It is kept here because this is where the instruments
+live, not because a number needs fitting.
+
 Run them with:
 
 ```
@@ -53,9 +62,10 @@ the operation being measured.
 | `widened_wall` | `move_face` | +0.2400 cm³ | not yet run | — |
 | `thickened_walls` | `thicken` | +1.4400 cm³ | not yet run | — |
 | `thinned_wall` | `thicken` | −0.2400 cm³ | not yet run | — |
+| `spread_pockets` | `sketch_driven_pattern` | −1.2000 cm³ | not yet run | — |
 
-Measured on Inventor 2027.1, 2026-09-03, except the `move_face` and `thicken`
-rows, which nothing has run. All four of the original tolerances in `PREDICTED` now
+Measured on Inventor 2027.1, 2026-09-03, except the `move_face`, `thicken` and
+`sketch_driven_pattern` rows, which nothing has run. All four of the original tolerances in `PREDICTED` now
 come from that run rather than from a placeholder: `coil` 0.15, `draft`
 0.20, `emboss` 0.40, `split` 0.05. Each is deliberately looser than its own
 measurement, for reasons recorded beside the table in
@@ -211,6 +221,32 @@ What is genuinely unmeasured is elsewhere, and each fixture isolates one of it.
 Neither fixture's number should be copied into `PREDICTED` on agreement alone:
 `thicken` should go to an extrude's 0.02 once the side is confirmed and the
 corner question answered, since what is left after that is exact.
+
+## The one that counts features rather than measuring them
+
+`spread_pockets` is the instrument for `sketch_driven_pattern`, and its volume
+is the least interesting thing about it. A plate with one 0.4 cm³ pocket, that
+pocket copied to three more points: −1.2000 cm³, by the same rule the pulley's
+circular pattern and the threaded boss's rectangular one already confirm at
+0.02. Nothing there needs measuring.
+
+**What needs measuring is whether Inventor puts an occurrence on the reference
+point as well.** The recipe assumes not: the seed sits at (−35, −20), that point
+is named as the reference, and the other three get one occurrence each, so four
+points describe four pockets. Three readings, and two of them are the same
+volume:
+
+| what comes back | what it means |
+|---|---|
+| −1.2000 cm³, four pockets | the recipe's assumption holds |
+| −1.2000 cm³, **five** features | the reference is patterned onto itself, and the duplicate removes nothing extra because it lands exactly on the seed |
+| −1.6000 cm³ | five occurrences with the fifth somewhere unaccounted for |
+
+That middle row is why `--only sketch-driven-pattern` counts the features on the
+finished part instead of only measuring it. A duplicate feature sitting exactly
+on its seed is invisible to a volume and would ship as a part with a redundant
+feature in its browser — harmless on this plate, and not harmless on a pattern
+somebody later edits.
 
 ## The path that could not run at all
 

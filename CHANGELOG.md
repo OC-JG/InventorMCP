@@ -5,6 +5,88 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 ## Unreleased
 
 ### Added
+- **`sketch_driven_pattern`: the last of Tier 2, and the only pattern here that
+  places its occurrences.** Copies features to a sketch's points, for a layout
+  that follows nothing in particular. The seed sits on `reference` and the
+  occurrences go on the other points, so N points describe N of the feature.
+
+  **Two findings changed the shape of this one, and both are worth more than the
+  operation.**
+
+  **The gap was narrower than Tier 2 claimed.** It said anything irregular "has
+  to be enumerated by hand" — but `hole` already takes a list of points and
+  `boss` a list of positions, so an irregular set of holes or bosses never
+  needed a pattern at all. What was genuinely missing is patterning a feature
+  whose definition is *not* already a list of positions: a pocket, a rib, a
+  filleted detail. That makes this the **smallest in value** of the three Tier 2
+  items, which is the opposite of what the roadmap's ordering implied, and both
+  that file and `ARCHITECTURE.md` now say so.
+
+  **And it was the largest in thought, for the reason the roadmap missed.** It
+  is the first operation whose entire input is a set of *positions*, put to a
+  simulator that counted pattern occurrences without ever placing them — the
+  `ponytail` on `_repeat`. A version that counted the points it was handed could
+  not tell a correct recipe from one whose points all miss the part. So this one
+  places them.
+
+  **Placement is exact, which is why it is affordable here and not for the other
+  three.** A `_Slab` is an outline in one of three origin planes plus a sweep
+  along the normal, so translating one is shifting the outline by the move's
+  in-plane components and the near and far by the out-of-plane one. A rotation
+  or a reflection is only representable that way in special cases. So
+  `rectangular_pattern`, `circular_pattern` and `mirror` still count, `_repeat`'s
+  marker now says which callers it is talking about, and doing the other three
+  is a separate change with a constraint worth writing down: the three shipped
+  examples that pattern or mirror agree with Inventor to **0.003%** on
+  `seed × extra`, so a placement path has to reproduce that rather than improve
+  on it.
+
+  **What the placement bought, as numbers:**
+
+  * a cut driven through where an occurrence went is measured against what the
+    pattern left. A 6 mm hole through a copied 4 mm pocket in a 10 mm plate is
+    charged 6 mm of material (0.1696 cm³), where the ledger would otherwise have
+    said 10 mm (0.2827);
+  * the part's bounding box grows to where the copied *prism* is, not to where
+    the whole box would be if it were moved — a 10 mm pad copied 200 mm along a
+    100 mm plate reaches 205 mm, not 250. That was wrong in the first draft and
+    the test that caught it now says why;
+  * an occurrence of a *cutting* seed standing over air is reported, and
+    `rehearse` turns it into a warning. Deliberately narrow: only asked where
+    every feature that added material recorded prisms for it, because
+    `_material_spans` answers None both for "no material here" and for "this
+    part was never modelled as prisms", and reporting the second as a miss would
+    fire a warning on a correct recipe.
+
+  **Slabs now carry the name of the feature that created them.** `source` could
+  not answer "which prisms are the seed's" — a part with two extrudes has two
+  sets of slabs both saying `extrude` — and a pattern that copies a seed's
+  prisms has to know. Each copy is attributed to the *pattern* rather than the
+  seed, so patterning a pattern copies the occurrences and a second pattern of
+  the same seed does not find them. An unattributed prism is not copied, which
+  today means a shell's cavity, and a shell is not a thing anyone patterns.
+
+  **`PREDICTED` is 0.02, not the placeholder**, and the inconsistency beside the
+  other two unmeasured operations is deliberate. Its arithmetic is the rule the
+  other patterns use and is already measured at 0.02 on the pulley and the
+  threaded boss. What is unmeasured is a semantic question instead — whether
+  Inventor also places an occurrence on the reference point — which is an
+  off-by-one *occurrence*, 33% on a three-point pattern. A tight tolerance
+  reports that; 0.5 would hide it.
+
+  That question's wrong answers include one that leaves the volume *unchanged*:
+  a duplicate landing exactly on the seed. So `--only sketch-driven-pattern`
+  prints the finished part's feature list rather than only measuring it, and
+  `examples/calibration/spread_pockets.json` records all three readings.
+
+### Changed
+- **Phase 2 is complete.** `move_face`, `thicken` and `sketch_driven_pattern`
+  all landed on 2026-09-07, so the roadmap item covering the three is ticked —
+  with each one's live measurement as its own open item below it, the same split
+  the work axis got, because a tick covering unmeasured COM is the claim that
+  file exists not to make.
+
+### Added
 - **`thicken`: a layer on faces, each along its own normal.** Tier 2's second
   item, and it closes half of what that item asked for. The half it closes is
   the wall-thickness one, and the property that matters is the normal: a box's

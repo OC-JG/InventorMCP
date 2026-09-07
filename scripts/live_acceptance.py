@@ -1144,6 +1144,80 @@ def _thicken_fixture(session: Session, report: Report, stem: str) -> float | Non
             session.forget(context.doc_id)
 
 
+def check_sketch_driven_pattern(session: Session, report: Report) -> None:
+    """`sketch_driven_pattern`, and the question a volume cannot answer.
+
+    The third COM call in this project that has never executed, after
+    `move_face` and `thicken`. Unlike those two its *arithmetic* is not new: an
+    occurrence does whatever its seed did, which is the rule the other two
+    patterns use and which the pulley and the threaded boss already confirm at
+    0.02. So this check is not calibrating anything.
+
+    What it is for is a semantic question: **does Inventor put an occurrence on
+    the reference point as well?** `examples/calibration/spread_pockets.json`
+    assumes not -- the seed sits on `home`, the other three points get one
+    occurrence each, and four points describe four pockets. Two of the three
+    possible answers are the *same volume*:
+
+    * -1.2000 cm^3 with four pockets: the assumption holds;
+    * -1.2000 with **five** features: the reference was patterned onto itself,
+      and the duplicate removes nothing extra because it lands on the seed;
+    * -1.6000: five occurrences, the fifth somewhere unaccounted for.
+
+    So this counts the features on the finished part as well as measuring it.
+    A duplicate sitting exactly on its seed is invisible to a volume, and it
+    would ship as a part with a redundant feature in its browser.
+    """
+    print("\n--- sketch_driven_pattern: the COM half, which has never run")
+    if session.backend.name == "mock":
+        report.skip("sketch-driven-pattern: not run",
+                    "the simulator places the occurrences itself and would only "
+                    "confirm its own assumption. Use --backend inventor.")
+        return
+
+    path = CALIBRATION / "spread_pockets.json"
+    recipe = PartRecipe.model_validate(json.loads(path.read_text(encoding="utf-8")))
+    context, broken = build(session, recipe)
+    if broken:
+        report.check(False, "sketch-driven-pattern: it builds in Inventor",
+                     broken[0][:600])
+        if context:
+            session.backend.close_document(context.doc_id, save=False)
+            session.forget(context.doc_id)
+        return
+    report.check(True, "sketch-driven-pattern: it builds in Inventor")
+
+    try:
+        seen = measure(session, context) or {}
+        # The plate less four pockets, derived from the recipe's own parameters.
+        values = {spec.name: float(spec.value) for spec in recipe.parameters}
+        plate = (values["plate_w"] / 10) * (values["plate_d"] / 10) * (values["plate_t"] / 10)
+        pocket = (values["pocket"] / 10) ** 2 * (values["pocket_deep"] / 10)
+        expected = plate - 4 * pocket
+        volume = seen.get("volume_cm3")
+        report.check(
+            volume is not None and abs(volume - expected) < 5e-3,
+            f"sketch-driven-pattern: four pockets leave {expected:.4f} cm^3 -- "
+            f"measured {volume}",
+            f"{expected - pocket:.4f} would mean five occurrences with one of them "
+            "off the part; anything else means the occurrences are not the seed "
+            "repeated. Read the feature count below before concluding.")
+
+        # And the count, which is the reading the volume cannot give.
+        features = [info.name for info in session.backend.list_features(context.doc_id)]
+        report.note(f"features on the finished part: {features}")
+        report.note(
+            "Four pockets is Plate, Slot and Spread -- the pattern is one feature "
+            "holding three occurrences. If Inventor also patterned the reference "
+            "point, the volume is unchanged and only Inventor's browser shows it: "
+            "open the pattern and count its occurrences. Four means the reference "
+            "was included and docs/INVENTOR_SETUP.md needs correcting, along with "
+            "the mock's `elsewhere` filter.")
+    finally:
+        session.backend.close_document(context.doc_id, save=False)
+        session.forget(context.doc_id)
+
+
 def check_work_geometry(session: Session, report: Report) -> None:
     """The five Phase 2 behaviours whose COM half has never executed.
 
@@ -1782,6 +1856,7 @@ CHECKS = {
     "work-geometry": check_work_geometry,
     "move-face": check_move_face,
     "thicken": check_thicken,
+    "sketch-driven-pattern": check_sketch_driven_pattern,
     "views": check_views,
 }
 

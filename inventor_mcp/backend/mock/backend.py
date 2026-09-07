@@ -66,6 +66,7 @@ from ..base import (
     DraftRequest,
     MoveFaceRequest,
     ThickenRequest,
+    SketchDrivenPatternRequest,
     THICKEN_SHARE,
     EmbossRequest,
     ShellRequest,
@@ -263,6 +264,14 @@ class _Slab:
     body: int = 0
     #: What put it there, for diagnosis only.
     source: str = "extrude"
+    #: The name of the feature that created it, where the creating code has one
+    #: to hand. Needed by `sketch_driven_pattern`, which places copies of a
+    #: seed's prisms and so has to know which prisms are the seed's -- `source`
+    #: cannot answer that, because a part with two extrudes has two sets of
+    #: slabs both saying "extrude". Empty where nothing attributed it, and an
+    #: unattributed prism is simply not copied: a shell's cavity is the one
+    #: such case, and a shell is not a thing anyone patterns.
+    feature: str = ""
 
     @property
     def volume(self) -> float:
@@ -919,7 +928,7 @@ class MockBackend(Backend):
                                           name, cut=cut)
         self._record_slabs(document, sketch, loops, plane, span,
                            sign=-1.0 if cut else 1.0, body=target,
-                           source="cut" if cut else request.operation)
+                           source="cut" if cut else request.operation, feature=name)
 
         feature = _Feature(
             id=self._next("feat"),
@@ -950,7 +959,8 @@ class MockBackend(Backend):
     def _record_slabs(self, document: _Document, sketch: _Sketch,
                       loops: Sequence[Sequence[str]], plane: str,
                       span: tuple[float, float], *, sign: float = 1.0,
-                      body: int = 0, source: str = "extrude") -> None:
+                      body: int = 0, source: str = "extrude",
+                      feature: str = "") -> None:
         """Remember the prisms this feature added or emptied.
 
         A cut records a void rather than nothing: the region it swept holds no
@@ -964,11 +974,12 @@ class MockBackend(Backend):
             if len(outline) >= 3:
                 document.slabs.append(
                     _Slab(plane=plane, outline=outline, near=near, far=far,
-                          sign=sign, body=body, source=source))
+                          sign=sign, body=body, source=source, feature=feature))
 
     def _record_bores(self, document: _Document, plane: str, offset: float,
                       centres: Sequence[tuple[float, float]], radius: float,
-                      depth: float, *, body: int | None = None) -> None:
+                      depth: float, *, body: int | None = None,
+                      feature: str = "") -> None:
         """Record each drilled hole as a void, so later features see through it.
 
         Which way the drill goes is measured rather than assumed, the same way
@@ -1001,7 +1012,7 @@ class MockBackend(Backend):
                 plane=plane,
                 outline=[(u + du, v + dv) for du, dv in circle],
                 near=offset, far=offset + side * depth,
-                sign=-1.0, body=body or 0, source="hole"))
+                sign=-1.0, body=body or 0, source="hole", feature=feature))
 
     def _cut_reach(self, document: _Document, plane: str, sketch: _Sketch,
                    loops: Sequence[Sequence[str]], distance: float,
@@ -1410,9 +1421,13 @@ class MockBackend(Backend):
         # question is how many pieces there were to begin with.
         walls = _walls_on_the_axis(document, plane, sketch.offset, centers, aimed)
         moved = document.charge(-removed, aimed if aimed is not None else 0)
-        self._record_bores(document, plane, sketch.offset, centers, radius, depth, body=aimed)
-
+        # Named before the bores are recorded rather than after, because each
+        # prism now carries the name of the feature that made it -- which is
+        # what lets a pattern find its seed's prisms among everything else's.
         name = self._feature_name(document, request.name, "hole")
+        self._record_bores(document, plane, sketch.offset, centers, radius, depth,
+                           body=aimed, feature=name)
+
         for index, (u, v) in enumerate(centers):
             document.topology.append(
                 _Topo(
@@ -2206,6 +2221,18 @@ class MockBackend(Backend):
         own, so the ledger knows about the seed's material or void and not about
         the copies. A cut through where a patterned hole went is measured
         against material the pattern has already taken away.
+
+        **Except for `sketch_driven_pattern`, which places its copies in the
+        ledger and then calls this only for the charge.** So this paragraph is
+        about `rectangular_pattern`, `circular_pattern` and `mirror`, and the
+        reason it is still about them is that a translation is exact in this
+        model where a rotation and a reflection are not: a prism is an outline
+        in its plane plus a sweep along the normal, so shifting one is shifting
+        those, and turning or mirroring one is only representable when the axis
+        is perpendicular or the plane parallel. Doing the other three needs that
+        case analysis and the three shipped examples that pattern or mirror
+        currently agree with Inventor to 0.003% on the rule above, so the change
+        has to reproduce it exactly rather than improve on it.
         """
         if extra <= 0:
             return 0.0, "no additional occurrences"
@@ -2382,6 +2409,121 @@ class MockBackend(Backend):
         )
         document.features.append(feature)
         self._record("circular_pattern", name=name, count=request.count)
+        return _feature_info(feature)
+
+    def sketch_driven_pattern(self, doc_id: str,
+                              request: SketchDrivenPatternRequest) -> FeatureInfo:
+        """Copy features to a set of sketch points, and record where the copies went.
+
+        **The only pattern here that places its occurrences rather than counting
+        them**, and the reason is what this operation's input is. A rectangular
+        pattern's count and spacing already say it did something; this one is
+        given positions and nothing else, so a version that counted them could
+        not tell a correct recipe from one whose points all miss the part.
+
+        Placement is exact, which is why it is affordable here and not for the
+        other two. A `_Slab` is an outline in one of three origin planes plus a
+        sweep along its normal, so translating one is shifting its outline by the
+        move's in-plane components and its near and far by the out-of-plane one.
+        A rotation or a reflection is not representable that way except in
+        special cases, which is why `circular_pattern` and `mirror` still count.
+
+        The volume rule is `_repeat`'s and shared with it deliberately: an
+        occurrence does whatever its seed did. Now that the prisms are recorded,
+        charging each occurrence what it *actually* meets -- the way an `extrude`
+        cut is charged -- is available and is not done here, because it would
+        make this operation's arithmetic differ from the two patterns it sits
+        beside, and those are measured against Inventor at 0.02.
+        """
+        document = self._doc(doc_id)
+        sketch = document.find_sketch(request.sketch)
+        positions = _hole_points(sketch, request.point_indices)
+        if not positions:
+            raise FeatureError(
+                f"Sketch {sketch.name!r} contains no hole-centre points to pattern to.",
+                hint="Add `point`, `point_grid` or `bolt_circle` entities to the sketch.",
+            )
+        every = _hole_points(sketch, ())
+        if not 0 <= request.reference_index < len(every):
+            raise FeatureError(
+                f"Sketch {sketch.name!r} has {len(every)} hole centre(s); there is "
+                f"no point {request.reference_index} for the seed to sit on."
+            )
+        reference = every[request.reference_index]
+        targets = _pattern_targets(document, request.features)
+
+        # The seed's own point carries no occurrence: the feature is already
+        # there. Compared on coordinates rather than on index, because a caller
+        # naming a subset of the points and a reference outside it would
+        # otherwise pattern the seed onto itself.
+        elsewhere = [point for point in positions
+                     if math.dist(point, reference) > 1e-9]
+        moved, why = self._repeat(document, targets, len(elsewhere))
+
+        # Named before the prisms are placed, because each copy is attributed to
+        # *this* feature rather than to the seed. Otherwise a pattern of the
+        # pattern would find the occurrences and copy them a second time.
+        name = self._feature_name(document, request.name, "pattern")
+        wanted = {target.name for target in targets}
+        seeded = [slab for slab in document.slabs if slab.feature in wanted]
+        origin = map3d(sketch.base_plane, reference[0], reference[1], sketch.offset)
+        shifts = [
+            tuple(a - b for a, b in zip(
+                map3d(sketch.base_plane, point[0], point[1], sketch.offset), origin))
+            for point in elsewhere
+        ]
+        # Which occurrences stand over no material, asked before any copy is
+        # appended: afterwards an earlier occurrence's own void is in the ledger
+        # and the next one would be judged against it. This is the reading a
+        # pattern that only counted its points could not give, and the reason
+        # placing them is worth the code.
+        missed = _occurrences_over_nothing(document, seeded, shifts)
+        placed = 0
+        for shift in shifts:
+            for slab in seeded:
+                copy = replace(_translated(slab, shift), feature=name)
+                document.slabs.append(copy)
+                placed += 1
+                # The part reaches where the *copied prism* reaches, which is
+                # not the whole box moved: a 10 mm pad copied 200 mm along a
+                # 100 mm plate puts material at 195..205, and translating the
+                # box would have claimed the part ran out to 250.
+                if copy.sign > 0:
+                    self._expand_bounds(document, _slab_corners(copy))
+
+        detail: dict[str, Any] = {
+            "features": [t.name for t in targets],
+            "sketch": sketch.name,
+            "points": len(positions),
+            "occurrences": len(elsewhere),
+            "reference_at": [round(value, 6) for value in reference],
+            "prisms_placed": placed,
+            "volume_note": why,
+        }
+        if missed:
+            # A cut occurrence over air removes nothing, and the charge above
+            # has already been billed for it -- so this is both a wrong volume
+            # and, much more usefully, a recipe whose points are in the wrong
+            # place. `rehearse` turns it into a warning.
+            detail["occurrences_over_nothing"] = missed
+        if not seeded:
+            # The seed is a revolve, a sweep or a loft, which the ledger does not
+            # record as prisms at all. The volume still follows `_repeat`; what
+            # is missing is knowing where the copies are, and saying so is better
+            # than a `prisms_placed` of zero a reader has to interpret.
+            detail["placement"] = (
+                "not recorded: the seed feature put no prisms in the ledger, which "
+                "is the case for a revolve, a sweep and a loft. The volume is "
+                "still charged per occurrence")
+        feature = _Feature(
+            id=self._next("feat"),
+            name=name,
+            kind="sketch_driven_pattern",
+            volume_delta=moved,
+            detail=detail,
+        )
+        document.features.append(feature)
+        self._record("sketch_driven_pattern", name=name, occurrences=len(elsewhere))
         return _feature_info(feature)
 
     def mirror(self, doc_id: str, request: MirrorRequest) -> FeatureInfo:
@@ -3343,6 +3485,94 @@ def _profile_samples(sketch: _Sketch,
         samples.append(((centre[0] + corner[0]) / 2, (centre[1] + corner[1]) / 2))
     return samples
 
+
+
+
+#: The only feature kind that puts *solid* prisms in the ledger. A revolve, a
+#: sweep, a loft and a coil move the volume without recording a prism, and a
+#: draft, a thicken or a move_face change it without touching the ledger at all,
+#: so on a part carrying any of those the ledger's picture of where the material
+#: is is incomplete.
+_MODELS_ITS_MATERIAL = {"extrude"}
+
+
+def _material_is_fully_modelled(document: _Document) -> bool:
+    """Whether every feature that added material recorded prisms for it.
+
+    The precondition for saying "there is nothing here". `_material_spans`
+    answers None both when a point lies outside every prism -- genuinely no
+    material -- and when the part's material was never recorded as prisms at
+    all, and those two must not be confused: reporting the second as a miss
+    would fire a warning on a correct recipe, which teaches a reader to ignore
+    the field. So the question is only asked where the ledger can answer it.
+    """
+    return all(
+        feature.kind in _MODELS_ITS_MATERIAL
+        for feature in document.features
+        if (feature.volume_delta or 0.0) > 0.0
+    )
+
+
+def _occurrences_over_nothing(document: _Document, seeded: Sequence[_Slab],
+                              shifts: Sequence[Sequence[float]]) -> list[int]:
+    """Which of these occurrences of a *cutting* seed stand over no material.
+
+    Only asked of a cut, because that is where the answer means something: an
+    occurrence of a join standing clear of the part is a legitimate island,
+    while a cut over air removes nothing and has still been charged for.
+
+    And only asked at all where the ledger models the material -- see
+    :func:`_material_is_fully_modelled`. The question is put at the centre of
+    each copied prism, the same way a hole decides which way to drill.
+    """
+    voids = [slab for slab in seeded if slab.sign < 0]
+    if not voids or not _material_is_fully_modelled(document):
+        return []
+    over: list[int] = []
+    for index, shift in enumerate(shifts):
+        for slab in voids:
+            moved = _translated(slab, shift)
+            _, _, (w_axis, _) = _PLANES[moved.plane][0]
+            u = sum(point[0] for point in moved.outline) / len(moved.outline)
+            v = sum(point[1] for point in moved.outline) / len(moved.outline)
+            centre = map3d(moved.plane, u, v, (moved.near + moved.far) / 2)
+            if not _material_spans(document, w_axis, centre):
+                over.append(index)
+                break
+    return over
+
+def _translated(slab: _Slab, shift: Sequence[float]) -> _Slab:
+    """*slab* moved by a model-space vector, which is exact for a prism.
+
+    A prism is an outline in its plane's own coordinates and a sweep along that
+    plane's normal, so a translation splits cleanly into the two: the in-plane
+    components shift every outline point, and the out-of-plane one shifts the
+    near and far. `to_sketch` maps a *point* onto a plane's coordinates and is
+    used here on a *vector*, which is sound because the mapping is a signed
+    permutation of the axes and carries no offset.
+    """
+    du, dv, dw = to_sketch(slab.plane, shift)
+    return replace(
+        slab,
+        outline=[(u + du, v + dv) for u, v in slab.outline],
+        near=slab.near + dw,
+        far=slab.far + dw,
+        source=f"{slab.source} occurrence",
+    )
+
+
+def _slab_corners(slab: _Slab) -> list[tuple[float, float, float]]:
+    """The corners of a prism's own bounding box, in model space.
+
+    The outline's extremes rather than every vertex, which is all a bounding box
+    needs and is what `_expand_bounds` is given elsewhere.
+    """
+    us = [point[0] for point in slab.outline]
+    vs = [point[1] for point in slab.outline]
+    return [map3d(slab.plane, u, v, w)
+            for u in (min(us), max(us))
+            for v in (min(vs), max(vs))
+            for w in (slab.near, slab.far)]
 
 def _hole_points(sketch: _Sketch, indices: Sequence[int]) -> list[tuple[float, float]]:
     plan = sketch.plan

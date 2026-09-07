@@ -31,6 +31,7 @@ from .backend.base import (
     DraftRequest,
     MoveFaceRequest,
     ThickenRequest,
+    SketchDrivenPatternRequest,
     EmbossRequest,
     ExtrudeRequest,
     FeatureInfo,
@@ -63,6 +64,7 @@ from .schema import (
     DraftOp,
     MoveFaceOp,
     ThickenOp,
+    SketchDrivenPatternOp,
     EmbossOp,
     ExtrudeOp,
     FilletOp,
@@ -449,6 +451,20 @@ def _apply_one(session: Session, context: DocumentContext, op: Operation) -> dic
             name=op.name,
         )
         return _record(context, backend.circular_pattern(context.doc_id, request), "circular_pattern")
+
+    if isinstance(op, SketchDrivenPatternOp):
+        sketch_name, plan = context.sketch_plan(op.sketch)
+        selected = _hole_indices(plan, op.points, sketch_name)
+        reference = _hole_indices(plan, [op.reference], sketch_name) if op.reference else [0]
+        request = SketchDrivenPatternRequest(
+            sketch=sketch_name,
+            point_indices=selected,
+            reference_index=reference[0],
+            features=list(op.features),
+            name=op.name,
+        )
+        return _record(context, backend.sketch_driven_pattern(context.doc_id, request),
+                       "sketch_driven_pattern")
 
     if isinstance(op, MirrorOp):
         request = MirrorRequest(
