@@ -905,6 +905,262 @@ def _live_deltas(session: Session, recipe: PartRecipe) -> dict[int, float]:
     return deltas
 
 
+def check_work_geometry(session: Session, report: Report) -> None:
+    """The five Phase 2 behaviours whose COM half has never executed.
+
+    ``docs/INVENTOR_SETUP.md`` has the list and the order, and the order matters:
+    ``WorkPoints.AddByPoint`` is what the two work-axis routes are built on, so a
+    failure there explains every later one and the rest are worth nothing until
+    it passes.
+
+    Written on a machine with no Inventor to reach, which is the whole reason
+    this check exists rather than an assertion in the test suite -- and which is
+    also why nothing here reads a COM member the repository has not already
+    called. Each check does its work through the recipe layer, so what is being
+    confirmed is the behaviour the caller gets, not a signature.
+
+    Three of these needed a part designed so the answer is visible at all:
+
+    * **The bolt circle is judged by where the centre of mass went**, not by
+      whether the pattern ran. `_repeat` counts occurrences and never reads the
+      axis, so "it built" proves nothing; and the question that matters is not
+      "did it run" but whether the axis moves when its driving parameter does.
+      Six holes on a circle centred at ``bolt_x`` pull the centre of mass with
+      them, so changing ``bolt_x`` has to move it. If it does not, the
+      expressions never reached the carrier sketch's dimensions and the feature
+      is parametric in name only.
+    * **The two blocks for the hole-targeting check are deliberately different
+      thicknesses.** The note in `FEATURE_COVERAGE.md` says a total volume cannot
+      show that aiming worked, and for two equal blocks it cannot -- the same
+      bore either way is the same volume. Ten millimetres against six makes the
+      total say which body was bored, without a per-body API the `Backend`
+      contract does not have.
+    * **The save check confirms the remedy, not the refusal.** The refusal is
+      offline logic and `tests/test_saving.py` holds it; what needs a live
+      Inventor is that the file is writable once the named document is closed,
+      because that is the sentence the hint puts in front of a caller.
+    """
+    if session.backend.name == "mock":
+        # The simulator implements all five and agrees with itself. Running it
+        # here would print five passes that say nothing about Inventor, which is
+        # worse than not running: the point of this check is the COM half.
+        report.skip("work-geometry: not run",
+                    "the simulator implements all five and would pass itself. "
+                    "Use --backend inventor.")
+        return
+
+    plate = [
+        {"op": "sketch", "name": "Outline", "plane": "xy", "entities": [
+            {"type": "rectangle", "center": [0, 0], "width": 120, "height": 80}]},
+        {"op": "extrude", "name": "Body", "sketch": "Outline", "distance": 10},
+    ]
+
+    # 1. WorkPoints.AddByPoint -- everything below depends on it.
+    recipe = PartRecipe.model_validate({
+        "name": "WorkPointProbe", "units": "mm",
+        "parameters": [{"name": "datum_x", "value": 30}],
+        "operations": plate + [
+            {"op": "work_point", "name": "Datum", "plane": "xy", "at": ["datum_x", 0]},
+        ]})
+    context, broken = build(session, recipe)
+    first_ok = report.check(not broken, "work-geometry: WorkPoints.AddByPoint runs",
+                            (broken[0] if broken else "")[:400])
+    if context:
+        names = {f.name for f in session.backend.list_features(context.doc_id)}
+        report.check("Datum" in names,
+                     "work-geometry: the work point is a feature in the tree",
+                     f"features: {sorted(names)}")
+        session.backend.close_document(context.doc_id, save=False)
+        session.forget(context.doc_id)
+    if not first_ok:
+        report.skip("work-geometry: the four checks below",
+                    "AddByPoint is what they are built on; fix it first. "
+                    "docs/INVENTOR_SETUP.md has the order and why.")
+        return
+
+    # 2. WorkAxes.AddByTwoPoints, via `normal_to_plane`, which builds two work
+    #    points and runs an axis through them.
+    for kind, extra in (("normal_to_plane", {"plane": "xy", "at": ["bolt_x", 0]}),
+                        ("sketch_line", {"sketch": "Aim", "line": "Spoke"})):
+        operations = list(plate)
+        if kind == "sketch_line":
+            operations.append(
+                {"op": "sketch", "name": "Aim", "plane": "xz", "entities": [
+                    {"type": "line", "name": "Spoke",
+                     "start": ["bolt_x", 0], "end": ["bolt_x", 40]}]})
+        operations.append({"op": "work_axis", "name": "BoltAxis", "kind": kind, **extra})
+        recipe = PartRecipe.model_validate({
+            "name": f"WorkAxis_{kind}", "units": "mm",
+            "parameters": [{"name": "bolt_x", "value": 30}],
+            "operations": operations})
+        context, broken = build(session, recipe)
+        call = ("WorkAxes.AddByTwoPoints" if kind == "normal_to_plane"
+                else "WorkAxes.AddByLine")
+        report.check(not broken, f"work-geometry: {call} runs ({kind})",
+                     (broken[0] if broken else "")[:400])
+        if context:
+            session.backend.close_document(context.doc_id, save=False)
+            session.forget(context.doc_id)
+
+    # 3. The one that matters: does the bolt circle move with its parameter?
+    recipe = PartRecipe.model_validate({
+        "name": "OffCentreBoltCircle", "units": "mm",
+        "parameters": [{"name": "bolt_x", "value": 30},
+                       {"name": "pcd", "value": 30}],
+        "operations": plate + [
+            {"op": "work_axis", "name": "BoltAxis", "plane": "xy", "at": ["bolt_x", 0]},
+            {"op": "sketch", "name": "Pilot", "plane": "xy", "entities": [
+                {"type": "point", "position": ["bolt_x + pcd / 2", 0]}]},
+            # `through_all` with no `direction`, which is what every shipped
+            # example does and what the acceptance run has actually measured.
+            # The unit test for this recipe says `direction: "negative"`, and
+            # that has never run against Inventor -- copying it into a live
+            # instrument would risk failing this check on the drill direction
+            # and reading as a fault in the work axis.
+            {"op": "hole", "name": "Bolt1", "sketch": "Pilot", "diameter": 5,
+             "through_all": True},
+            {"op": "circular_pattern", "name": "BoltCircle", "features": ["Bolt1"],
+             "axis": "BoltAxis", "count": 6, "angle": "360 deg"},
+        ]})
+    context, broken = build(session, recipe)
+    if broken:
+        report.check(False, "work-geometry: the off-centre bolt circle builds",
+                     broken[0][:400])
+    else:
+        report.check(True, "work-geometry: the off-centre bolt circle builds")
+        before = session.backend.mass_properties(context.doc_id)
+        try:
+            apply_parameter(session, context, _spec("bolt_x", 45))
+            after = session.backend.mass_properties(context.doc_id)
+        except Exception as exc:
+            report.check(False, "work-geometry: bolt_x can be changed",
+                         f"{type(exc).__name__}: {exc}")
+        else:
+            moved = _centre_shift_mm(before, after)
+            if moved is None:
+                # Not a failure of the work axis: a backend that reports no
+                # centre of mass cannot answer this, and saying "the bolt circle
+                # did not move" would blame the wrong thing.
+                report.skip("work-geometry: the bolt circle moves when bolt_x does",
+                            "this backend reported no centre of mass, so there is "
+                            "nothing to compare. Inventor's MassProperties does.")
+            else:
+                # Predicted, not a threshold. Six 5 mm bores through a
+                # 120x80x10 plate remove 6 * pi * 0.25^2 * 1.0 = 1.17810 cm^3
+                # centred on the circle, so moving that centre 15 mm shifts the
+                # remaining 94.82190 cm^3 by 1.17810 * 15 / 94.82190 = 0.18640 mm.
+                # A pass on magnitude and not merely on movement is what
+                # distinguishes an axis that tracks its parameter from one that
+                # moved somewhere else.
+                predicted = 1.178097 * 15.0 / 94.821903
+                report.check(
+                    abs(moved - predicted) < 0.05 * predicted,
+                    "work-geometry: the bolt circle moves when bolt_x does",
+                    f"centre of mass moved {moved:.5f} mm against a predicted "
+                    f"{predicted:.5f}. Zero means the expressions never reached "
+                    "the carrier sketch's dimensions, so the axis is parametric "
+                    "in name only -- the failure docs/INVENTOR_SETUP.md says to "
+                    "look for here. A different non-zero figure means it moved "
+                    "somewhere other than where bolt_x put it.")
+                report.note(f"work-geometry: centre of mass moved {moved:.5f} mm "
+                            f"on bolt_x 30 -> 45, predicted {predicted:.5f}")
+        session.backend.close_document(context.doc_id, save=False)
+        session.forget(context.doc_id)
+
+    # 4. A hole aimed at the second body, which is aimed after it is built.
+    recipe = PartRecipe.model_validate({
+        "name": "AimedHole", "units": "mm", "operations": [
+            {"op": "sketch", "name": "First", "plane": "xy", "entities": [
+                {"type": "rectangle", "center": [0, 0], "width": 20, "height": 20}]},
+            {"op": "extrude", "name": "BlockA", "sketch": "First", "distance": 10},
+            {"op": "sketch", "name": "Second", "plane": "xy", "entities": [
+                {"type": "rectangle", "center": [40, 0], "width": 20, "height": 20}]},
+            {"op": "extrude", "name": "BlockB", "sketch": "Second", "distance": 6,
+             "operation": "new_body"},
+            {"op": "sketch", "name": "Pilot", "plane": "xy", "entities": [
+                {"type": "point", "position": [40, 0]}]},
+            {"op": "hole", "name": "Bore", "sketch": "Pilot", "diameter": 8,
+             "through_all": True, "bodies": [2]},
+        ]})
+    context, broken = build(session, recipe)
+    if broken:
+        report.check(False, "work-geometry: a hole aimed with `bodies` builds",
+                     broken[0][:400])
+    else:
+        report.check(True, "work-geometry: a hole aimed with `bodies` builds")
+        volume = session.backend.mass_properties(context.doc_id).volume
+        # 20x20x10 + 20x20x6 = 6.4 cm^3, less a 8 mm bore through whichever
+        # block it landed on: 0.3016 through the 6 mm one, 0.5027 through 10 mm.
+        through_b, through_a = 6.4 - 0.301593, 6.4 - 0.502655
+        report.check(
+            abs(volume - through_b) < 1e-3,
+            "work-geometry: the bore went through the second body",
+            f"volume {volume:.6f} cm^3; aimed at the 6 mm block that is "
+            f"{through_b:.6f}, through the 10 mm one it is {through_a:.6f}. The "
+            "blocks are different thicknesses precisely so the total can tell "
+            "them apart -- equal ones cannot, which is the note in "
+            "FEATURE_COVERAGE.md.")
+        session.backend.close_document(context.doc_id, save=False)
+        session.forget(context.doc_id)
+
+    # 5. The save conflict's remedy: writable once the holder is closed.
+    into = ROOT / ".acceptance"
+    into.mkdir(exist_ok=True)
+    target = into / "save_conflict.ipt"
+    first = session.backend.new_part("SaveConflictA", units="mm")
+    session.register(first, "mm", "deg")
+    second = session.backend.new_part("SaveConflictB", units="mm")
+    session.register(second, "mm", "deg")
+    try:
+        session.backend.save_document(first.id, str(target))
+        report.check(target.is_file(), "work-geometry: the first save writes the file",
+                     str(target))
+        try:
+            session.backend.save_document(second.id, str(target))
+        except Exception as exc:
+            report.check("already open" in str(exc),
+                         "work-geometry: the second save is refused by name",
+                         f"{type(exc).__name__}: {exc}")
+        else:
+            report.check(False, "work-geometry: the second save is refused by name",
+                         "it was allowed, so the guard did not see the conflict")
+        session.backend.close_document(first.id, save=False)
+        session.forget(first.id)
+        try:
+            session.backend.save_document(second.id, str(target))
+        except Exception as exc:
+            report.check(False,
+                         "work-geometry: closing the holder makes the path writable",
+                         f"{type(exc).__name__}: {exc}. The hint tells a caller to "
+                         "close the document and try again; if this fails, that "
+                         "advice is wrong.")
+        else:
+            report.check(True,
+                         "work-geometry: closing the holder makes the path writable")
+        report.note(f"work-geometry: delete {into} when you are done")
+    finally:
+        for handle in (first.id, second.id):
+            try:
+                session.backend.close_document(handle, save=False)
+            except Exception:
+                pass
+            session.forget(handle)
+
+
+def _spec(name: str, value: float):
+    from inventor_mcp.schema import ParameterSpec
+
+    return ParameterSpec(name=name, value=value)
+
+
+def _centre_shift_mm(before, after) -> float | None:
+    """How far the centre of mass moved, in mm, or ``None`` if unreported."""
+    first, second = before.center_of_mass, after.center_of_mass
+    if not first or not second:
+        return None
+    return 10.0 * sum((a - b) ** 2 for a, b in zip(first, second)) ** 0.5
+
+
 def check_views(session: Session, report: Report) -> None:
     """Every display mode and orientation `capture_view` offers, actually applied.
 
@@ -993,6 +1249,7 @@ CHECKS = {
     "threading": check_threading,
     "constants": check_constants,
     "calibration": check_calibration,
+    "work-geometry": check_work_geometry,
     "views": check_views,
 }
 

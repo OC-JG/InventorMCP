@@ -51,6 +51,20 @@ INTERESTING = [
     "WorkPlanes.AddByPlaneAndOffset",
     "UserParameters.AddByExpression",
     "UserParameters.AddByValue",
+    # The three Phase 2 calls that have never executed. They are here because
+    # this list is "the calls whose argument order this server depends on", and
+    # these are the only ones where that order has never been read from anything
+    # -- docs/INVENTOR_SETUP.md records what each is assumed to take.
+    "WorkPoints.AddByPoint",
+    "WorkAxes.AddByTwoPoints",
+    "WorkAxes.AddByLine",
+    # Not a call this server makes, but the object behind defect 4: `capture_view`
+    # orientation names do not describe what you get, and `check_views` says there
+    # is nothing to assert until somebody measures what each one produces. Reading
+    # the Camera interface is where that starts -- if it reports the eye and the
+    # up vector, the orientations can be measured as numbers instead of by
+    # looking at pictures, which is the only way that defect gets closed.
+    "Camera",
 ]
 
 #: VARIANT type codes that appear in generated InvokeTypes calls.

@@ -63,6 +63,18 @@ when it is available and from a fallback table when it is not. The fallback tabl
 a convenience for machines where the pywin32 cache cannot be generated — a read-only
 `gen_py` directory, a roaming profile, or a stale cache after an Inventor upgrade.
 
+**The symptom to match**, because it names neither Inventor nor the cache and
+cost the 2026-09-07 acceptance run its whole type library:
+
+    Could not add module (IID('{D98A091D-...}'), 0, 1, 0) - <class 'AttributeError'>:
+    module 'win32com.gen_py.D98A091D-...x0x1x0' has no attribute 'CLSIDToClassMap'
+
+That is a corrupt cache, not a missing Inventor — `connect` succeeded and
+reported 2027.1 in the same breath. Every `k...` constant then falls back to the
+table and says so on stderr, and `scripts/com_signatures.py` cannot start at all.
+Clear it as below and re-run; if the fallback warnings are still printed, nothing
+in that run's enum-dependent behaviour is measured.
+
 **If a feature is created with the wrong behaviour** — a cut that joins, a vertical
 dimension that comes out aligned — a fallback value is the first suspect. Fix the
 type library rather than the table:
@@ -249,6 +261,109 @@ afternoon:
   treatment for free. `_MIRRORED_PLANES` survives only as the fallback for when
   the measurement fails, and the measured axes are reported on every sketch
   result — `live_smoke.py` prints them.
+
+## Not measured at all: the Phase 2 COM
+
+Everything else in this file was learned by running against a real Inventor.
+This section is the exception, and is kept separate for that reason: `work_point`
+and `work_axis` were written on 2026-09-03 in a session with no Inventor to
+reach, so **three COM calls in `backend/com/backend.py` have never executed**.
+The simulator side is measured and tested; the live side is a proposal.
+
+What a live run has to confirm, in this order:
+
+1. **`WorkPoints.AddByPoint(sketchPoint)`** — that it exists, takes a sketch
+   point, and does not need a second `Construction` argument. Everything else
+   here depends on it.
+2. **`WorkAxes.AddByTwoPoints(first, second)`** — that it takes two
+   `WorkPoint` objects rather than transient `Point`s.
+3. **`WorkAxes.AddByLine(sketchLine)`** — that a sketch line is acceptable
+   where the docs say `Line`.
+
+Then the thing worth checking beyond "did it run": build
+`{"op": "work_axis", "plane": "xy", "at": [30, 0]}` on a plate, pattern a hole
+about it, **and change the driving parameter**. The axis is built from two work
+points that share the caller's expressions, so the bolt circle should move with
+the parameter. If it does not, the expressions are not reaching the carrier
+sketch's dimensions and the feature is parametric in name only.
+
+Why it is built the way it is, rather than the shorter way: the obvious
+implementation is to offset two origin planes and intersect them
+(`WorkAxes.AddByTwoPlanes`), which is fewer calls and uses only primitives this
+file has already verified. It was rejected because it needs the sign of an
+origin plane's normal, which nothing here has measured, and **a wrong sign there
+builds a part that looks right** — the same failure as the `trim` inversion in
+defect 5, which survived three runs precisely because the volume was correct for
+the half it kept. The carrier-sketch route instead puts every position through
+`build_sketch`, which measures a sketch's own axes rather than deducing them
+from a plane's name, so a call that behaves differently raises instead.
+
+### The other two, added the same way
+
+Both were written without an Inventor to reach and both are listed here rather
+than left in the changelog, because this is the file a person reads before
+spending a CAD seat.
+
+4. **A hole is aimed *after* it is built.** Unlike `extrude` there is no
+   definition object to put `AffectedBodies` on -- `HoleFeatures.Add...` makes
+   the feature in one call -- so the backend sets it on the finished feature and
+   treats a release that refuses as a hard error. What a run has to confirm is
+   the refusal path as much as the success one: the hole exists either way, and
+   one on the wrong body has taken real material out of a part that looks
+   finished. **The total volume cannot show it worked**, either: two equal
+   blocks stay equal whichever one is bored, and only the per-body figures
+   differ.
+5. **A save onto a path another open document holds is refused before the
+   write** -- defect 3. Nothing new is called; the check reads `list_documents`,
+   which is `app.Documents`, and Inventor's own refusal is the bare "Exception
+   occurred" this replaces. What a run has to confirm is the *other* half: that
+   Inventor accepts the save once the named document is closed, so the remedy in
+   the hint is real. Worth confirming too that `Documents` reports a path for a
+   document the user opened in the UI, since that is the case a session-registry
+   check could not have covered.
+
+### Running all five
+
+    python scripts/live_acceptance.py --only work-geometry
+
+`check_work_geometry` runs them in the order above and stops after the first if
+it fails, because the two work-axis routes are built on `AddByPoint` and a
+failure there explains every later one. It skips outright on `--backend mock`:
+the simulator implements all five and would pass itself, which is worse than not
+running.
+
+Three of its checks needed a part designed so the answer is visible at all, and
+the reasoning is worth knowing before reading a result:
+
+* **The bolt circle is judged by where the centre of mass went**, against a
+  figure derived beforehand. Six 5 mm bores through a 120x80x10 plate remove
+  1.17810 cm^3 centred on the circle, so moving that centre 15 mm shifts the
+  remaining 94.82190 cm^3 by **0.18640 mm**. Zero means the expressions never
+  reached the carrier sketch's dimensions and the axis is parametric in name
+  only; a different non-zero figure means it moved somewhere other than where
+  `bolt_x` put it. "It built" proves neither, because `_repeat` counts
+  occurrences and never reads the axis.
+* **The two blocks in the hole-targeting check are different thicknesses on
+  purpose**, 10 mm and 6 mm. `FEATURE_COVERAGE.md` notes that a total volume
+  cannot show which body was bored, and for equal blocks it cannot -- the same
+  bore either way is the same volume. Unequal ones make the total say, without a
+  per-body figure the `Backend` contract does not expose.
+* **The save check confirms the remedy, not the refusal.** The refusal is
+  offline logic that `tests/test_saving.py` already holds; what needs Inventor is
+  that the file is writable once the named document is closed, because that is
+  the sentence the hint puts in front of a caller.
+
+The recipes are the shipped ones' patterns, not the unit tests'. The bolt hole is
+`through_all` with no `direction`, because that is what every shipped example does
+and what an acceptance run has actually measured; the unit test for the same
+recipe says `direction: "negative"`, which has never run against Inventor and
+would risk failing this check on the drill direction while reading as a fault in
+the work axis.
+
+For defect 4, `scripts/com_signatures.py` now reads the whole `Camera` interface.
+If it reports the eye and the up vector, the orientation names can be measured as
+numbers rather than judged by looking at renders -- which is what `check_views`
+says is missing before any of it can be asserted.
 
 ## Known-shaky areas
 

@@ -35,9 +35,21 @@ from ...errors import (
 )
 from ...expressions import referenced_parameters
 from ...geometry import profile_loops
-from ...plan import PArc, PCircle, PEllipse, PLine, PPoint, PText, PointRef, Ref, SketchPlan
+from ...plan import (
+    ORIGIN,
+    PArc,
+    PCircle,
+    PEllipse,
+    PLine,
+    PPoint,
+    PText,
+    PointRef,
+    Ref,
+    SketchPlan,
+)
 from ...units import from_internal, inventor_symbol, unit_from_inventor
 from ..base import (
+    _same_file_key,
     AppInfo,
     AxisSpec,
     Backend,
@@ -45,6 +57,7 @@ from ..base import (
     CoilRequest,
     CircularPatternRequest,
     DocInfo,
+    Driven,
     ExportRequest,
     ExtrudeRequest,
     FeatureInfo,
@@ -67,7 +80,9 @@ from ..base import (
     SweepRequest,
     ThreadRequest,
     TopoInfo,
+    WorkAxisRequest,
     WorkPlaneRequest,
+    WorkPointRequest,
 )
 from . import holes
 from .constants import (
@@ -357,6 +372,12 @@ class ComBackend(Backend):
         self._constants: Constants = Constants(None)
         self._documents: dict[str, Any] = {}
         self._sketches: dict[str, dict[str, Any]] = {}
+        #: doc_id -> sketch name -> recipe label -> the Inventor entity.
+        #: `build_sketch` is handed a label per named primitive and Inventor
+        #: hands back an entity per primitive; nothing was keeping the two
+        #: together, so every lookup by label went looking for an Inventor
+        #: *name* that no code had ever assigned. See `_labelled_entity`.
+        self._sketch_entities: dict[str, dict[str, dict[str, Any]]] = {}
         self._topology: dict[str, dict[str, Any]] = {}
         self._transactions: dict[str, Any] = {}
         self._ids = count(1)
@@ -452,6 +473,7 @@ class ComBackend(Backend):
         self._app = None
         self._documents.clear()
         self._sketches.clear()
+        self._sketch_entities.clear()
         self._topology.clear()
         if pythoncom is not None:
             try:
@@ -494,6 +516,7 @@ class ComBackend(Backend):
         doc_id = self._next("doc")
         self._documents[doc_id] = document
         self._sketches[doc_id] = {}
+        self._sketch_entities[doc_id] = {}
         return DocInfo(
             id=doc_id,
             name=str(document.DisplayName),
@@ -1117,6 +1140,42 @@ class ComBackend(Backend):
             )
         return results
 
+    def document_at_path(self, path: str) -> tuple[str | None, str] | None:  # pragma: no cover
+        """Which open document occupies *path*, cheaply.
+
+        One ``FullFileName`` read per open document and nothing else on the miss
+        path, which is the normal one. ``list_documents`` cannot be used here:
+        it reads six properties per document, scans the held handles by COM
+        identity for each, and registers every document it did not recognise --
+        so on the session this was found on, with 1033 documents open behind an
+        assembly, a single save would have minted a thousand handles and left
+        the next call comparing a million COM identities.
+
+        Only a match costs more, and then only for that one document: its
+        display name, and a scan of the *held* handles -- a handful -- to see
+        whether this session has an id for it. No id means the user opened it in
+        Inventor's UI, which the caller reports differently because there is no
+        handle to close by.
+        """
+        app = self._require_app()
+        target = _same_file_key(path)
+        documents = app.Documents
+        for index in range(1, int(documents.Count) + 1):
+            document = documents.Item(index)
+            try:
+                full = str(document.FullFileName)
+            except Exception:
+                # An unsaved document has no file name on some releases and
+                # raises rather than returning empty. It cannot hold a path.
+                continue
+            if not full or _same_file_key(full) != target:
+                continue
+            for held_id, held in self._documents.items():
+                if _same_com_object(document, held):
+                    return held_id, str(document.DisplayName)
+            return None, str(document.DisplayName)
+        return None
+
     def activate_document(self, doc_id: str) -> DocInfo:  # pragma: no cover - Windows only
         document = self._doc(doc_id)
         document.Activate()
@@ -1124,6 +1183,9 @@ class ComBackend(Backend):
 
     def save_document(self, doc_id: str, path: str | None = None) -> DocInfo:  # pragma: no cover
         document = self._doc(doc_id)
+        # Before the write, not after: Inventor's refusal to overwrite a file it
+        # has open is a bare "Exception occurred" that names nothing -- defect 3.
+        self.refuse_a_path_another_document_holds(doc_id, path)
         with self._translate_errors("Saving", DocumentError):
             if path:
                 os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
@@ -1150,6 +1212,7 @@ class ComBackend(Backend):
             # because the eviction was the very call that failed.
             self._documents.pop(doc_id, None)
             self._sketches.pop(doc_id, None)
+            self._sketch_entities.pop(doc_id, None)
 
     def set_material(self, doc_id: str, material: str,
                      appearance: str | None = None) -> DocInfo:  # pragma: no cover
@@ -1399,6 +1462,8 @@ class ComBackend(Backend):
                             "; ".join(refused_dimensions[:5]))
 
         self._sketches.setdefault(doc_id, {})[sketch.Name] = sketch
+        self._sketch_entities.setdefault(doc_id, {})[str(sketch.Name)] = \
+            _entities_by_label(plan, objects)
         profiles = _count_profiles(sketch)
         # Whether a refused constraint mattered is a question about the sketch
         # that came out, not about the constraint's kind. A coincidence Inventor
@@ -1861,6 +1926,30 @@ class ComBackend(Backend):
         plane.Visible = False
         return plane
 
+    def _labelled_entity(self, doc_id: str, sketch_name: str,
+                         label: str) -> Any | None:  # pragma: no cover - Windows only
+        """The Inventor entity a recipe label names, from what `build_sketch` kept.
+
+        This exists because the three lookups that used to do this searched
+        Inventor's own ``SketchPoints`` and ``SketchLines`` for an entity whose
+        ``Name`` equalled the recipe's label -- and **nothing ever set those
+        names**. ``_add_primitive`` sets ``Construction``, ``HoleCenter`` and
+        ``Centerline`` and has never read ``primitive.label``, so the labels
+        lived only in the `SketchPlan` on the Python side. Every such lookup was
+        therefore searching for a name that could not be there. The simulator
+        reads the plan's labels directly, which is why all of it passed offline
+        and the first live run failed on the first check.
+
+        Returning the handle Inventor gave us at creation avoids the question of
+        whether a sketch entity's ``Name`` can be assigned at all, which nothing
+        here has measured. Callers keep the old name search as a fallback: if a
+        stored handle has gone stale it is no worse than the behaviour it
+        replaces, and the error then names both routes.
+        """
+        return (self._sketch_entities.get(doc_id, {})
+                .get(sketch_name, {})
+                .get(label))
+
     def _resolve_axis(self, doc_id: str, axis: AxisSpec) -> Any:  # pragma: no cover
         document = self._doc(doc_id)
         component = document.ComponentDefinition
@@ -1875,13 +1964,19 @@ class ComBackend(Backend):
                 raise SelectionError(f"Unknown edge handle {axis.value!r}.")
             return entry["object"]
         sketch = self._sketch(doc_id, axis.sketch or "")
+        kept = self._labelled_entity(doc_id, str(sketch.Name), axis.value)
+        if kept is not None:
+            return kept
         for index in range(1, int(sketch.SketchLines.Count) + 1):
             line = sketch.SketchLines.Item(index)
             if str(getattr(line, "Name", "")) == axis.value:
                 return line
         raise FeatureError(
             f"Sketch {axis.sketch!r} has no line named {axis.value!r} to revolve about.",
-            hint="Give the sketch line a `name` in the recipe and reference it here.",
+            hint="Give the sketch line a `name` in the recipe and reference it here. "
+                 "This session did not keep an entity under that label either, so "
+                 "the sketch was built before the label was recorded, or by a "
+                 "different session.",
         )
 
     # -- features ----------------------------------------------------------
@@ -2208,6 +2303,19 @@ class ComBackend(Backend):
                     "is wider than the bore it sits over.",
                 ) from exc
 
+            if request.bodies:
+                # Unlike `extrude`, a hole is built by `HoleFeatures.Add...`
+                # rather than from a definition object, so there is nothing to
+                # set `AffectedBodies` on before the feature exists. It is set
+                # afterwards instead, and a release that will not take it is a
+                # hard error rather than a warning: the hole is built either
+                # way, and one on the wrong body has removed real material from
+                # a part that now looks finished. Unmeasured -- see the work
+                # axis note in `docs/INVENTOR_SETUP.md` for the standing
+                # caveat about calls written without an Inventor to try them.
+                _aim_at_bodies(self._require_app(), document.ComponentDefinition,
+                               feature, request.bodies)
+
             # Inventor coerces what it can, so a wrong argument order can build
             # a plain hole and report success.  Reading the type back off the
             # feature is the only thing that distinguishes "made a counterbore"
@@ -2249,6 +2357,7 @@ class ComBackend(Backend):
             "method": call.method,
             "drilled": ("along" if along_normal else "against") + " the sketch normal",
             "chose_by": why,
+            "bodies": list(request.bodies) or None,
         }
         if request.tap:
             detail["tap"] = request.tap
@@ -2865,6 +2974,98 @@ class ComBackend(Backend):
         return FeatureInfo(id=f"wp:{plane.Name}", name=str(plane.Name), kind="work_plane",
                            detail={"base": request.base})
 
+    # -- work points and axes ---------------------------------------------
+    #
+    # None of the three COM calls below has been run against a real Inventor:
+    # this feature was written in a cloud session with no Inventor to reach.
+    # `docs/INVENTOR_SETUP.md` lists what a live run has to confirm. The shape
+    # of the code is chosen so that being wrong is loud rather than quiet --
+    # every position comes from `build_sketch`, which measures the sketch's own
+    # axes instead of deducing them from a plane's name, so a call that does not
+    # exist raises and a call that does puts the geometry where the recipe said.
+    # The alternative -- offsetting origin planes and intersecting them -- needs
+    # the sign of an origin plane's normal, which nothing here has measured, and
+    # a wrong sign there would build a part that looked right.
+
+    def _carrier_point(self, doc_id: str, plane: str, at: Sequence[Driven],
+                       offset_expression: str | None, tag: str) -> Any:  # pragma: no cover
+        """A work point at *at* on *plane*, via a sketch that carries it.
+
+        The sketch is how the point stays parametric: its two driving dimensions
+        are the caller's own expressions, so the point moves when the parameter
+        does. ``AddByPoint`` is the only unmeasured step.
+        """
+        document = self._doc(doc_id)
+        component = document.ComponentDefinition
+        sketch_name = f"{tag}_carrier"
+        plan = SketchPlan(name=sketch_name, plane=plane)
+        if offset_expression:
+            plan.offset_expression = offset_expression
+        point = plan.add(PPoint("point1", construction=True), _CARRIER_LABEL)
+        u, v = at
+        for kind, driven, text in (("horizontal", u, (0.0, -0.4)), ("vertical", v, (-0.4, 0.0))):
+            if abs(driven.value) < 1e-9:
+                plan.constrain(
+                    "vertical_align" if kind == "horizontal" else "horizontal_align",
+                    ORIGIN, Ref(point.id),
+                )
+            else:
+                plan.dimension(kind, (ORIGIN, Ref(point.id)), driven.expression,
+                               abs(driven.value), text_offset=text)
+        self.build_sketch(doc_id, plan)
+        sketch = self._sketch(doc_id, sketch_name)
+        sketch_point = (self._labelled_entity(doc_id, str(sketch.Name), _CARRIER_LABEL)
+                        or _named_sketch_point(sketch, _CARRIER_LABEL))
+        with self._translate_errors("Work point"):
+            work_point = component.WorkPoints.AddByPoint(sketch_point)
+            work_point.Visible = False
+        return work_point
+
+    def work_point(self, doc_id: str, request: WorkPointRequest) -> FeatureInfo:  # pragma: no cover
+        document = self._doc(doc_id)
+        offset = request.offset.expression if request.offset and request.offset.value else None
+        with self._batch(document):
+            point = self._carrier_point(
+                doc_id, request.plane, request.at, offset, request.name or "wpt"
+            )
+            if request.name:
+                point.Name = request.name
+        return FeatureInfo(id=f"wpt:{point.Name}", name=str(point.Name), kind="work_point",
+                           detail={"plane": request.plane,
+                                   "at": [component.as_dict() for component in request.at]})
+
+    def work_axis(self, doc_id: str, request: WorkAxisRequest) -> FeatureInfo:  # pragma: no cover
+        document = self._doc(doc_id)
+        component = document.ComponentDefinition
+        axes = component.WorkAxes
+        with self._batch(document), self._translate_errors("Work axis"):
+            if request.kind == "sketch_line":
+                sketch = self._sketch(doc_id, request.sketch or "")
+                line = (self._labelled_entity(doc_id, str(sketch.Name), request.line or "")
+                        or _named_sketch_line(sketch, request.line or ""))
+                axis = axes.AddByLine(line)
+            elif request.kind == "two_points":
+                first, second = (_named_work_point(component, name) for name in request.points)
+                axis = axes.AddByTwoPoints(first, second)
+            else:
+                # Perpendicular to the plane, through `at`: two points at the
+                # same place in the plane's coordinates, one on it and one on a
+                # parallel plane above it. The separation only has to be
+                # non-zero -- the direction is the plane's normal whatever it is
+                # -- so it is a literal, while `at` stays the caller's
+                # expressions on both points and the axis tracks the parameter.
+                tag = request.name or "wax"
+                low = self._carrier_point(doc_id, request.plane, request.at, None, f"{tag}_a")
+                high = self._carrier_point(doc_id, request.plane, request.at,
+                                           _CARRIER_SEPARATION, f"{tag}_b")
+                axis = axes.AddByTwoPoints(low, high)
+            if request.name:
+                axis.Name = request.name
+            axis.Visible = False
+        return FeatureInfo(id=f"wax:{axis.Name}", name=str(axis.Name), kind="work_axis",
+                           detail={"kind": request.kind, "plane": request.plane,
+                                   "measured_against_inventor": False})
+
     def thread(self, doc_id: str, request: ThreadRequest) -> FeatureInfo:  # pragma: no cover
         document = self._doc(doc_id)
         faces = self._topology_collection(doc_id, request.faces)
@@ -3381,6 +3582,73 @@ def _named_work_plane(component: Any, name: str) -> Any:  # pragma: no cover - W
     raise SketchError(
         f"No work plane named {name!r}.",
         hint="Use 'xy', 'xz', 'yz', or create one with the `work_plane` operation first.",
+    )
+
+
+#: The label the carrier sketch gives its one point, so it can be found again.
+_CARRIER_LABEL = "__work_point__"
+
+#: How far apart the two points defining a `normal_to_plane` axis sit. Any
+#: non-zero separation gives the same axis, so this is a literal rather than an
+#: expression -- there is no parameter it could sensibly track.
+_CARRIER_SEPARATION = "10 mm"
+
+
+def _entities_by_label(plan: SketchPlan, objects: dict[str, Any]) -> dict[str, Any]:
+    """The Inventor entities `build_sketch` created, against the recipe's labels.
+
+    ``objects`` is keyed by primitive id, which is what constraints and
+    dimensions resolve through; a caller asking later has only the label the
+    recipe wrote. Nothing was keeping the two together, so every lookup by label
+    searched Inventor for a *name* no code assigns -- see `_labelled_entity`.
+
+    A label can cover several primitives: a rectangle named "Outline" is four
+    lines under one label. The first wins, which is the rule `resolve_axis`
+    already applies when it takes the first `PLine` under a label. A primitive
+    Inventor declined to create has no entry in ``objects`` and contributes
+    nothing, rather than storing ``None`` for a caller to trip over.
+    """
+    by_label: dict[str, Any] = {}
+    for primitive in plan.primitives:
+        label = getattr(primitive, "label", None)
+        entity = objects.get(primitive.id)
+        if label and entity is not None and label not in by_label:
+            by_label[label] = entity
+    return by_label
+
+
+def _named_sketch_point(sketch: Any, label: str) -> Any:  # pragma: no cover - Windows only
+    points = sketch.SketchPoints
+    for index in range(1, int(points.Count) + 1):
+        point = points.Item(index)
+        if str(getattr(point, "Name", "")) == label:
+            return point
+    raise FeatureError(
+        f"The carrier sketch did not keep a point named {label!r}.",
+        hint="Inventor renamed or dropped it; a work point cannot be placed without it.",
+    )
+
+
+def _named_sketch_line(sketch: Any, name: str) -> Any:  # pragma: no cover - Windows only
+    lines = sketch.SketchLines
+    for index in range(1, int(lines.Count) + 1):
+        line = lines.Item(index)
+        if str(getattr(line, "Name", "")) == name:
+            return line
+    raise FeatureError(
+        f"Sketch {str(sketch.Name)!r} has no line named {name!r} to lie a work axis along.",
+        hint="Give the sketch line a `name` in the recipe and reference it here.",
+    )
+
+
+def _named_work_point(component: Any, name: str) -> Any:  # pragma: no cover - Windows only
+    points = component.WorkPoints
+    for index in range(1, int(points.Count) + 1):
+        if str(points.Item(index).Name) == name:
+            return points.Item(index)
+    raise FeatureError(
+        f"No work point named {name!r}.",
+        hint="Create it with a `work_point` operation before the axis that runs through it.",
     )
 
 

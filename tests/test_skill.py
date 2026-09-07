@@ -379,10 +379,11 @@ class TestTheRehearsalWarningsAreAllListed:
 
     `### What to read in the rehearsal` introduces its bullets as the ways a
     recipe passes every schema check and still builds the wrong part, which
-    makes it a list claiming to be complete. It has drifted twice -- the
-    profile-misses-the-part warning and the pattern-repeats-nothing one both
-    shipped unlisted and were added by hand afterwards -- and when this was
-    written three of the six were still missing.
+    makes it a list claiming to be complete. It has drifted three times -- the
+    far-wall warning and the pattern-axis one both shipped unlisted and were
+    added by hand afterwards, the second of them arriving with its wording
+    truncated, which this caught on the merge that brought it in -- and when
+    this was written three of the eight were missing outright.
 
     Nothing to import: the warnings are inline f-strings at their call sites.
     So the templates are read out of the source instead. A `{"where": ...,
@@ -398,7 +399,7 @@ class TestTheRehearsalWarningsAreAllListed:
       warning listed where nobody reading it has that report is noise.
     * the wrong-side warning's *runtime* wording. No recipe has been found that
       provokes it: an `extrude` cut is measured against the simulator's ledger
-      of prisms and so is never charged a positive volume. The other five each
+      of prisms and so is never charged a positive volume. The other seven each
       have a recipe below; that one is pinned by its source alone.
     """
 
@@ -508,8 +509,23 @@ class TestTheRehearsalWarningsAreAllListed:
     STRAY = {"op": "sketch", "name": "F", "plane": "xy", "entities": [
         {"type": "circle", "center": [0, 500], "diameter": 6}]}
 
+    #: A box shelled from the top with a bore straight through it. Inventor's
+    #: through-all extent stops where it first leaves material, so the near wall
+    #: is drilled and the far one is left solid.
+    BORED = [
+        {"op": "sketch", "name": "Outline", "plane": "xy", "entities": [
+            {"type": "rectangle", "center": [0, 0], "width": 60, "height": 40}]},
+        {"op": "extrude", "name": "Body", "sketch": "Outline", "distance": 20},
+        {"op": "shell", "name": "Hollow", "thickness": 2.5,
+         "faces": {"kind": "face", "filter": "top"}},
+        {"op": "sketch", "name": "Route", "plane": "yz", "entities": [
+            {"type": "point", "position": [0, 10]}]},
+        {"op": "hole", "name": "Cable", "sketch": "Route", "diameter": 6,
+         "through_all": True},
+    ]
+
     #: A recipe that provokes each warning, and the words it should come back
-    #: saying. Five of the six; the sixth is in the class docstring.
+    #: saying. Seven of the eight; the eighth is in the class docstring.
     PROVOKES = [
         ("a cut whose profile misses the part",
          PLATE + [STRAY, {"op": "extrude", "sketch": "F", "distance": 20,
@@ -523,6 +539,16 @@ class TestTheRehearsalWarningsAreAllListed:
          [], "added no material"),
         ("a parameter nothing refers to",
          PLATE, [{"name": "unused", "value": 3}], "drive nothing"),
+        ("a through hole across a hollow box",
+         BORED, [], "will drill the near one only"),
+        ("a circular pattern about an axis flat in the patterned face",
+         PLATE + [{"op": "sketch", "name": "Pilot", "plane": "xy", "entities": [
+                       {"type": "point", "position": [12, 0]}]},
+                  {"op": "hole", "name": "Bolt1", "sketch": "Pilot",
+                   "diameter": 5, "through_all": True, "direction": "negative"},
+                  {"op": "circular_pattern", "features": ["Bolt1"],
+                   "axis": "x", "count": 6}],
+         [], "the pattern axis"),
         ("an operation this Inventor refuses",
          PLATE + [{"op": "thread",
                    "faces": {"kind": "face", "filter": "cylindrical"},

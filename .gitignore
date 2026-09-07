@@ -26,3 +26,8 @@ OldVersions/
 
 # DFM loop working files: an STL and a report per round.
 .dfm/
+
+# Live acceptance working files: the renders `views` captures and the parts
+# `work-geometry` saves. Both runs print the directory and say to delete it.
+.views/
+.acceptance/

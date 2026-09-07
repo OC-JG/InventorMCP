@@ -56,9 +56,11 @@ three are hygiene the code had earned the right to skip until it stopped being
 able to.
 
 **1. The simulator's volume model becomes a per-body ledger.** This is the only
-real redesign. Thirteen of the fourteen `ponytail:` markers (the repository's
-word for a deliberate approximation) live in `backend/mock/`, and the worst of
-them is structural rather than local: `document.volume` is one scalar,
+real redesign. Fifteen of the sixteen `ponytail:` markers (the repository's
+word for a deliberate approximation) live in `backend/mock/` — it was thirteen
+of fourteen when this was written, and the sentence said so until 2026-09-03,
+which is what put this file under `test_roadmap_still_true.py` — and the worst
+of them was structural rather than local: `document.volume` is one scalar,
 `document.slabs` is a list that only `extrude` appends to and nothing ever
 subtracts from, and every operation's estimate was bolted on separately. So a
 through-cut after a shell is charged against the pre-shell solid — a 26×
@@ -238,7 +240,8 @@ reading the numbers.
       trimmed revolve is excluded from the comparison rather than covered by a
       loose number, because the ledger cannot answer there and says so.
 - [x] **Give the divergence check a sense of direction** — defect 6, found on
-      the way and fixed the same day. It compared volumes moved and nothing
+      the way to the calibration above and fixed the same day *(2026-09-03)*.
+      It compared volumes moved and nothing
       else, so a cut that took the right amount off the wrong side read as a
       pass: the run that exposed the split inversion was 1.2% apart while
       keeping the opposite half of the part. Every operation now records where
@@ -248,8 +251,18 @@ reading the numbers.
       simulator's box is approximate for a revolve and exact only for prisms.
 - [x] **Drift tests are the rule** (restructure 2). *(2026-09-03.)* Written
       down in `DECISIONS.md` as "a fact stated twice needs a test that the two
-      agree", with the six drifts that earned it and the corollary that the
+      agree", with the drifts that earned it and the corollary that the
       answer is usually the test rather than removing the duplication.
+
+      **Including this file, which was the last one exempt from it**
+      *(2026-09-03)*. The rule was written here and not applied here, and the
+      file had drifted in three ways: the `ponytail:` count above, four
+      calibrated tolerances quoted with nothing holding them against
+      `PREDICTED`, and a ticked item dated "the same day" without saying which.
+      `tests/test_roadmap_still_true.py` now holds the countable claims, and
+      says in its own docstring which claims it deliberately leaves alone —
+      dated measurements, the landscape section, and the phase count, which is a
+      framing choice rather than a fact.
 
 ### Phase 2 — the coil-shaped additions
 
@@ -257,18 +270,162 @@ Each is one request type, one abstract method, two implementations, roughly
 350 lines across the same five files. Ordered by how often the lack of it has
 actually bitten.
 
-- [ ] **Work axis and work point.** `AxisSpec` already accepts `work_axis`;
-      nothing creates one, so a circular pattern can only turn about an origin
-      axis. Unblocks every off-centre bolt circle.
-- [ ] **`hole` gains `bodies`**, the multi-body targeting `extrude` already
-      has.
-- [ ] **A both-directions extent on `hole`**, or a warning when a through
-      hole's axis re-enters material it did not cut — defect 1 in
-      `FEATURE_COVERAGE.md`.
+- [x] **Work axis and work point.** *(2026-09-03. Simulator measured and
+      tested; the three COM calls are unmeasured -- see below.)* `AxisSpec`
+      already accepted `work_axis` and nothing created one.
+
+      **The reason given here was wrong, and checking it was worth more than
+      taking it.** This item read "so a circular pattern can only turn about an
+      origin axis", which is false: `resolve_axis` has always resolved named
+      sketch lines and the COM backend passes whatever it resolves straight to
+      `AxisEntity`, so an off-centre bolt circle was already buildable via a
+      throwaway sketch on a *perpendicular* plane carrying a line in that
+      plane's own coordinates. That was measured before anything was written,
+      and it builds clean.
+
+      ~~and it builds clean~~ **— against the simulator, and only there.** The
+      first live run, 2026-09-07 on Inventor 2027.1, showed the workaround
+      cannot have built clean on Inventor at all: the COM backend never wrote
+      the recipe's labels onto Inventor's sketch entities, so resolving a named
+      sketch line searched for a name nothing assigns. Defect 8 in
+      `FEATURE_COVERAGE.md`. The paragraph above is left standing with this
+      correction under it rather than rewritten, because the mistake it made is
+      the one worth keeping visible: "measured" was written of a simulator run
+      in a session with no Inventor to reach, in the same file that exists to
+      keep that distinction.
+
+      The real reason is geometric and sharper: a circular pattern turns about
+      an axis perpendicular to the face it patterns, a sketch line lies *in* its
+      own sketch plane, and so no line drawn on a plate's face can ever be that
+      plate's bolt-circle axis. The workaround therefore asks the caller to do
+      the axis mapping in their head, on a plane they are not otherwise using.
+      `work_axis` with `kind: "normal_to_plane"` says it directly, in the
+      plane's own coordinates, with `at` carrying expressions like every other
+      number here.
+
+      Probing the false claim also turned up **defect 7**: the recipe that gets
+      this wrong -- a pattern axis lying in the patterned face's own plane --
+      passes `check_recipe`, passes `validate_recipe` and returns `ok: true`
+      from the simulator, because `_repeat` counts occurrences without ever
+      reading the axis. `work_axis` makes that mistake avoidable; it does not
+      make it detectable, and the note in `FEATURE_COVERAGE.md` says what would.
+      *A warning for it landed on 2026-09-07 -- see the item below.*
+- [x] **Warn about a pattern axis lying in the patterned face** — defect 7,
+      the item above's leftover. *(2026-09-07.)* A warning rather than a
+      finding, and the reason is the limit of a static check rather than
+      caution: a pattern about an in-plane axis is meaningless as a bolt circle
+      and a legitimate way to write a 180-degree flip, and nothing static tells
+      the two apart. So it fires only where the geometry is certain -- an origin
+      axis lying in the seed's plane, a sketch line on that plane, or one on a
+      work plane offset from it -- and declines on the four cases where an
+      answer was available and would have been wrong.
+
+      One of those four is worth recording here rather than only in
+      `FEATURE_COVERAGE.md`: **the simulator would have given the wrong answer
+      and the check does not take it.** `mock.work_plane` files every work plane
+      against an origin base whatever its `kind`, so it believes an angled plane
+      is parallel to its base; a check that read the simulator's own table would
+      report a correct angled-plane recipe as a fault. The plane chain is walked
+      from the recipe instead, honouring `offset` and nothing else.
+
+      This does not close defect 7. The fix is still the simulator placing
+      occurrences rather than counting them, which is the `ponytail` on
+      `_repeat` and a ledger-sized change; the warning makes the mistake
+      *visible*, where `work_axis` only made it avoidable.
+- [ ] **Measure the work axis against a live Inventor.** Split from the item
+      above rather than left inside it, because a tick that covers unmeasured
+      COM would be the kind of claim this file exists not to make.
+      `WorkPoints.AddByPoint`, `WorkAxes.AddByTwoPoints` and
+      `WorkAxes.AddByLine` have never executed; `INVENTOR_SETUP.md` has the
+      order to check them in, and the test that matters is not "did it run" but
+      whether the bolt circle moves when the driving parameter does.
+
+      **Run once, 2026-09-07, Inventor 2027.1: it failed on the first check
+      and found defect 8 instead.** `live_acceptance.py --only work-geometry`
+      runs all five unmeasured Phase 2 behaviours -- the three calls above, the
+      hole aimed with `bodies`, and the save conflict's remedy -- and asserts
+      the bolt circle's centre-of-mass shift against 0.18640 mm derived
+      beforehand rather than merely checking that the pattern ran.
+
+      It got no further than `WorkPoints.AddByPoint`, and not because of that
+      call: the carrier sketch's point could not be found, because **the COM
+      backend never wrote the recipe's labels onto Inventor's sketch entities**
+      and three lookups searched for a name nothing assigns. Defect 8, fixed the
+      same day by keeping the entity Inventor hands back at creation. The four
+      checks below it skipped by design, which is what that ordering is for.
+
+      So this stays open, and the three calls stay unmeasured: the run proved
+      the instrument works and the labels did not. What it has not yet done is
+      execute `AddByPoint`. **The same run also could not read the type
+      library** -- a corrupt `gen_py` cache, seven enums on unverified fallback
+      values, and `com_signatures.py` unable to start -- so the next run wants
+      that cleared first, and the enum warnings gone from its output, before any
+      of its numbers are trusted.
+- [x] **`hole` gains `bodies`**, the multi-body targeting `extrude` already
+      has. *(2026-09-03.)* Every piece it needed was already parameterised by
+      body -- `charge`, `_through_all_distance`, `_material_spans` and
+      `_Slab.body` -- so the simulator side was threading an argument that four
+      functions were already waiting for, and `extrude`'s inline body check
+      became a shared `_aimed_body` rather than a second copy.
+
+      Two things are worth knowing. **A hole is aimed after it is built, not
+      before**: unlike `extrude` there is no definition object to put
+      `AffectedBodies` on, because `HoleFeatures.Add...` makes the feature in
+      one call, so the COM backend sets it on the finished feature and treats a
+      release that refuses as a hard error -- the hole exists either way, and one
+      on the wrong body has taken real material out of a part that looks
+      finished. Unmeasured, like the work axis. **And the total volume cannot
+      show that aiming worked**: both test blocks are 8 cm³ and
+      `_through_all_distance` deliberately falls back to the bounding box over a
+      point no prism covers, so a bore aimed at the wrong body is still charged
+      full depth and the totals agree to the digit. Per body they do not, which
+      is the ledger's reason for never aggregating.
+- [x] ~~**A both-directions extent on `hole`**~~, **or a warning when a through
+      hole's axis re-enters material it did not cut** — defect 1 in
+      `FEATURE_COVERAGE.md`. *(2026-09-03, the second of the two.)*
+
+      The first is struck through rather than left open, because it is not
+      implementable: **Inventor's hole extent has no both-directions option.**
+      Distance, Through All and To, and Through All takes a side. There is
+      nothing to add a knob to, so the item was offering a choice between a fix
+      and a workaround without knowing it.
+
+      The warning was nearly free, which is the part worth recording. The
+      simulator already counted the separate pieces of material each drill axis
+      crosses -- it needs them to decide which way the hole goes -- and a count
+      above one *is* the condition, exactly. So `rehearse` reports it, names the
+      substitute (`extrude`, `direction: "symmetric"`, `extent: "through_all"`)
+      and says the step will diverge on volume as well, since the simulator
+      charges every wall the axis meets and Inventor drills one.
+
+      Fires on the reproduction, and on none of the eleven shipped examples --
+      the enclosure included, the part this defect was found on, which has used
+      the substitute since. Both directions are tested: a warning that fires on
+      a correct recipe teaches the reader to ignore the field.
 - [ ] **Sketch-driven pattern, thicken, move face** — Tier 2 in
       `FEATURE_COVERAGE.md`, all with public `Add` methods.
-- [ ] **`save_part` names the conflict** when the path is already open —
-      defect 3.
+- [x] **`save_part` names the conflict** when the path is already open —
+      defect 3. *(2026-09-07.)* The item said "names the conflict" and the fix
+      turned out not to be a message at all: Inventor's refusal to overwrite a
+      file it has open is a bare "Exception occurred" with nothing in the
+      ErrorManager, so there was nothing to translate. The conflict is knowable
+      *before* the write, so it is refused there — with the filename, the
+      document handle holding it, and both ways out.
+
+      Two things worth recording. **The check belongs below the tool layer**, and
+      not only for the usual reason that a rule enforced on one path is not a
+      rule: `list_documents` reads Inventor's own `Documents` collection on the
+      COM backend, so it sees a file the *user* opened in the UI, which the
+      session's own registry never can. So the guard lives on `Backend` and both
+      implementations inherit it. **And the own-path case is checked before the
+      listing rather than by comparing ids**, because on COM the ids are exactly
+      what cannot be trusted — `document_path`'s note records an id-to-id match
+      over that listing once matching nothing at all — and an in-place save
+      written longhand has to keep working however the ids compare. Both are
+      pinned by tests, one of them against a backend whose ids never match.
+
+      Unmeasured live, like the rest of Phase 2's COM: what a run has to confirm
+      is that Inventor takes the save once the named document is closed.
 
 ### Phase 3 — drawings
 

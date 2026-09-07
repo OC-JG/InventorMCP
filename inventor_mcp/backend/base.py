@@ -15,11 +15,29 @@ expression string Inventor should store alongside it.
 
 from __future__ import annotations
 
+import os
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, Sequence
 
+from ..errors import DocumentError
 from ..plan import SketchPlan
+
+
+def _same_file_key(path: str) -> str:
+    """A form of *path* that compares equal for two names of the same file.
+
+    Absolute, so a relative name matches the absolute one it resolves to, and
+    case-folded through ``normcase`` because the machine that matters here runs
+    Windows -- where `Bracket.ipt` and `bracket.ipt` are one file and comparing
+    them raw would miss the collision this is looking for. ``normcase`` also
+    settles the separators, so a path written with forward slashes matches the
+    backslashed one Inventor hands back.
+
+    Deliberately not ``realpath``: resolving symlinks needs the file to exist,
+    and the interesting case is a path being written for the first time.
+    """
+    return os.path.normcase(os.path.abspath(path))
 
 
 def _clean(value: Any) -> Any:
@@ -268,6 +286,9 @@ class HoleRequest:
     tap_class: str | None = None
     tap_right_handed: bool = True
     tap_full_depth: bool = True
+    #: Bodies the hole may affect, 1-based in creation order. Empty leaves
+    #: Inventor's default, which is the first body only.
+    bodies: Sequence[int] = ()
     name: str | None = None
 
 
@@ -385,6 +406,31 @@ class WorkPlaneRequest:
     second: str | None = None
     offset: Driven | None = None
     angle: Driven | None = None
+    name: str | None = None
+
+
+@dataclass
+class WorkPointRequest:
+    plane: str = "xy"
+    at: tuple[Driven, Driven] = ()  # type: ignore[assignment]
+    offset: Driven | None = None
+    name: str | None = None
+
+
+@dataclass
+class WorkAxisRequest:
+    """Where a work axis comes from.
+
+    ``kind`` decides which of the remaining fields carries the answer, and the
+    schema has already refused the combinations that name none of them.
+    """
+
+    kind: str = "normal_to_plane"
+    plane: str = "xy"
+    at: tuple[Driven, Driven] = ()  # type: ignore[assignment]
+    points: Sequence[str] = ()
+    line: str | None = None
+    sketch: str | None = None
     name: str | None = None
 
 
@@ -526,6 +572,12 @@ class Backend(ABC):
     def work_plane(self, doc_id: str, request: WorkPlaneRequest) -> FeatureInfo: ...
 
     @abstractmethod
+    def work_point(self, doc_id: str, request: WorkPointRequest) -> FeatureInfo: ...
+
+    @abstractmethod
+    def work_axis(self, doc_id: str, request: WorkAxisRequest) -> FeatureInfo: ...
+
+    @abstractmethod
     def draft(self, doc_id: str, request: DraftRequest) -> FeatureInfo: ...
 
     @abstractmethod
@@ -598,6 +650,83 @@ class Backend(ABC):
         raise NotImplementedError(
             f"The {self.name} backend cannot import translated geometry."
         )
+
+    def refuse_a_path_another_document_holds(self, doc_id: str, path: str | None) -> None:
+        """Refuse a Save As onto a path some other open document already occupies.
+
+        Defect 3 in ``docs/FEATURE_COVERAGE.md``. Inventor will not write a file
+        it already has open, and says so with a bare "Exception occurred" and
+        nothing in the ErrorManager -- so the second save of a rebuild, onto the
+        path the first one wrote, failed and named neither the file nor the
+        document holding it. Rebuilding leaves the earlier document open, which
+        makes this the normal case rather than an unusual one.
+
+        Asked *before* the write rather than translated after it, because the
+        conflict is knowable and Inventor's own refusal is not readable. It
+        lives here rather than in either backend so both are held to it and no
+        caller routes around it -- the reasoning ``apply_parameter`` records for
+        the freeze guard: a rule enforced in one path is not a rule.
+
+        The question goes to :meth:`document_at_path`, which sees every open
+        document and not only the ones this session opened -- a file the user
+        opened in Inventor's UI collides just as hard. Saving in place (no
+        ``path``, which both backends read as ``Save``) cannot collide and is not
+        checked; neither is saving onto the path this document is already at,
+        which is an in-place save written out longhand and must stay allowed
+        however the ids compare -- so it is settled from the document's own path
+        first, never by comparing ids.
+        """
+        if not path:
+            return
+        target = _same_file_key(path)
+        own = self.document_path(doc_id)
+        if own and target == _same_file_key(own):
+            return
+        holder = self.document_at_path(path)
+        if holder is None:
+            return
+        other_id, other_name = holder
+        if other_id == doc_id:
+            # Its own path after all, by a route `document_path` could not
+            # answer. Reporting a document as blocking itself would be worse
+            # than the bare exception this replaces.
+            return
+        where = f" as document {other_id!r} ({other_name})" if other_id else (
+            f" as {other_name}, opened outside this session")
+        remedy = (f"Close that document first (`close_part(document={other_id!r})`)"
+                  if other_id else
+                  f"Close {other_name} in Inventor")
+        raise DocumentError(
+            f"{os.path.basename(path)} is already open in this Inventor "
+            f"session,{where}.",
+            hint=f"Inventor will not write a file it has open. {remedy}, or save "
+                 "this one under another name -- a revision suffix on the path is "
+                 "the usual answer when the open copy is still wanted.",
+        )
+
+    def document_at_path(self, path: str) -> tuple[str | None, str] | None:
+        """Which open document occupies *path*, as ``(session id, name)``.
+
+        The id is ``None`` for a document this session did not open -- one the
+        user opened in Inventor's UI -- which is a real case and needs naming
+        differently, since there is no handle to close by.
+
+        A separate method from ``list_documents`` because the cost matters and
+        the listing's is unbounded. On the COM backend that listing reads six
+        properties per document, scans held handles by COM identity for each,
+        and **registers every document it did not recognise**; against a session
+        with an assembly open -- 1033 documents on the machine this was found on
+        -- a save would have cost a thousand registrations and a million
+        identity comparisons on the next call. This asks one question instead,
+        so a backend can answer it with one property read per document and
+        register nothing. The default is the honest slow version, correct for
+        any backend whose listing is cheap.
+        """
+        target = _same_file_key(path)
+        for info in self.list_documents():
+            if info.path and _same_file_key(info.path) == target:
+                return info.id, info.name
+        return None
 
     def document_path(self, doc_id: str) -> str | None:
         """Where this document lives on disk, or ``None`` if nowhere yet.

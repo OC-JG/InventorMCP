@@ -4,7 +4,304 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
 ## Unreleased
 
+### Fixed
+- **The save guard no longer walks every open document.** It asked
+  `list_documents`, and the first live connection reported **1033 open
+  documents** behind an assembly. On the COM backend that listing reads six
+  properties per document, scans the held handles by COM identity for each, and
+  *registers every document it did not recognise* — so a single `save_part` with
+  a path would have minted a thousand session handles and left the next call
+  comparing a million COM identities. Caught by reading the connection's own
+  reply, not by anything failing.
+
+  The guard now asks `document_at_path`, one narrow question each backend
+  answers as cheaply as it can: on COM, one `FullFileName` read per document on
+  the miss path and nothing else, with the display name and the held-handle scan
+  paid only for a real match. The rule itself stays shared on `Backend`; only
+  the enumeration is per-backend, and a test holds that split.
+
+  It also surfaced a case the first version could not name: a document open
+  because the *user* opened it in Inventor's UI has no session handle, so the
+  refusal now says "opened outside this session" and says to close it in
+  Inventor, rather than offering `close_part(document=None)`.
+- **The recipe's sketch labels never reached Inventor** — defect 8, found by the
+  first live run of the work-geometry check (2026-09-07, Inventor 2027.1) and
+  fixed the same day. `build_sketch` on the COM backend creates each entity and
+  sets `Construction`, `HoleCenter` and `Centerline`; it has never read
+  `primitive.label`. The labels lived only in the `SketchPlan`, on the Python
+  side, while three places searched Inventor's own `SketchPoints` and
+  `SketchLines` for an entity whose `Name` equalled one — a name no code
+  assigns:
+
+  * `_carrier_point`, which places every `work_point` and every
+    `normal_to_plane` work axis;
+  * `work_axis` with `kind: "sketch_line"`;
+  * `_resolve_axis`, which is how a **revolve** finds a named sketch line.
+
+  The run got no further than its first check and blamed the right place for the
+  wrong reason: "the carrier sketch did not keep a point named
+  `__work_point__`". It was never given that name. Nothing offline could have
+  caught it — the mock resolves labels from the plan, so every test passed, and
+  the whole COM path is `# pragma: no cover`, so no coverage gap showed either.
+
+  The third caller predates the work geometry, and `docs/ROADMAP.md` recorded it
+  as measured: an off-centre bolt circle "was already buildable via a throwaway
+  sketch on a perpendicular plane... That was measured before anything was
+  written, and it builds clean." It builds clean on the **simulator**. The
+  measurement was taken in a session with no Inventor to reach. The roadmap now
+  carries that correction under the original sentence rather than a rewrite,
+  because the mistake is the one worth keeping visible.
+
+  The fix keeps the entity Inventor hands back at creation: `_entities_by_label`
+  builds a label-to-entity map from what `build_sketch` already collected, and
+  `_labelled_entity` reads it. Nothing depends on whether a sketch entity's
+  `Name` can be assigned, which nothing here has measured. All three callers
+  keep the old name search as a fallback, so a stale handle is no worse than the
+  behaviour it replaces and the error then names both routes.
+  `tests/test_sketch_labels.py` holds the bookkeeping, and a test fails if any
+  of the three call sites stops asking.
+
+  **Still unmeasured**: whether `AddByPoint` then works. The run never reached
+  it, so the roadmap item stays open.
+- **`INVENTOR_SETUP.md` names the corrupt-`gen_py` symptom.** The same run could
+  not read the type library —
+  `module 'win32com.gen_py....' has no attribute 'CLSIDToClassMap'` — which put
+  seven enums on unverified fallback values and stopped
+  `scripts/com_signatures.py` starting, while `connect` succeeded and reported
+  2027.1 in the same breath. The error names neither Inventor nor the cache, so
+  the message is now quoted next to the fix that clears it.
+
 ### Added
+- **An acceptance check for the five Phase 2 behaviours whose COM half has never
+  executed** — `live_acceptance.py --only work-geometry`. `WorkPoints.AddByPoint`,
+  `WorkAxes.AddByTwoPoints` and `WorkAxes.AddByLine`, the hole aimed with
+  `bodies`, and the save conflict's remedy. **Nothing here has been measured**:
+  this is the instrument, written on a machine with no Inventor to reach, and the
+  roadmap item stays open until a seat runs it.
+
+  What makes it worth more than "did it run": three of the checks needed a part
+  designed so the answer is visible at all.
+
+  * **The bolt circle is judged by where the centre of mass went**, against a
+    figure derived beforehand. Six 5 mm bores through a 120x80x10 plate remove
+    1.17810 cm^3 centred on the circle, so moving that centre 15 mm shifts the
+    remaining 94.82190 cm^3 by 0.18640 mm. Zero means the expressions never
+    reached the carrier sketch's dimensions and the axis is parametric in name
+    only; a different non-zero figure means it moved somewhere other than where
+    `bolt_x` put it. That the pattern built proves neither, because `_repeat`
+    counts occurrences and never reads the axis.
+  * **The two blocks in the hole-targeting check are different thicknesses**, 10
+    mm against 6 mm. `FEATURE_COVERAGE.md` notes a total volume cannot show which
+    body was bored, and for equal blocks it cannot — the same bore either way is
+    the same volume. Unequal ones make the total say, with no per-body figure the
+    `Backend` contract does not expose.
+  * **The save check confirms the remedy rather than the refusal**, since the
+    refusal is offline logic `tests/test_saving.py` already holds and what needs
+    Inventor is that the path is writable once the holder is closed.
+
+  It skips outright on `--backend mock`, because the simulator implements all
+  five and would print five passes that say nothing about Inventor. Every recipe
+  in it was validated and built against the simulator, and every line of it was
+  executed there with the skip lifted, so a typo cannot wait for the CAD seat to
+  surface. The bolt hole uses `through_all` with no `direction` — what every
+  shipped example does and what an acceptance run has measured — rather than the
+  `direction: "negative"` its unit test uses, which has never run against
+  Inventor and would risk failing the check on the drill direction while reading
+  as a fault in the work axis.
+
+  `scripts/com_signatures.py` gains the three unverified calls, whose argument
+  order has never been read from anything, and the `Camera` interface: defect 4's
+  orientation names cannot be asserted until somebody measures what each one
+  produces, and if `Camera` reports the eye and the up vector then they can be
+  measured as numbers instead of judged by eye.
+
+### Fixed
+- **A save onto a path Inventor already has open is refused by name** — defect
+  3, and the fix is not a better message. Inventor will not write a file it has
+  open, and says so with a bare "Exception occurred" and nothing in the
+  ErrorManager, so there was nothing to translate. Since each rebuild leaves the
+  earlier document open, this was the *normal* case for a second save, and it
+  named neither the file nor the document holding it.
+
+  The conflict is knowable before the write, so that is where it is answered.
+  `Backend.refuse_a_path_another_document_holds` asks `list_documents` whether
+  another open document occupies the target path, and refuses with the filename,
+  the handle holding it, and both ways out — `close_part(document=...)`, or a
+  different name. Picking one of those for the caller would be guessing which
+  copy they wanted.
+
+  **`list_documents` is why this is not a tool-layer check.** On the COM backend
+  it reads Inventor's own `Documents` collection, so it sees a file the *user*
+  opened in the UI as well as one this session opened — which the session's own
+  registry cannot, and which is the case the defect report came from. And the
+  guard sits on `Backend` rather than in either implementation, so both are held
+  to it and no caller routes around it: the reasoning `apply_parameter` records
+  for the freeze guard.
+
+  Saving in place is not checked, because it cannot collide, and neither is
+  saving onto the path the document is already at. That last case is settled
+  *before* the listing rather than by comparing ids, because on COM the ids are
+  exactly what cannot be relied on — `document_path`'s own note records an
+  id-to-id match over that listing once matching nothing at all — and an
+  in-place save written longhand must keep working however they compare. Paths
+  compare through `abspath` and `normcase`, so two names for one file collide
+  and a Windows case difference does not hide one.
+
+  `tests/test_saving.py` holds it, including that both backends ask the guard and
+  neither carries a copy, and that the own-path case survives a backend whose ids
+  never match. Three mutations were checked and each failed the test written for
+  it. The live half is unmeasured, as with the rest of Phase 2's COM.
+
+### Added
+- **A pattern axis lying flat in the patterned face is warned about** — defect
+  7, found on 2026-09-03 while checking whether the roadmap's reason for wanting
+  a work axis was true, and open since. A `circular_pattern` turns about an axis
+  perpendicular to the face it patterns; a sketch line lies *in* its own sketch
+  plane; so a plate sketched on XY whose pattern axis is a line drawn on XY asks
+  Inventor to revolve the holes about an axis lying flat in the plate. Nothing
+  caught it — `check_recipe` passes it, `validate_recipe` passes it, and the
+  simulator returns `ok: true` with a plausible volume, because `_repeat`
+  multiplies the seed's volume delta and never reads the axis at all. The
+  warning says that outright, because a reader checking volumes learns nothing.
+
+  **A warning rather than a finding**, and the reason is the honest limit of a
+  static check rather than caution: a pattern about an in-plane axis is
+  meaningless as a bolt circle and a legitimate way to write a 180-degree flip,
+  and nothing static tells the two apart. So it names both substitutes —
+  `work_axis` with `kind: "normal_to_plane"`, or `mirror`.
+
+  It fires on three certain shapes: an origin axis lying in the seed's plane
+  (`x` or `y` under a plate sketched on XY, which is the cheapest way to make
+  the mistake since `axis` defaults to `"z"`), a sketch line on that plane, and
+  one on a work plane offset from it, following the chain however long. It
+  declines on four where an answer was available and would have been wrong — an
+  angled work plane, a revolved seed, a `two_points` work axis, and a pattern
+  whose axis is right for one seed and wrong for another.
+
+  **The simulator would have got one of those wrong and the check does not take
+  its word.** `mock.work_plane` files every work plane against an origin base
+  whatever its `kind`, so it believes an angled plane is parallel to its base;
+  reading that table would have reported a correct angled-plane recipe as a
+  fault. The plane chain is walked from the recipe instead, honouring `offset`
+  and nothing else. Only `extrude` and `hole` seed a judgement, because only
+  there does the sketch plane describe the resulting faces — a revolve's
+  geometry does not sit in its sketch plane, and the shipped belt pulley is
+  exactly that case.
+
+  Fires on the reproduction and on none of the eleven shipped examples or seven
+  calibration fixtures. `tests/test_pattern_axis.py` holds both directions, and
+  the label resolution is narrowed to the sketches that existed when the pattern
+  ran — resolving against the finished document lets a later sketch claim the
+  name, and that mutation was checked to fail the test.
+
+  This does not close defect 7: the fix is still the simulator placing
+  occurrences rather than counting them. The warning makes the mistake visible,
+  where `work_axis` only made it avoidable.
+
+### Fixed
+- **The gap list said two things a merge had just made false.** Merging the
+  Phase 2 work-geometry branch closed two entries in `FEATURE_COVERAGE.md`'s
+  *Gaps that are not feature collections* — work axis and work point, and `hole`
+  drilling only the primary body — and neither bullet knew it. The list still
+  told a reader to reach for an `extrude` cut where a `hole` with `bodies` now
+  works. Both are struck through, with the note in each that the COM half is
+  unmeasured, and `tests/test_coverage_gaps_still_true.py` holds the list to the
+  schema in both directions: a gap declared open while the operation exists
+  fails, and so does one struck through with nothing behind it.
+- **The roadmap is under the drift rule it was written in.** `DECISIONS.md`'s
+  rule is that a fact stated in two places does not merge without a test that
+  they agree. `ROADMAP.md` is where that rule was written down, and was the last
+  document exempt from it — and it had drifted three ways: it said thirteen of
+  fourteen `ponytail:` markers lived in `backend/mock/` when there were sixteen,
+  fifteen of them there; it quoted four calibrated tolerances with nothing
+  holding them against `PREDICTED`; and one ticked item was dated "the same day"
+  without saying which. Found by going looking, not by anything failing.
+
+  `tests/test_roadmap_still_true.py` holds the countable claims, and its
+  docstring says which claims it deliberately leaves alone — dated
+  measurements, the landscape section, and the phase count, which is a framing
+  choice rather than a fact.
+
+  Each claim was then mutated to check the test could actually fail, and each
+  mutation was caught by exactly one test. Three of the tests were wrong when
+  first written — one called five sound entries undated by reading line by line
+  where an item spans several — which is the same false-positive habit the run
+  warnings are written to avoid, and is now recorded in `DECISIONS.md` as what a
+  drift test has to earn.
+
+### Added
+- **A through hole that will drill the near wall only is warned about** —
+  defect 1, open since it cost the PCB enclosure a cable route. Inventor's
+  through-all extent stops where it first exits material, so a hole across a
+  hollow box leaves the far wall solid and the part looks built.
+
+  The roadmap offered two fixes and they were not equally available: **Inventor's
+  hole extent has no both-directions option** — Distance, Through All and To,
+  with Through All taking a side — so there is nothing to add a knob to. The
+  warning is what landed, and it was nearly free: the simulator already counts
+  the separate pieces of material each drill axis crosses, because it needs them
+  to decide which way the hole goes, and a count above one *is* the condition.
+  `rehearse` now reports it, names the substitute (`extrude` with
+  `direction: "symmetric"`) and says the step will diverge on volume too, since
+  the simulator charges every wall the axis meets.
+
+  Fires on the reproduction and on none of the eleven shipped examples — the
+  enclosure included, which has been built with the substitute since. Both
+  directions are tested: a warning that fires on a correct recipe teaches the
+  reader to ignore the field.
+- **`hole` gains `bodies`**, the multi-body targeting `extrude` already had. A
+  hole aimed at a second body used to land on the first, which removes real
+  material from the wrong place and reports success.
+
+  The simulator needed no new arithmetic: `charge`, `_through_all_distance`,
+  `_material_spans` and `_Slab.body` were all already parameterised by body, so
+  this threads an argument four functions were waiting for. `extrude`'s inline
+  body-number check became a shared `_aimed_body` instead of a second copy.
+
+  A hole is aimed *after* it is built, unlike an extrude: `HoleFeatures.Add...`
+  makes the feature in one call, so there is no definition object to put
+  `AffectedBodies` on. The COM backend sets it on the finished feature and
+  treats a release that refuses as a hard error rather than a warning — the hole
+  exists either way, and one on the wrong body has cut a part that looks
+  finished. Unmeasured, for the same reason as the work axis below.
+
+  Worth recording because a test went looking for it: the *total* volume cannot
+  show that aiming worked. `_through_all_distance` deliberately falls back to
+  the bounding box over a point no prism covers, so a bore aimed at the wrong
+  body is still charged its full depth and two runs agree to the digit. Per body
+  they do not, which is the ledger's reason for never aggregating.
+- **Work axis and work point.** A named axis in space, so a circular pattern can
+  turn about something other than an origin axis, and a named point to hang one
+  on. `kind: "normal_to_plane"` is the bolt-circle case and the default:
+  perpendicular to a plane, through a point given in that plane's own
+  coordinates, with `at` carrying expressions like every other number here.
+  `two_points` and `sketch_line` name geometry that already exists.
+
+  **The roadmap's reason for wanting this was wrong, and checking it first was
+  worth more than the feature.** It said a circular pattern could only turn
+  about an origin axis. It never could: `resolve_axis` has always resolved named
+  sketch lines, so an off-centre bolt circle was already buildable through a
+  throwaway sketch on a perpendicular plane -- measured before a line was
+  written, and it builds clean. The real reason is geometric: the axis must
+  stand perpendicular to the face being patterned, a sketch line lies flat in
+  its own sketch plane, and so the workaround asks the caller to do the axis
+  mapping in their head on a plane they are not otherwise using.
+
+  Probing that claim turned up **defect 7**: the recipe that gets it wrong --
+  a pattern axis lying in the patterned face's own plane -- passes
+  `check_recipe`, passes `validate_recipe`, and returns `ok: true` with a
+  plausible volume, because the simulator's `_repeat` counts occurrences and
+  never reads the axis. This operation makes the mistake avoidable, not
+  detectable; `docs/FEATURE_COVERAGE.md` records what detecting it would take.
+
+  **The COM side is unmeasured.** Written in a session with no Inventor to
+  reach, so `WorkPoints.AddByPoint`, `WorkAxes.AddByTwoPoints` and
+  `WorkAxes.AddByLine` have never executed. The simulator side is measured and
+  tested (32 tests). The shorter implementation -- offsetting two origin planes
+  and intersecting them -- was rejected for needing the sign of an origin
+  plane's normal, which nothing here has measured and which would fail the way
+  the `trim` inversion did: silently, with a part that looks right.
+  `docs/INVENTOR_SETUP.md` says what a live run must confirm and in what order.
 - **Draft, combine, split and boss.** Four more operations, and one that could not
   be built at all.
 
