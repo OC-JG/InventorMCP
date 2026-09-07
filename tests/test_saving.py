@@ -268,17 +268,17 @@ class TestTheCostOfAsking:
         from inventor_mcp.backend.com.backend import ComBackend
 
         # The docstring names `list_documents` to explain why it is avoided, so
-        # the check has to be on the code rather than on the text. It used to
-        # cut the docstring out by `source.replace(__doc__, "")`, which stopped
-        # matching on 3.13: docstrings are dedented at compile time there, so
-        # `__doc__` is no longer a substring of the file. Dropping the node
-        # says what was meant on every version -- and on comments too, which
-        # are no more a call than the docstring is.
-        tree = ast.parse(textwrap.dedent(
-            inspect.getsource(ComBackend.document_at_path))).body[0]
-        if ast.get_docstring(tree) is not None:
-            tree.body = tree.body[1:]
-        body = ast.unparse(tree)
+        # the check has to be on the code rather than on the text. Through
+        # `ast` and not by subtracting `__doc__` from the source: 3.13 dedents
+        # docstrings at compile time, so that subtraction quietly stopped
+        # matching and the check read the very sentence it means to exclude --
+        # green on 3.11 and 3.12, red on 3.13, for nothing either backend did.
+        # `unparse` drops the comments too, which is the same intent.
+        source = textwrap.dedent(inspect.getsource(ComBackend.document_at_path))
+        function = ast.parse(source).body[0]
+        statements = (function.body[1:] if ast.get_docstring(function)
+                      else function.body)
+        body = ast.unparse(statements)
         assert "list_documents" not in body, (
             "the whole reason document_at_path exists is that list_documents is "
             "unbounded in cost and registers what it walks")

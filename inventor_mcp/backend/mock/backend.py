@@ -2435,6 +2435,30 @@ class MockBackend(Backend):
         return candidates
 
     def mass_properties(self, doc_id: str) -> MassProps:
+        """The part's volume, area and box -- and no centre of mass.
+
+        This used to report the bounding box's centre as the centroid, which is
+        the one number here that was silently wrong rather than approximate. A
+        centroid's whole job is to move when material moves, and a box centre
+        moves for nothing: a 120x80x10 plate with six 5 mm bores on a circle
+        30 mm off-axis reported ``(0, 0, 0.5)``, and putting the circle at 45 mm
+        reported ``(0, 0, 0.5)`` again. A real centroid does neither -- the bores
+        remove 1.178097 cm^3 centred on the circle, which at 30 mm puts it
+        0.37283 mm off the box centre in X and moves it a further 0.18640 mm at
+        45. Derived and not measured: the live run of 2026-09-07 stopped at
+        defect 8, so no seat has read this figure off Inventor yet.
+
+        `scripts/live_acceptance.py` judges the bolt-circle axis by exactly that
+        shift, so the invented centroid did not merely mislead -- it failed a
+        check the work axis had passed.
+
+        Nothing is reported instead, because there is nothing honest to report.
+        The ledger of signed prisms could give a real centroid for a prismatic
+        part -- sum ``volume * centroid`` over the prisms -- but not for this
+        part: a `circular_pattern` moves volume without recording prisms of its
+        own (see :meth:`_repeat`), so the ledger here knows one bore of six.
+        Callers that want the box centre have `bounding_box` and can say so.
+        """
         document = self._doc(doc_id)
         area = sum(topo.area or 0.0 for topo in document.topology if topo.kind == "face")
         density = _DENSITY.get((document.material or "").lower())
@@ -2445,7 +2469,7 @@ class MockBackend(Backend):
             mass=document.volume * density if density else None,
             density=density,
             material=document.material,
-            center_of_mass=_bounds_center(document.bounds),
+            center_of_mass_from=_NO_CENTROID,
             bounding_box=bounds,  # type: ignore[arg-type]
         )
 
@@ -3149,15 +3173,11 @@ def _pattern_targets(document: _Document, names: Sequence[str]) -> list[_Feature
 #: than guessed at.
 _VOLUME_NOT_MODELLED = "occurrence volume is not estimated by the simulator"
 
-
-def _bounds_center(bounds: list[float] | None) -> tuple[float, float, float] | None:
-    if not bounds:
-        return None
-    return (
-        (bounds[0] + bounds[3]) / 2,
-        (bounds[1] + bounds[4]) / 2,
-        (bounds[2] + bounds[5]) / 2,
-    )
+#: Said in place of a centroid, for the same reason as the line above: the
+#: simulator has no centroid, and the bounding box's centre is not a worse one
+#: but a different quantity. See :meth:`MockBackend.mass_properties`.
+_NO_CENTROID = ("not reported: the simulator has no centroid. The bounding box's "
+                "centre is in `bounding_box` and does not move when a void does")
 
 
 def _path_length(plan: Any) -> float:
