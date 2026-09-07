@@ -79,6 +79,13 @@ directory with Claude Code it will offer to enable the server for you. Check it 
 claude mcp list
 ```
 
+That config runs [`scripts/serve.py`](scripts/serve.py) rather than
+`python -m inventor_mcp` directly. The launcher needs only a Python — any Python —
+and re-executes the server on the first interpreter that can actually import it,
+preferring the repo's own `.venv`. It is there because the config file cannot know
+which `python` a client will find, and the bare one is usually the wrong one; see
+[When the connection fails](#when-the-connection-fails).
+
 ### Claude Desktop
 
 Edit the config file — create it if it does not exist:
@@ -155,6 +162,44 @@ simulator — useful, but it will not produce a real part. Run with
 
 Then try: *"Model a 120 x 80 x 8 mm aluminium mounting plate with 10 mm corner radii
 and four M6 clearance holes 12 mm in from each edge."*
+
+### When the connection fails
+
+If the client reports `CONNECTION_CLOSED`, "Connection closed", or just shows the
+server as failed, run:
+
+```powershell
+.venv\Scripts\python.exe -m inventor_mcp --doctor
+```
+
+```
+[ ok ] python       3.11 at C:\...\InventorMCP\.venv\Scripts\python.exe
+[FAIL] mcp sdk      not importable: No module named 'mcp'
+[ ok ] pywin32      11.0.0; Inventor is reachable
+[ -- ] server       not checked: mcp sdk missing
+[warn] analyser     not found: the DFM tool is not where this could find it
+
+The server will not start: mcp sdk
+```
+
+It walks the whole chain — interpreter, SDK, pydantic, pywin32, the backend
+`auto` picks, whether the server assembles, Node, and the DFM analyser — and
+prints the repair for anything that is not `ok`. It does not connect to Inventor,
+and it deliberately needs none of the things it reports on, so it still runs on
+the install where the server does not.
+
+Almost every case is one of three:
+
+| What the doctor says | What happened |
+|---|---|
+| `mcp sdk` / `pydantic` not importable | The client launched a Python the package is not installed into. Register the server by the **absolute path** to `.venv\Scripts\python.exe`, or use the shipped `.mcp.json`, which finds it for you. |
+| `pywin32` not importable | The server starts but offers only the simulator, so `connect` cannot reach Inventor. `pip install -e ".[inventor]"` |
+| `analyser` not found | The DFM tools have no analyser to call. `git submodule update --init dfm` |
+
+A closed connection is not a crash you can read: an MCP server that raises before
+it answers `initialize` has written its traceback to a stderr the client discards,
+which is why every cause looks identical from the outside. The doctor is that
+traceback, printed where you can see it.
 
 ---
 

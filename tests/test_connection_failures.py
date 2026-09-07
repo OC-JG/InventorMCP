@@ -1,0 +1,359 @@
+"""Why "the connection closed" was the only thing anybody was told.
+
+The server stopped being reachable from Claude and from the DFM tools at the
+same time, and every client said the same four words. It was not the modelling
+code, and the suite was green throughout: the shipped project-scoped
+``.mcp.json`` launched ``python -m inventor_mcp`` with a bare ``python``, which
+an MCP client resolves without the shell's ``PATH`` and without any virtualenv
+the shell had active. That Python had no ``mcp`` installed, so
+``inventor_mcp/__main__.py`` -- which imported the server at module level --
+raised ``ModuleNotFoundError`` before a byte of protocol was written, and the
+process exited. The client had nothing to report but ``CONNECTION_CLOSED``.
+
+The README already warned, in as many words, that a bare ``"python"`` is the
+commonest reason an MCP server shows as failed. Two facts that had to agree,
+and only one of them was written down anywhere a test could see. So they are
+checked here, along with the three properties that keep the failure legible
+next time:
+
+* nothing may be imported at the top of ``__main__`` that a broken install
+  cannot import, because that import *is* the silent failure;
+* ``preflight`` must run on the install where the server does not, so it may
+  not need the dependencies it exists to report on;
+* a venv's interpreter is a symlink to the one it was built from, so the
+  launcher may not identify interpreters by resolved path.
+"""
+
+from __future__ import annotations
+
+import ast
+import importlib.util
+import io
+import json
+import pathlib
+import sys
+
+import pytest
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+
+def top_level_imports(path: pathlib.Path) -> set[str]:
+    """Modules imported at the top of a file, not inside a function or a try."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    found: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom) and node.module:
+            found.add(node.module)
+        elif isinstance(node, ast.Import):
+            found.update(alias.name for alias in node.names)
+    return found
+
+
+def load_launcher():
+    """``scripts/serve.py``, loaded by path.
+
+    Nothing in ``tests/`` imports from ``scripts/``: the repo root is not on
+    ``sys.path`` under a bare ``pytest``, which is what CI runs.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "_serve_under_test", ROOT / "scripts" / "serve.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestTheConfigThatShipped:
+    """What ``.mcp.json`` launches, held against what the README says to."""
+
+    def test_it_does_not_run_a_bare_python_against_the_package(self):
+        """The regression itself.
+
+        ``python -m inventor_mcp`` needs the deps to be importable by whichever
+        ``python`` the client finds first. Running the launcher instead needs
+        only a Python: it re-executes the server on one that can import it.
+        """
+        config = json.loads((ROOT / ".mcp.json").read_text(encoding="utf-8"))
+        entry = config["mcpServers"]["inventor"]
+        args = entry["args"]
+        assert "-m" not in args, (
+            f"{entry['command']} {' '.join(args)} asks an unknown interpreter "
+            "to import the package. That is the configuration that reported "
+            "only CONNECTION_CLOSED."
+        )
+        assert args[0].endswith("serve.py"), args
+
+    def test_the_launcher_it_names_is_there(self):
+        """A path in a config file is a claim until something opens it."""
+        config = json.loads((ROOT / ".mcp.json").read_text(encoding="utf-8"))
+        named = config["mcpServers"]["inventor"]["args"][0]
+        assert (ROOT / named).is_file(), f"{named} is not in the repository"
+
+    def test_the_readme_still_warns_about_the_bare_interpreter(self):
+        """The warning is half of the pair above; without it this test is arbitrary.
+
+        Reworded freely -- matched on `"python"` and the word `PATH`, not on a
+        sentence -- but if the warning goes, the reason `.mcp.json` is shaped
+        the way it is goes with it.
+        """
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        assert 'bare `"python"`' in readme
+        assert "PATH" in readme
+
+
+class TestTheEntryPointStaysAbleToSpeak:
+    def test_main_does_not_import_the_server_at_module_level(self):
+        """The one line that made the failure silent.
+
+        ``from .server import main`` at the top of ``__main__`` runs before any
+        code of ours can catch it, so a missing dependency became a traceback on
+        the stderr an MCP client discards. Inside ``main`` it is catchable, and
+        is caught.
+        """
+        imported = top_level_imports(ROOT / "inventor_mcp" / "__main__.py")
+        assert ".server" not in imported and "inventor_mcp.server" not in imported
+        assert imported <= {"__future__", "sys"}, imported
+
+    def test_the_console_script_target_exists(self):
+        """``pyproject`` points ``inventor-mcp`` at ``__main__:main``.
+
+        It used to resolve to the name bound by the module-level import, which
+        is a different thing that happened to work. Moving that import inside a
+        function would have broken the installed command silently.
+        """
+        spec = tomllib_loads()["project"]["scripts"]["inventor-mcp"]
+        module_name, _, attribute = spec.partition(":")
+        module = importlib.import_module(module_name)
+        assert callable(getattr(module, attribute))
+
+
+def tomllib_loads() -> dict:
+    import tomllib
+
+    return tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+
+class TestTheDoctorRunsWhereTheServerCannot:
+    def test_it_imports_nothing_the_broken_install_is_missing(self):
+        """The property that makes the doctor worth having.
+
+        A missing ``mcp`` is the commonest cause of a closed connection, so a
+        doctor that needs ``mcp`` to load reports nothing on the machine that
+        needs it. Every such import is inside a check, inside a ``try``.
+        """
+        imported = top_level_imports(ROOT / "inventor_mcp" / "preflight.py")
+        for forbidden in ("mcp", "pydantic"):
+            assert not any(name.split(".")[0] == forbidden for name in imported), (
+                f"preflight imports {forbidden} at module level, so it cannot "
+                "run on the install it exists to diagnose"
+            )
+
+    def test_every_check_reports_rather_than_raises(self):
+        from inventor_mcp import preflight
+
+        findings = preflight.run_checks()
+        assert len(findings) == len(preflight.CHECKS)
+        for finding in findings:
+            assert finding.status in preflight.MARKERS, finding
+            assert finding.detail, finding
+            assert finding.line()
+
+    def test_a_healthy_install_is_reported_as_healthy(self):
+        """Run under the suite's own interpreter, which by definition has the deps.
+
+        The analyser and Node are allowed to be missing -- they are warnings, and
+        the offline CI legs have neither. A FAIL here means the interpreter
+        running the tests could not start the server, which the next assertion
+        would also have caught, later and less clearly.
+        """
+        from inventor_mcp import preflight
+
+        broken = [f for f in preflight.run_checks() if f.status == preflight.FAIL]
+        assert not broken, [(f.name, f.detail) for f in broken]
+
+    def test_it_exits_zero_and_names_what_is_missing(self):
+        from inventor_mcp import preflight
+
+        out = io.StringIO()
+        assert preflight.doctor(out=out) == 0
+        printed = out.getvalue()
+        assert "preflight" in printed
+        for finding in preflight.run_checks():
+            assert finding.name in printed, finding.name
+
+    def test_every_problem_carries_a_repair(self):
+        """A finding that is not OK and has no hint leaves somebody stuck.
+
+        Skipped checks are the exception, and deliberately: their detail already
+        names the failure that caused them, and a hint of their own would point
+        at the wrong thing.
+        """
+        from inventor_mcp import preflight
+
+        for check, _ in preflight.CHECKS:
+            finding = check()
+            if finding.status in (preflight.OK, preflight.SKIP):
+                continue
+            assert finding.hint, f"{finding.name}: {finding.detail}"
+
+    def test_a_missing_dependency_is_named_once_not_four_times(self):
+        """``backend``, ``server`` and ``analyser`` all fail without pydantic.
+
+        Their own reasons are true and useless: a backend that cannot import
+        pydantic is not a broken backend. So they are skipped, and the summary
+        names the dependency.
+        """
+        from inventor_mcp import preflight
+
+        def missing() -> preflight.Finding:
+            return preflight.Finding(
+                "pydantic", preflight.FAIL, "not importable", hint="install it"
+            )
+
+        original = preflight.CHECKS
+        preflight.CHECKS = (
+            (preflight.check_python, False),
+            (missing, False),
+            (preflight.check_backend, True),
+            (preflight.check_server, True),
+        )
+        try:
+            findings = {f.name: f for f in preflight.run_checks()}
+        finally:
+            preflight.CHECKS = original
+
+        assert findings["backend"].status == preflight.SKIP
+        assert findings["server"].status == preflight.SKIP
+        assert "pydantic" in findings["backend"].detail
+
+    def test_the_doctor_does_not_reach_inventor(self):
+        """A diagnostic that connects changes the thing it is diagnosing.
+
+        ``connect`` launches Inventor or attaches to a live session. The backend
+        check reports which backend ``auto`` picks and says, in the line it
+        prints, that it did not connect.
+        """
+        from inventor_mcp import preflight
+
+        finding = preflight.check_backend()
+        assert "not connected" in finding.detail
+
+
+class TestWhatTheClientWouldOtherwiseNotSee:
+    def test_the_startup_failure_names_the_interpreter(self):
+        """Nearly always the answer: the package is in a venv and the client
+        launched a different Python."""
+        from inventor_mcp import preflight
+
+        out = io.StringIO()
+        preflight.startup_failure(ModuleNotFoundError("No module named 'mcp'"), out=out)
+        printed = out.getvalue()
+        assert "No module named 'mcp'" in printed
+        assert sys.executable in printed
+        assert "--doctor" in printed
+
+    def test_doctor_is_answered_before_the_server_is_imported(self):
+        """``--doctor`` has to work on the install where importing the server is
+        what fails, so ``__main__`` reads it out of argv itself rather than
+        leaving it to the server's own argparse."""
+        source = (ROOT / "inventor_mcp" / "__main__.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        main = next(
+            node for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "main"
+        )
+        body = ast.unparse(main)
+        assert body.index("--doctor") < body.index(".server"), (
+            "the server is imported before --doctor is read, so the doctor "
+            "cannot run on a broken install"
+        )
+
+
+class TestTheLauncher:
+    def test_a_venv_python_is_not_mistaken_for_the_running_one(self, tmp_path, monkeypatch):
+        """The bug that made the first version of this launcher useless.
+
+        A virtualenv's ``bin/python`` is a symlink to the interpreter it was
+        built from, so ``Path(venv).resolve() == Path(sys.executable).resolve()``
+        is true for a venv that is not the interpreter now running. Comparing
+        them that way sent the server down the in-process path on the very
+        Python that could not import it -- the exact failure the launcher was
+        added to remove, reintroduced inside the fix.
+        """
+        launcher = load_launcher()
+
+        venv = tmp_path / ".venv" / "bin"
+        venv.mkdir(parents=True)
+        interpreter = venv / "python"
+        try:
+            interpreter.symlink_to(pathlib.Path(sys.executable).resolve())
+        except (OSError, NotImplementedError) as exc:
+            # Windows refuses symlinks without Developer Mode or elevation, and
+            # the machine with the Inventor seat runs this suite. The property
+            # is platform-independent; only this way of setting it up is not.
+            pytest.skip(f"cannot create a symlink here: {exc}")
+
+        monkeypatch.setattr(launcher, "VENV_PYTHONS", (interpreter,))
+        found = launcher.candidates()
+
+        assert (str(interpreter), False) in found, found
+        current = [python for python, is_current in found if is_current]
+        assert current == [sys.executable], found
+
+    def test_the_running_interpreter_is_tried_last(self):
+        """It is the one the client happened to launch, which is the thing being
+        worked around. The venv the installer fills goes first."""
+        launcher = load_launcher()
+        found = launcher.candidates()
+        assert found, "sys.executable is always a candidate"
+        assert found[-1] == (sys.executable, True), found
+
+    def test_it_asks_for_the_import_that_actually_breaks(self):
+        """Both ``mcp`` and the package, not just the package.
+
+        An editable install puts ``inventor_mcp`` on the path of an interpreter
+        that may still be missing ``mcp``, and ``inventor_mcp/__init__.py``
+        imports nothing, so importing it alone succeeds there. Checking only
+        that would hand the server to the interpreter that cannot run it.
+        """
+        source = (ROOT / "scripts" / "serve.py").read_text(encoding="utf-8")
+        assert "import mcp, inventor_mcp" in source
+
+    def test_this_interpreter_can_serve(self):
+        """The suite's own Python has the deps, so the check must say yes.
+
+        A ``can_serve`` that answered no for a working install would send every
+        start down the explanation path.
+        """
+        launcher = load_launcher()
+        assert launcher.can_serve(sys.executable)
+
+    def test_it_refuses_an_interpreter_that_cannot(self, tmp_path):
+        launcher = load_launcher()
+        assert not launcher.can_serve(tmp_path / "not-a-python")
+
+    def test_nothing_usable_explains_itself_on_stderr(self, capsys, monkeypatch):
+        """Stderr knowing the client discards it, because stdout is the protocol
+        and prose written there corrupts the stream rather than being ignored.
+        The message is for whoever runs the command by hand afterwards."""
+        launcher = load_launcher()
+        monkeypatch.setattr(launcher, "can_serve", lambda python: False)
+
+        assert launcher.main(["--backend", "auto"]) == 2
+        printed = capsys.readouterr()
+        assert printed.out == "", "the stdio transport's stream was written to"
+        assert "cannot start" in printed.err
+        assert "--doctor" in printed.err
+        assert sys.executable in printed.err
+
+
+def test_doctor_is_documented_by_help(capsys):
+    """``--help`` has to mention it, or nobody finds it when they need it."""
+    from inventor_mcp.server import main
+
+    with pytest.raises(SystemExit) as exit_code:
+        main(["--help"])
+    assert exit_code.value.code == 0
+    assert "--doctor" in capsys.readouterr().out

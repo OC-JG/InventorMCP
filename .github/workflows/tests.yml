@@ -48,9 +48,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
       - name: The server starts and the COM backend degrades cleanly
+        # --doctor makes both claims at once, and names the interpreter it made
+        # them about. It exits non-zero only when the server would not start:
+        # pywin32 and the analyser are absent on this runner by design, and both
+        # are warnings. This is the check somebody is asked to run when a client
+        # reports only that the connection closed, so CI runs the same one.
         run: |
           python -m inventor_mcp --help
-          python -c "from inventor_mcp.backend import create_backend; b = create_backend('auto'); print('fell back to', b.name)"
+          python -m inventor_mcp --doctor
 
   dfm:
     name: the manufacturability loop

@@ -5,6 +5,64 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 ## Unreleased
 
 ### Fixed
+- **The server would not start from the shipped `.mcp.json`, and no client could
+  say why.** Connecting to Inventor failed from Claude and from the DFM tools at
+  once, with every client reporting the same four words — `Connection closed` —
+  and the suite green throughout.
+
+  The project-scoped `.mcp.json` launched `python -m inventor_mcp` with a bare
+  `python`. An MCP client resolves that without the shell's `PATH` and without
+  any virtualenv the shell had active, so it was not the `.venv` that
+  `install.ps1` fills and registers by absolute path. That interpreter had no
+  `mcp` installed; `inventor_mcp/__main__.py` imported the server at module
+  level, so `ModuleNotFoundError` was raised before a byte of protocol was
+  written and the process exited. The traceback went to stderr, which a client
+  discards. `CONNECTION_CLOSED` is all that was left, and it is the same message
+  for a missing dependency, the wrong interpreter, a half-finished install and a
+  genuine crash.
+
+  The README already warned, in as many words, that a bare `"python"` is the
+  commonest reason an MCP server shows as failed. Two facts that had to agree,
+  and nothing was checking one against the other.
+
+  Three changes, and the second is the one that matters next time:
+
+  - `.mcp.json` now runs **`scripts/serve.py`**, which needs only a Python — any
+    Python, standard library only — and re-executes the server on the first
+    interpreter that can import it, preferring the repository's own `.venv`. A
+    config file cannot know which `python` a client will find; this one does not
+    have to.
+  - **`python -m inventor_mcp --doctor`** walks the whole chain — interpreter,
+    SDK (naming which server class the shim found), pydantic, pywin32, the
+    backend `auto` picks, whether the server assembles, Node, the analyser — and
+    prints the repair for anything that is not `ok`. It imports none of the
+    things it reports on, so it runs on the install where the server does not,
+    and it does not connect to Inventor: a diagnostic that changes what it is
+    diagnosing is not one. Dependent checks are *skipped* rather than allowed
+    their own verdict, so a missing pydantic is named once instead of four times
+    as a broken backend, a broken server and a missing analyser.
+  - `__main__.py` no longer imports the server at module level, and answers
+    `--doctor` before it tries: that import *was* the silent failure, and the
+    doctor's whole job is to run where it fails. A startup failure now names the
+    interpreter and the package directory on stderr, because the interpreter is
+    nearly always the answer.
+
+  Found while writing the launcher, and worth recording because the fix
+  reintroduced the bug it was fixing: a virtualenv's `bin/python` is a symlink to
+  the interpreter it was built from, so `Path(venv).resolve() ==
+  Path(sys.executable).resolve()` is **true** for a venv that is emphatically not
+  the interpreter now running. Identifying candidates by resolved path sent the
+  server down the in-process path on the very Python that could not import it.
+  The launcher carries "is this the running one" as a flag rather than deriving
+  it, and `tests/test_connection_failures.py` builds exactly that symlink.
+
+  `install.ps1`'s final check is now `--doctor` rather than its own inline
+  script, so the install and the diagnosis cannot disagree about what working
+  means. Twenty-one tests hold the pair of facts together: what `.mcp.json`
+  launches, that the README's warning still stands, that nothing importable-only
+  on a healthy install sits at the top of `__main__` or `preflight`, and that the
+  explanation goes to stderr rather than the stream carrying the protocol.
+
 - **The DFM loop's baseline was measured on whatever state the caller left the
   document in.** Audited after defect 9, and this was the one real gap: each
   round already applied its changes, called `rebuild`, read that rebuild's

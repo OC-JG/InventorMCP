@@ -164,17 +164,19 @@ if (-not (Test-Path $desktopDir)) {
 }
 
 # -- 6. prove it -------------------------------------------------------------
+#
+# The doctor rather than a check written here. It walks the same chain -- the
+# interpreter, the SDK, pywin32, the backend `auto` picks, whether the server
+# assembles, Node, the analyser -- and it is what somebody will be asked to run
+# when a client later reports only that the connection closed. One check, so the
+# install and the diagnosis cannot disagree about what "working" means.
 Write-Host "-- checking the pieces line up"
-& $py -c @"
-from inventor_mcp.dfm.runner import find_dfm_root, DfmUnavailable
-try:
-    print('   analyser:', find_dfm_root())
-except DfmUnavailable as exc:
-    print('   analyser: not found --', exc.hint)
-from inventor_mcp.server import create_server
-create_server('mock')
-print('   server:   builds')
-"@
+& $py -m inventor_mcp --doctor
+if ($LASTEXITCODE -ne 0) {
+    Write-Warning ("The server will not start yet -- see the FAIL lines above. " +
+        "Re-run this script, or fix what it names and check again with:`n" +
+        "   & '$py' -m inventor_mcp --doctor")
+}
 
 Write-Host ""
 Write-Host "Done. In Claude Code, 'connect' finds Inventor when it is running." -ForegroundColor Green
