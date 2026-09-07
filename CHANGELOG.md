@@ -4,6 +4,37 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
 ## Unreleased
 
+### Changed
+- **The work axis is measured, and the last failure was the prediction rather
+  than the part.** Fifth live run, Inventor 2027.1: the same bolt circle about a
+  created `normal_to_plane` axis and about `z` measured **0.37273 mm apart**, so
+  the axis is genuinely off-centre, and it moved **0.12263 mm** when `bolt_x`
+  went 30 → 45.
+
+  The check called that a failure against a derived 0.18640, and the part was
+  right. The derivation is one line — six bores removing 1.17810 cm³ centred on
+  the circle, moved 15 mm, out of a remaining 94.82190 cm³ — and it holds only
+  while every hole is on the plate. At `bolt_x` 45 the hole at θ=0 sits at
+  x = 60, exactly the plate edge, and Inventor cuts away half of it. Deriving
+  the clipped case by hand (five whole bores plus a half-disc whose centroid
+  sits 4r/3π inside the edge) gives **0.12263 mm** — Inventor's figure to five
+  decimal places.
+
+  So the geometry now runs `bolt_x` 20 → 35, which keeps every hole on the
+  plate, and `_bolt_circle_prediction` **refuses to return a figure** when one
+  would be clipped, naming the reason instead. A prediction whose assumptions
+  are not met is not a looser prediction; it is a different question's answer.
+  `DECISIONS.md` records the rule and its corollary about reading results: this
+  check reported "parametric in name only" four times and pointed at the wrong
+  thing on three of them, and what broke the deadlock was noticing the volume
+  had moved while the centre of mass had not.
+
+  The roadmap item is ticked. Getting there cost four defects, none of them the
+  thing being measured — **8** the sketch labels, **9** the missing rebuild,
+  **10** the unit-like parameter name, **11** the carrier point on the origin —
+  and the run history is kept under the tick, because a tick is the least
+  informative thing the item produced.
+
 ### Fixed
 - **Every `normal_to_plane` work axis ran through the origin** — defect 11,
   found on the fourth live run and the actual cause of a failure three earlier

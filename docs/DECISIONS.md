@@ -330,3 +330,31 @@ where JSON needs `true` — few-shot material that would have been copied.
 The same rule applies to CI: a workflow whose result nobody reads is worse than
 no workflow, because it looks like coverage. Every run on this branch failed at
 `pip install` for sixteen commits before anyone opened the logs.
+
+## A derivation has preconditions, and they belong beside it
+
+*Added 2026-09-07, from the work-axis acceptance run.*
+
+The run measured a bolt circle's centre of mass moving 0.12263 mm where this
+repository had derived 0.18640, and reported a failure. The part was correct.
+The derivation -- six bores removing 1.17810 cm^3 centred on the circle, moved
+15 mm, out of a remaining 94.82190 cm^3 -- is one line of arithmetic, and it
+holds only while every hole is on the plate. At the position the check drove to,
+one hole sat exactly on the plate edge and Inventor cut away half of it. Hand
+deriving *that* case reproduced Inventor's figure to five decimal places.
+
+So the rule, which is the volume ledger's rule one level up: **a number this
+repository derives is only as good as the assumptions it does not state, and an
+unstated assumption reads as a fault in Inventor.** Where a check compares
+against a derived figure, the derivation's preconditions are computed and the
+check refuses to compare when they do not hold -- `_bolt_circle_prediction`
+returns a reason instead of a number. A prediction whose assumptions are not met
+is not a looser prediction; it is a different question's answer.
+
+The corollary is about reading results. Four runs of this check reported
+"parametric in name only" and were pointing at the wrong thing three times: at
+the labels, at the missing rebuild, and finally at a carrier point stuck on the
+origin whose symmetry produced exactly the reading the message described. A
+check's message says what it concluded, not what it measured. The numbers it
+prints alongside are the evidence, and the one that broke the deadlock was
+noticing that the volume moved while the centre of mass did not.

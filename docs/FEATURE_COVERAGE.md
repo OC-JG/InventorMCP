@@ -539,3 +539,24 @@ Each of these was hit while building real parts, and each passed
     assertion that would have caught this on the first run, and the volumes
     would not have: they agree to six decimals whether the axis is right or
     wrong.
+
+    *Confirmed fixed on the fifth run, 2026-09-07.* The two patterns measured
+    **0.37273 mm apart**, so the created axis is genuinely off-centre; and the
+    bolt circle moved **0.12263 mm** when `bolt_x` went 30 to 45.
+
+    **That figure was read as a failure and was the correct answer.** The check
+    predicted 0.18640, from one line of arithmetic -- six bores removing
+    1.17810 cm^3 centred on the circle, moving 15 mm, out of a remaining
+    94.82190 cm^3 -- and that line has a precondition nobody had written down:
+    every hole is on the plate. At `bolt_x` 45 the hole at theta=0 sits at
+    x = 60, exactly the plate edge, and Inventor cuts away half of it. Deriving
+    the clipped case by hand -- five whole bores plus a half-disc whose centroid
+    sits 4r/3pi inside the edge -- gives **0.12263 mm**, which is Inventor's
+    figure to five decimal places.
+
+    So the work axis is measured as parametric, and the last thing standing
+    between the check and a clean pass was its own constant. The geometry now
+    runs `bolt_x` 20 to 35, which keeps every hole on the plate, and
+    `_bolt_circle_prediction` refuses to return a figure at all when a hole
+    would be clipped, naming the reason. A prediction whose assumptions are not
+    met is not a looser prediction; it is a different question's answer.

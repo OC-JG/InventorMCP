@@ -400,9 +400,23 @@ What the second run left open, and what to do about each:
 * **A parameter change rebuilt nothing.** *Found on the third run and fixed --
   defect 9.* `set_parameter` was the only mutating call outside `_batch`, and
   `_batch` is what calls `document.Update()`, so the geometry stayed as it was
-  and every measurement afterwards read the old part. It is why the bolt circle
-  measured 0.00000 mm of movement against a derived 0.18640. Reaches the DFM
-  loop and `set_parameters`, not only this check.
+  and every measurement afterwards read the old part. Reaches the DFM loop and
+  `set_parameters`, not only this check.
+* **The carrier point never left the origin** -- defect 11, the one that
+  actually stopped the bolt circle moving, found on the fourth run. It hid
+  behind its own symmetry: a bolt circle about an origin axis has its centroid
+  *at* the origin, so the centre of mass does not move when the parameter does,
+  which reads exactly like the parametric failure this section told you to look
+  for. Three runs said so and pointed at the wrong thing.
+* **And then the prediction was wrong rather than the part.** The fifth run
+  measured 0.12263 mm against a derived 0.18640 and reported a failure. The
+  derivation assumed six whole holes; at `bolt_x` 45 the hole at theta=0 sits at
+  x = 60, exactly the plate edge, and Inventor halves it. Hand-deriving the
+  clipped case gives 0.12263 mm -- Inventor's figure to five decimals. **When a
+  measurement disagrees with a derivation here, check the derivation's
+  preconditions before the part.** The geometry now runs `bolt_x` 20 to 35,
+  which keeps every hole on the plate, and `_bolt_circle_prediction` refuses to
+  return a figure at all when one would be clipped.
 * **`hole` + `bodies` is not available on 2027.1.** `HoleFeature` has no
   `AffectedBodies`; see the gap list in `FEATURE_COVERAGE.md`. The acceptance
   check skips it with that reason rather than failing every run, and `rehearse`

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import shutil
 import sys
 import traceback
@@ -1025,9 +1026,17 @@ def check_work_geometry(session: Session, report: Report) -> None:
     # `pcd` is deliberately not the name here: Inventor refused it on
     # 2026-09-07 and the probe above is what will say why. The measurement this
     # check exists for must not be blocked on an unexplained name.
+    # bolt_x 20 -> 35, not 30 -> 45. At 45 the hole at theta=0 sits exactly on
+    # the plate edge (45 + 15 = 60, and the plate spans -60..60), so Inventor
+    # cuts away half of it -- which is a *correct* build whose centre of mass
+    # moves 0.12263 mm rather than the 0.18640 a prediction assuming six whole
+    # holes gives. It measured 0.12263 and was read as a failure for one run.
+    # 20 -> 35 keeps every hole on the plate, so the derivation below is exact,
+    # and `_bolt_circle_prediction` refuses to hand back a figure if a later
+    # edit breaks that again.
     recipe = PartRecipe.model_validate({
         "name": "OffCentreBoltCircle", "units": "mm",
-        "parameters": [{"name": "bolt_x", "value": 30},
+        "parameters": [{"name": "bolt_x", "value": 20},
                        {"name": "bolt_spacing", "value": 30}],
         "operations": plate + [
             {"op": "work_axis", "name": "BoltAxis", "plane": "xy", "at": ["bolt_x", 0]},
@@ -1052,7 +1061,7 @@ def check_work_geometry(session: Session, report: Report) -> None:
         report.check(True, "work-geometry: the off-centre bolt circle builds")
         before = session.backend.mass_properties(context.doc_id)
         try:
-            apply_parameter(session, context, _spec("bolt_x", 45))
+            apply_parameter(session, context, _spec("bolt_x", 35))
             after = session.backend.mass_properties(context.doc_id)
         except Exception as exc:
             report.check(False, "work-geometry: bolt_x can be changed",
@@ -1071,8 +1080,8 @@ def check_work_geometry(session: Session, report: Report) -> None:
                 (p for p in session.backend.list_parameters(context.doc_id)
                  if p.name == "bolt_x"), None)
             report.check(
-                readback is not None and abs(readback.value - 45.0) < 1e-6,
-                "work-geometry: bolt_x reads back as 45 after being set",
+                readback is not None and abs(readback.value - 35.0) < 1e-6,
+                "work-geometry: bolt_x reads back as 35 after being set",
                 f"read back {readback.value if readback else None}. If this "
                 "fails the parameter never took, and the centre-of-mass check "
                 "below is measuring the wrong thing.")
@@ -1089,25 +1098,30 @@ def check_work_geometry(session: Session, report: Report) -> None:
                             "this backend reported no centre of mass, so there is "
                             "nothing to compare. Inventor's MassProperties does.")
             else:
-                # Predicted, not a threshold. Six 5 mm bores through a
-                # 120x80x10 plate remove 6 * pi * 0.25^2 * 1.0 = 1.17810 cm^3
-                # centred on the circle, so moving that centre 15 mm shifts the
-                # remaining 94.82190 cm^3 by 1.17810 * 15 / 94.82190 = 0.18640 mm.
-                # A pass on magnitude and not merely on movement is what
-                # distinguishes an axis that tracks its parameter from one that
-                # moved somewhere else.
-                predicted = 1.178097 * 15.0 / 94.821903
-                report.check(
-                    abs(moved - predicted) < 0.05 * predicted,
-                    "work-geometry: the bolt circle moves when bolt_x does",
-                    f"centre of mass moved {moved:.5f} mm against a predicted "
-                    f"{predicted:.5f}. Zero means the expressions never reached "
-                    "the carrier sketch's dimensions, so the axis is parametric "
-                    "in name only -- the failure docs/INVENTOR_SETUP.md says to "
-                    "look for here. A different non-zero figure means it moved "
-                    "somewhere other than where bolt_x put it.")
-                report.note(f"work-geometry: centre of mass moved {moved:.5f} mm "
-                            f"on bolt_x 30 -> 45, predicted {predicted:.5f}")
+                predicted, invalid = _bolt_circle_prediction(20.0, 35.0)
+                if invalid:
+                    # The derivation has a precondition and it is not satisfied,
+                    # so there is no figure to compare against. Saying so beats
+                    # comparing to a number that does not describe the part --
+                    # which is what happened when a hole landed on the plate
+                    # edge and its half-cut build read as a parametric failure.
+                    report.check(False,
+                                 "work-geometry: the prediction is valid for "
+                                 "this geometry", invalid)
+                else:
+                    report.check(
+                        abs(moved - predicted) < 0.01 * predicted,
+                        "work-geometry: the bolt circle moves when bolt_x does",
+                        f"centre of mass moved {moved:.5f} mm against a derived "
+                        f"{predicted:.5f}. Zero means the expressions never "
+                        "reached the carrier sketch's dimensions, so the axis is "
+                        "parametric in name only. A different non-zero figure "
+                        "means it moved somewhere other than where bolt_x put "
+                        "it -- and check the prediction before the part: a hole "
+                        "crossing the plate edge changes the right answer.")
+                    report.note(f"work-geometry: centre of mass moved "
+                                f"{moved:.5f} mm on bolt_x 20 -> 35, derived "
+                                f"{predicted:.5f}")
         session.backend.close_document(context.doc_id, save=False)
         session.forget(context.doc_id)
 
@@ -1209,6 +1223,45 @@ def check_work_geometry(session: Session, report: Report) -> None:
             except Exception:
                 pass
             session.forget(handle)
+
+
+def _bolt_circle_prediction(start_mm: float,
+                            end_mm: float) -> tuple[float, str | None]:
+    """How far the centre of mass should move, and whether the sum applies.
+
+    Six 5 mm bores through a 120x80x10 plate remove
+    ``6 * pi * 0.25^2 * 1.0 = 1.17810 cm^3`` centred on the bolt circle, so
+    moving that centre shifts the remaining ``94.82190 cm^3`` in proportion.
+    One line of arithmetic -- **as long as every hole is on the plate.**
+
+    That precondition was unstated for a run and cost one. At ``bolt_x`` 45 the
+    hole at theta=0 sits at x = 60, exactly the plate edge, and Inventor cuts
+    away half of it: a correct build whose centre of mass moves 0.12263 mm, not
+    the 0.18640 the sum above gives. Hand-deriving the clipped case afterwards
+    reproduced Inventor's figure to five decimals, which is what said the part
+    was right and the prediction wrong.
+
+    So this returns a reason instead of a number when a hole would leave the
+    plate. A prediction whose assumptions are not met is not a looser
+    prediction; it is a different question's answer.
+    """
+    half_w, half_h, thickness = 6.0, 4.0, 1.0
+    r_hole, r_circle, count = 0.25, 1.5, 6
+    for bolt_x in (start_mm / 10.0, end_mm / 10.0):
+        for index in range(count):
+            angle = 2 * math.pi * index / count
+            x = bolt_x + r_circle * math.cos(angle)
+            y = r_circle * math.sin(angle)
+            if x + r_hole > half_w or abs(y) + r_hole > half_h:
+                return 0.0, (
+                    f"at bolt_x {bolt_x * 10:.0f} mm a hole reaches "
+                    f"x={(x + r_hole) * 10:.1f}, y={(abs(y) + r_hole) * 10:.1f} "
+                    f"mm and the plate is 120x80, so Inventor clips it and the "
+                    "one-line derivation no longer describes the part. Move the "
+                    "bolt circle in, or derive the clipped case.")
+    bores = count * math.pi * r_hole ** 2 * thickness
+    plate = 12.0 * 8.0 * thickness
+    return bores * (end_mm - start_mm) / (plate - bores), None
 
 
 def _compare_axis_against_z(session: Session, report: Report,

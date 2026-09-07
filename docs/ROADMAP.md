@@ -332,13 +332,39 @@ actually bitten.
       occurrences rather than counting them, which is the `ponytail` on
       `_repeat` and a ledger-sized change; the warning makes the mistake
       *visible*, where `work_axis` only made it avoidable.
-- [ ] **Measure the work axis against a live Inventor.** Split from the item
-      above rather than left inside it, because a tick that covers unmeasured
-      COM would be the kind of claim this file exists not to make.
+- [x] **Measure the work axis against a live Inventor.** *Done 2026-09-07,
+      Inventor 2027.1, after five runs and four defects.* The three COM calls
+      execute; a `normal_to_plane` axis is genuinely off-centre (the same bolt
+      circle about it and about `z` measure 0.37273 mm apart); and it tracks its
+      driving parameter -- **0.12263 mm of centre-of-mass movement against a
+      hand derivation of 0.12263**, agreeing to five decimal places.
+
+      That agreement is with the *clipped* derivation, and the story of it is
+      the item's real lesson. The check predicted 0.18640 from one line of
+      arithmetic whose precondition -- every hole on the plate -- was never
+      written down. At `bolt_x` 45 one hole sits exactly on the plate edge and
+      Inventor halves it, correctly. So the run reported a failure, the part was
+      right, and the number to distrust was the one this repository had derived
+      rather than the one Inventor measured. The geometry moved inboard and
+      `_bolt_circle_prediction` now refuses to hand back a figure when a hole
+      would be clipped.
+
+      Four defects came out of getting here, none of them the thing being
+      measured: **8**, the recipe's sketch labels never reaching Inventor;
+      **9**, a parameter change rebuilding nothing; **10**, Inventor refusing a
+      parameter name it reads as a unit; and **11**, the carrier point never
+      leaving the origin. Defect 11 was the one that mattered and it hid behind
+      its own symmetry for three runs, while the check said "parametric in name
+      only" and pointed at the wrong thing each time.
+
+      **How it went, run by run**, kept because a tick is the least
+      informative thing this item produced. It was split from the one above
+      rather than left inside it, because a tick that covered unmeasured COM
+      would be the kind of claim this file exists not to make; at that point
       `WorkPoints.AddByPoint`, `WorkAxes.AddByTwoPoints` and
-      `WorkAxes.AddByLine` have never executed; `INVENTOR_SETUP.md` has the
-      order to check them in, and the test that matters is not "did it run" but
-      whether the bolt circle moves when the driving parameter does.
+      `WorkAxes.AddByLine` had never executed, and the test that mattered was
+      never "did it run" but whether the bolt circle moves when the driving
+      parameter does.
 
       **Run once, 2026-09-07, Inventor 2027.1: it failed on the first check
       and found defect 8 instead.** `live_acceptance.py --only work-geometry`
