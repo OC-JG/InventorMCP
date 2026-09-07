@@ -112,12 +112,47 @@ from .session import DocumentContext
 #: accurate in the same pass and their entries stayed put: one live datapoint
 #: each is not a basis for a tolerance, and tightening on a hunch is the mistake
 #: this table exists to catch.
+#: `move_face` is at 0.50, which is this file's own placeholder for an operation
+#: nothing has measured, and it is here rather than at `extrude`'s 0.02 for that
+#: reason alone. The arithmetic is exact in the same sense a prism's is -- a
+#: planar face of area A moved `d` along its own normal changes the solid by
+#: `A*d`, and a face slid along its own plane changes nothing, both straight out
+#: of the dot product. What is unmeasured is the whole live half: the COM call
+#: has never executed, so there is no run behind any number here. Tighten it
+#: when `--only move-face` has produced one, and not before: a tolerance set
+#: from arithmetic alone is the mistake the four entries above record fixing.
+#: What 0.50 still catches is what any tolerance under 1.0 catches -- a sign
+#: flip, and a change where none was predicted, which for this operation means
+#: Inventor moved the faces the other way or did not move them at all.
+#: `thicken` is at 0.50 for the same reason as `move_face` and one more of its
+#: own. The arithmetic is exact for a planar face -- its area times the layer --
+#: and it is first-order for a curved one, missing a term in the square of the
+#: thickness. But the number also rests on `THICKEN_SHARE`, which says which
+#: side of a face a `negative` layer goes on, and *that* is a claim about
+#: Inventor rather than arithmetic: sound set algebra about a boolean against a
+#: slab, and silent on whether Inventor agrees about the side. A tolerance
+#: cannot cover being wrong about the side at all -- the `trim` inversion was
+#: 1.2% out while keeping the opposite half of the part -- so what guards it is
+#: the centroid check and the COM backend refusing a result that is not within a
+#: factor of its prediction, not this entry.
+#: `sketch_driven_pattern` is 0.02 rather than the placeholder, and the reason
+#: is worth stating because it looks inconsistent beside the two above. Its COM
+#: call has never run either -- but its *arithmetic* is not new: an occurrence
+#: does whatever its seed did, which is the same rule `rectangular_pattern` and
+#: `circular_pattern` use and which is measured against Inventor at 0.02 on the
+#: pulley and the threaded boss. What is unmeasured is a semantic question
+#: instead: whether Inventor also puts an occurrence on the reference point, so
+#: that a sketch of N points makes N occurrences plus the seed rather than N-1
+#: plus the seed. That is an off-by-one *occurrence* -- 33% on a three-point
+#: pattern -- so a tight tolerance reports it and the placeholder 0.5 would hide
+#: it. The looser number would be the less honest one here.
 PREDICTED = {
     "extrude": 0.02,
     "hole": 0.02,
     "mirror": 0.02,
     "rectangular_pattern": 0.02,
     "circular_pattern": 0.02,
+    "sketch_driven_pattern": 0.02,
     "shell": 0.02,
     "split": 0.05,
     "revolve": 0.15,
@@ -128,6 +163,8 @@ PREDICTED = {
     "chamfer": 0.30,
     "loft": 0.35,
     "emboss": 0.40,
+    "move_face": 0.50,
+    "thicken": 0.50,
 }
 
 
@@ -568,6 +605,41 @@ def _warn_about(warnings: list[dict[str, Any]], where: str, op: Operation,
                    "`extrude` cut with `direction: \"symmetric\"` and "
                    "`extent: \"through_all\"`, or drill each wall on its own "
                    "sketch.",
+        })
+
+    # A thicken whose direction and operation cancel builds a feature and
+    # leaves the part alone. `positive`+`cut` is caught by the subtractive rule
+    # below; `negative`+`join` is not subtractive and would otherwise pass in
+    # silence, which for the commonest mistake in a recipe is the wrong answer.
+    cancels = (outcome.get("detail") or {}).get("changes_nothing")
+    if op.op == "thicken" and cancels:
+        warnings.append({
+            "where": where,
+            "warning": f"this layer changes nothing: {cancels}",
+            "why": "Inventor will build the feature and the part will be exactly "
+                   "as it was. To grow the part use `direction: \"positive\"` with "
+                   "`operation: \"join\"`; to thin it, `negative` with `cut`. "
+                   "`symmetric` does half either way. Whether Inventor agrees "
+                   "which side `negative` is has not been measured -- see the "
+                   "thicken section of docs/INVENTOR_SETUP.md.",
+        })
+
+    # An occurrence of a cutting seed that stands over no material. The volume
+    # has already been charged for it, so this is a wrong number -- but the
+    # useful reading is that the recipe's points are in the wrong place, which is
+    # what a pattern that only counted its points could never say.
+    adrift = (outcome.get("detail") or {}).get("occurrences_over_nothing") or []
+    if adrift:
+        warnings.append({
+            "where": where,
+            "warning": f"{len(adrift)} occurrence(s) of this pattern cut nothing: "
+                       f"points {adrift}",
+            "why": "Those occurrences stand clear of the part, so Inventor will "
+                   "remove nothing there while the simulator has charged the seed's "
+                   "volume for each -- expect this step to diverge as well. Counted "
+                   "from the points as the recipe lists them, the reference "
+                   "excluded. Move the points onto the part, or check the sketch "
+                   "plane is the one you meant.",
         })
 
     subtractive = op.op in _SUBTRACTIVE or getattr(op, "operation", None) == "cut"

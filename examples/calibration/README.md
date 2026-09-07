@@ -11,9 +11,25 @@ example used those operations, so no acceptance run had ever compared one with
 Inventor. At 0.5 the check would wave through a fillet applied to the wrong
 edge, which is the thing it exists to catch.
 
-Three of the four have been measured since. `split` has not: the run that tried
-found the two backends disagreeing about which side of the plane a trim throws
-away, which has to be settled before any number means anything.
+All four have been measured since, on 2026-09-03. `split` was the last and the
+hardest: the run that first tried found the two backends disagreeing about which
+side of the plane a trim throws away, and that had to be settled before any
+number could mean anything.
+
+**`move_face` and `thicken` are the fifth and sixth, added 2026-09-07, and they
+are at the placeholder for a different reason from the other four: not that no
+example reaches them, but that their COM halves have never executed at all.** So
+there is no Inventor column for their four fixtures yet.
+`docs/INVENTOR_SETUP.md` says what a run has to confirm for each.
+
+**`spread_pockets` is here for a third reason and is not calibrating a
+tolerance at all.** `sketch_driven_pattern`'s COM half has never run either,
+but its arithmetic is the rule the other two patterns use and is already
+measured at 0.02, so it sits at 0.02 rather than the placeholder. What its
+fixture asks is a *semantic* question -- whether Inventor also places an
+occurrence on the reference point -- and the answer is an occurrence count
+rather than a volume. It is kept here because this is where the instruments
+live, not because a number needs fitting.
 
 Run them with:
 
@@ -42,9 +58,15 @@ the operation being measured.
 | `stepped_split_negative` | `split` | −20.8000 cm³ | −20.8000 cm³ | 0.0% |
 | `origin_plane_split` | `split` | −8.0000 cm³ | −8.0000 cm³ | 0.0% |
 | `shelled_both_ways` | `shell` | −35.1920 cm³ | −35.1920 cm³ | 0.0% |
+| `lifted_face` | `move_face` | +6.4000 cm³ | not yet run | — |
+| `widened_wall` | `move_face` | +0.2400 cm³ | not yet run | — |
+| `thickened_walls` | `thicken` | +1.4400 cm³ | not yet run | — |
+| `thinned_wall` | `thicken` | −0.2400 cm³ | not yet run | — |
+| `spread_pockets` | `sketch_driven_pattern` | −1.2000 cm³ | not yet run | — |
 
-Measured on Inventor 2027.1, 2026-09-03. All four tolerances in `PREDICTED`
-now come from that run rather than from a placeholder: `coil` 0.15, `draft`
+Measured on Inventor 2027.1, 2026-09-03, except the `move_face`, `thicken` and
+`sketch_driven_pattern` rows, which nothing has run. All four of the original tolerances in `PREDICTED` now
+come from that run rather than from a placeholder: `coil` 0.15, `draft`
 0.20, `emboss` 0.40, `split` 0.05. Each is deliberately looser than its own
 measurement, for reasons recorded beside the table in
 `inventor_mcp/rehearsal.py` — a tolerance is for catching a feature that did
@@ -75,9 +97,10 @@ could break.
   two backends disagree about which side goes. Recorded as defect 5 in
   `docs/FEATURE_COVERAGE.md`.
 
-  `split` therefore keeps its placeholder tolerance. Its run came back 25.3%
-  apart and that figure is worth nothing: the simulator kept the wrong amount
-  and Inventor kept the wrong side, so it is two unrelated errors compounding.
+  `split` therefore kept its placeholder tolerance at that point. That run came
+  back 25.3% apart and the figure was worth nothing: the simulator kept the
+  wrong amount and Inventor kept the wrong side, so it was two unrelated errors
+  compounding.
 
   `stepped_split_negative` is the same part cut the same way with
   `remove_positive` false, and it answered the first question on the same day:
@@ -118,6 +141,112 @@ could break.
   it. Comparing volumes catches a cut that missed and a fillet on the wrong
   edge, and is blind to a cut that took the right amount off the wrong side
   whenever the two halves are near enough in size.
+
+## The two nobody has run
+
+`lifted_face` and `widened_wall` are the instruments for `move_face`, and they
+are the only fixtures here whose *true* answer is exact rather than estimated. A
+rectangular prism's face keeps its area as it translates, so the solid changes by
+exactly area times distance: 32 cm² × 0.2 cm is 6.4 cm³ for the lifted cap, and
+4 cm² × 0.6 cm × 0.1 cm — 40 × 6 × 1 mm — is 0.24 cm³ for the widened wall. The
+simulator says 6.4000 and 0.2400, from a dot product of the move against each
+face's own normal, which is the same arithmetic arrived at the same way.
+
+So these two are predictions Inventor can break, in the sense `drafted_block`
+was, and not measurements to be copied down. What the run is worth is not the
+number:
+
+- **`lifted_face` asks whether the parametric chain reaches the feature.** The
+  distance is the parameter `lift`, and the lesson of defect 11 is that a work
+  axis can be built, measured, and still be parametric in name only. Change
+  `lift` and the volume has to change with it.
+- **`widened_wall` asks two questions its partner cannot.** Its face is picked
+  out of four by a selector rather than by being the only cap, so it fails if
+  the COM selector reaches a different face than the simulator's; and it moves
+  along an axis that is not the extrude's own, so it fails if Inventor reads the
+  direction relative to the face rather than to the model. Its 0.24 cm³ is
+  deliberately small beside the 19.2 cm³ plate it sits on: a move that took the
+  whole wall with it is then a large fraction rather than a rounding error.
+
+Neither is tractable as an estimate to loosen. If a run disagrees on either, the
+answer is a fault to find rather than a tolerance to widen — which is why
+`PREDICTED["move_face"]` should come down from 0.50 to something like an
+extrude's 0.02 the moment a run agrees, rather than being split down the middle.
+
+What both leave untouched is the assumption underneath the arithmetic: that the
+moved face keeps its area. It does on a prism, which is what these measure. It
+does not on a face bounded by a fillet or a draft, and the simulator's
+`ponytail` on `move_face` says so. Nothing here calibrates that case, and a
+fixture for it cannot go in this directory as it stands, because the rule these
+recipes are checked against is that nothing before the operation under test may
+be looser than an extrude — and a fillet is 0.30.
+
+## The two that ask a question rather than measure an estimate
+
+`thickened_walls` and `thinned_wall` are the instruments for `thicken`, and
+neither is really calibrating arithmetic. The arithmetic is exact per face — a
+planar face's area times the layer — and on a *single* planar face `thicken` and
+`move_face` come out identical, which is worth knowing before reading either
+fixture: thickening the top face 2 mm and moving it 2 mm produce the same solid
+and the same 6.4 cm³. Two independently written operations agreeing is a
+cross-check and not a second measurement.
+
+What is genuinely unmeasured is elsewhere, and each fixture isolates one of it.
+
+- **`thickened_walls` asks about the corners.** Four walls grown 1 mm outward is
+  the case a single named direction cannot express, and it is where the layers
+  stop being independent. They do not meet: the +X wall's layer covers x 40→41
+  over y −20→20, the +Y wall's covers y 20→21 over x −40→40, and the 1 × 1 × 6
+  mm notch at each corner belongs to neither. So the answer is **1.4400 cm³** if
+  Inventor leaves those notches and **1.4640** if it closes them — 4 × 6 mm³
+  apart, or 1.7%. The simulator says 1.4400 because summing face areas is what
+  it can defend, not because anybody knows. Either result is a fact worth
+  recording; what would be wrong is quoting one as though it had been measured.
+
+- **`thinned_wall` asks about the side**, which no magnitude reveals.
+  `THICKEN_SHARE` in `backend/base.py` says a `negative` layer lies behind the
+  face, in the material, so cutting it removes 0.24 cm³ and leaves the plate 79
+  mm wide. That is sound set algebra about a boolean against a slab, and it is
+  silent on whether Inventor means the same side. The three outcomes are
+  distinguishable: **−0.2400** confirms the table, **0.0000** says the layer
+  landed outside the solid and the side is inverted, and any positive figure
+  says something else again.
+
+  This is defect 5's lesson applied before it can be repeated. A `trim` kept the
+  wrong half of a part for as long as the feature existed, and one of the runs
+  that found it was 1.2% apart — inside every tolerance in the table — because
+  the volume was correct for the half it kept. A tolerance cannot catch being
+  wrong about a side. A fixture whose three outcomes are different numbers can.
+
+Neither fixture's number should be copied into `PREDICTED` on agreement alone:
+`thicken` should go to an extrude's 0.02 once the side is confirmed and the
+corner question answered, since what is left after that is exact.
+
+## The one that counts features rather than measuring them
+
+`spread_pockets` is the instrument for `sketch_driven_pattern`, and its volume
+is the least interesting thing about it. A plate with one 0.4 cm³ pocket, that
+pocket copied to three more points: −1.2000 cm³, by the same rule the pulley's
+circular pattern and the threaded boss's rectangular one already confirm at
+0.02. Nothing there needs measuring.
+
+**What needs measuring is whether Inventor puts an occurrence on the reference
+point as well.** The recipe assumes not: the seed sits at (−35, −20), that point
+is named as the reference, and the other three get one occurrence each, so four
+points describe four pockets. Three readings, and two of them are the same
+volume:
+
+| what comes back | what it means |
+|---|---|
+| −1.2000 cm³, four pockets | the recipe's assumption holds |
+| −1.2000 cm³, **five** features | the reference is patterned onto itself, and the duplicate removes nothing extra because it lands exactly on the seed |
+| −1.6000 cm³ | five occurrences with the fifth somewhere unaccounted for |
+
+That middle row is why `--only sketch-driven-pattern` counts the features on the
+finished part instead of only measuring it. A duplicate feature sitting exactly
+on its seed is invisible to a volume and would ship as a part with a redundant
+feature in its browser — harmless on this plate, and not harmless on a pattern
+somebody later edits.
 
 ## The path that could not run at all
 

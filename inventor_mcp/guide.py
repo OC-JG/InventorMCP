@@ -130,6 +130,23 @@ draft       {"op":"draft","faces":{"filter":"vertical"},"plane":"xy","angle":"2 
              leave the tool. Unlike an extrude's `taper` this works on faces that
              already exist, which is what you want on walls built before the tooling
              was thought about.
+thicken     {"op":"thicken","faces":{"kind":"face","filter":"vertical"},
+             "thickness":"wall","direction":"positive","operation":"join"}
+             A layer of material on faces, each along ITS OWN normal -- so all four
+             walls of a box grow outward in one operation, which `move_face` cannot
+             say with a single direction. positive+join grows the part, negative+cut
+             thins it, symmetric does half either way. positive+cut and
+             negative+join change nothing and are warned about: the layer is where
+             the material already is not, or already is. Its COM half has never run
+             against Inventor.
+move_face   {"op":"move_face","faces":{"kind":"face","filter":"top"},"direction":"z",
+             "distance":"lift"}
+             Translates faces of a solid that already exists. The one way to alter
+             imported geometry: a translated STEP body has no sketches to work from.
+             A planar face moved along its own normal changes the part by area times
+             distance, and one slid along its own plane changes nothing -- so the
+             direction matters more than the sign. `flip` reverses it; `distance` is
+             always positive. Its COM half has never run against Inventor.
 boss        {"op":"boss","positions":[[20,0],[-20,0]],"plane":"Top","diameter":6,
              "height":10,"hole_diameter":2.5,"tap":"M3x0.5"}
              A mounting post with a pilot down it. Inventor's own Boss cannot be made
@@ -153,6 +170,15 @@ split       {"op":"split","tool":"Mid","style":"trim|split|faces","remove_positi
              Cuts the part with a plane. `trim` throws a side away -- this is how a
              lid comes off a tray. `split` keeps both halves as bodies. `faces` only
              divides the faces the plane crosses.
+sketch_driven_pattern
+            {"op":"sketch_driven_pattern","features":["Pocket"],"sketch":"Spots",
+             "reference":"home"}
+             Copies features to a sketch's points, for a layout that follows nothing
+             in particular. The seed sits on `reference` and the occurrences go on
+             the other points, so N points means N of the feature. Reach for it only
+             when the feature is not already position-shaped: `hole` takes a list of
+             points and `boss` a list of positions, so irregular holes and bosses
+             need no pattern at all. Its COM half has never run against Inventor.
 patterns    {"op":"rectangular_pattern","features":["Hole1"],"axis1":"x","count1":4,"spacing1":25}
             {"op":"circular_pattern","features":["Hole1"],"axis":"z","count":6}
             {"op":"mirror","features":["Rib"],"plane":"yz"}

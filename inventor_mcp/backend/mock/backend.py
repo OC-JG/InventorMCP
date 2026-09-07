@@ -64,6 +64,15 @@ from ..base import (
     ScreenshotRequest,
     CombineRequest,
     DraftRequest,
+    MoveFaceRequest,
+    ThickenRequest,
+    SketchDrivenPatternRequest,
+    DimensionInfo,
+    DrawingContents,
+    RetrieveRequest,
+    ViewInfo,
+    ViewRequest,
+    THICKEN_SHARE,
     EmbossRequest,
     ShellRequest,
     SplitRequest,
@@ -260,6 +269,14 @@ class _Slab:
     body: int = 0
     #: What put it there, for diagnosis only.
     source: str = "extrude"
+    #: The name of the feature that created it, where the creating code has one
+    #: to hand. Needed by `sketch_driven_pattern`, which places copies of a
+    #: seed's prisms and so has to know which prisms are the seed's -- `source`
+    #: cannot answer that, because a part with two extrudes has two sets of
+    #: slabs both saying "extrude". Empty where nothing attributed it, and an
+    #: unattributed prism is simply not copied: a shell's cavity is the one
+    #: such case, and a shell is not a thing anyone patterns.
+    feature: str = ""
 
     @property
     def volume(self) -> float:
@@ -352,6 +369,37 @@ class _Feature:
 
 
 @dataclass
+class _View:
+    """A view placed on a sheet."""
+
+    id: str
+    name: str
+    direction: str
+    at: tuple[float, float]
+    scale: float
+    style: str
+    #: What the view spans on the sheet in cm, measured from the part it draws.
+    extent: tuple[float, float] | None
+    #: The document id of the part this view is of.
+    part: str = ""
+    #: The view this one is projected from, or None for a base view.
+    parent: str | None = None
+
+
+@dataclass
+class _Dimension:
+    """A dimension on a sheet, retrieved from a part's own model dimension."""
+
+    id: str
+    value: float
+    kind: str
+    view: str
+    parameter: str
+    expression: str
+    reference: bool = False
+
+
+@dataclass
 class _Document:
     id: str
     name: str
@@ -379,6 +427,15 @@ class _Document:
     )
     topology: list[_Topo] = field(default_factory=list)
     bounds: list[float] | None = None  # xmin, ymin, zmin, xmax, ymax, zmax
+    #: "part" or "drawing". A part leaves the three fields below alone and a
+    #: drawing leaves everything above them alone -- one dataclass rather than
+    #: two because `_doc` returns documents by id and a caller asking for one
+    #: should not have to know which kind it is before it can be told.
+    kind: str = "part"
+    sheet: str | None = None
+    template: str | None = None
+    views: list["_View"] = field(default_factory=list)
+    dimensions: list["_Dimension"] = field(default_factory=list)
     #: The signed prisms the part is made of, in creation order: what extrudes
     #: added and what cuts, shells and holes took out. Enough to answer "how
     #: thick is the part here", which is what a cut has to know.
@@ -712,6 +769,10 @@ class MockBackend(Backend):
             id=document.id,
             name=document.name,
             path=document.path,
+            # Reported rather than defaulted, for the reason the COM backend
+            # asks Inventor: a drawing described as a part in the same result
+            # that lists its views is a contradiction somebody has to notice.
+            kind=document.kind,
             units=document.units,
             angle_units=document.angle_units,
             active=document.id == self._active,
@@ -916,7 +977,7 @@ class MockBackend(Backend):
                                           name, cut=cut)
         self._record_slabs(document, sketch, loops, plane, span,
                            sign=-1.0 if cut else 1.0, body=target,
-                           source="cut" if cut else request.operation)
+                           source="cut" if cut else request.operation, feature=name)
 
         feature = _Feature(
             id=self._next("feat"),
@@ -947,7 +1008,8 @@ class MockBackend(Backend):
     def _record_slabs(self, document: _Document, sketch: _Sketch,
                       loops: Sequence[Sequence[str]], plane: str,
                       span: tuple[float, float], *, sign: float = 1.0,
-                      body: int = 0, source: str = "extrude") -> None:
+                      body: int = 0, source: str = "extrude",
+                      feature: str = "") -> None:
         """Remember the prisms this feature added or emptied.
 
         A cut records a void rather than nothing: the region it swept holds no
@@ -961,11 +1023,12 @@ class MockBackend(Backend):
             if len(outline) >= 3:
                 document.slabs.append(
                     _Slab(plane=plane, outline=outline, near=near, far=far,
-                          sign=sign, body=body, source=source))
+                          sign=sign, body=body, source=source, feature=feature))
 
     def _record_bores(self, document: _Document, plane: str, offset: float,
                       centres: Sequence[tuple[float, float]], radius: float,
-                      depth: float, *, body: int | None = None) -> None:
+                      depth: float, *, body: int | None = None,
+                      feature: str = "") -> None:
         """Record each drilled hole as a void, so later features see through it.
 
         Which way the drill goes is measured rather than assumed, the same way
@@ -998,7 +1061,7 @@ class MockBackend(Backend):
                 plane=plane,
                 outline=[(u + du, v + dv) for du, dv in circle],
                 near=offset, far=offset + side * depth,
-                sign=-1.0, body=body or 0, source="hole"))
+                sign=-1.0, body=body or 0, source="hole", feature=feature))
 
     def _cut_reach(self, document: _Document, plane: str, sketch: _Sketch,
                    loops: Sequence[Sequence[str]], distance: float,
@@ -1407,9 +1470,13 @@ class MockBackend(Backend):
         # question is how many pieces there were to begin with.
         walls = _walls_on_the_axis(document, plane, sketch.offset, centers, aimed)
         moved = document.charge(-removed, aimed if aimed is not None else 0)
-        self._record_bores(document, plane, sketch.offset, centers, radius, depth, body=aimed)
-
+        # Named before the bores are recorded rather than after, because each
+        # prism now carries the name of the feature that made it -- which is
+        # what lets a pattern find its seed's prisms among everything else's.
         name = self._feature_name(document, request.name, "hole")
+        self._record_bores(document, plane, sketch.offset, centers, radius, depth,
+                           body=aimed, feature=name)
+
         for index, (u, v) in enumerate(centers):
             document.topology.append(
                 _Topo(
@@ -1444,6 +1511,23 @@ class MockBackend(Backend):
                 "diameter": request.diameter.as_dict(),
                 "style": request.style,
                 "through_all": request.through_all,
+                "depth": request.depth.as_dict() if request.depth else None,
+                # The style's own sizes, which were absent until 2026-09-07 and
+                # were found missing by pointing a drawing at every shipped
+                # part: a counterbore's diameter and depth are dimensions any
+                # drawing of the cover plate carries, and nothing could retrieve
+                # them because the feature never recorded them. Each carries its
+                # expression, so a drawing can dimension it like any other.
+                "cbore_diameter": (request.cbore_diameter.as_dict()
+                                   if request.cbore_diameter else None),
+                "cbore_depth": (request.cbore_depth.as_dict()
+                                if request.cbore_depth else None),
+                "csink_diameter": (request.csink_diameter.as_dict()
+                                   if request.csink_diameter else None),
+                "csink_angle": (request.csink_angle.as_dict()
+                                if request.csink_angle else None),
+                "bottom_angle": (request.bottom_angle.as_dict()
+                                 if request.bottom_angle else None),
                 "tap": request.tap,
                 # The simulator has no thread table, so a tapped hole is sized
                 # by the recipe's diameter. Inventor sizes it from the table,
@@ -1757,6 +1841,405 @@ class MockBackend(Backend):
         self._record("draft", name=name, faces=len(faces))
         return _feature_info(feature)
 
+    def _axis_direction(
+        self, document: _Document, axis: AxisSpec
+    ) -> tuple[float, float, float]:
+        """A unit vector in model space for whatever the caller named as an axis.
+
+        The three routes `resolve_axis` produces, answered the same way the rest
+        of this file answers them: an origin axis from its name, a created work
+        axis from the direction it was built with, a sketch line from its own
+        plane's mapping, an edge from the direction recorded when it was
+        synthesised. A named thing that is not there raises rather than falling
+        back to `z` -- a move along an axis nobody asked for is the quiet wrong
+        answer this backend exists to make loud.
+        """
+        if axis.kind == "work_axis":
+            if axis.value.lower() in ("x", "y", "z"):
+                unit = [0.0, 0.0, 0.0]
+                unit["xyz".index(axis.value.lower())] = 1.0
+                return (unit[0], unit[1], unit[2])
+            if axis.value in document.work_axes:
+                return document.work_axes[axis.value][1]
+            known = ", ".join(sorted(document.work_axes)) or "(none)"
+            raise FeatureError(
+                f"No work axis named {axis.value!r} to move along.",
+                hint=f"Work axes in this part: {known}.",
+            )
+
+        if axis.kind == "edge":
+            for topo in document.topology:
+                if topo.id == axis.value:
+                    if topo.direction is None:
+                        raise FeatureError(
+                            f"Edge {axis.value!r} has no recorded direction, so it "
+                            "cannot say which way to move.",
+                            hint="A circular or arc edge is not a direction. Use a "
+                            "straight edge, an origin axis, or a work axis.",
+                        )
+                    return topo.direction
+            raise SelectionError(
+                f"Unknown edge handle {axis.value!r}.",
+                hint="Handles change whenever the model rebuilds; re-run `select_topology`.",
+            )
+
+        # sketch_line
+        sketch = (
+            document.find_sketch(axis.sketch)
+            if axis.sketch
+            else (document.sketches[-1] if document.sketches else None)
+        )
+        if sketch is None:
+            raise FeatureError("There is no sketch to take a direction from.")
+        for primitive in sketch.plan.resolve_label(axis.value):
+            if isinstance(primitive, PLine):
+                return _edge_direction(sketch.base_plane, primitive)
+        raise FeatureError(
+            f"Sketch {sketch.name!r} has no line named {axis.value!r} to move along.",
+            hint="Give the sketch line a `name` in the recipe and reference it here.",
+        )
+
+    def move_face(self, doc_id: str, request: MoveFaceRequest) -> FeatureInfo:
+        """Translate faces along a direction, charging the volume they sweep.
+
+        The arithmetic is exact and worth stating, because it is the reason this
+        operation is predictable where Inventor's other two move styles are not:
+        a planar face of area A translated by a vector v changes the solid by
+        `A * (v . n)`, its own normal doing the projecting. So a face slid along
+        its own plane changes nothing, and one pushed out along its normal
+        changes by area times distance -- and the simulator gets both from the
+        dot product rather than from a rule about which faces count.
+
+        Exact while the moved face keeps its area, which is true of a wall on a
+        prism and is what a wall-thickness or clearance move is. It is not true
+        of a face bounded by a fillet or a draft, where the neighbours the face
+        stretches into are not parallel to the move.
+
+        ponytail: the ledger is not updated, only the volume and the moved
+        face's own position. So a cut driven through a face that has been moved
+        is charged the thickness the part had before the move -- the prisms in
+        `document.slabs` still describe the original solid. Enough to say what a
+        move did; not enough to be measured through afterwards. The volume also
+        lands on the first body, because a `_Topo` does not record which body it
+        belongs to and there is nothing here to aim with; on a single-body part,
+        which is every case this operation is for so far, that is the right one.
+        """
+        document = self._doc(doc_id)
+        if document.volume <= 0:
+            raise FeatureError(
+                "Nothing to move: the part has no solid body yet.",
+                hint="`move_face` changes a solid that already exists -- extrude "
+                "something first, or `import_geometry` a part to alter.",
+            )
+        faces = self._match(document, request.faces)
+        if not faces:
+            raise FeatureError(
+                "No faces matched, so there is nothing to move.",
+                hint="Run `select_topology` with the same selector to see what it matches.",
+            )
+        direction = self._axis_direction(document, request.direction)
+        distance = request.distance.value * (-1.0 if request.flip else 1.0)
+        shift = tuple(component * distance for component in direction)
+
+        swept = 0.0
+        unanswerable: list[str] = []
+        for topo in faces:
+            if topo.normal is None or topo.area is None:
+                unanswerable.append(topo.description)
+                continue
+            along = sum(a * b for a, b in zip(shift, topo.normal))
+            swept += topo.area * along
+        moved = document.charge(swept)
+
+        # The faces really are somewhere else now, and a later selector says
+        # `near`. Moving their midpoints is most of what makes a second
+        # operation on a moved part select what the caller means.
+        for topo in faces:
+            topo.midpoint = tuple(  # type: ignore[assignment]
+                position + step for position, step in zip(topo.midpoint, shift)
+            )
+        self._expand_bounds(document, [topo.midpoint for topo in faces])
+
+        how = ("exact where the moved face keeps its area: area times the move "
+               "along the face's own normal")
+        detail: dict[str, Any] = {
+            "faces": len(faces),
+            "direction": request.direction.value,
+            "distance": request.distance.as_dict(),
+            "flip": request.flip,
+            # `or 0.0` so a flipped move along an axis it does not touch reads
+            # as 0.0 rather than -0.0, which looks like a sign that means something.
+            "shift_cm": [round(component, 6) or 0.0 for component in shift],
+            "volume_from": how,
+        }
+        if unanswerable:
+            # A cylindrical or swept face has no single normal here, so the dot
+            # product has nothing to project onto and the honest answer is that
+            # this backend cannot say. `estimated` is what `rehearse` reads to
+            # leave the step out of the divergence comparison, rather than
+            # inventing a tolerance wide enough to cover a number nobody has.
+            detail["estimated"] = True
+            detail["faces_not_answered_for"] = unanswerable
+            detail["volume_from"] = (
+                f"{how}; {len(unanswerable)} of the matched faces "
+                f"{'has' if len(unanswerable) == 1 else 'have'} no normal here and "
+                "contributed nothing to the figure"
+            )
+        # "move", not "move_face": `_feature_name` capitalises what it is
+        # given, and Move1 reads better in a browser than Move_face1.
+        name = self._feature_name(document, request.name, "move")
+        feature = _Feature(
+            id=self._next("feat"),
+            name=name,
+            kind="move_face",
+            volume_delta=moved,
+            detail=detail,
+        )
+        document.features.append(feature)
+        document.modified = True
+        self._record("move_face", name=name, faces=len(faces))
+        return _feature_info(feature)
+
+    def thicken(self, doc_id: str, request: ThickenRequest) -> FeatureInfo:
+        """Add or remove a layer on faces, each along its own normal.
+
+        Exact for planar faces, and for the reason the arithmetic is worth
+        stating: a planar face of area A swept `t` along its own normal is a
+        prism of `A*t`, and thickening a set of them is the sum. No dot product
+        is needed here because the direction *is* each face's own normal, which
+        is the difference between this and `move_face` -- and the reason a box's
+        four walls can be grown outward in one operation where a single named
+        direction could only move them all the same way.
+
+        First-order for a curved face, which is charged rather than declined:
+        a cylinder of radius r thickened outward by t gains
+        `pi*((r+t)^2 - r^2)*h`, and `area*t` is `2*pi*r*h*t`, so the missing
+        term is `pi*t^2*h` -- second order in the thickness and small while the
+        layer is thin next to the radius, which is what a wall is. The step
+        declares itself an estimate so the rehearsal will not compare it, since
+        the second-order term is exactly what nobody has measured.
+
+        ponytail: the ledger is not updated, only the volume. So a cut driven
+        through a face that has been thickened is charged the thickness the part
+        had before the layer went on, and the volume lands on the first body
+        because a face does not record which body it belongs to -- the same two
+        limits `move_face` has, for the same reason.
+        """
+        document = self._doc(doc_id)
+        if document.volume <= 0:
+            raise FeatureError(
+                "Nothing to thicken: the part has no solid body yet.",
+                hint="`thicken` adds a layer to faces of a solid that already "
+                "exists. Extrude something first.",
+            )
+        faces = self._match(document, request.faces)
+        if not faces:
+            raise FeatureError(
+                "No faces matched, so there is nothing to thicken.",
+                hint="Run `select_topology` with the same selector to see what it matches.",
+            )
+        share = THICKEN_SHARE[(request.direction, request.operation)]
+        area = sum(topo.area or 0.0 for topo in faces)
+        curved = [topo.description for topo in faces if topo.normal is None]
+        swept = share * area * request.thickness.value
+        moved = document.charge(swept)
+
+        # A thickened face is where it was; what changed is how much material
+        # stands behind it. Only the outward-growing cases move the part's
+        # extent, and only along each face's own normal.
+        if share > 0:
+            grown = share * request.thickness.value
+            for topo in faces:
+                if topo.normal is None:
+                    continue
+                self._expand_bounds(document, [tuple(
+                    position + component * grown
+                    for position, component in zip(topo.midpoint, topo.normal)
+                )])
+
+        how = "exact for a planar face: its area times the layer's thickness"
+        detail: dict[str, Any] = {
+            "faces": len(faces),
+            "thickness": request.thickness.as_dict(),
+            "direction": request.direction,
+            "operation": request.operation,
+            "area_cm2": round(area, 6),
+            "share_of_the_layer": share,
+            "volume_from": how,
+        }
+        if curved:
+            detail["estimated"] = True
+            detail["curved_faces"] = curved
+            detail["volume_from"] = (
+                f"{how}; {len(curved)} of them "
+                f"{'is' if len(curved) == 1 else 'are'} curved and charged to "
+                "first order only, missing a term in the square of the thickness"
+            )
+        if share == 0.0:
+            # Not an error: it is a legitimate thing to ask for and Inventor
+            # will build it. It is also almost certainly not what was meant, so
+            # the detail says so and `rehearse` turns it into a warning.
+            detail["changes_nothing"] = (
+                f"a {request.direction!r} layer with operation {request.operation!r} "
+                "lies where the material already " +
+                ("is not" if request.operation == "cut" else "is") +
+                ", so the boolean has nothing to do"
+            )
+        name = self._feature_name(document, request.name, "thicken")
+        feature = _Feature(
+            id=self._next("feat"),
+            name=name,
+            kind="thicken",
+            volume_delta=moved,
+            detail=detail,
+        )
+        document.features.append(feature)
+        document.modified = True
+        self._record("thicken", name=name, faces=len(faces))
+        return _feature_info(feature)
+
+    # -- drawings ----------------------------------------------------------
+    #: Which of the part's axes a view of each direction shows across and up,
+    #: and which it looks along. The same table `drafting.py` and
+    #: `drawing._overall_from` use -- a view's extent is the part's own extent on
+    #: two axes, so this is the whole of what the simulator needs to know about
+    #: what a direction means. `iso` is absent: it shows all three foreshortened,
+    #: which is not two numbers.
+    _VIEW_SPAN = {
+        "front": (0, 2), "rear": (0, 2),
+        "top": (0, 1), "bottom": (0, 1),
+        "left": (1, 2), "right": (1, 2),
+    }
+
+    def new_drawing(self, name: str, *, template: str | None = None,
+                    sheet: str = "a3", units: str = "mm") -> DocInfo:
+        document = _Document(id=self._next("doc"), name=name, units=units,
+                             kind="drawing", sheet=sheet, template=template)
+        self._documents[document.id] = document
+        self._active = document.id
+        self._record("new_drawing", name=name, sheet=sheet, template=template)
+        return self._doc_info(document)
+
+    def place_view(self, doc_id: str, request: ViewRequest) -> ViewInfo:
+        """Put a base view of a part on the sheet.
+
+        The extent is the useful part and it is measured rather than invented:
+        the part's own bounding box, on the two axes this direction shows,
+        scaled. So a sheet read back says how big each view is, and a view of a
+        part that does not fit its sheet is answerable without a renderer --
+        which is the argument for a ledger over a picture.
+        """
+        drawing = self._drawing(doc_id)
+        part = self._doc(request.part_doc_id)
+        if part.kind != "part":
+            raise DocumentError(
+                f"{part.name!r} is a {part.kind}, so there is nothing to draw.",
+                hint="A view is a view of a part. Pass the part's document id.")
+        if any(view.name == request.name for view in drawing.views):
+            raise DocumentError(f"This sheet already has a view named {request.name!r}.")
+        if request.parent is not None:
+            # Checked here rather than trusted from the caller, because Inventor
+            # will refuse the same thing and a simulator that accepted it would
+            # let a recipe through that cannot be built.
+            parent = self._view(drawing, request.parent)
+            if parent.scale != request.scale:
+                raise DocumentError(
+                    f"View {request.name!r} is projected from {parent.name!r} and "
+                    f"asks for scale {request.scale} where its parent is at "
+                    f"{parent.scale}.",
+                    hint="A projected view takes its parent's scale. Drop the "
+                    "scale here, or place it as a base view with `at`.")
+
+        extent: tuple[float, float] | None = None
+        span = self._VIEW_SPAN.get(request.direction)
+        if span is not None and part.bounds:
+            extent = tuple(  # type: ignore[assignment]
+                abs(part.bounds[axis + 3] - part.bounds[axis]) * request.scale
+                for axis in span
+            )
+        view = _View(
+            id=self._next("view"),
+            name=request.name,
+            direction=request.direction,
+            at=request.at,
+            scale=request.scale,
+            style=request.style,
+            extent=extent,
+            part=request.part_doc_id,
+            parent=request.parent,
+        )
+        drawing.views.append(view)
+        drawing.modified = True
+        self._record("place_view", name=request.name, direction=request.direction)
+        return _view_info(view)
+
+    def retrieve_dimensions(self, doc_id: str,
+                            request: RetrieveRequest) -> list[DimensionInfo]:
+        """Bring the part's own dimensions for these parameters onto a view.
+
+        Retrieval, not placement, and the simulator models exactly that: a
+        dimension can be retrieved only if the model *has* one. So a parameter
+        that exists and drives no sketch dimension comes back missing rather
+        than drawn, which is a real limit and not a shortcoming of the
+        simulator -- Inventor cannot retrieve a dimension the model does not
+        hold either, and the caller has asked for something no sheet can show.
+
+        The value is the model's, so a dimension on the sheet cannot disagree
+        with the part: that is the property that makes reading the sheet back a
+        check on the recipe rather than on the arithmetic.
+        """
+        drawing = self._drawing(doc_id)
+        view = self._view(drawing, request.view)
+        part = self._doc(view.part)
+        found: list[DimensionInfo] = []
+        for names, is_reference in ((request.parameters, False),
+                                    (request.reference, True)):
+            for name in names:
+                candidate = _model_dimension_for(part, name)
+                if candidate is None:
+                    continue
+                value, kind, expression = candidate
+                entry = _Dimension(
+                    id=self._next("dim"), value=value, kind=kind, view=view.name,
+                    parameter=name, expression=expression, reference=is_reference,
+                )
+                drawing.dimensions.append(entry)
+                found.append(_dimension_info(entry))
+        drawing.modified = True
+        self._record("retrieve_dimensions", view=request.view, kept=len(found))
+        return found
+
+    def read_drawing(self, doc_id: str) -> DrawingContents:
+        """The sheet as it now is, which is what closes the round trip.
+
+        Read back from the recorded views and dimensions rather than from the
+        recipe that asked for them, so that a dimension the retrieval could not
+        find is absent here -- the whole point of reading a sheet rather than
+        trusting the request.
+        """
+        drawing = self._drawing(doc_id)
+        return DrawingContents(
+            views=[_view_info(view) for view in drawing.views],
+            dimensions=[_dimension_info(entry) for entry in drawing.dimensions],
+            sheet=drawing.sheet or "a3",
+        )
+
+    def _drawing(self, doc_id: str) -> _Document:
+        document = self._doc(doc_id)
+        if document.kind != "drawing":
+            raise DocumentError(
+                f"{document.name!r} is a {document.kind}, not a drawing.",
+                hint="Create one with `new_drawing` first.")
+        return document
+
+    def _view(self, drawing: _Document, name: str) -> _View:
+        for view in drawing.views:
+            if view.name == name:
+                return view
+        known = ", ".join(view.name for view in drawing.views) or "(none)"
+        raise DocumentError(f"This sheet has no view named {name!r}.",
+                            hint=f"Views on it: {known}.")
+
     def combine(self, doc_id: str, request: CombineRequest) -> FeatureInfo:
         document = self._doc(doc_id)
         bodies = list(document.bodies)
@@ -1946,6 +2429,18 @@ class MockBackend(Backend):
         own, so the ledger knows about the seed's material or void and not about
         the copies. A cut through where a patterned hole went is measured
         against material the pattern has already taken away.
+
+        **Except for `sketch_driven_pattern`, which places its copies in the
+        ledger and then calls this only for the charge.** So this paragraph is
+        about `rectangular_pattern`, `circular_pattern` and `mirror`, and the
+        reason it is still about them is that a translation is exact in this
+        model where a rotation and a reflection are not: a prism is an outline
+        in its plane plus a sweep along the normal, so shifting one is shifting
+        those, and turning or mirroring one is only representable when the axis
+        is perpendicular or the plane parallel. Doing the other three needs that
+        case analysis and the three shipped examples that pattern or mirror
+        currently agree with Inventor to 0.003% on the rule above, so the change
+        has to reproduce it exactly rather than improve on it.
         """
         if extra <= 0:
             return 0.0, "no additional occurrences"
@@ -2122,6 +2617,121 @@ class MockBackend(Backend):
         )
         document.features.append(feature)
         self._record("circular_pattern", name=name, count=request.count)
+        return _feature_info(feature)
+
+    def sketch_driven_pattern(self, doc_id: str,
+                              request: SketchDrivenPatternRequest) -> FeatureInfo:
+        """Copy features to a set of sketch points, and record where the copies went.
+
+        **The only pattern here that places its occurrences rather than counting
+        them**, and the reason is what this operation's input is. A rectangular
+        pattern's count and spacing already say it did something; this one is
+        given positions and nothing else, so a version that counted them could
+        not tell a correct recipe from one whose points all miss the part.
+
+        Placement is exact, which is why it is affordable here and not for the
+        other two. A `_Slab` is an outline in one of three origin planes plus a
+        sweep along its normal, so translating one is shifting its outline by the
+        move's in-plane components and its near and far by the out-of-plane one.
+        A rotation or a reflection is not representable that way except in
+        special cases, which is why `circular_pattern` and `mirror` still count.
+
+        The volume rule is `_repeat`'s and shared with it deliberately: an
+        occurrence does whatever its seed did. Now that the prisms are recorded,
+        charging each occurrence what it *actually* meets -- the way an `extrude`
+        cut is charged -- is available and is not done here, because it would
+        make this operation's arithmetic differ from the two patterns it sits
+        beside, and those are measured against Inventor at 0.02.
+        """
+        document = self._doc(doc_id)
+        sketch = document.find_sketch(request.sketch)
+        positions = _hole_points(sketch, request.point_indices)
+        if not positions:
+            raise FeatureError(
+                f"Sketch {sketch.name!r} contains no hole-centre points to pattern to.",
+                hint="Add `point`, `point_grid` or `bolt_circle` entities to the sketch.",
+            )
+        every = _hole_points(sketch, ())
+        if not 0 <= request.reference_index < len(every):
+            raise FeatureError(
+                f"Sketch {sketch.name!r} has {len(every)} hole centre(s); there is "
+                f"no point {request.reference_index} for the seed to sit on."
+            )
+        reference = every[request.reference_index]
+        targets = _pattern_targets(document, request.features)
+
+        # The seed's own point carries no occurrence: the feature is already
+        # there. Compared on coordinates rather than on index, because a caller
+        # naming a subset of the points and a reference outside it would
+        # otherwise pattern the seed onto itself.
+        elsewhere = [point for point in positions
+                     if math.dist(point, reference) > 1e-9]
+        moved, why = self._repeat(document, targets, len(elsewhere))
+
+        # Named before the prisms are placed, because each copy is attributed to
+        # *this* feature rather than to the seed. Otherwise a pattern of the
+        # pattern would find the occurrences and copy them a second time.
+        name = self._feature_name(document, request.name, "pattern")
+        wanted = {target.name for target in targets}
+        seeded = [slab for slab in document.slabs if slab.feature in wanted]
+        origin = map3d(sketch.base_plane, reference[0], reference[1], sketch.offset)
+        shifts = [
+            tuple(a - b for a, b in zip(
+                map3d(sketch.base_plane, point[0], point[1], sketch.offset), origin))
+            for point in elsewhere
+        ]
+        # Which occurrences stand over no material, asked before any copy is
+        # appended: afterwards an earlier occurrence's own void is in the ledger
+        # and the next one would be judged against it. This is the reading a
+        # pattern that only counted its points could not give, and the reason
+        # placing them is worth the code.
+        missed = _occurrences_over_nothing(document, seeded, shifts)
+        placed = 0
+        for shift in shifts:
+            for slab in seeded:
+                copy = replace(_translated(slab, shift), feature=name)
+                document.slabs.append(copy)
+                placed += 1
+                # The part reaches where the *copied prism* reaches, which is
+                # not the whole box moved: a 10 mm pad copied 200 mm along a
+                # 100 mm plate puts material at 195..205, and translating the
+                # box would have claimed the part ran out to 250.
+                if copy.sign > 0:
+                    self._expand_bounds(document, _slab_corners(copy))
+
+        detail: dict[str, Any] = {
+            "features": [t.name for t in targets],
+            "sketch": sketch.name,
+            "points": len(positions),
+            "occurrences": len(elsewhere),
+            "reference_at": [round(value, 6) for value in reference],
+            "prisms_placed": placed,
+            "volume_note": why,
+        }
+        if missed:
+            # A cut occurrence over air removes nothing, and the charge above
+            # has already been billed for it -- so this is both a wrong volume
+            # and, much more usefully, a recipe whose points are in the wrong
+            # place. `rehearse` turns it into a warning.
+            detail["occurrences_over_nothing"] = missed
+        if not seeded:
+            # The seed is a revolve, a sweep or a loft, which the ledger does not
+            # record as prisms at all. The volume still follows `_repeat`; what
+            # is missing is knowing where the copies are, and saying so is better
+            # than a `prisms_placed` of zero a reader has to interpret.
+            detail["placement"] = (
+                "not recorded: the seed feature put no prisms in the ledger, which "
+                "is the case for a revolve, a sweep and a loft. The volume is "
+                "still charged per occurrence")
+        feature = _Feature(
+            id=self._next("feat"),
+            name=name,
+            kind="sketch_driven_pattern",
+            volume_delta=moved,
+            detail=detail,
+        )
+        document.features.append(feature)
+        self._record("sketch_driven_pattern", name=name, occurrences=len(elsewhere))
         return _feature_info(feature)
 
     def mirror(self, doc_id: str, request: MirrorRequest) -> FeatureInfo:
@@ -2629,6 +3239,107 @@ def _feature_info(feature: _Feature) -> FeatureInfo:
     )
 
 
+
+
+#: Which sketch-dimension kinds a drawing shows as what. A horizontal or
+#: vertical distance is a linear dimension on the sheet like any other.
+_DIMENSION_KINDS = {"diameter": "diameter", "radius": "radius", "angle": "angle"}
+
+#: Feature detail keys that hold a driven value, and the dimension kind each
+#: becomes on a sheet. The key names the quantity, which is what decides whether
+#: a retrieved dimension reads as a diameter or a length -- an 8 mm extrude and
+#: an 8 mm bore are not the same dimension to anybody reading the drawing.
+_FEATURE_DIMENSIONS = {
+    "diameter": "diameter", "cbore_diameter": "diameter",
+    "csink_diameter": "diameter", "hole_diameter": "diameter",
+    "radius": "radius", "radius_end": "radius", "corner_radius": "radius",
+    "angle": "angle", "taper": "angle", "csink_angle": "angle",
+    "bottom_angle": "angle", "included_angle": "angle",
+}
+
+
+def _model_dimension_for(part: _Document,
+                         name: str) -> tuple[float, str, str] | None:
+    """The part's own dimension for *name*: its value, its kind and its expression.
+
+    Sketch dimensions first, then feature values, because that is the order a
+    reader of the drawing would expect a size to come from -- an outline's width
+    is the outline's, and a depth is the extrude's.
+
+    Both count as model dimensions, and Inventor retrieves both: an extrude's
+    distance and a hole's diameter are parameters in the model browser exactly
+    as a sketch's width is. Looking only at sketches was this simulator's first
+    answer and it was wrong in a way worth recording -- it reported a plate's
+    thickness as impossible to dimension, which is the one dimension a plate
+    drawing certainly carries.
+
+    None where the part has no dimension driven by that parameter at all. That
+    is a real limit rather than a gap here: Inventor cannot retrieve a dimension
+    the model does not hold, so a caller asking for one has asked for something
+    no sheet can show.
+
+    **And the dimension found need not be the parameter's own value.** A
+    dimension whose expression *is* the parameter is preferred, but where none
+    exists the one it drives is returned instead: the mounting plate expresses
+    its `edge_margin` of 12 as a hole spacing of `plate_w - 2 * edge_margin`, so
+    a drawing asking to dimension the margin gets the 96 mm spacing, because 12
+    is a number that model never states anywhere. That is faithful -- retrieval
+    can only offer dimensions the model holds -- and it is not obvious, so the
+    expression is returned alongside the value and `build_drawing` says so.
+    """
+    # An exact match first, and this ordering is not a nicety. `plate_w` is
+    # referenced by the outline's width dimension *and* by the hole spacing
+    # `plate_w - 2 * edge_margin`, so without a preference the answer would be
+    # whichever the iteration reached first -- and a drawing asking for the
+    # plate's width would sometimes get its hole pitch instead.
+    for exact in (True, False):
+        for sketch in part.sketches:
+            for dimension in sketch.plan.dimensions:
+                if exact:
+                    if dimension.expression.strip() != name:
+                        continue
+                elif name not in referenced_parameters(dimension.expression):
+                    continue
+                return (dimension.value,
+                        _DIMENSION_KINDS.get(dimension.kind, "linear"),
+                        dimension.expression)
+    for feature in part.features:
+        for key, kind in _FEATURE_DIMENSIONS.items():
+            driven = feature.detail.get(key)
+            if _drives(driven, name):
+                return (driven["value"], kind, driven["expression"])
+        for key, driven in feature.detail.items():
+            if key not in _FEATURE_DIMENSIONS and _drives(driven, name):
+                return (driven["value"], "linear", driven["expression"])
+    return None
+
+
+def _drives(driven: Any, name: str) -> bool:
+    """Whether a feature detail entry is a driven value referring to *name*."""
+    if not isinstance(driven, dict):
+        return False
+    expression, value = driven.get("expression"), driven.get("value")
+    if not isinstance(expression, str) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return name in referenced_parameters(expression)
+    except Exception:
+        return False
+
+def _view_info(view: _View) -> ViewInfo:
+    return ViewInfo(
+        id=view.id, name=view.name, direction=view.direction, at=view.at,
+        scale=view.scale, style=view.style, extent=view.extent,
+    )
+
+
+def _dimension_info(entry: _Dimension) -> DimensionInfo:
+    return DimensionInfo(
+        id=entry.id, value=entry.value, kind=entry.kind, view=entry.view,
+        parameter=entry.parameter, expression=entry.expression,
+        reference=entry.reference,
+    )
+
 def _selected_loops(sketch: _Sketch, profiles: Sequence[int] | str) -> list[list[str]]:
     if profiles == "all":
         return sketch.loops
@@ -3083,6 +3794,94 @@ def _profile_samples(sketch: _Sketch,
         samples.append(((centre[0] + corner[0]) / 2, (centre[1] + corner[1]) / 2))
     return samples
 
+
+
+
+#: The only feature kind that puts *solid* prisms in the ledger. A revolve, a
+#: sweep, a loft and a coil move the volume without recording a prism, and a
+#: draft, a thicken or a move_face change it without touching the ledger at all,
+#: so on a part carrying any of those the ledger's picture of where the material
+#: is is incomplete.
+_MODELS_ITS_MATERIAL = {"extrude"}
+
+
+def _material_is_fully_modelled(document: _Document) -> bool:
+    """Whether every feature that added material recorded prisms for it.
+
+    The precondition for saying "there is nothing here". `_material_spans`
+    answers None both when a point lies outside every prism -- genuinely no
+    material -- and when the part's material was never recorded as prisms at
+    all, and those two must not be confused: reporting the second as a miss
+    would fire a warning on a correct recipe, which teaches a reader to ignore
+    the field. So the question is only asked where the ledger can answer it.
+    """
+    return all(
+        feature.kind in _MODELS_ITS_MATERIAL
+        for feature in document.features
+        if (feature.volume_delta or 0.0) > 0.0
+    )
+
+
+def _occurrences_over_nothing(document: _Document, seeded: Sequence[_Slab],
+                              shifts: Sequence[Sequence[float]]) -> list[int]:
+    """Which of these occurrences of a *cutting* seed stand over no material.
+
+    Only asked of a cut, because that is where the answer means something: an
+    occurrence of a join standing clear of the part is a legitimate island,
+    while a cut over air removes nothing and has still been charged for.
+
+    And only asked at all where the ledger models the material -- see
+    :func:`_material_is_fully_modelled`. The question is put at the centre of
+    each copied prism, the same way a hole decides which way to drill.
+    """
+    voids = [slab for slab in seeded if slab.sign < 0]
+    if not voids or not _material_is_fully_modelled(document):
+        return []
+    over: list[int] = []
+    for index, shift in enumerate(shifts):
+        for slab in voids:
+            moved = _translated(slab, shift)
+            _, _, (w_axis, _) = _PLANES[moved.plane][0]
+            u = sum(point[0] for point in moved.outline) / len(moved.outline)
+            v = sum(point[1] for point in moved.outline) / len(moved.outline)
+            centre = map3d(moved.plane, u, v, (moved.near + moved.far) / 2)
+            if not _material_spans(document, w_axis, centre):
+                over.append(index)
+                break
+    return over
+
+def _translated(slab: _Slab, shift: Sequence[float]) -> _Slab:
+    """*slab* moved by a model-space vector, which is exact for a prism.
+
+    A prism is an outline in its plane's own coordinates and a sweep along that
+    plane's normal, so a translation splits cleanly into the two: the in-plane
+    components shift every outline point, and the out-of-plane one shifts the
+    near and far. `to_sketch` maps a *point* onto a plane's coordinates and is
+    used here on a *vector*, which is sound because the mapping is a signed
+    permutation of the axes and carries no offset.
+    """
+    du, dv, dw = to_sketch(slab.plane, shift)
+    return replace(
+        slab,
+        outline=[(u + du, v + dv) for u, v in slab.outline],
+        near=slab.near + dw,
+        far=slab.far + dw,
+        source=f"{slab.source} occurrence",
+    )
+
+
+def _slab_corners(slab: _Slab) -> list[tuple[float, float, float]]:
+    """The corners of a prism's own bounding box, in model space.
+
+    The outline's extremes rather than every vertex, which is all a bounding box
+    needs and is what `_expand_bounds` is given elsewhere.
+    """
+    us = [point[0] for point in slab.outline]
+    vs = [point[1] for point in slab.outline]
+    return [map3d(slab.plane, u, v, w)
+            for u in (min(us), max(us))
+            for v in (min(vs), max(vs))
+            for w in (slab.near, slab.far)]
 
 def _hole_points(sketch: _Sketch, indices: Sequence[int]) -> list[tuple[float, float]]:
     plan = sketch.plan

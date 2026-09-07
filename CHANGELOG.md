@@ -256,6 +256,488 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   on a healthy install sits at the top of `__main__` or `preflight`, and that the
   explanation goes to stderr rather than the stream carrying the protocol.
 
+- **Five defects in the drawing layer, found by asking for a drawing of all
+  eleven shipped parts.** None of them by writing a test first. The fixture the
+  drawing tests were built on is a plate with four well-behaved parameters, and
+  every one of these needed a part shaped some other way. `ARCHITECTURE.md`
+  already argues for keeping the examples executable — two bugs were found by
+  writing them rather than by writing tests — and this is that argument paying
+  out again, at five for eleven.
+
+  * **A count resolved as a length.** The worst-behaved of the five. Asking to
+    dimension the belt pulley's `lighten_count` of 5 resolved it as a *length*
+    and put a **50 mm dimension** on the sheet — a number that appears nowhere
+    on the part or the drawing. It was caught at all only because that part
+    happens to have no 50 mm number either. A parameter that is not a length or
+    an angle is now refused with the reason: a count belongs in a callout, and
+    the dimension to state is the spacing.
+  * **An angle was stated in radians and labelled as an angle.** The moulded
+    housing's 1.5 degree draft came out as **0.02618** — its value in radians —
+    because an angle was divided by the *length* factor. `compare` then read
+    0.02618 as degrees and reported the sheet as stating a number the part does
+    not have, so a correct drawing was reported wrong and the cause was a unit.
+    The ledger now states an angle in the sheet's own `angle_units`, and the
+    reading converts to degrees, which is what `compare` compares in.
+  * **A counterbore's own sizes could not be dimensioned.** The hole feature
+    recorded its diameter and its style and *not* its counterbore's diameter or
+    depth, or its countersink's, so nothing could retrieve them — and those are
+    dimensions any drawing of the cover plate carries. The cover plate went from
+    6 of its 10 parameters dimensionable to all 10.
+  * **Building did not check what rehearsing checked.** A caller who went
+    straight to `build_drawing_from_recipe` got a category error reported as a
+    dimension that did not arrive — which is what a typo looks like too, and the
+    two have different fixes. The refusal now happens before any sheet exists.
+  * **"Not on the sheet" did not say why.** The commonest reason is an
+    *intermediate parameter*: `pipe_bend`'s `wall` appears only in `tube_od =
+    tube_id + 2 * wall`, and `moulded_housing`'s `boss_wall` only in `boss_d =
+    boss_hole_d + 2 * boss_wall`. Both drive the part; no dimension states
+    either, because the sketch says `tube_od`. So the warning now names the
+    parameter that *is* stated — "dimension `tube_od` instead" — and says
+    separately when a parameter drives nothing at all, since those two have
+    different fixes.
+
+  The sweep is kept as a test rather than thrown away: every shipped part is
+  drawn, and what each one cannot state is held as data with a reason. Three of
+  the five above would have been caught on the day they landed by that test
+  existing.
+
+### Added
+- **Projected views, which is what makes the projection angle mean anything.**
+  Until now every view was a base view at a position the recipe gave, and
+  `DrawingRecipe.projection` was recorded and applied to nothing — the sheet
+  stated a convention it did not follow. That is worse than picking either
+  convention, because a reader trusts the projection symbol.
+
+  A view with a `parent` is projected from it and takes its parent's scale. It
+  is deliberately **not** positioned by hand: giving both `parent` and `at` is
+  refused, because where a projected view lands *is* what first and third angle
+  mean. Third angle draws the top view above the front view and the right-hand
+  view to the right; first angle puts both on the opposite side. The two are
+  mirror images about the parent, and a test asserts exactly that rather than
+  restating the table.
+
+  An isometric view is exempt from the flip. It is not a projection of
+  anything, so neither convention has an opinion about where it goes, and
+  negating its corner in first angle would move it for no reason.
+
+  **On Inventor this is a different call that names no direction at all.**
+  `AddProjectedView` takes a parent, a position and a style — Inventor is told a
+  place and *infers* which way the view faces, the reverse of a base view. So
+  the angle is applied before the call, in `drafting.projected_position`, which
+  is the one place the recipe's `projection` does any work.
+
+  That has a useful consequence for the live run: **the direction check is
+  sharper for a projected view than a base one.** Nothing asserted a projected
+  view's direction, so what the sheet reports back is Inventor's own answer to a
+  question only the layout asked. A projected top view reading as anything but
+  `top` would mean the convention implemented here and the one Inventor applies
+  are not the same — and since first angle is the third-angle table negated and
+  nothing else distinguishes them, negating it is the whole fix.
+
+  The layout is readable from a rehearsal too, so the angle's effect can be
+  checked before any sheet is made, and the shipped drawing is now a real
+  three-view first-angle sheet: one base view with the top view projected
+  *below* it.
+
+- **PDF export.** `export_model` offers `pdf`, and it is the format a drawing is
+  actually sent in — a sheet exportable only as DWG needs Inventor at the other
+  end to read. It is a drawing format rather than a part one: a part has no
+  sheet to print, and `export`'s written-but-not-there check is what reports
+  both that and a machine whose PDF translator add-in is disabled, since
+  Inventor answers success either way.
+
+### Added
+- **The sheet gets made: four drawing methods on both backends.** `new_drawing`,
+  `place_view`, `retrieve_dimensions` and `read_drawing` on the `Backend` ABC —
+  so the two implementations cannot drift, which the compiler enforces rather
+  than anybody's discipline. The simulator's half is measured and tested; **the
+  COM half has never executed**, and it is the largest unmeasured surface in the
+  project.
+
+  `build_drawing_from_recipe` places the views, retrieves the dimensions the
+  recipe asks for, then **reads the sheet back and checks that**. Reading back
+  what you just asked for proves nothing; reading back what is *there* is the
+  test, and it is what the round trip has needed all along.
+
+  **Dimensions are retrieved from the model, not placed by geometry**, and that
+  is the design decision worth arguing. The roadmap imagined "dimensions placed
+  against the geometry a named parameter drives", which means working out which
+  two drawing curves a parameter drives — the guessing a recipe exists to avoid.
+  The parts this server builds make a better route available: every sketch
+  dimension carries a parameter's expression and every driven feature value is a
+  named parameter, so Inventor's own retrieve-model-dimensions produces
+  dimensions that *are* the parameters, and a dimension on the sheet cannot then
+  disagree with the part.
+
+  The price is that retrieval brings *every* model dimension onto the view, so
+  the asked-for ones must be kept and the rest removed — which needs a retrieved
+  dimension to name the parameter it came from. **Nothing here has ever held a
+  `DrawingDimension`**, so that is the single fact the whole approach rests on
+  and the first thing a live run must settle. `retrieve_dimensions` deletes what
+  it retrieved and fails loudly if none of them will say, rather than leaving a
+  sheet carrying every dimension the model happens to hold.
+
+  **No enum value is guessed anywhere in it.** The view orientations and styles
+  are named — `kFrontViewOrientation`, `kHiddenLineRemovedDrawingViewStyle` —
+  and `_k` reads their values from the type library, raising a message that names
+  the fix when it cannot. A wrong name raises; a wrong number is not possible.
+  That is a better starting position than the extrude extents had, where 32 of
+  51 fallback values turned out wrong.
+
+  **Two checks exist only because the sheet is read back**, and neither could be
+  static:
+
+  * **a parameter with no model dimension cannot be retrieved.** Inventor can
+    place a dimension only if the model holds one, so a parameter driving
+    neither a sketch dimension nor a feature value has nothing to retrieve. No
+    static check could know that — the parameter exists and resolves perfectly
+    well;
+  * **a view that reports facing a way it was not asked to.** Defect 4's
+    drawing-shaped cousin: `capture_view`'s `front` returns a top view on a part
+    built on XY, and a drawing view reaches Inventor through a similarly-named
+    enum. `read_drawing` asks the *sheet* for each view's orientation and extent
+    rather than remembering the request, which is the only way that check could
+    work.
+
+### Changed
+- **Pointing the drawing schema at a shipped part found the thing worth knowing,
+  and it took a real recipe to find it.** Asking to dimension the mounting
+  plate's `edge_margin` does **not** put 12 mm on the sheet. Dimensions are
+  retrieved, and that model never states 12 anywhere — the margin exists only as
+  a hole spacing of `plate_w - 2 * edge_margin`, so the sheet carries **96 mm**.
+  The holes are pinned either way and the drawing is correct; the number the
+  recipe named is simply not the number a reader sees.
+
+  Three consequences, all landed here:
+
+  * `build_drawing` **says so** rather than leaving it to be noticed, and the
+    warning names the expression that came back;
+  * an **exact match is preferred** over one that merely refers. `plate_w` is
+    referenced by the outline's width *and* by that same hole spacing, so
+    without a preference the answer was whichever the iteration reached first —
+    a drawing asking for the plate's width would sometimes have got its hole
+    pitch;
+  * the rehearsal and the built sheet **disagree about it on purpose**, and a
+    test pins that. The rehearsal resolves `edge_margin` to 12, because that is
+    what the parameter is worth; only a sheet that has been made can say which
+    dimension came back. That difference is the whole reason the round trip
+    reads the sheet rather than trusting the request.
+
+  Also from that first run: looking only at sketch dimensions was the
+  simulator's first answer about what can be retrieved, and it reported a
+  plate's *thickness* as impossible to dimension — the one dimension a plate
+  drawing certainly carries. Inventor retrieves feature dimensions as readily as
+  sketch ones, an extrude's distance being a parameter in the model browser, so
+  the retrieval reads both.
+
+### Added
+- **Phase 3 opens: `DrawingRecipe`, a second root beside `PartRecipe`.** A
+  drawing describes *views of* a solid rather than a solid, which is a different
+  noun at the top of the document — the first thing in this project that
+  `PartRecipe` could not be stretched to cover.
+
+  `{"name": ..., "sheet": "a3", "projection": "first_angle", "views": [...]}`,
+  and each view carries `direction`, where it sits on the sheet, its scale, and
+  **`dimension` — which of the part's parameters it states.** That last is the
+  differentiator and the reason the schema is shaped this way: a drawing
+  generator has to decide which dimensions matter, and the field's tools infer
+  it from the geometry and reach 80–90%. A recipe does not have to infer
+  anything, because the part's parameters *are* the design intent. Naming them
+  is a statement the author already made when they wrote the part.
+
+  **Nothing is drawn.** No `DrawingDocument`, no views placed, no title block —
+  that API has not been read here and is the largest single piece left in the
+  project. What landed is the description of a drawing and the rehearsal of one,
+  which is the half that needs no Inventor and is worth having on its own for
+  the same reason `validate_recipe` is.
+
+  **`drafting.py` is the new module, and the naming matters.** `drawing.py`
+  *reads* — a `DrawingReading` is what somebody wrote down looking at a sheet.
+  `drafting.py` *produces* — it works out what a sheet would say and puts that
+  through `drawing.compare`, the same function the reading direction uses,
+  reused rather than reimplemented. Only its vocabulary is translated.
+
+  **What the ledger finds on its own is the point.** A drawing can be wrong in
+  ways the part cannot correct, and the one that matters is **a number the part
+  states that the sheet never gives** — an under-dimensioned drawing. It is the
+  only drawing fault that is invisible when you look at the sheet, because every
+  dimension on it is correct, and a factory cannot make what a drawing does not
+  say. It falls out of `compare`'s `invented` list read the other way round: a
+  number the model asserts and the drawing does not give is not an invention on
+  anybody's part when the drawing is the thing being produced.
+
+  Reported as a **warning rather than a failure**, because it can be deliberate
+  — a value a general note covers, or one the reader is meant to derive — and a
+  check that refused a legitimate sheet would teach the reader to ignore it.
+  Alongside it, a second and independent reading of the same defect: which axes
+  of the part's overall size no dimension on the sheet states. Worked out from
+  the dimensions rather than from the views, deliberately, because a produced
+  view's extent is whatever the part is — so asking a view what it shows would
+  be asking the part about itself.
+
+  A value the part *derives* from numbers the sheet does state is not counted.
+  `examples/drawings/mounting_plate.json` is the case in point: the plate drives
+  its four holes from `edge_margin`, the sheet states that, and the 96 mm pitch
+  the part computes comes back under `derived` rather than as a fault. A drawing
+  stating the pitch and omitting the margin would pin the same holes and be
+  reported as leaving the margin undimensioned — both defensible on paper, only
+  one matching the model, which is exactly what this check makes visible.
+
+  Two tools: `rehearse_drawing_recipe` and `drawing_recipe_schema`, taking the
+  count to thirty-two. And a shipped drawing of a shipped part, because a schema
+  nobody has aimed at a whole eleven-parameter recipe is one whose gaps are
+  still hiding — the argument `ARCHITECTURE.md` already makes about keeping the
+  examples executable.
+
+  Everything below the schema is reused unchanged, which was the second Phase 3
+  item: `resolve.Resolver` seeded from the part's rehearsal resolves each
+  dimension, so it carries the expression that produced it, and a sheet can be
+  dimensioned in inches from a part modelled in millimetres.
+
+### Added
+- **`sketch_driven_pattern`: the last of Tier 2, and the only pattern here that
+  places its occurrences.** Copies features to a sketch's points, for a layout
+  that follows nothing in particular. The seed sits on `reference` and the
+  occurrences go on the other points, so N points describe N of the feature.
+
+  **Two findings changed the shape of this one, and both are worth more than the
+  operation.**
+
+  **The gap was narrower than Tier 2 claimed.** It said anything irregular "has
+  to be enumerated by hand" — but `hole` already takes a list of points and
+  `boss` a list of positions, so an irregular set of holes or bosses never
+  needed a pattern at all. What was genuinely missing is patterning a feature
+  whose definition is *not* already a list of positions: a pocket, a rib, a
+  filleted detail. That makes this the **smallest in value** of the three Tier 2
+  items, which is the opposite of what the roadmap's ordering implied, and both
+  that file and `ARCHITECTURE.md` now say so.
+
+  **And it was the largest in thought, for the reason the roadmap missed.** It
+  is the first operation whose entire input is a set of *positions*, put to a
+  simulator that counted pattern occurrences without ever placing them — the
+  `ponytail` on `_repeat`. A version that counted the points it was handed could
+  not tell a correct recipe from one whose points all miss the part. So this one
+  places them.
+
+  **Placement is exact, which is why it is affordable here and not for the other
+  three.** A `_Slab` is an outline in one of three origin planes plus a sweep
+  along the normal, so translating one is shifting the outline by the move's
+  in-plane components and the near and far by the out-of-plane one. A rotation
+  or a reflection is only representable that way in special cases. So
+  `rectangular_pattern`, `circular_pattern` and `mirror` still count, `_repeat`'s
+  marker now says which callers it is talking about, and doing the other three
+  is a separate change with a constraint worth writing down: the three shipped
+  examples that pattern or mirror agree with Inventor to **0.003%** on
+  `seed × extra`, so a placement path has to reproduce that rather than improve
+  on it.
+
+  **What the placement bought, as numbers:**
+
+  * a cut driven through where an occurrence went is measured against what the
+    pattern left. A 6 mm hole through a copied 4 mm pocket in a 10 mm plate is
+    charged 6 mm of material (0.1696 cm³), where the ledger would otherwise have
+    said 10 mm (0.2827);
+  * the part's bounding box grows to where the copied *prism* is, not to where
+    the whole box would be if it were moved — a 10 mm pad copied 200 mm along a
+    100 mm plate reaches 205 mm, not 250. That was wrong in the first draft and
+    the test that caught it now says why;
+  * an occurrence of a *cutting* seed standing over air is reported, and
+    `rehearse` turns it into a warning. Deliberately narrow: only asked where
+    every feature that added material recorded prisms for it, because
+    `_material_spans` answers None both for "no material here" and for "this
+    part was never modelled as prisms", and reporting the second as a miss would
+    fire a warning on a correct recipe.
+
+  **Slabs now carry the name of the feature that created them.** `source` could
+  not answer "which prisms are the seed's" — a part with two extrudes has two
+  sets of slabs both saying `extrude` — and a pattern that copies a seed's
+  prisms has to know. Each copy is attributed to the *pattern* rather than the
+  seed, so patterning a pattern copies the occurrences and a second pattern of
+  the same seed does not find them. An unattributed prism is not copied, which
+  today means a shell's cavity, and a shell is not a thing anyone patterns.
+
+  **`PREDICTED` is 0.02, not the placeholder**, and the inconsistency beside the
+  other two unmeasured operations is deliberate. Its arithmetic is the rule the
+  other patterns use and is already measured at 0.02 on the pulley and the
+  threaded boss. What is unmeasured is a semantic question instead — whether
+  Inventor also places an occurrence on the reference point — which is an
+  off-by-one *occurrence*, 33% on a three-point pattern. A tight tolerance
+  reports that; 0.5 would hide it.
+
+  That question's wrong answers include one that leaves the volume *unchanged*:
+  a duplicate landing exactly on the seed. So `--only sketch-driven-pattern`
+  prints the finished part's feature list rather than only measuring it, and
+  `examples/calibration/spread_pockets.json` records all three readings.
+
+### Changed
+- **Phase 2 is complete.** `move_face`, `thicken` and `sketch_driven_pattern`
+  all landed on 2026-09-07, so the roadmap item covering the three is ticked —
+  with each one's live measurement as its own open item below it, the same split
+  the work axis got, because a tick covering unmeasured COM is the claim that
+  file exists not to make.
+
+### Added
+- **`thicken`: a layer on faces, each along its own normal.** Tier 2's second
+  item, and it closes half of what that item asked for. The half it closes is
+  the wall-thickness one, and the property that matters is the normal: a box's
+  four walls point four ways, so `positive` + `join` grows all four outward in
+  one operation where a single named direction would push two out and two in.
+  That is what makes it a different operation from `move_face` rather than a
+  spelling of it, and it is the DFM wall remedy -- `dfm/discover.py` has counted
+  a thicken feature's thickness as evidence of the `wall` role since before one
+  could be built.
+
+  `{"op":"thicken","faces":{...},"thickness":"wall","direction":"positive",
+  "operation":"join"}`. `negative` + `cut` thins the walls instead; `symmetric`
+  does half either way.
+
+  **The half it does not close is the headline one -- turning a surface into a
+  wall -- and the reason is not the schema.** *No operation in this server
+  creates a surface.* `extrude`, `loft` and `sweep` all produce solids, so the
+  only surface a part here could hold is one that arrived through
+  `import_geometry`, and thickening that would work today. Inventor's offset
+  mode is absent for the same reason: it *produces* a surface and nothing
+  downstream could take one. Recorded in `FEATURE_COVERAGE.md` under Tier 1c
+  rather than left as an implied gap.
+
+  **Exact per planar face, first-order on a curved one, and charged either
+  way.** A planar face's area times the layer is a prism. A cylinder of radius r
+  thickened by t gains `pi*((r+t)^2 - r^2)*h` where `area*t` is `2*pi*r*h*t`, so
+  the missing term is `pi*t^2*h` -- second order, and small while the layer is
+  thin next to the radius, which is what a wall is. That it is charged at all is
+  the opposite of what `move_face` does with the same face, and the difference
+  is real: there the move's direction is arbitrary relative to the face so the
+  dot product has no answer, while here the direction *is* the face's own
+  normal.
+
+  **What is unmeasured about this one is a side and a corner, not a number.**
+  `THICKEN_SHARE` says the layer is a slab swept from the face, the operation is
+  a boolean, and a face's normal points out of the solid -- so the outward half
+  is air, the inward half is material, and `positive` + `cut` and `negative` +
+  `join` therefore do *nothing at all*. That is sound set algebra and it is
+  silent on whether Inventor means the same side by "negative". So:
+
+  * the two cancelling pairs are **warned about at rehearsal rather than
+    refused**. A refusal would prevent the run that settles the question, which
+    is the mistake the `shell` `both` enum made -- that refusal was right and it
+    hid the fact that nothing had ever exercised the path;
+  * the table lives in `backend/base.py`, above both backends, rather than as a
+    copy in each. Two self-consistent halves disagreeing about which side
+    something goes on is exactly how defect 5 survived three runs, and one table
+    cannot disagree with itself;
+  * `thinned_wall.json` is shaped so its three possible outcomes are three
+    different numbers -- **-0.2400** confirms the table, **0.0000** says the
+    layer landed outside the solid and the side is inverted, anything positive
+    says something else again. A tolerance cannot catch a side: the `trim`
+    inversion was 1.2% apart while keeping the opposite half of the part;
+  * `thickened_walls.json` carries the corner question. Four walls grown 1 mm
+    outward leave a 1 x 1 x 6 mm notch at each corner belonging to no wall, so
+    the answer is **1.4400 cm^3** if Inventor leaves them and **1.4640** if it
+    closes them. `--only thicken` reports which rather than asserting one:
+    nobody has measured it, and a check that picked one would be inventing the
+    answer it then confirms.
+
+  **And one risk is handled in the code rather than left to a run.**
+  `ThickenFeatures.Add` takes a face collection, a variant distance and two enum
+  *integers*, so a wrong argument order need not raise the way `_profiles`'s two
+  forms cannot mislead -- Inventor would accept a thickness of 20,481
+  (`kNewBodyOperation`) and build a part the size of a house, successfully. So
+  `CreateThickenDefinition` is tried first where a release has it, because a
+  definition's properties are named and cannot be filled in the wrong order;
+  `Add`'s arguments are never permuted, only its trailing optional
+  `VerifyResults`; and the result is measured against the area-times-thickness
+  prediction and refused outside a factor of four, with the feature deleted
+  rather than left in the part. The factor is deliberately enormous: it catches
+  20,481 cm and nothing subtler, because the subtler end is the divergence
+  check's job.
+
+  `_topology_collection` gained a sibling, `_topology_selection`, returning the
+  matched faces alongside the collection so that prediction comes out of the
+  same select as the faces themselves. Two selects would be two chances to match
+  differently.
+
+### Added
+- **`move_face`: the one way to change geometry this server did not build.**
+  Tier 2's third item, taken first of the three because it is the only one that
+  adds a *kind* of reach rather than a feature. `import_geometry` could read a
+  STEP part for DFM analysis and then alter nothing about it: translated
+  geometry has no sketches and no parameters, so every other operation in the
+  schema has nothing to take hold of.
+
+  `{"op":"move_face","faces":{...},"direction":"z","distance":"lift"}` --
+  faces picked by the same selectors as a fillet, a direction that is anything
+  `resolve_axis` accepts, and a distance that is an expression like every other
+  length here. `flip` is the only way to reverse it, so there is one spelling
+  per move rather than two that have to agree.
+
+  **The arithmetic is a dot product rather than an estimate**, which is the
+  reason this operation can be predicted at all: a planar face of area A
+  translated by v changes the solid by exactly `A*(v.n)`, its own normal doing
+  the projecting. A face pushed along its normal changes the part by area times
+  distance; one slid along its own plane changes nothing; and both come out of
+  the same expression rather than a rule about which faces count. The two new
+  calibration fixtures say +6.4000 and +0.2400 cm^3, each agreeing with the
+  hand derivation to the digit, so they are predictions a live run can break in
+  the sense `drafted_block` was.
+
+  Only the direction-and-distance move is offered. Inventor's planar drag and
+  rotate-about-a-line are deliberately absent: this is the shape a wall
+  thickness or a clearance is expressed in, and the other two have no
+  predictable result to check against.
+
+  **What the simulator will not answer for, it says so about.** A cylindrical
+  face has no single normal here, so the dot product has nothing to project
+  onto, and the step declares itself an estimate -- which is what `rehearse`
+  reads to leave it out of the divergence comparison, the same seam a trimmed
+  revolve uses. A tolerance loose enough to cover a number nobody has is loose
+  enough to cover a fault.
+
+  **The COM half has never executed, and unusually the signature is not known
+  either.** Every other call in that backend was read off a type library before
+  it was written; here `FEATURE_COVERAGE.md` records only that
+  `MoveFaceFeatures` has `Add` and `CreateDefinition`, and not what the
+  definition's setter is called. So the backend tries three spellings, each of
+  which can only mean direction-and-distance, and names every one it tried when
+  none work -- rather than one guess that comes back as a bare "Exception
+  occurred". A free-drag or point-to-point setter is deliberately not among
+  them: one of those accepting a direction and a distance by accident is the
+  quietly wrong part these notes exist to prevent. `PREDICTED["move_face"]` is
+  at the placeholder 0.50 accordingly; the arithmetic would justify an
+  extrude's 0.02 and nothing has run.
+
+  `scripts/live_acceptance.py --only move-face` is that run, and it takes three
+  readings per fixture rather than one, because defect 11 cost four runs to the
+  belief that a feature which builds and measures right must be parametric: the
+  magnitude against the derivation, the *sign* (a magnitude-only check passes a
+  face that moved the right distance the wrong way), and the driving parameter
+  doubled. `docs/INVENTOR_SETUP.md` has the ordered list, and says to read the
+  real signature with `scripts/com_signatures.py --search MoveFace` before
+  spending a seat on the check.
+
+  One approximation, marked as one: the ledger is not updated, only the volume
+  and the moved face's own position. So a cut driven through a moved face is
+  charged the thickness the part had before the move, and
+  `tests/test_move_face.py` pins that rather than leaving it to the comment, so
+  whoever fixes it is sent to the `ponytail:` that says it is broken.
+
+### Fixed
+- **Three documentation facts that had gone stale, found while adding the
+  above** rather than by a test, which is the point of noting them.
+  `FEATURE_COVERAGE.md` said seventeen collections covered and listed
+  seventeen names; the count and the list are now checked against each other
+  (`test_the_coverage_count_matches_the_list_it_introduces`), because that
+  sentence is two spellings of one fact and the rule from `DECISIONS.md`
+  applies to it. `ARCHITECTURE.md` still located `PREDICTED` in `builder.py`,
+  which the Phase 1 split moved to `rehearsal.py`, and still said coil, draft,
+  emboss and split had never been compared against Inventor, which stopped
+  being true on 2026-09-03. `examples/calibration/README.md` said the same
+  about `split` three paragraphs above its own table showing it at 0.0%.
+
+  Also: the calibration README's table regex read its operation column as
+  `[a-z]+`, so `move_face` was the first row it would have silently declined to
+  check. Both columns take an underscore now.
+
+### Fixed
 - **The DFM loop's baseline was measured on whatever state the caller left the
   document in.** Audited after defect 9, and this was the one real gap: each
   round already applied its changes, called `rebuild`, read that rebuild's
