@@ -13,19 +13,20 @@ Revolve Rib RuleFillet RuledSurface Sculpt Shell Simplify SketchDrivenPattern
 Slot SnapFit Split Sweep Thicken Thread Trim Unwrap iFeatures
 ```
 
-**Covered today, 18 of the 53 collections:** Extrude, Revolve, Sweep, Loft,
+**Covered today, 19 of the 53 collections:** Extrude, Revolve, Sweep, Loft,
 Coil, Hole, Fillet, Chamfer, Shell, RectangularPattern, CircularPattern, Mirror,
-Thread, Emboss, FaceDraft, Combine, Split, MoveFace. Work planes, work axes,
-work points and material are covered too and are not `Features` collections, so
-they sit outside the count. `boss` and
+Thread, Emboss, FaceDraft, Combine, Split, MoveFace, Thicken. Work planes, work
+axes, work points and material are covered too and are not `Features`
+collections, so they sit outside the count. `boss` and
 `rib` exist as recipe operations but are built from primitives, because neither
-Inventor feature can be created through the API -- see below. **MoveFace is the
-one on that list whose COM call has never executed** -- added 2026-09-07, exact
-in the simulator, unmeasured live, and kept in the count rather than out of it
-because the schema offers it to a caller either way. Tier 1c below says what
-that means.
+Inventor feature can be created through the API -- see below. **MoveFace and
+Thicken are the two on that list whose COM calls have never executed** -- both
+added 2026-09-07, exact in the simulator, unmeasured live, and kept in the count
+rather than out of it because the schema offers them to a caller either way.
+Tier 1c below says what that means, and for Thicken it also says which half of
+Inventor's feature is reachable at all.
 
-Eighteen of fifty-three flatters the gap in one direction and overstates it in
+Nineteen of fifty-three flatters the gap in one direction and overstates it in
 the other: the covered ones are the high-frequency core of solid
 modelling, and a good half of what is missing is surfacing and repair work that a
 text-to-part server has no business doing.
@@ -158,14 +159,62 @@ also passes the simulator rehearsal.
    file exists to catch. `docs/INVENTOR_SETUP.md` has what a live run must
    confirm, and `scripts/com_signatures.py --search MoveFace` is where it starts.
 
+6. **Thicken.** *Added 2026-09-07 as `{"op":"thicken",...}`, and it closes half
+   of what this item asked for.* The half it closes is the wall-thickness one: a
+   layer of material added to or removed from faces, each along **its own**
+   normal, which is what makes it a different operation from `move_face` rather
+   than a spelling of it. A box's four walls point four ways, so `positive` +
+   `join` grows all four outward in one operation where a single named direction
+   would push two out and two in. `negative` + `cut` thins them. That is the DFM
+   wall remedy, and `dfm/discover.py` has expected a thicken feature's thickness
+   to count as evidence of the `wall` role since before one could be built.
+
+   **The half it does not close is the headline one: turning a surface into a
+   wall.** Not because of the schema -- because *no operation in this server
+   creates a surface*. `extrude`, `loft` and `sweep` all produce solids; there is
+   no surface body anywhere, and Inventor's `kSurfaceOperation` is not offered
+   for that reason. So the only surface a part here could hold is one that
+   arrived through `import_geometry`, and thickening it would work today if it
+   did. Inventor's offset mode is absent for the same reason: it *produces* a
+   surface, and nothing downstream could take one. `FaceOffsetFeatures` only
+   exposes `_Add`, and Inventor's leading underscore means internal, so plain
+   face offset was never on the table either.
+
+   **Exact per planar face, first-order on a curved one.** A planar face's area
+   times the layer is a prism; a cylinder of radius r thickened by t gains
+   `pi*((r+t)^2 - r^2)*h` where `area*t` is `2*pi*r*h*t`, so the missing term is
+   `pi*t^2*h` -- second order, and small while the layer is thin next to the
+   radius, which is what a wall is. It is charged rather than declined, unlike
+   the same face under `move_face`, and the difference is real: there the move's
+   direction is arbitrary relative to the face so the dot product has no answer,
+   while here the direction *is* the face's own normal.
+
+   **What is genuinely unmeasured is a side and a corner, not a number.**
+   `THICKEN_SHARE` in `backend/base.py` says which side of a face a `negative`
+   layer lies on, and therefore that `positive` + `cut` and `negative` + `join`
+   do nothing at all -- the layer is where the material already is not, or
+   already is. That is sound set algebra about a boolean against a slab and it
+   is silent on whether Inventor agrees, so the two cancelling pairs are warned
+   about at rehearsal rather than refused: a refusal would prevent the run that
+   settles it. And four walls grown outward leave a 1 x 1 x 6 mm notch at each
+   corner belonging to no wall, so the answer is 1.4400 cm^3 if Inventor leaves
+   them and 1.4640 if it closes them. `examples/calibration/thickened_walls.json`
+   and `thinned_wall.json` isolate one question each; a tolerance cannot catch
+   being wrong about a side, which is what defect 5 was.
+
+   The COM call has never executed and its signature has never been read, the
+   same as `move_face` -- with one difference that is handled in the code rather
+   than left to a run. Its arguments are a variant and two enum *integers*, so a
+   wrong order need not raise: it would be accepted and build something
+   enormous. So the backend measures the result against the area-times-thickness
+   prediction and refuses anything outside a factor of four, deleting the
+   feature rather than leaving it in the part.
+
 ### Tier 2 -- frequently wanted, no current workaround
 
 5. **SketchDrivenPattern.** Pattern by sketch points. Rectangular and circular
    patterns cover the regular cases; anything irregular currently has to be
    enumerated by hand.
-6. **Thicken.** Turning a surface into a wall. `ThickenFeatures.Add` is public.
-   `FaceOffsetFeatures` only exposes `_Add`, and Inventor's leading underscore
-   means internal, so plain face offset is not on the table.
 
 Not tier 2 after all, checked against the type library rather than the docs:
 **Lip, SnapFit, Grill, Rest** and **DirectEdit** are all read-only collections

@@ -271,9 +271,10 @@ reach, so **three COM calls in `backend/com/backend.py` have never executed**.
 The simulator side is measured and tested; the live side is a proposal.
 
 Those three have since been measured -- see *Running all five*, below, and the
-six runs it took. **`move_face`, added 2026-09-07, is the section's current
-occupant** and is a step worse than they were: they had signatures read off a
-type library, and this one does not. It has its own subsection at the end.
+six runs it took. **`move_face` and `thicken`, both added 2026-09-07, are the
+section's current occupants** and are a step worse than they were: those three
+had signatures read off a type library, and these two do not. Each has its own
+subsection at the end.
 
 What a live run has to confirm, in this order:
 
@@ -550,6 +551,91 @@ If a fixture disagrees, the answer is a fault to find and not a tolerance to
 widen: these are derivations rather than estimates.
 `PREDICTED["move_face"]` sits at the placeholder 0.50 and should come down to an
 extrude's 0.02 once a run agrees, rather than to something in between.
+
+
+### `thicken`, where the risk is a side and an argument order
+
+Added 2026-09-07, in the same session as `move_face` and with the same gap: the
+call is documented, its signature has not been read here, and nothing has run.
+Two things make it a sharper problem than `move_face` was, and both are handled
+in the code rather than left for a run to discover.
+
+**1. A wrong argument order need not raise.** `ThickenFeatures.Add` takes a face
+collection, a distance, a direction enum and an operation enum. The distance is
+a *variant* -- a number or an expression string -- and the enums are integers.
+So handing them over in the wrong order is not the type mismatch that makes
+`_profiles`'s two forms safe to try: Inventor would accept a thickness of 20,481
+(`kNewBodyOperation`) and build a part the size of a house, successfully.
+
+Two answers to that, both in the backend:
+
+* `CreateThickenDefinition` is tried first where the release has it, because a
+  definition's properties are *named* and cannot be filled in the wrong order.
+* `Add`'s arguments are Inventor's documented order and are **never permuted**.
+  What is tried twice is only the trailing `VerifyResults`, present and absent
+  -- the same optional-with-a-default problem `AddForSolid` had, and appending an
+  optional flag cannot change what the earlier arguments mean.
+* And the result is measured. The backend predicts `area * thickness` from the
+  faces it selected -- it reads `Face.Evaluator.Area` anyway for the selectors --
+  and refuses anything outside a **factor of four** of that, deleting the feature
+  rather than leaving it in the part. Four is deliberately enormous: it catches a
+  thickness of 20,481 cm and nothing subtler, because the subtler end is the
+  divergence check's job.
+
+**2. Which side a `negative` layer lies on is a claim about Inventor.**
+`THICKEN_SHARE` in `backend/base.py` says the layer is a slab swept from the
+face, the operation is a boolean, and a face's normal points out of the solid --
+so the outward half is air and the inward half is material, and therefore:
+
+| direction | join | cut |
+|---|---|---|
+| `positive` | +area x t | nothing to remove |
+| `negative` | already material | -area x t |
+| `symmetric` | +area x t/2 | -area x t/2 |
+
+That is set algebra, and it is sound *given* that Inventor means the same thing
+by "negative". Nothing here has measured that. The two cells that do nothing are
+warned about at rehearsal rather than refused, deliberately: a refusal would
+prevent the run that settles the question, which is the mistake the `shell`
+`both` enum made -- the refusal was right and it hid the fact that nothing had
+ever exercised the path.
+
+**What the run has to answer**, in this order:
+
+1. **Which route builds it at all** -- `CreateThickenDefinition` if this release
+   has one, or `Add` with five arguments or six. The feature detail reports
+   `built_by`, so a successful run says which.
+2. **The side**, via `examples/calibration/thinned_wall.json`. One wall thinned
+   1 mm from behind should remove **0.2400 cm^3** and leave the plate 79 mm
+   wide. Three outcomes are distinguishable: **-0.2400** confirms the table,
+   **0.0000** says Inventor puts a `negative` layer outside the solid so there
+   was nothing to cut, and any positive figure says something else again. This
+   is the reading that matters, and it is defect 5's lesson taken in advance --
+   a `trim` kept the wrong half of a part for as long as the feature existed, and
+   one of the runs that found it was 1.2% apart, inside every tolerance, because
+   the volume was right for the half it kept. A tolerance cannot catch a side.
+   Different numbers can.
+3. **The corners**, via `examples/calibration/thickened_walls.json`. Four walls
+   grown 1 mm outward: the layers do not meet, and the 1 x 1 x 6 mm notch at
+   each corner belongs to no wall. So **1.4400 cm^3** if Inventor leaves the
+   notches and **1.4640** if it closes them -- 4 x 6 mm^3 apart, 1.7%. This is
+   reported rather than asserted: nobody has measured which, and a check that
+   picked one would be inventing the answer it then confirms. If it turns out to
+   be the closed one, the simulator is 1.7% low on every multi-face thicken and
+   should gain the corner term.
+
+    python scripts/com_signatures.py ThickenFeatures
+    python scripts/live_acceptance.py --only thicken
+
+Read the signature first, as with `move_face`: it costs a second and makes the
+factor-of-four guard unnecessary.
+
+**One thing a run cannot answer, because it is not about Inventor.** The half of
+Inventor's Thicken that turns a *surface* into a wall is unreachable here, and
+not because of the schema: no operation in this server creates a surface, so the
+only surface a part could hold is one that arrived through `import_geometry`.
+Thickening that would work today. `docs/FEATURE_COVERAGE.md` records it under
+Tier 1c rather than as a gap in this file, since it is a fact about this server.
 
 ## Known-shaky areas
 

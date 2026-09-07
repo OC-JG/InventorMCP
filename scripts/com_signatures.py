@@ -67,6 +67,15 @@ INTERESTING = [
     # MoveFaceFeatures` -- since the definition's own class is what is missing.
     "MoveFaceFeatures.CreateDefinition",
     "MoveFaceFeatures.Add",
+    # `thicken`, added the same day and riskier than move_face for one
+    # reason: its arguments are a variant and two enum integers, so an order
+    # that is wrong would not be a type mismatch -- it would hand Inventor a
+    # thickness of 20,481 cm. The backend refuses a result that is not within a
+    # factor of its own prediction, which catches that; reading the signature
+    # makes the guard unnecessary. `CreateThickenDefinition` is tried first
+    # where it exists, because a definition's properties are named.
+    "ThickenFeatures.Add",
+    "ThickenFeatures.CreateThickenDefinition",
     # Not a call this server makes, but the object behind defect 4: `capture_view`
     # orientation names do not describe what you get, and `check_views` says there
     # is nothing to assert until somebody measures what each one produces. Reading

@@ -1,0 +1,59 @@
+{
+  "name": "CalibrationThickenedWalls",
+  "description": "A plate whose four side walls are each grown 1 mm outward in one operation. The instrument for `thicken`, and the case that distinguishes it from `move_face`: each face moves along its OWN normal, so four walls pointing four ways grow outward together, which a single named direction cannot say. The simulator charges the four faces' area times the layer -- perimeter 240 mm x 6 mm tall is 14.4 cm^2, so 1.4400 cm^3 -- and that figure has a known question in it, which is the real reason this fixture exists. The four slabs do not meet at the corners: the +X wall's layer covers x 40 to 41 over y -20 to 20, and the +Y wall's covers y 20 to 21 over x -40 to 40, so the 1 x 1 x 6 mm notch at each corner belongs to neither. If Inventor closes those corners the answer is 1.4400 + 4 x 6 mm^3 = 1.4640 cm^3, 1.7% higher; if it leaves them the answer is 1.4400. Both are defensible and nothing here has measured which, so the run decides rather than the author. Whichever it is, the difference belongs to the corners and not to the arithmetic, which is exact per face.",
+  "units": "mm",
+  "parameters": [
+    {
+      "name": "plate_w",
+      "value": 80
+    },
+    {
+      "name": "plate_d",
+      "value": 40
+    },
+    {
+      "name": "plate_t",
+      "value": 6
+    },
+    {
+      "name": "wall",
+      "value": 1,
+      "comment": "the layer on each wall; 240 mm of perimeter x 6 mm x 1 mm is 1.44 cm^3"
+    }
+  ],
+  "operations": [
+    {
+      "op": "sketch",
+      "name": "Outline",
+      "plane": "xy",
+      "entities": [
+        {
+          "type": "rectangle",
+          "center": [
+            0,
+            0
+          ],
+          "width": "plate_w",
+          "height": "plate_d"
+        }
+      ]
+    },
+    {
+      "op": "extrude",
+      "name": "Plate",
+      "sketch": "Outline",
+      "distance": "plate_t"
+    },
+    {
+      "op": "thicken",
+      "name": "Walls",
+      "faces": {
+        "kind": "face",
+        "filter": "vertical"
+      },
+      "thickness": "wall",
+      "direction": "positive",
+      "operation": "join"
+    }
+  ]
+}

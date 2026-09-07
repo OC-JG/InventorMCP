@@ -372,6 +372,51 @@ class MoveFaceRequest:
     name: str | None = None
 
 
+#: What one unit of `area * thickness` does to a solid, per thicken direction
+#: and operation. Set algebra rather than a table of Inventor's behaviour: the
+#: layer is a slab swept from the face along its own normal, the operation is a
+#: boolean against the solid, and a face's normal points out of it. So the
+#: outward half of the slab is air and the inward half is material:
+#:
+#: * `positive`/`join` -- the whole slab is air, and joining adds all of it: +1.
+#: * `negative`/`cut` -- the whole slab is material, and cutting takes it: -1.
+#: * `symmetric` -- half either side, so a join adds the outward half and a cut
+#:   removes the inward one: +/-0.5.
+#: * `positive`/`cut` -- the slab is air; there is nothing there to remove: 0.
+#: * `negative`/`join` -- the slab is material; a union with material changes
+#:   nothing: 0.
+#:
+#: It lives here, above both backends, rather than in each of them. The two
+#: disagreeing about which side a layer goes on is the `trim` inversion again --
+#: defect 5, which survived three runs because each half was self-consistent --
+#: and one table cannot disagree with itself. What is *not* settled by set
+#: algebra is whether Inventor's "negative" means this side, which is what
+#: `live_acceptance.py --only thicken` is for.
+THICKEN_SHARE: dict[tuple[str, str], float] = {
+    ("positive", "join"): 1.0,
+    ("positive", "cut"): 0.0,
+    ("negative", "join"): 0.0,
+    ("negative", "cut"): -1.0,
+    ("symmetric", "join"): 0.5,
+    ("symmetric", "cut"): -0.5,
+}
+
+
+@dataclass
+class ThickenRequest:
+    """Faces, a layer thickness, and which side of them it goes on.
+
+    `thickness` is always positive; `direction` is the only thing that says
+    which way, so a given layer has one spelling rather than two.
+    """
+
+    faces: ResolvedSelector
+    thickness: Driven
+    direction: str = "positive"
+    operation: str = "join"
+    name: str | None = None
+
+
 @dataclass
 class CombineRequest:
     base: int
@@ -603,6 +648,9 @@ class Backend(ABC):
 
     @abstractmethod
     def move_face(self, doc_id: str, request: MoveFaceRequest) -> FeatureInfo: ...
+
+    @abstractmethod
+    def thicken(self, doc_id: str, request: ThickenRequest) -> FeatureInfo: ...
 
     @abstractmethod
     def combine(self, doc_id: str, request: CombineRequest) -> FeatureInfo: ...

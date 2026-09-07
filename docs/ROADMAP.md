@@ -56,7 +56,7 @@ three are hygiene the code had earned the right to skip until it stopped being
 able to.
 
 **1. The simulator's volume model becomes a per-body ledger.** This is the only
-real redesign. Sixteen of the seventeen `ponytail:` markers (the repository's
+real redesign. Seventeen of the eighteen `ponytail:` markers (the repository's
 word for a deliberate approximation) live in `backend/mock/` — it was thirteen
 of fourteen when this was written, and the sentence said so until 2026-09-03,
 which is what put this file under `test_roadmap_still_true.py` — and the worst
@@ -530,6 +530,52 @@ actually bitten.
       none work, rather than one guess that fails as "Exception occurred".
       `PREDICTED["move_face"]` is at the placeholder 0.50 accordingly — the
       arithmetic would justify an extrude's 0.02 and nothing has run.
+
+      **`thicken` landed the same day, and it closes half of what this item
+      asked for.** Tier 2 described it as "turning a surface into a wall", and
+      that half is not reachable at all — not because of the schema, but
+      because *no operation in this server creates a surface*. Everything here
+      builds solids, so the only surface a part could hold is one that arrived
+      through `import_geometry`, and thickening that would work today. What did
+      land is the wall-thickness half: a layer added to or removed from faces,
+      each along **its own** normal, which is what makes it a different
+      operation from `move_face` rather than a spelling of it — a box's four
+      walls point four ways, so `positive` + `join` grows all four outward in
+      one operation where a single named direction would push two out and two
+      in. That is the DFM wall remedy, and `dfm/discover.py` has counted a
+      thicken feature's thickness as evidence of the `wall` role since before
+      one could be built.
+
+      **Its uncertainty is a side and a corner rather than a number**, which is
+      what makes it worth reading twice. The arithmetic is exact per planar
+      face and first-order on a curved one. But it rests on `THICKEN_SHARE` in
+      `backend/base.py`, which says which side of a face a `negative` layer
+      lies on — sound set algebra about a boolean against a slab, and silent on
+      whether Inventor agrees. A tolerance cannot catch being wrong about a
+      side: defect 5's `trim` was 1.2% apart while keeping the opposite half of
+      the part. So `thinned_wall` is shaped so that the three ways it could go
+      are three different numbers, and `thickened_walls` reports which of two
+      defensible corner answers Inventor gives rather than asserting the one
+      the simulator sums. One table lives above both backends rather than a
+      copy in each, because two self-consistent halves disagreeing is exactly
+      how defect 5 survived three runs.
+
+      One more thing is handled in the code rather than left to a run:
+      `ThickenFeatures.Add` takes a variant and two enum *integers*, so a wrong
+      argument order need not raise — Inventor would accept a thickness of
+      20,481 and build a part the size of a house. The definition route is
+      preferred where it exists because a definition's properties are named,
+      `Add`'s arguments are never permuted, and the result is measured against
+      the area-times-thickness prediction and refused outside a factor of four,
+      with the feature deleted rather than left in the part.
+- [ ] **Measure `thicken` against a live Inventor** — `python
+      scripts/com_signatures.py ThickenFeatures`, then `--only thicken`. Two
+      questions, one fixture each, and neither is the magnitude: on a single
+      planar face `thicken` and `move_face` coincide by construction, so what
+      needs a seat is which side a `negative` layer lies on and what Inventor
+      does with the corner notches four grown walls leave behind.
+      `INVENTOR_SETUP.md` has both, with the three readings that tell the side
+      answers apart.
 - [ ] **Measure `move_face` against a live Inventor**, which for this one means
       reading the real signature first: `python scripts/com_signatures.py
       --search MoveFace`, then `--only move-face`. Split from the item above

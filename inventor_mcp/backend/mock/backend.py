@@ -65,6 +65,8 @@ from ..base import (
     CombineRequest,
     DraftRequest,
     MoveFaceRequest,
+    ThickenRequest,
+    THICKEN_SHARE,
     EmbossRequest,
     ShellRequest,
     SplitRequest,
@@ -1915,6 +1917,104 @@ class MockBackend(Backend):
         document.features.append(feature)
         document.modified = True
         self._record("move_face", name=name, faces=len(faces))
+        return _feature_info(feature)
+
+    def thicken(self, doc_id: str, request: ThickenRequest) -> FeatureInfo:
+        """Add or remove a layer on faces, each along its own normal.
+
+        Exact for planar faces, and for the reason the arithmetic is worth
+        stating: a planar face of area A swept `t` along its own normal is a
+        prism of `A*t`, and thickening a set of them is the sum. No dot product
+        is needed here because the direction *is* each face's own normal, which
+        is the difference between this and `move_face` -- and the reason a box's
+        four walls can be grown outward in one operation where a single named
+        direction could only move them all the same way.
+
+        First-order for a curved face, which is charged rather than declined:
+        a cylinder of radius r thickened outward by t gains
+        `pi*((r+t)^2 - r^2)*h`, and `area*t` is `2*pi*r*h*t`, so the missing
+        term is `pi*t^2*h` -- second order in the thickness and small while the
+        layer is thin next to the radius, which is what a wall is. The step
+        declares itself an estimate so the rehearsal will not compare it, since
+        the second-order term is exactly what nobody has measured.
+
+        ponytail: the ledger is not updated, only the volume. So a cut driven
+        through a face that has been thickened is charged the thickness the part
+        had before the layer went on, and the volume lands on the first body
+        because a face does not record which body it belongs to -- the same two
+        limits `move_face` has, for the same reason.
+        """
+        document = self._doc(doc_id)
+        if document.volume <= 0:
+            raise FeatureError(
+                "Nothing to thicken: the part has no solid body yet.",
+                hint="`thicken` adds a layer to faces of a solid that already "
+                "exists. Extrude something first.",
+            )
+        faces = self._match(document, request.faces)
+        if not faces:
+            raise FeatureError(
+                "No faces matched, so there is nothing to thicken.",
+                hint="Run `select_topology` with the same selector to see what it matches.",
+            )
+        share = THICKEN_SHARE[(request.direction, request.operation)]
+        area = sum(topo.area or 0.0 for topo in faces)
+        curved = [topo.description for topo in faces if topo.normal is None]
+        swept = share * area * request.thickness.value
+        moved = document.charge(swept)
+
+        # A thickened face is where it was; what changed is how much material
+        # stands behind it. Only the outward-growing cases move the part's
+        # extent, and only along each face's own normal.
+        if share > 0:
+            grown = share * request.thickness.value
+            for topo in faces:
+                if topo.normal is None:
+                    continue
+                self._expand_bounds(document, [tuple(
+                    position + component * grown
+                    for position, component in zip(topo.midpoint, topo.normal)
+                )])
+
+        how = "exact for a planar face: its area times the layer's thickness"
+        detail: dict[str, Any] = {
+            "faces": len(faces),
+            "thickness": request.thickness.as_dict(),
+            "direction": request.direction,
+            "operation": request.operation,
+            "area_cm2": round(area, 6),
+            "share_of_the_layer": share,
+            "volume_from": how,
+        }
+        if curved:
+            detail["estimated"] = True
+            detail["curved_faces"] = curved
+            detail["volume_from"] = (
+                f"{how}; {len(curved)} of them "
+                f"{'is' if len(curved) == 1 else 'are'} curved and charged to "
+                "first order only, missing a term in the square of the thickness"
+            )
+        if share == 0.0:
+            # Not an error: it is a legitimate thing to ask for and Inventor
+            # will build it. It is also almost certainly not what was meant, so
+            # the detail says so and `rehearse` turns it into a warning.
+            detail["changes_nothing"] = (
+                f"a {request.direction!r} layer with operation {request.operation!r} "
+                "lies where the material already " +
+                ("is not" if request.operation == "cut" else "is") +
+                ", so the boolean has nothing to do"
+            )
+        name = self._feature_name(document, request.name, "thicken")
+        feature = _Feature(
+            id=self._next("feat"),
+            name=name,
+            kind="thicken",
+            volume_delta=moved,
+            detail=detail,
+        )
+        document.features.append(feature)
+        document.modified = True
+        self._record("thicken", name=name, faces=len(faces))
         return _feature_info(feature)
 
     def combine(self, doc_id: str, request: CombineRequest) -> FeatureInfo:

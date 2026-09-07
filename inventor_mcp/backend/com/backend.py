@@ -74,6 +74,8 @@ from ..base import (
     CombineRequest,
     DraftRequest,
     MoveFaceRequest,
+    ThickenRequest,
+    THICKEN_SHARE,
     EmbossRequest,
     ShellRequest,
     SplitRequest,
@@ -2462,6 +2464,19 @@ class ComBackend(Backend):
 
     def _topology_collection(self, doc_id: str, selector: ResolvedSelector, *,
                              required: bool = True) -> Any:  # pragma: no cover
+        return self._topology_selection(doc_id, selector, required=required)[0]
+
+    def _topology_selection(self, doc_id: str, selector: ResolvedSelector, *,
+                            required: bool = True
+                            ) -> tuple[Any, list[TopoInfo]]:  # pragma: no cover
+        """The collection Inventor wants, and what was matched, from one select.
+
+        Split out for `thicken`, which needs the faces' *areas* as well as the
+        faces: what it predicts Inventor will do is the sum of those areas times
+        the layer, and checking the result against that prediction is what makes
+        a mis-called COM method loud. Two selects would be two chances to match
+        differently, so both come out of one.
+        """
         matches = self.select(doc_id, selector)
         if not matches and required:
             raise SelectionError(
@@ -2472,7 +2487,7 @@ class ComBackend(Backend):
         collection = self._new_collection(selector.kind)
         for match in matches:
             collection.Add(self._topology[match.id]["object"])
-        return collection
+        return collection, matches
 
     #: AddSimple's trailing options, in declaration order. They are
     #: optional-with-a-default, and leaving them out makes pywin32 send a
@@ -2908,6 +2923,127 @@ class ComBackend(Backend):
             f"Could not create a move-face definition: {'; '.join(failures)}",
             hint="Read what this release really offers with `python "
             "scripts/com_signatures.py MoveFaceFeatures`.",
+        )
+
+    #: How far Inventor's thicken may differ from the area-times-thickness
+    #: prediction before the feature is treated as a mis-call and deleted.
+    #:
+    #: Deliberately enormous, because of what it is guarding against. This
+    #: method's argument order has never been read off a type library, and
+    #: `Distance` is a variant while `Direction` is an enum *integer* -- so an
+    #: argument order that is wrong in the way `_profiles` is safe from would
+    #: not be a type mismatch here: it would hand Inventor a thickness of
+    #: 20,481 cm and build a part the size of a house. A factor of four catches
+    #: that and nothing subtler. The fine end is the divergence check's job,
+    #: where a disagreement is reported rather than refused.
+    _THICKEN_SANITY = 4.0
+
+    def thicken(self, doc_id: str, request: ThickenRequest) -> FeatureInfo:  # pragma: no cover
+        """Add or remove a layer on faces, each along its own normal.
+
+        **Never executed against a real Inventor**, and its signature has never
+        been read either -- `docs/INVENTOR_SETUP.md` has the ordered list of
+        what a run must settle. What is recorded is that `ThickenFeatures.Add`
+        is public; the argument order is Inventor's documented one and is a
+        proposal.
+
+        Two things make this riskier than `move_face` and are handled here
+        rather than left to the run. Its arguments are a variant and two enums,
+        so a wrong *order* need not raise -- it can be accepted and build
+        something enormous. And the direction-and-operation meaning is a claim
+        about Inventor: the simulator derives it from set algebra, which is
+        sound for a boolean against a slab and says nothing about whether
+        Inventor's "negative" means the same side. So the result is measured
+        against the prediction and a wild disagreement is refused, with the
+        feature deleted rather than left in the part.
+        """
+        document = self._doc(doc_id)
+        faces, matched = self._topology_selection(doc_id, request.faces)
+        if int(faces.Count) == 0:
+            raise FeatureError(
+                "No faces matched, so there is nothing to thicken.",
+                hint="Run `select_topology` with the same selector to see what it matches.",
+            )
+        share = THICKEN_SHARE[(request.direction, request.operation)]
+        area = sum(info.area or 0.0 for info in matched)
+        predicted = share * area * request.thickness.value
+        before = _solid_volume(document)
+        features = document.ComponentDefinition.Features.ThickenFeatures
+        with self._batch(document), self._translate_errors("Thicken"):
+            feature, made_by = self._add_thicken(features, faces, request)
+            if request.name:
+                feature.Name = request.name
+            moved = None if before is None else _volume_change(document, before)
+            if (predicted and moved is not None
+                    and not _within_a_factor(moved, predicted, self._THICKEN_SANITY)):
+                _delete_quietly(feature)
+                raise FeatureError(
+                    f"Thicken moved {moved:.4f} cm^3 where {predicted:.4f} was "
+                    f"predicted from {area:.4f} cm^2 of face and a "
+                    f"{request.thickness.expression} layer, which is too far out "
+                    "to be a disagreement about geometry.",
+                    hint=f"The feature was built by {made_by} and has been deleted "
+                    "again. This call's argument order has never been read from a "
+                    "type library -- `python scripts/com_signatures.py "
+                    "ThickenFeatures` is how to settle it, and an order that puts "
+                    "the direction enum where the distance goes looks exactly like "
+                    "this.",
+                )
+        return _feature_info(feature, "thicken", {
+            "faces": int(faces.Count),
+            "thickness": request.thickness.as_dict(),
+            "direction": request.direction,
+            "operation": request.operation,
+            "area_cm2": round(area, 6),
+            "predicted_cm3": round(predicted, 6),
+            "built_by": made_by,
+        })
+
+    def _add_thicken(self, features: Any, faces: Any,
+                     request: ThickenRequest) -> tuple[Any, str]:  # pragma: no cover
+        """Build the thicken feature, by whichever route this release offers.
+
+        The definition route is tried first where it exists, because a
+        definition's properties are named and so cannot be filled in the wrong
+        order -- which is the specific failure this whole method is careful
+        about. `Add`'s arguments are then Inventor's documented order and are
+        never permuted: a permutation that Inventor accepts is a part built
+        wrongly, and unlike `_profiles`'s two forms there is nothing here to
+        tell the two apart at the call.
+
+        What *is* tried twice is the trailing `VerifyResults`, present and
+        absent. That is the same optional-with-a-default problem `AddForSolid`
+        had, where leaving it out sends a missing variant Inventor rejects as a
+        type mismatch, and appending an optional flag cannot change what the
+        earlier arguments mean.
+        """
+        direction = self._k(EXTENT_DIRECTIONS[request.direction])
+        operation = self._k(BOOLEAN_OPERATIONS[request.operation])
+        thickness = request.thickness.expression
+        failures: list[str] = []
+
+        factory = getattr(features, "CreateThickenDefinition", None)
+        if factory is not None:
+            try:
+                definition = factory(faces, thickness, direction, operation)
+                return features.Add(definition), "CreateThickenDefinition + Add"
+            except Exception as exc:
+                failures.append(f"CreateThickenDefinition: {_com_message(exc)}")
+
+        # IsOffset is False throughout: the offset mode produces a surface body
+        # and nothing in this server can hold one. `schema.ThickenOp` says so.
+        for arguments in ((faces, thickness, direction, operation, False),
+                          (faces, thickness, direction, operation, False, True)):
+            try:
+                return features.Add(*arguments), f"Add with {len(arguments)} arguments"
+            except Exception as exc:
+                failures.append(f"Add/{len(arguments)}: {_com_message(exc)}")
+
+        raise FeatureError(
+            f"No route to a thicken feature on this release: {'; '.join(failures)}",
+            hint="Read what it really takes with `python scripts/com_signatures.py "
+            "ThickenFeatures`. This call has never run against an Inventor -- "
+            "docs/INVENTOR_SETUP.md says so and says what to confirm.",
         )
 
     def combine(self, doc_id: str, request: CombineRequest) -> FeatureInfo:  # pragma: no cover
@@ -4733,6 +4869,26 @@ def _driven_parameters(plan: SketchPlan, applied: Sequence[str]) -> list[str]:
             continue
     return sorted(names)
 
+
+
+def _volume_change(document: Any, before: float) -> float | None:  # pragma: no cover
+    """How much the part's volume moved since *before*, or None if unreadable."""
+    after = _solid_volume(document)
+    return None if after is None else after - before
+
+
+def _within_a_factor(measured: float, predicted: float, factor: float) -> bool:
+    """Whether *measured* is the same sign as *predicted* and within *factor* of it.
+
+    Both halves matter. A layer that grew the part where one was predicted to
+    shrink it is the wrong side, which no magnitude test sees; and a factor
+    rather than a percentage is what catches an argument handed in as an enum
+    integer without faulting an honest disagreement about curvature.
+    """
+    if (measured < 0) != (predicted < 0):
+        return False
+    ratio = abs(measured) / abs(predicted)
+    return 1 / factor <= ratio <= factor
 
 def _solid_volume(document: Any) -> float | None:
     """The current volume, or None if it cannot be measured.

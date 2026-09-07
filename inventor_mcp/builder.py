@@ -30,6 +30,7 @@ from .backend.base import (
     CombineRequest,
     DraftRequest,
     MoveFaceRequest,
+    ThickenRequest,
     EmbossRequest,
     ExtrudeRequest,
     FeatureInfo,
@@ -61,6 +62,7 @@ from .schema import (
     CombineOp,
     DraftOp,
     MoveFaceOp,
+    ThickenOp,
     EmbossOp,
     ExtrudeOp,
     FilletOp,
@@ -530,6 +532,17 @@ def _apply_one(session: Session, context: DocumentContext, op: Operation) -> dic
             name=op.name,
         )
         return _record(context, backend.move_face(context.doc_id, request), "move_face")
+
+    if isinstance(op, ThickenOp):
+        request = ThickenRequest(
+            faces=resolve_selector(op.faces, resolver, kind="face"),
+            thickness=_driven(  # type: ignore[arg-type]
+                resolver.length(op.thickness, "thicken thickness", positive=True)),
+            direction=op.direction,
+            operation=op.operation,
+            name=op.name,
+        )
+        return _record(context, backend.thicken(context.doc_id, request), "thicken")
 
     if isinstance(op, CombineOp):
         request = CombineRequest(

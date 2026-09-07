@@ -1,0 +1,65 @@
+{
+  "name": "CalibrationThinnedWall",
+  "description": "The same plate with one side wall thinned 1 mm from behind, rather than four walls grown. This fixture is not about the magnitude -- 40 x 6 x 1 mm is 0.24 cm^3 and its partner already establishes that the arithmetic per face is exact. It is about the SIDE, which is the one thing in `thicken` that no amount of arithmetic settles. THICKEN_SHARE in backend/base.py says a `negative` layer lies behind the face, in the material, so cutting it removes 0.24 cm^3 and the plate becomes 79 mm wide. That is set algebra about a boolean against a slab and it is sound; what it does not know is whether Inventor means the same side by `negative`. If Inventor reads it the other way the layer is outside the solid, there is nothing to cut, and this run comes back 0.0000 rather than -0.2400 -- and if it reads `negative` as this side but applies the operation to the far one, the answer is a positive number. So the three outcomes are distinguishable: -0.2400 confirms the table, 0.0000 says the side is inverted, and anything positive says something else again. This is the trim inversion's lesson applied before it can be repeated: defect 5 survived three runs because the volume was correct for the half it kept.",
+  "units": "mm",
+  "parameters": [
+    {
+      "name": "plate_w",
+      "value": 80
+    },
+    {
+      "name": "plate_d",
+      "value": 40
+    },
+    {
+      "name": "plate_t",
+      "value": 6
+    },
+    {
+      "name": "shave",
+      "value": 1,
+      "comment": "taken off behind one wall; 40 x 6 x 1 mm is 0.24 cm^3"
+    }
+  ],
+  "operations": [
+    {
+      "op": "sketch",
+      "name": "Outline",
+      "plane": "xy",
+      "entities": [
+        {
+          "type": "rectangle",
+          "center": [
+            0,
+            0
+          ],
+          "width": "plate_w",
+          "height": "plate_d"
+        }
+      ]
+    },
+    {
+      "op": "extrude",
+      "name": "Plate",
+      "sketch": "Outline",
+      "distance": "plate_t"
+    },
+    {
+      "op": "thicken",
+      "name": "Shave",
+      "faces": {
+        "kind": "face",
+        "filter": "vertical",
+        "near": [
+          40,
+          0,
+          3
+        ],
+        "limit": 1
+      },
+      "thickness": "shave",
+      "direction": "negative",
+      "operation": "cut"
+    }
+  ]
+}

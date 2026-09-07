@@ -5,6 +5,86 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 ## Unreleased
 
 ### Added
+- **`thicken`: a layer on faces, each along its own normal.** Tier 2's second
+  item, and it closes half of what that item asked for. The half it closes is
+  the wall-thickness one, and the property that matters is the normal: a box's
+  four walls point four ways, so `positive` + `join` grows all four outward in
+  one operation where a single named direction would push two out and two in.
+  That is what makes it a different operation from `move_face` rather than a
+  spelling of it, and it is the DFM wall remedy -- `dfm/discover.py` has counted
+  a thicken feature's thickness as evidence of the `wall` role since before one
+  could be built.
+
+  `{"op":"thicken","faces":{...},"thickness":"wall","direction":"positive",
+  "operation":"join"}`. `negative` + `cut` thins the walls instead; `symmetric`
+  does half either way.
+
+  **The half it does not close is the headline one -- turning a surface into a
+  wall -- and the reason is not the schema.** *No operation in this server
+  creates a surface.* `extrude`, `loft` and `sweep` all produce solids, so the
+  only surface a part here could hold is one that arrived through
+  `import_geometry`, and thickening that would work today. Inventor's offset
+  mode is absent for the same reason: it *produces* a surface and nothing
+  downstream could take one. Recorded in `FEATURE_COVERAGE.md` under Tier 1c
+  rather than left as an implied gap.
+
+  **Exact per planar face, first-order on a curved one, and charged either
+  way.** A planar face's area times the layer is a prism. A cylinder of radius r
+  thickened by t gains `pi*((r+t)^2 - r^2)*h` where `area*t` is `2*pi*r*h*t`, so
+  the missing term is `pi*t^2*h` -- second order, and small while the layer is
+  thin next to the radius, which is what a wall is. That it is charged at all is
+  the opposite of what `move_face` does with the same face, and the difference
+  is real: there the move's direction is arbitrary relative to the face so the
+  dot product has no answer, while here the direction *is* the face's own
+  normal.
+
+  **What is unmeasured about this one is a side and a corner, not a number.**
+  `THICKEN_SHARE` says the layer is a slab swept from the face, the operation is
+  a boolean, and a face's normal points out of the solid -- so the outward half
+  is air, the inward half is material, and `positive` + `cut` and `negative` +
+  `join` therefore do *nothing at all*. That is sound set algebra and it is
+  silent on whether Inventor means the same side by "negative". So:
+
+  * the two cancelling pairs are **warned about at rehearsal rather than
+    refused**. A refusal would prevent the run that settles the question, which
+    is the mistake the `shell` `both` enum made -- that refusal was right and it
+    hid the fact that nothing had ever exercised the path;
+  * the table lives in `backend/base.py`, above both backends, rather than as a
+    copy in each. Two self-consistent halves disagreeing about which side
+    something goes on is exactly how defect 5 survived three runs, and one table
+    cannot disagree with itself;
+  * `thinned_wall.json` is shaped so its three possible outcomes are three
+    different numbers -- **-0.2400** confirms the table, **0.0000** says the
+    layer landed outside the solid and the side is inverted, anything positive
+    says something else again. A tolerance cannot catch a side: the `trim`
+    inversion was 1.2% apart while keeping the opposite half of the part;
+  * `thickened_walls.json` carries the corner question. Four walls grown 1 mm
+    outward leave a 1 x 1 x 6 mm notch at each corner belonging to no wall, so
+    the answer is **1.4400 cm^3** if Inventor leaves them and **1.4640** if it
+    closes them. `--only thicken` reports which rather than asserting one:
+    nobody has measured it, and a check that picked one would be inventing the
+    answer it then confirms.
+
+  **And one risk is handled in the code rather than left to a run.**
+  `ThickenFeatures.Add` takes a face collection, a variant distance and two enum
+  *integers*, so a wrong argument order need not raise the way `_profiles`'s two
+  forms cannot mislead -- Inventor would accept a thickness of 20,481
+  (`kNewBodyOperation`) and build a part the size of a house, successfully. So
+  `CreateThickenDefinition` is tried first where a release has it, because a
+  definition's properties are named and cannot be filled in the wrong order;
+  `Add`'s arguments are never permuted, only its trailing optional
+  `VerifyResults`; and the result is measured against the area-times-thickness
+  prediction and refused outside a factor of four, with the feature deleted
+  rather than left in the part. The factor is deliberately enormous: it catches
+  20,481 cm and nothing subtler, because the subtler end is the divergence
+  check's job.
+
+  `_topology_collection` gained a sibling, `_topology_selection`, returning the
+  matched faces alongside the collection so that prediction comes out of the
+  same select as the faces themselves. Two selects would be two chances to match
+  differently.
+
+### Added
 - **`move_face`: the one way to change geometry this server did not build.**
   Tier 2's third item, taken first of the three because it is the only one that
   adds a *kind* of reach rather than a feature. `import_geometry` could read a

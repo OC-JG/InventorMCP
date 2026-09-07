@@ -1046,6 +1046,104 @@ def _parameter_value(recipe: PartRecipe, name: str) -> float:
     raise KeyError(f"{recipe.name} has no parameter {name!r}")
 
 
+def check_thicken(session: Session, report: Report) -> None:
+    """`thicken`, whose COM half has never executed -- nor been read.
+
+    Two questions, one fixture each, and neither is about arithmetic. On a
+    single planar face `thicken` and `move_face` come out identical by
+    construction, so the magnitude is already established by `--only move-face`
+    and `tests/test_thicken.py`. What a live seat is needed for is:
+
+    * **the corners**, which `thickened_walls` isolates. Four walls grown 1 mm
+      outward is the case a single direction cannot express, and the four layers
+      do not meet: a 1 x 1 x 6 mm notch at each corner belongs to no wall. So
+      the answer is 1.4400 cm^3 if Inventor leaves them and 1.4640 if it closes
+      them. Both are defensible; this reports which, rather than asserting the
+      one the simulator happens to sum.
+    * **the side**, which `thinned_wall` isolates and no magnitude reveals.
+      `THICKEN_SHARE` says a `negative` layer lies behind the face, in the
+      material, so cutting it removes 0.24 cm^3. That is set algebra and says
+      nothing about whether Inventor agrees. Three outcomes are
+      distinguishable and this asserts the one the table claims.
+
+    That second one is defect 5's lesson applied in advance. A `trim` kept the
+    wrong half of a part for as long as the feature existed, and one of the runs
+    that found it was 1.2% apart -- inside every tolerance -- because the volume
+    was right for the half it kept. Only a fixture whose wrong answers are
+    *different numbers* catches a side.
+    """
+    print("\n--- thicken: the COM half, which has never run")
+    if session.backend.name == "mock":
+        report.skip("thicken: not run",
+                    "the simulator implements the table it would be checked "
+                    "against, so it would only confirm itself. Use --backend inventor.")
+        return
+
+    # 1. The corners. Reported rather than asserted: nobody has measured which
+    #    of the two Inventor does, and a check that picked one would be
+    #    inventing the answer it then confirms.
+    walls = _thicken_fixture(session, report, "thickened_walls")
+    if walls is not None:
+        left, closed = 1.44, 1.464
+        matched = ("the notches left open" if abs(walls - left) < 5e-3 else
+                   "the corners closed" if abs(walls - closed) < 5e-3 else None)
+        report.check(
+            matched is not None,
+            f"thicken: four walls moved {walls:+.4f} cm^3, which is "
+            f"{matched or 'neither candidate'}",
+            f"expected {left:+.4f} with the corner notches left open or "
+            f"{closed:+.4f} with them closed -- 4 x 6 mm^3 apart. Neither means "
+            "the layer is not area times thickness per face, which is the one "
+            "part of this that was thought to be arithmetic.")
+        if matched:
+            report.note(
+                f"The corner question is answered: {matched}. If it is the "
+                f"closed one, the simulator's {left:+.4f} is low by 1.7% on any "
+                "multi-face thicken and the ledger should gain the corner term.")
+
+    # 2. The side. Asserted, because the table makes a definite claim and the
+    #    two ways of being wrong are different numbers.
+    thinned = _thicken_fixture(session, report, "thinned_wall")
+    if thinned is not None:
+        report.check(
+            abs(thinned - -0.24) < 5e-3,
+            f"thicken: a negative layer lies behind the face -- measured "
+            f"{thinned:+.4f} cm^3 against -0.2400 derived",
+            "0.0000 would mean Inventor puts a `negative` layer outside the "
+            "solid, so there was nothing to cut and THICKEN_SHARE has the side "
+            "inverted; a positive figure means something else again. Fix the "
+            "table in backend/base.py rather than the tolerance -- being wrong "
+            "about a side is what defect 5 was.")
+
+
+def _thicken_fixture(session: Session, report: Report, stem: str) -> float | None:
+    """Build one thicken fixture and return what its last operation moved.
+
+    The plate before it is derived from the recipe's own parameters rather than
+    measured, so the figure compared is a prediction and not a reading taken
+    after the fact.
+    """
+    print(f"\n--- thicken: {stem}")
+    path = CALIBRATION / f"{stem}.json"
+    recipe = PartRecipe.model_validate(json.loads(path.read_text(encoding="utf-8")))
+    context, broken = build(session, recipe)
+    try:
+        if broken:
+            # The first failure carries the hint naming every route tried.
+            report.check(False, f"thicken: {stem} builds in Inventor", broken[0][:600])
+            return None
+        report.check(True, f"thicken: {stem} builds in Inventor")
+        seen = measure(session, context)
+        if seen is None or "volume_cm3" not in seen:
+            report.check(False, f"thicken: {stem} can be measured")
+            return None
+        return seen["volume_cm3"] - _plate_volume(recipe)
+    finally:
+        if context:
+            session.backend.close_document(context.doc_id, save=False)
+            session.forget(context.doc_id)
+
+
 def check_work_geometry(session: Session, report: Report) -> None:
     """The five Phase 2 behaviours whose COM half has never executed.
 
@@ -1683,6 +1781,7 @@ CHECKS = {
     "calibration": check_calibration,
     "work-geometry": check_work_geometry,
     "move-face": check_move_face,
+    "thicken": check_thicken,
     "views": check_views,
 }
 

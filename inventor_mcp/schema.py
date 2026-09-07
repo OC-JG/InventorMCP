@@ -796,6 +796,56 @@ class MoveFaceOp(OpBase):
     flip: bool = Field(False, description="Move against `direction` rather than along it.")
 
 
+class ThickenOp(OpBase):
+    """Add or remove a layer of material on faces, each along its own normal.
+
+    The wall-thickness operation. Where `move_face` translates faces along one
+    direction the caller names, this thickens each face along its *own* normal,
+    which is what "make every wall 0.5 mm thicker" means and what a single
+    direction cannot say: the four walls of a box point four different ways.
+
+    **What each direction and operation pair does to a solid**, which is set
+    algebra rather than an Inventor quirk -- the layer is a slab swept from the
+    face and the operation is a boolean, so:
+
+    * `positive` + `join` grows the part by area times thickness. The usual one.
+    * `negative` + `cut` removes that much from behind the faces. Thinning.
+    * `symmetric` straddles the face, so half the layer is already material and
+      the net change is half the thickness either way.
+    * `positive` + `cut` and `negative` + `join` change **nothing** -- the layer
+      is where the material already is not, or already is. They are warned
+      about at rehearsal rather than refused, because that is a claim about
+      Inventor nobody here has measured yet.
+
+    Inventor's offset mode, its `intersect` and `new_body` operations and its
+    surface output are all deliberately absent. Offset and surface output both
+    produce a surface body, and this server has no surface anywhere -- nothing
+    downstream could take one. `intersect` on a layer outside the solid leaves
+    nothing at all, which is a way to delete a part rather than an operation.
+
+    The other half of what Inventor's Thicken does -- **turning a surface into
+    a wall** -- is out of reach for the same reason as the offset mode, and not
+    because of this schema: no operation here creates a surface, so the only
+    surface a part could hold is one that arrived through `import_geometry`.
+    """
+
+    op: Literal["thicken"] = "thicken"
+    faces: Selector = Field(
+        default_factory=lambda: Selector(kind="face"),
+        description="Faces to thicken. Each grows along its own normal.",
+    )
+    thickness: ValueSpec = Field(
+        1.0, description="How thick a layer. Always positive -- `direction` says which way."
+    )
+    direction: Direction = Field(
+        "positive",
+        description="'positive' outward along each face's normal, 'negative' inward, "
+        "'symmetric' half either side.",
+    )
+    operation: Literal["join", "cut"] = Field(
+        "join", description="Add the layer or remove it."
+    )
+
 class RibOp(OpBase):
     """A rib: a thin web standing on the part, in a plane you choose.
 
@@ -908,6 +958,7 @@ Operation = Annotated[
         EmbossOp,
         DraftOp,
         MoveFaceOp,
+        ThickenOp,
         RibOp,
         CombineOp,
         SplitOp,

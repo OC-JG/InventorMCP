@@ -124,6 +124,17 @@ from .session import DocumentContext
 #: What 0.50 still catches is what any tolerance under 1.0 catches -- a sign
 #: flip, and a change where none was predicted, which for this operation means
 #: Inventor moved the faces the other way or did not move them at all.
+#: `thicken` is at 0.50 for the same reason as `move_face` and one more of its
+#: own. The arithmetic is exact for a planar face -- its area times the layer --
+#: and it is first-order for a curved one, missing a term in the square of the
+#: thickness. But the number also rests on `THICKEN_SHARE`, which says which
+#: side of a face a `negative` layer goes on, and *that* is a claim about
+#: Inventor rather than arithmetic: sound set algebra about a boolean against a
+#: slab, and silent on whether Inventor agrees about the side. A tolerance
+#: cannot cover being wrong about the side at all -- the `trim` inversion was
+#: 1.2% out while keeping the opposite half of the part -- so what guards it is
+#: the centroid check and the COM backend refusing a result that is not within a
+#: factor of its prediction, not this entry.
 PREDICTED = {
     "extrude": 0.02,
     "hole": 0.02,
@@ -141,6 +152,7 @@ PREDICTED = {
     "loft": 0.35,
     "emboss": 0.40,
     "move_face": 0.50,
+    "thicken": 0.50,
 }
 
 
@@ -581,6 +593,23 @@ def _warn_about(warnings: list[dict[str, Any]], where: str, op: Operation,
                    "`extrude` cut with `direction: \"symmetric\"` and "
                    "`extent: \"through_all\"`, or drill each wall on its own "
                    "sketch.",
+        })
+
+    # A thicken whose direction and operation cancel builds a feature and
+    # leaves the part alone. `positive`+`cut` is caught by the subtractive rule
+    # below; `negative`+`join` is not subtractive and would otherwise pass in
+    # silence, which for the commonest mistake in a recipe is the wrong answer.
+    cancels = (outcome.get("detail") or {}).get("changes_nothing")
+    if op.op == "thicken" and cancels:
+        warnings.append({
+            "where": where,
+            "warning": f"this layer changes nothing: {cancels}",
+            "why": "Inventor will build the feature and the part will be exactly "
+                   "as it was. To grow the part use `direction: \"positive\"` with "
+                   "`operation: \"join\"`; to thin it, `negative` with `cut`. "
+                   "`symmetric` does half either way. Whether Inventor agrees "
+                   "which side `negative` is has not been measured -- see the "
+                   "thicken section of docs/INVENTOR_SETUP.md.",
         })
 
     subtractive = op.op in _SUBTRACTIVE or getattr(op, "operation", None) == "cut"
