@@ -391,6 +391,29 @@ actually bitten.
       precisely the failure `describe_feature` already records. It is a backend
       method now, `list_work_geometry`, implemented on both.
 
+      **Fourth run: the cause, at last -- and it was never the three calls.**
+      `_carrier_point` created its sketch point with no position and left a
+      driving dimension to place it. Inventor infers a coincidence with the
+      projected origin for a point built at (0, 0), that pins both degrees of
+      freedom, and the dimension cannot move it -- so the carrier point stayed on
+      the origin and every `normal_to_plane` axis ran through the origin.
+      Defect 11.
+
+      **It hid behind its own symmetry for three runs.** A bolt circle about an
+      origin axis has its centroid *at* the origin, so the centre of mass does
+      not move when the parameter does -- exactly the reading this item told the
+      check to interpret as "parametric in name only". The check said so three
+      times while pointing at the wrong thing, and the two faults fixed on the
+      way (defects 8 and 9) were both real and neither the cause.
+
+      What separated them was one more number: **the volume changed while the
+      centre of mass did not.** The pilot hole moved as asked; the axis did not.
+      A parameter that moves some geometry and not the rest is not a parametric
+      failure. The check now also builds the same bolt circle about `z` and
+      requires the two to measure apart -- the assertion that would have caught
+      this on the first run, where the volumes would not have: they agree to six
+      decimals either way.
+
       Two more things the run measured, neither of them what it was aimed at:
       **`hole` + `bodies` cannot work on Inventor** -- 2027.1's `HoleFeature`
       has no `AffectedBodies` at all -- and **work geometry does not appear in

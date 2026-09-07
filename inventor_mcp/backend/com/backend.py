@@ -3010,8 +3010,27 @@ class ComBackend(Backend):
         plan = SketchPlan(name=sketch_name, plane=plane)
         if offset_expression:
             plan.offset_expression = offset_expression
-        point = plan.add(PPoint("point1", construction=True), _CARRIER_LABEL)
         u, v = at
+        # Created *at* its position, then dimensioned to hold it there -- which
+        # is what every other `PPoint` in `geometry.py` does, and what this call
+        # alone did not. Built at (0, 0) instead, Inventor infers a coincidence
+        # with the projected origin, that coincidence pins both degrees of
+        # freedom, and the dimension meant to place the point cannot move it.
+        # So the carrier point stayed on the origin, the work axis ran through
+        # the origin, and a bolt circle about it came out symmetric: the centre
+        # of mass did not move by so much as a micron when `bolt_x` changed,
+        # while the volume did, because the pilot hole -- an ordinary sketch
+        # point, built at its real position -- moved as asked. Defect 11,
+        # measured 2026-09-07.
+        #
+        # The dimensions are `abs()` of the coordinate, so the sign lives in the
+        # position and nowhere else. That is the second reason this cannot be
+        # left to the dimension: from the origin, a dimension of 30 says nothing
+        # about which side.
+        point = plan.add(
+            PPoint("point1", construction=True, position=(u.value, v.value)),
+            _CARRIER_LABEL,
+        )
         for kind, driven, text in (("horizontal", u, (0.0, -0.4)), ("vertical", v, (-0.4, 0.0))):
             if abs(driven.value) < 1e-9:
                 plan.constrain(

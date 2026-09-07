@@ -1621,3 +1621,56 @@ class TestWorkGeometryIsAskedOfTheBackend:
         assert not reached, (
             f"live_acceptance.py reaches into COM itself ({sorted(set(reached))}); "
             "that is the wrong-thread failure that cost a run. Ask the backend.")
+
+
+class TestGeometryIsBuiltWhereItGoes:
+    """Defect 11: a sketch point built at (0, 0) cannot be dimensioned away.
+
+    Inventor infers a coincidence with the projected origin for a point built
+    there, that coincidence pins both degrees of freedom, and the dimension
+    meant to place the point cannot move it. `_carrier_point` was the only
+    `PPoint` in the codebase created without a position, so every
+    `normal_to_plane` work axis ran through the origin -- and hid behind the
+    symmetry of a bolt circle about the origin for three live runs.
+    """
+
+    def test_the_carrier_point_is_created_at_its_position(self):
+        import inspect
+
+        source = inspect.getsource(com.ComBackend._carrier_point)
+        assert "position=(u.value, v.value)" in source, (
+            "the carrier point is built without a position again; Inventor will "
+            "pin it to the origin and the dimension will not move it")
+
+    def test_every_point_the_planner_makes_carries_a_position(self):
+        """The convention this call broke. Checked over `geometry.py`, which is
+        where all the others are, so a new one cannot quietly omit it."""
+        import ast
+        import pathlib as _pathlib
+
+        source = (_pathlib.Path(com.__file__).resolve().parent.parent.parent
+                  / "geometry.py").read_text()
+        bare = []
+        for node in ast.walk(ast.parse(source)):
+            if not (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "PPoint"):
+                continue
+            if not any(kw.arg == "position" for kw in node.keywords):
+                bare.append(node.lineno)
+        assert not bare, (
+            f"PPoint built without a position at geometry.py lines {bare}. "
+            "Inventor pins a point built at the origin and no dimension will "
+            "move it -- defect 11.")
+
+    def test_the_acceptance_check_compares_the_axis_against_z(self):
+        """The assertion that would have caught defect 11 on the first run.
+
+        Volumes cannot distinguish a work axis on the origin from a correct one
+        -- they agree to six decimals -- so the check has to compare position
+        against a pattern about `z`, which is what a misplaced axis imitates.
+        """
+        text = (pathlib.Path(__file__).resolve().parent.parent
+                / "scripts" / "live_acceptance.py").read_text()
+        assert "_compare_axis_against_z" in text
+        assert "an off-centre axis is not the same as Z" in text

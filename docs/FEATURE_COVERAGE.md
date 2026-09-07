@@ -498,3 +498,44 @@ Each of these was hit while building real parts, and each passed
     underscore or capitalise the name. The acceptance run keeps the probe as a
     regression check, so a release that changes its mind shows up there rather
     than in somebody's recipe.
+
+11. ~~**The carrier point never left the origin, so every `normal_to_plane` work
+    axis ran through the origin.**~~ *Found and fixed 2026-09-07, fourth live
+    run. The one that hid behind three earlier failures.*
+
+    `_carrier_point` created its point as `PPoint("point1", construction=True)`
+    -- **with no position** -- and relied on a driving dimension to place it at
+    `at`. Every other `PPoint` in `geometry.py` is created *at* its coordinates
+    and then dimensioned to hold it there; this call was the only exception.
+
+    Built at (0, 0), Inventor infers a coincidence with the projected origin,
+    that coincidence pins both degrees of freedom, and the dimension meant to
+    place the point cannot move it. So the point stayed on the origin, and so
+    did the axis through it.
+
+    **Why it took four runs.** A bolt circle about an axis on the origin is
+    *symmetric*: six holes evenly spaced around the origin have their centroid
+    at the origin, so the centre of mass does not move when the driving
+    parameter does -- which is exactly the reading the check was written to
+    interpret as "the axis is parametric in name only". It said so three times
+    and was pointing at the wrong thing. Two other faults were fixed on the way
+    to it (defect 8, the labels; defect 9, the missing rebuild), both real,
+    neither the cause.
+
+    The fourth run is what separated them, and only because it printed one more
+    number: **the volume changed while the centre of mass did not.** The pilot
+    hole is an ordinary sketch point, built at its real position, so it moved as
+    asked; the pattern axis did not. A parameter that moves some geometry and
+    not the rest is not a parametric failure, and that is what said the axis
+    itself was in the wrong place.
+
+    The sign matters too, and is the second reason this cannot be left to a
+    dimension: the dimensions are `abs()` of each coordinate, so from the origin
+    a dimension of 30 says nothing about which side. The position carries the
+    sign and nothing else does.
+
+    `check_work_geometry` now also builds the same bolt circle about the created
+    axis and about `z` and requires the two to measure *apart*. That is the
+    assertion that would have caught this on the first run, and the volumes
+    would not have: they agree to six decimals whether the axis is right or
+    wrong.

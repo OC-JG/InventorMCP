@@ -5,6 +5,52 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 ## Unreleased
 
 ### Fixed
+- **Every `normal_to_plane` work axis ran through the origin** — defect 11,
+  found on the fourth live run and the actual cause of a failure three earlier
+  runs had misread. `_carrier_point` created its point as
+  `PPoint("point1", construction=True)` — **with no position** — and left a
+  driving dimension to place it at `at`. Every other `PPoint` in `geometry.py`
+  is created at its coordinates and then dimensioned to hold it there; this was
+  the only exception. Built at (0, 0), Inventor infers a coincidence with the
+  projected origin, that coincidence pins both degrees of freedom, and the
+  dimension cannot move the point. So the point stayed on the origin, and so did
+  the axis through it.
+
+  **It hid behind its own symmetry.** A bolt circle about an axis on the origin
+  has its centroid at the origin, so the centre of mass does not move when the
+  driving parameter does — which is precisely the reading the check was written
+  to interpret as "the axis is parametric in name only". It reported that three
+  times while pointing at the wrong thing. The two faults fixed on the way
+  (defect 8, the sketch labels; defect 9, the missing rebuild) were both real
+  and neither was the cause.
+
+  What separated them was one more number: **the volume changed while the centre
+  of mass did not.** The pilot hole is an ordinary sketch point, built at its
+  real position, so it moved as asked; the pattern axis did not. A parameter
+  that moves some geometry and not the rest is not a parametric failure, and
+  that is what said the axis itself was misplaced.
+
+  The sign is the second reason this cannot be left to a dimension: the
+  dimensions are `abs()` of each coordinate, so from the origin a dimension of
+  30 says nothing about which side.
+
+  `check_work_geometry` now builds the same bolt circle about the created axis
+  and about `z` and requires the two to measure apart — the assertion that would
+  have caught this on the first run. The volumes would not have: they agree to
+  six decimals whether the axis is right or wrong.
+
+### Changed
+- **The `list_features` divergence has its missing fact.** On a part carrying one
+  created work point, 2027.1 reports `work_planes` as
+  `['YZ Plane', 'XZ Plane', 'XY Plane']`, `work_axes` as
+  `['X Axis', 'Y Axis', 'Z Axis']` and `work_points` as
+  `['Center Point', 'Datum']` — so Inventor's origin geometry does sit in those
+  collections and a created one is the extra entry. Recorded rather than acted
+  on: filtering by name would break on a rename or a localised Inventor, and the
+  positional rule the numbers suggest wants confirming on another release before
+  `edit_feature` and the DFM loop rely on it.
+
+### Fixed
 - **A parameter change rebuilt nothing, so every measurement after it was of the
   part as it had been** — defect 9, found on the third live run.
   `document.Update()` is called from `_batch`, and `set_parameter` was **the

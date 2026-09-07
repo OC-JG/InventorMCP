@@ -1111,6 +1111,15 @@ def check_work_geometry(session: Session, report: Report) -> None:
         session.backend.close_document(context.doc_id, save=False)
         session.forget(context.doc_id)
 
+    # 3b. The discriminator that would have caught defect 11 on the first run.
+    #     A bolt circle about an axis at (bolt_x, 0) and the same one about Z
+    #     must not measure the same: about Z the six holes sit evenly around the
+    #     origin, so their centroid *is* the origin. That symmetry is exactly
+    #     what hid a work axis stuck on the origin behind a centre of mass that
+    #     never moved -- three runs of reading "0.00000 mm" as a parametric
+    #     failure, when the axis was in the wrong place from the start.
+    _compare_axis_against_z(session, report, plate)
+
     # 4. A hole aimed at the second body, which is aimed after it is built.
     recipe = PartRecipe.model_validate({
         "name": "AimedHole", "units": "mm", "operations": [
@@ -1200,6 +1209,78 @@ def check_work_geometry(session: Session, report: Report) -> None:
             except Exception:
                 pass
             session.forget(handle)
+
+
+def _compare_axis_against_z(session: Session, report: Report,
+                            plate: list[dict]) -> None:
+    """The same bolt circle about a created axis and about Z, measured apart.
+
+    A work axis that silently sits on the origin is indistinguishable from a
+    correct one by volume, and its centre of mass does not move when the
+    parameter does -- which reads as "the axis is not parametric" and sent three
+    runs looking in the wrong place. Patterning about Z gives exactly the
+    symmetric result such an axis produces, so if the two agree, the axis is not
+    where it was asked to be.
+    """
+    def bolt_circle(axis: str):
+        recipe = PartRecipe.model_validate({
+            "name": f"BoltCircle_{axis}", "units": "mm",
+            "parameters": [{"name": "bolt_x", "value": 30},
+                           {"name": "bolt_spacing", "value": 30}],
+            "operations": plate + [
+                {"op": "work_axis", "name": "BoltAxis", "plane": "xy",
+                 "at": ["bolt_x", 0]},
+                {"op": "sketch", "name": "Pilot", "plane": "xy", "entities": [
+                    {"type": "point", "position": ["bolt_x + bolt_spacing / 2", 0]}]},
+                {"op": "hole", "name": "Bolt1", "sketch": "Pilot", "diameter": 5,
+                 "through_all": True},
+                {"op": "circular_pattern", "name": "Ring", "features": ["Bolt1"],
+                 "axis": axis, "count": 6, "angle": "360 deg"},
+            ]})
+        context, broken = build(session, recipe)
+        if broken:
+            return context, None
+        return context, session.backend.mass_properties(context.doc_id)
+
+    contexts = []
+    try:
+        about_axis_context, about_axis = bolt_circle("BoltAxis")
+        contexts.append(about_axis_context)
+        about_z_context, about_z = bolt_circle("z")
+        contexts.append(about_z_context)
+        if about_axis is None or about_z is None:
+            report.check(False, "work-geometry: both bolt circles build",
+                         "one of the two did not, so there is nothing to compare")
+            return
+        gap = _centre_shift_mm(about_axis, about_z)
+        if gap is None:
+            # No centroid to compare, so this says nothing -- and a backend that
+            # reports none is not a backend whose axis is wrong.
+            report.skip("work-geometry: an off-centre axis is not the same as Z",
+                        "this backend reported no centre of mass. Inventor's "
+                        "MassProperties does.")
+            return
+        report.check(
+            gap > 1e-3,
+            "work-geometry: an off-centre axis is not the same as Z",
+            f"the two centres of mass are {gap:.5f} mm apart. Zero means the "
+            "created axis behaved exactly like Z through the origin -- the "
+            "signature of a carrier point that never left the origin, which is "
+            "defect 11. Volumes: "
+            f"{about_axis.volume:.6f} about the axis, {about_z.volume:.6f} "
+            "about Z; those can agree even when the axis is wrong, which is why "
+            "this compares position.")
+        report.note(f"work-geometry: about the axis vs about Z, centres of mass "
+                    f"{gap:.5f} mm apart")
+    finally:
+        for context in contexts:
+            if context is None:
+                continue
+            try:
+                session.backend.close_document(context.doc_id, save=False)
+            except Exception:
+                pass
+            session.forget(context.doc_id)
 
 
 def _probe_parameter_names(session: Session, report: Report) -> None:

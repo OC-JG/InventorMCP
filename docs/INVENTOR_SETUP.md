@@ -407,11 +407,24 @@ What the second run left open, and what to do about each:
   `AffectedBodies`; see the gap list in `FEATURE_COVERAGE.md`. The acceptance
   check skips it with that reason rather than failing every run, and `rehearse`
   warns on the field.
-* **Work geometry is absent from `list_features`.** The COM backend walks
-  `ComponentDefinition.Features`; Inventor keeps work planes, axes and points in
-  their own collections, and the mock puts them all in one list. The check now
-  prints what those three collections hold, because fixing the divergence needs
-  to know whether Inventor's own origin planes and axes are in there too.
+* **Work geometry is absent from `list_features`, and the missing fact is now
+  measured.** The COM backend walks `ComponentDefinition.Features`; Inventor
+  keeps work planes, axes and points in their own collections, and the mock puts
+  them all in one list. On a part carrying one created work point, 2027.1
+  reports:
+
+      work_planes  3: ['YZ Plane', 'XZ Plane', 'XY Plane']
+      work_axes    3: ['X Axis', 'Y Axis', 'Z Axis']
+      work_points  2: ['Center Point', 'Datum']
+
+  So **Inventor's origin geometry does sit in those collections** -- three
+  planes, three axes and a `Center Point` -- and a created one is simply the
+  extra entry. That is what a `list_features` fix needed and did not have.
+  Filtering by name would be the wrong way to use it (a user can rename an
+  origin plane, and a localised Inventor names them differently); what the
+  numbers show is that a *positional* rule -- the first three, three and one --
+  matches this release, and that wants confirming on another before anything
+  relies on it.
 
 ## Known-shaky areas
 
