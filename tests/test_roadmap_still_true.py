@@ -34,7 +34,7 @@ import re
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-ROADMAP = (ROOT / "docs/ROADMAP.md").read_text()
+ROADMAP = (ROOT / "docs/ROADMAP.md").read_text(encoding="utf-8")
 
 WORDS = {
     "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
@@ -60,7 +60,7 @@ def ponytail_markers() -> dict[str, int]:
     """
     counts: dict[str, int] = {}
     for path in sorted((ROOT / "inventor_mcp").rglob("*.py")):
-        found = sum(1 for line in path.read_text().splitlines() if "ponytail:" in line)
+        found = sum(1 for line in path.read_text(encoding="utf-8").splitlines() if "ponytail:" in line)
         if found:
             # `as_posix`, not `str`: on Windows the key came out with
             # backslashes, the lookup below asked for the forward-slash spelling
@@ -154,7 +154,7 @@ class TestTheCalibratedTolerances:
         that is the entry's claim, and a missing one means the number cannot be
         re-measured when someone doubts it."""
         recipes = " ".join(
-            path.read_text() for path in (ROOT / "examples/calibration").glob("*.json"))
+            path.read_text(encoding="utf-8") for path in (ROOT / "examples/calibration").glob("*.json"))
         for operation in self.QUOTED:
             assert f'"{operation}"' in recipes, (
                 f"no calibration recipe exercises {operation}")

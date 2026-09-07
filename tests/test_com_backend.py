@@ -1613,7 +1613,7 @@ class TestWorkGeometryIsAskedOfTheBackend:
         import ast
 
         source = (pathlib.Path(__file__).resolve().parent.parent
-                  / "scripts" / "live_acceptance.py").read_text()
+                  / "scripts" / "live_acceptance.py").read_text(encoding="utf-8")
         reached = [node.attr for node in ast.walk(ast.parse(source))
                    if isinstance(node, ast.Attribute)
                    and node.attr in ("ComponentDefinition", "MassProperties",

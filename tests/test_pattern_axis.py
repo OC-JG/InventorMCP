@@ -205,13 +205,13 @@ class TestTheRecipesThatMustStayQuiet:
         shipped set would be this warning's own undoing.
         """
         for path in sorted(ROOT.glob("examples/*.json")):
-            report = rehearse(PartRecipe.model_validate(json.loads(path.read_text())))
+            report = rehearse(PartRecipe.model_validate(json.loads(path.read_text(encoding="utf-8"))))
             offending = [e for e in report["warnings"] if "pattern axis" in e["warning"]]
             assert offending == [], f"{path.name}: {offending}"
 
     def test_no_calibration_fixture_triggers_it_either(self):
         for path in sorted(ROOT.glob("examples/calibration/*.json")):
-            report = rehearse(PartRecipe.model_validate(json.loads(path.read_text())))
+            report = rehearse(PartRecipe.model_validate(json.loads(path.read_text(encoding="utf-8"))))
             offending = [e for e in report["warnings"] if "pattern axis" in e["warning"]]
             assert offending == [], f"{path.name}: {offending}"
 

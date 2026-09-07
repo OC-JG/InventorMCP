@@ -400,7 +400,7 @@ class TestRehearsal:
         (pathlib.Path(__file__).resolve().parent.parent / "examples").glob("*.json")),
         ids=lambda p: p.stem)
     def test_every_shipped_example_rehearses_without_a_warning(self, path):
-        report = self.rehearse(json.loads(path.read_text()))
+        report = self.rehearse(json.loads(path.read_text(encoding="utf-8")))
         assert report["ok"] is True
         assert report["warnings"] == [], (
             f"{path.stem}: {[w['warning'] for w in report['warnings']]}")

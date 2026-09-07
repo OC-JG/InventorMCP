@@ -25,8 +25,8 @@ import re
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-README = (ROOT / "README.md").read_text()
-ARCHITECTURE = (ROOT / "docs/ARCHITECTURE.md").read_text()
+README = (ROOT / "README.md").read_text(encoding="utf-8")
+ARCHITECTURE = (ROOT / "docs/ARCHITECTURE.md").read_text(encoding="utf-8")
 
 WORDS = {"nineteen": 19, "twenty": 20, "thirty": 30, "forty": 40,
          "twenty-nine": 29, "thirty-one": 31, "thirty-two": 32}

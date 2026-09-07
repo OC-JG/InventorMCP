@@ -34,7 +34,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 def declared_floor() -> tuple[int, int]:
     """The oldest Python ``pyproject`` says it supports."""
-    spec = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    spec = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     text = spec["project"]["requires-python"]
     match = re.fullmatch(r">=\s*(\d+)\.(\d+)", text.strip())
     assert match, f"requires-python is {text!r}; this test only reads a '>=X.Y' floor"
@@ -43,7 +43,7 @@ def declared_floor() -> tuple[int, int]:
 
 def matrix_versions() -> list[tuple[int, int]]:
     """The Pythons the offline CI matrix actually runs."""
-    workflow = (ROOT / ".github/workflows/tests.yml").read_text()
+    workflow = (ROOT / ".github/workflows/tests.yml").read_text(encoding="utf-8")
     match = re.search(r"python-version:\s*\[([^\]]+)\]", workflow)
     assert match, "no python-version matrix found in tests.yml -- has the workflow moved?"
     found = re.findall(r"(\d+)\.(\d+)", match.group(1))
@@ -84,7 +84,7 @@ def test_every_module_parses_on_the_oldest_supported_python(path: pathlib.Path):
     """
     major, minor = declared_floor()
     try:
-        ast.parse(path.read_text(), filename=str(path), feature_version=(major, minor))
+        ast.parse(path.read_text(encoding="utf-8"), filename=str(path), feature_version=(major, minor))
     except SyntaxError as exc:  # pragma: no cover - the point of the test
         pytest.fail(
             f"{path.relative_to(ROOT)}:{exc.lineno} needs newer than Python "

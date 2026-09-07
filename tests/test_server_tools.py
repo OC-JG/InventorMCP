@@ -324,7 +324,7 @@ class TestTheWholeSurfaceEndToEnd:
         from pathlib import Path
 
         path = Path(__file__).resolve().parent.parent / "examples" / "angle_bracket.json"
-        return json.loads(path.read_text())
+        return json.loads(path.read_text(encoding="utf-8"))
 
     def test_a_recipe_builds_through_the_tool(self, connected):
         built = call(connected, "build_part_from_recipe", {"recipe": self.recipe()})

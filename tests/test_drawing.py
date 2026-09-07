@@ -44,7 +44,7 @@ PLATE_DRAWING = {
 
 
 def plate_recipe() -> dict:
-    return json.loads((EXAMPLES / "mounting_plate.json").read_text())
+    return json.loads((EXAMPLES / "mounting_plate.json").read_text(encoding="utf-8"))
 
 
 def check(reading: dict, recipe: dict) -> dict:
@@ -316,9 +316,9 @@ class TestTheWorkedExample:
 
     def result(self) -> dict:
         reading = DrawingReading.model_validate(
-            json.loads((EXAMPLES / "drawings" / "cover_plate.json").read_text()))
+            json.loads((EXAMPLES / "drawings" / "cover_plate.json").read_text(encoding="utf-8")))
         recipe = PartRecipe.model_validate(
-            json.loads((EXAMPLES / "cover_plate.json").read_text()))
+            json.loads((EXAMPLES / "cover_plate.json").read_text(encoding="utf-8")))
         rehearsal = rehearse(recipe)
         assert rehearsal["ok"], rehearsal["findings"]
         return compare(reading, rehearsal)

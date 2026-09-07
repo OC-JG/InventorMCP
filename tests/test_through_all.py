@@ -245,11 +245,11 @@ class TestPappus:
 
         root = Path(__file__).resolve().parent.parent
         recipe = PartRecipe.model_validate(
-            json.loads((root / "examples" / "belt_pulley.json").read_text()))
+            json.loads((root / "examples" / "belt_pulley.json").read_text(encoding="utf-8")))
         result = build_part(session, recipe)
         assert result["ok"], result["errors"]
         expected = json.loads(
-            (root / "examples" / "expected" / "belt_pulley.json").read_text())
+            (root / "examples" / "expected" / "belt_pulley.json").read_text(encoding="utf-8"))
         measured = session.backend.mass_properties(result["document"]).volume
         assert measured == pytest.approx(expected["volume_cm3"], abs=5e-6)
 
@@ -294,7 +294,7 @@ class TestSeparateProfilesInOneSketch:
 
         root = Path(__file__).resolve().parent.parent
         recipe = PartRecipe.model_validate(
-            json.loads((root / "examples" / "enclosure_base.json").read_text()))
+            json.loads((root / "examples" / "enclosure_base.json").read_text(encoding="utf-8")))
         result = build_part(session, recipe)
         assert result["ok"], result["errors"]
         bosses = [op for op in result["operations"] if op.get("name") == "Bosses"]
@@ -394,6 +394,6 @@ class TestAThroughHoleThatDrillsTheNearWallOnly:
         for path in sorted(Path(__file__).resolve().parent.parent.glob("examples/*.json")):
             from inventor_mcp.rehearsal import rehearse
 
-            report = rehearse(PartRecipe.model_validate(json.loads(path.read_text())))
+            report = rehearse(PartRecipe.model_validate(json.loads(path.read_text(encoding="utf-8"))))
             offending = [entry for entry in report["warnings"] if "walls" in entry["warning"]]
             assert offending == [], f"{path.name}: {offending}"

@@ -49,7 +49,7 @@ MOVED = {
 
 def top_level_imports(module: str) -> set[str]:
     """Modules imported at the top of a file, not inside a function."""
-    tree = ast.parse((ROOT / "inventor_mcp" / f"{module}.py").read_text())
+    tree = ast.parse((ROOT / "inventor_mcp" / f"{module}.py").read_text(encoding="utf-8"))
     found: set[str] = set()
     for node in tree.body:
         if isinstance(node, ast.ImportFrom) and node.module:
@@ -85,7 +85,7 @@ class TestNothingWasBrokenByMovingIt:
         """`builder` must not define them again; it forwards, once, on demand."""
         from inventor_mcp import builder
 
-        tree = ast.parse((ROOT / "inventor_mcp/builder.py").read_text())
+        tree = ast.parse((ROOT / "inventor_mcp/builder.py").read_text(encoding="utf-8"))
         defined = {node.name for node in tree.body
                    if isinstance(node, (ast.FunctionDef, ast.ClassDef))}
         defined |= {target.id for node in tree.body if isinstance(node, ast.Assign)

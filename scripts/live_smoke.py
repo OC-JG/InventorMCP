@@ -51,7 +51,7 @@ def main(argv: list[str] | None = None) -> int:
                              "Use it to check what a selector would actually match.")
     args = parser.parse_args(argv)
 
-    recipe = PartRecipe.model_validate(json.loads(Path(args.recipe).read_text()))
+    recipe = PartRecipe.model_validate(json.loads(Path(args.recipe).read_text(encoding="utf-8")))
     print(f"Recipe: {recipe.name} ({len(recipe.parameters)} parameters, "
           f"{len(recipe.operations)} operations) from {args.recipe}")
 

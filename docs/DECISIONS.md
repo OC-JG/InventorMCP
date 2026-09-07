@@ -284,6 +284,11 @@ instead, and each cost a real failure:
   so the divergence check was silent in exactly the places somebody had flagged
   as least trustworthy;
 * the DFM job's green tick against whether the analyser ran at all;
+* the Skill's list of rehearsal warnings against the warnings a rehearsal
+  emits: introduced as the ways a recipe passes every schema check and still
+  builds the wrong part, which makes it a list claiming to be complete, and
+  three of the six were missing -- two of them added to it by hand after they
+  had already shipped unlisted;
 * **the roadmap against the tree, which is the one that proves the rule is not
   yet a habit.** `ROADMAP.md` is where restructure 2 -- this rule -- was written
   down, and it was itself the last document not under it. It said thirteen of
