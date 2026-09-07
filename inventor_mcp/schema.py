@@ -757,6 +757,45 @@ class DraftOp(OpBase):
     flip: bool = Field(False, description="Reverse the pull direction.")
 
 
+class MoveFaceOp(OpBase):
+    """Translate faces of a solid that already exists, along a direction.
+
+    The only operation here that changes geometry it did not create, which is
+    what makes it the one way into imported material: a translated STEP body has
+    no sketches and no parameters, so every other operation in this schema has
+    nothing to take hold of. `import_geometry` could read a part for DFM and
+    then change nothing about it; this is the answer to that.
+
+    Inventor's move-face feature also offers a planar drag and a rotation about
+    a line. Only the direction-and-distance move is here, and deliberately: it
+    is the one a wall thickness or a clearance is expressed in, and it is the
+    one whose result is predictable -- a planar face of area A moved by `d`
+    along its own normal changes the part by exactly `A*d`, which is a number
+    the rehearsal can check Inventor against. A free drag is not.
+
+    `distance` is an expression like every other length, so a face moved by
+    `wall_t` moves when that parameter does -- on a part built here. On imported
+    geometry there is no parameter to drive and the expression is worth only the
+    number it evaluates to, which is the honest limit of this operation on the
+    material it exists for.
+    """
+
+    op: Literal["move_face"] = "move_face"
+    faces: Selector = Field(
+        default_factory=lambda: Selector(kind="face"),
+        description="Faces to move. A wall's outer face, a boss's top.",
+    )
+    direction: AxisRef = Field(
+        "z",
+        description="Which way they go: 'x'|'y'|'z', a named work axis, the name of a "
+        "sketch line, or 'edge:<handle>'.",
+    )
+    distance: ValueSpec = Field(
+        1.0, description="How far along `direction`. Always positive -- use `flip` to reverse."
+    )
+    flip: bool = Field(False, description="Move against `direction` rather than along it.")
+
+
 class RibOp(OpBase):
     """A rib: a thin web standing on the part, in a plane you choose.
 
@@ -868,6 +907,7 @@ Operation = Annotated[
         ThreadOp,
         EmbossOp,
         DraftOp,
+        MoveFaceOp,
         RibOp,
         CombineOp,
         SplitOp,

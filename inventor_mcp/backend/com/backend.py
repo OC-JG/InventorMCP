@@ -73,6 +73,7 @@ from ..base import (
     ScreenshotRequest,
     CombineRequest,
     DraftRequest,
+    MoveFaceRequest,
     EmbossRequest,
     ShellRequest,
     SplitRequest,
@@ -2782,6 +2783,133 @@ class ComBackend(Backend):
             "angle": request.angle.as_dict(),
         })
 
+    #: How a move-face definition might be told a direction and a distance,
+    #: tried in this order. Every other feature in this file names one call it
+    #: was measured making; this one names three, because nobody has read the
+    #: signature off a type library yet -- `docs/FEATURE_COVERAGE.md` records
+    #: only that `MoveFaceFeatures` has `Add` and `CreateDefinition`, and not
+    #: what the definition's setter is called.
+    #:
+    #: A list of attempts is the shape `_profiles` already uses for a call whose
+    #: arguments Inventor accepts in more than one form, and it is safe here for
+    #: a reason worth stating: the two arguments cannot be swapped silently. A
+    #: direction is a COM object and a distance is an expression string, so a
+    #: wrong order is a type mismatch rather than a part that builds wrongly.
+    #: Every candidate here therefore means *direction and distance* and nothing
+    #: else -- a free-drag or point-to-point setter takes different arguments
+    #: with different meanings, and one of those accepting these two by accident
+    #: is exactly the quietly wrong part this file refuses to risk.
+    #: What a list cannot rule out is a *third* argument whose default means
+    #: something, which is why `scripts/com_signatures.py --search MoveFace` is
+    #: named in the failure and in `docs/INVENTOR_SETUP.md`.
+    _MOVE_FACE_SETTERS = (
+        "SetDirectionAndDistance",
+        "SetDirectionMove",
+        "SetDirectionAndDistanceMoveData",
+    )
+
+    def move_face(self, doc_id: str, request: MoveFaceRequest) -> FeatureInfo:  # pragma: no cover
+        """Translate faces of an existing solid along a direction.
+
+        **Never executed against a real Inventor.** `docs/INVENTOR_SETUP.md`
+        keeps this with the other unmeasured COM, and the reason it is written
+        this way rather than as one call is there too: the definition object is
+        measured to exist and its setter is not, so the setter is discovered and
+        the failure names every spelling that was tried.
+
+        The volume before and after is read and reported, because a move-face
+        that moved nothing is this operation's version of a cut that met no
+        material -- Inventor builds the feature either way. It is reported
+        rather than raised on: a face slid along its own plane legitimately
+        changes no volume, and the simulator is the half that knows which case
+        this is.
+        """
+        document = self._doc(doc_id)
+        faces = self._topology_collection(doc_id, request.faces)
+        if int(faces.Count) == 0:
+            raise FeatureError(
+                "No faces matched, so there is nothing to move.",
+                hint="Run `select_topology` with the same selector to see what it matches.",
+            )
+        direction = self._resolve_axis(doc_id, request.direction)
+        distance = request.distance.expression
+        if request.flip:
+            distance = f"-({distance})"
+        before = _solid_volume(document)
+        features = document.ComponentDefinition.Features.MoveFaceFeatures
+        with self._batch(document), self._translate_errors("MoveFace"):
+            definition, made_by = self._move_face_definition(features, faces)
+            failures: list[str] = []
+            for setter_name in self._MOVE_FACE_SETTERS:
+                setter = getattr(definition, setter_name, None)
+                if setter is None:
+                    failures.append(f"{setter_name}: the definition has no such method")
+                    continue
+                try:
+                    setter(direction, distance)
+                except Exception as exc:
+                    failures.append(f"{setter_name}: {_com_message(exc)}")
+                    continue
+                break
+            else:
+                raise FeatureError(
+                    "Nothing on this release's MoveFaceDefinition would take a "
+                    f"direction and a distance: {'; '.join(failures)}",
+                    hint="Read the real signature with `python scripts/com_signatures.py "
+                    "--search MoveFace` and follow it here. This is the one call in "
+                    "this backend that has never run against an Inventor -- "
+                    "docs/INVENTOR_SETUP.md says so and says what to confirm.",
+                )
+            try:
+                feature = features.Add(definition)
+            except Exception as exc:
+                raise FeatureError(
+                    f"Move face failed: {self._explain(exc)}",
+                    hint=f"{int(faces.Count)} face(s) {distance!r} along "
+                    f"{request.direction.value!r}, with a definition from "
+                    f"{made_by}. A move that would make the solid "
+                    "self-intersecting, or that carries a face away from the "
+                    "neighbours it has to stretch, will refuse.",
+                ) from exc
+            if request.name:
+                feature.Name = request.name
+        after = _solid_volume(document)
+        return _feature_info(feature, "move_face", {
+            "faces": int(faces.Count),
+            "direction": request.direction.value,
+            "distance": request.distance.as_dict(),
+            "flip": request.flip,
+            "definition_from": made_by,
+            "volume_change_cm3": (
+                None if before is None or after is None else round(after - before, 6)
+            ),
+        })
+
+    def _move_face_definition(self, features: Any, faces: Any) -> tuple[Any, str]:  # pragma: no cover
+        """A `MoveFaceDefinition` for *faces*, and which call produced it.
+
+        Two spellings are tried for the same reason the setters are: what is
+        recorded about this collection is that it has a `CreateDefinition`, and
+        Inventor's other definition factories are named for their feature
+        (`CreateShellDefinition`, `CreateFaceDraftDefinition`), so the longer
+        name is as likely as the short one on any given release.
+        """
+        failures: list[str] = []
+        for name in ("CreateDefinition", "CreateMoveFaceDefinition"):
+            factory = getattr(features, name, None)
+            if factory is None:
+                failures.append(f"{name}: MoveFaceFeatures has no such method")
+                continue
+            try:
+                return factory(faces), name
+            except Exception as exc:
+                failures.append(f"{name}: {_com_message(exc)}")
+        raise FeatureError(
+            f"Could not create a move-face definition: {'; '.join(failures)}",
+            hint="Read what this release really offers with `python "
+            "scripts/com_signatures.py MoveFaceFeatures`.",
+        )
+
     def combine(self, doc_id: str, request: CombineRequest) -> FeatureInfo:  # pragma: no cover
         document = self._doc(doc_id)
         component = document.ComponentDefinition
@@ -3882,6 +4010,7 @@ _FEATURE_TYPES: dict[str, str] = {
     # Measured: 2027.1's type library has no kDraftFeatureObject -- the face
     # draft feature's enum is this one.
     "kFaceDraftFeatureObject": "draft",
+    "kMoveFaceFeatureObject": "move_face",
     "kSplitFeatureObject": "split",
     "kCoilFeatureObject": "coil",
     "kEmbossFeatureObject": "emboss",

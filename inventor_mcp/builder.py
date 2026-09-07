@@ -29,6 +29,7 @@ from .backend.base import (
     Driven,
     CombineRequest,
     DraftRequest,
+    MoveFaceRequest,
     EmbossRequest,
     ExtrudeRequest,
     FeatureInfo,
@@ -59,6 +60,7 @@ from .schema import (
     CircularPatternOp,
     CombineOp,
     DraftOp,
+    MoveFaceOp,
     EmbossOp,
     ExtrudeOp,
     FilletOp,
@@ -517,6 +519,17 @@ def _apply_one(session: Session, context: DocumentContext, op: Operation) -> dic
             name=op.name,
         )
         return _record(context, backend.draft(context.doc_id, request), "draft")
+
+    if isinstance(op, MoveFaceOp):
+        request = MoveFaceRequest(
+            faces=resolve_selector(op.faces, resolver, kind="face"),
+            direction=resolve_axis(context, op.direction),
+            distance=_driven(  # type: ignore[arg-type]
+                resolver.length(op.distance, "move-face distance", positive=True)),
+            flip=op.flip,
+            name=op.name,
+        )
+        return _record(context, backend.move_face(context.doc_id, request), "move_face")
 
     if isinstance(op, CombineOp):
         request = CombineRequest(

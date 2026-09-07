@@ -58,6 +58,15 @@ INTERESTING = [
     "WorkPoints.AddByPoint",
     "WorkAxes.AddByTwoPoints",
     "WorkAxes.AddByLine",
+    # `move_face`, added 2026-09-07, and the only entry here that is a question
+    # rather than a dependency: what is recorded about MoveFaceFeatures is that
+    # it has `Add` and `CreateDefinition`, and not what the definition's setter
+    # for a direction and a distance is called. The backend tries three
+    # spellings and names them all when none works; this is how that stops being
+    # necessary. Read the collection whole -- `python scripts/com_signatures.py
+    # MoveFaceFeatures` -- since the definition's own class is what is missing.
+    "MoveFaceFeatures.CreateDefinition",
+    "MoveFaceFeatures.Add",
     # Not a call this server makes, but the object behind defect 4: `capture_view`
     # orientation names do not describe what you get, and `check_views` says there
     # is nothing to assert until somebody measures what each one produces. Reading

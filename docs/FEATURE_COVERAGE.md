@@ -13,15 +13,19 @@ Revolve Rib RuleFillet RuledSurface Sculpt Shell Simplify SketchDrivenPattern
 Slot SnapFit Split Sweep Thicken Thread Trim Unwrap iFeatures
 ```
 
-**Covered today, 17 of the 53 collections:** Extrude, Revolve, Sweep, Loft,
+**Covered today, 18 of the 53 collections:** Extrude, Revolve, Sweep, Loft,
 Coil, Hole, Fillet, Chamfer, Shell, RectangularPattern, CircularPattern, Mirror,
-Thread, Emboss, FaceDraft, Combine, Split. Work planes, work axes, work points
-and material are covered too and are not `Features` collections, so they sit
-outside the count. `boss` and
+Thread, Emboss, FaceDraft, Combine, Split, MoveFace. Work planes, work axes,
+work points and material are covered too and are not `Features` collections, so
+they sit outside the count. `boss` and
 `rib` exist as recipe operations but are built from primitives, because neither
-Inventor feature can be created through the API -- see below.
+Inventor feature can be created through the API -- see below. **MoveFace is the
+one on that list whose COM call has never executed** -- added 2026-09-07, exact
+in the simulator, unmeasured live, and kept in the count rather than out of it
+because the schema offers it to a caller either way. Tier 1c below says what
+that means.
 
-Seventeen of fifty-three flatters the gap in one direction and overstates it in
+Eighteen of fifty-three flatters the gap in one direction and overstates it in
 the other: the covered ones are the high-frequency core of solid
 modelling, and a good half of what is missing is surfacing and repair work that a
 text-to-part server has no business doing.
@@ -112,6 +116,48 @@ also passes the simulator rehearsal.
     were already implemented and are confirmed here: 1.9792 cm^3 for a 6 circle
     swept 70 mm, and 13.6136 cm^3 for a 30-to-10 loft over 40 mm.
 
+### Tier 1c -- landed in the simulator, unmeasured against Inventor
+
+7. **MoveFace.** *Added 2026-09-07 as `{"op":"move_face",...}`. Exact in the
+   simulator; its COM half has never executed.* Taken ahead of the other two
+   Tier 2 items because it is the only one that adds a kind of reach rather than
+   a feature: it is the one route to changing imported geometry, and the server
+   could read a STEP part for DFM analysis and then alter nothing about it,
+   because translated geometry has no sketches and no parameters for anything
+   else here to take hold of.
+
+   **The arithmetic is a dot product, not an estimate**, which is why this can
+   be a prediction rather than a measurement: a planar face of area A translated
+   by v changes the solid by `A*(v.n)`, its own normal doing the projecting. So a
+   face pushed along its normal changes the part by area times distance, and one
+   slid along its own plane changes nothing, both out of the same expression.
+   `examples/calibration/lifted_face.json` and `widened_wall.json` say +6.4000
+   and +0.2400 cm^3, each agreeing with the hand derivation to the digit.
+
+   Exact while the moved face keeps its area, which is true of a wall on a prism
+   and is what a wall-thickness or clearance move is. It is not true of a face
+   bounded by a fillet or a draft, and the `ponytail` on the simulator's
+   `move_face` says so along with the other limit: the ledger is not updated, so
+   a cut driven through a moved face is charged the thickness the part had
+   before the move.
+
+   Only the direction-and-distance move is offered. Inventor's planar drag and
+   rotate-about-a-line are deliberately absent: this is the shape a wall
+   thickness or a clearance is expressed in, and it is the one whose result the
+   rehearsal can predict at all.
+
+   **What is unmeasured here is unusual, and worth naming exactly.** Every other
+   COM call in this server was read off a type library before it was written.
+   This one was not: what is recorded above is that `MoveFaceFeatures` has `Add`
+   and `CreateDefinition`, and *not* what the definition's setter is called. So
+   the backend tries three spellings, each of which can only mean direction and
+   distance, and names every one it tried when none of them work -- rather than
+   one guess that comes back as a bare "Exception occurred". A free-drag or
+   point-to-point setter is deliberately not among them: one of those accepting
+   a direction and a distance by accident is exactly the quietly wrong part this
+   file exists to catch. `docs/INVENTOR_SETUP.md` has what a live run must
+   confirm, and `scripts/com_signatures.py --search MoveFace` is where it starts.
+
 ### Tier 2 -- frequently wanted, no current workaround
 
 5. **SketchDrivenPattern.** Pattern by sketch points. Rectangular and circular
@@ -120,10 +166,6 @@ also passes the simulator rehearsal.
 6. **Thicken.** Turning a surface into a wall. `ThickenFeatures.Add` is public.
    `FaceOffsetFeatures` only exposes `_Add`, and Inventor's leading underscore
    means internal, so plain face offset is not on the table.
-7. **MoveFace.** `MoveFaceFeatures` has `Add` and `CreateDefinition`, so this is
-   buildable, and it is the only route to changing imported geometry -- the
-   server reads STEP for DFM analysis and can then alter nothing, because
-   translated geometry has no parameters.
 
 Not tier 2 after all, checked against the type library rather than the docs:
 **Lip, SnapFit, Grill, Rest** and **DirectEdit** are all read-only collections

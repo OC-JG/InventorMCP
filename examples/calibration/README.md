@@ -11,9 +11,15 @@ example used those operations, so no acceptance run had ever compared one with
 Inventor. At 0.5 the check would wave through a fillet applied to the wrong
 edge, which is the thing it exists to catch.
 
-Three of the four have been measured since. `split` has not: the run that tried
-found the two backends disagreeing about which side of the plane a trim throws
-away, which has to be settled before any number means anything.
+All four have been measured since, on 2026-09-03. `split` was the last and the
+hardest: the run that first tried found the two backends disagreeing about which
+side of the plane a trim throws away, and that had to be settled before any
+number could mean anything.
+
+**`move_face` is the fifth, added 2026-09-07, and it is at the placeholder for a
+different reason from the other four: not that no example reaches it, but that
+its COM half has never executed at all.** So there is no Inventor column for its
+two fixtures yet. `docs/INVENTOR_SETUP.md` says what a run has to confirm.
 
 Run them with:
 
@@ -42,9 +48,12 @@ the operation being measured.
 | `stepped_split_negative` | `split` | −20.8000 cm³ | −20.8000 cm³ | 0.0% |
 | `origin_plane_split` | `split` | −8.0000 cm³ | −8.0000 cm³ | 0.0% |
 | `shelled_both_ways` | `shell` | −35.1920 cm³ | −35.1920 cm³ | 0.0% |
+| `lifted_face` | `move_face` | +6.4000 cm³ | not yet run | — |
+| `widened_wall` | `move_face` | +0.2400 cm³ | not yet run | — |
 
-Measured on Inventor 2027.1, 2026-09-03. All four tolerances in `PREDICTED`
-now come from that run rather than from a placeholder: `coil` 0.15, `draft`
+Measured on Inventor 2027.1, 2026-09-03, except the two `move_face` rows,
+which nothing has run. All four of the original tolerances in `PREDICTED` now
+come from that run rather than from a placeholder: `coil` 0.15, `draft`
 0.20, `emboss` 0.40, `split` 0.05. Each is deliberately looser than its own
 measurement, for reasons recorded beside the table in
 `inventor_mcp/rehearsal.py` — a tolerance is for catching a feature that did
@@ -75,9 +84,10 @@ could break.
   two backends disagree about which side goes. Recorded as defect 5 in
   `docs/FEATURE_COVERAGE.md`.
 
-  `split` therefore keeps its placeholder tolerance. Its run came back 25.3%
-  apart and that figure is worth nothing: the simulator kept the wrong amount
-  and Inventor kept the wrong side, so it is two unrelated errors compounding.
+  `split` therefore kept its placeholder tolerance at that point. That run came
+  back 25.3% apart and the figure was worth nothing: the simulator kept the
+  wrong amount and Inventor kept the wrong side, so it was two unrelated errors
+  compounding.
 
   `stepped_split_negative` is the same part cut the same way with
   `remove_positive` false, and it answered the first question on the same day:
@@ -118,6 +128,45 @@ could break.
   it. Comparing volumes catches a cut that missed and a fillet on the wrong
   edge, and is blind to a cut that took the right amount off the wrong side
   whenever the two halves are near enough in size.
+
+## The two nobody has run
+
+`lifted_face` and `widened_wall` are the instruments for `move_face`, and they
+are the only fixtures here whose *true* answer is exact rather than estimated. A
+rectangular prism's face keeps its area as it translates, so the solid changes by
+exactly area times distance: 32 cm² × 0.2 cm is 6.4 cm³ for the lifted cap, and
+4 cm² × 0.6 cm × 0.1 cm — 40 × 6 × 1 mm — is 0.24 cm³ for the widened wall. The
+simulator says 6.4000 and 0.2400, from a dot product of the move against each
+face's own normal, which is the same arithmetic arrived at the same way.
+
+So these two are predictions Inventor can break, in the sense `drafted_block`
+was, and not measurements to be copied down. What the run is worth is not the
+number:
+
+- **`lifted_face` asks whether the parametric chain reaches the feature.** The
+  distance is the parameter `lift`, and the lesson of defect 11 is that a work
+  axis can be built, measured, and still be parametric in name only. Change
+  `lift` and the volume has to change with it.
+- **`widened_wall` asks two questions its partner cannot.** Its face is picked
+  out of four by a selector rather than by being the only cap, so it fails if
+  the COM selector reaches a different face than the simulator's; and it moves
+  along an axis that is not the extrude's own, so it fails if Inventor reads the
+  direction relative to the face rather than to the model. Its 0.24 cm³ is
+  deliberately small beside the 19.2 cm³ plate it sits on: a move that took the
+  whole wall with it is then a large fraction rather than a rounding error.
+
+Neither is tractable as an estimate to loosen. If a run disagrees on either, the
+answer is a fault to find rather than a tolerance to widen — which is why
+`PREDICTED["move_face"]` should come down from 0.50 to something like an
+extrude's 0.02 the moment a run agrees, rather than being split down the middle.
+
+What both leave untouched is the assumption underneath the arithmetic: that the
+moved face keeps its area. It does on a prism, which is what these measure. It
+does not on a face bounded by a fillet or a draft, and the simulator's
+`ponytail` on `move_face` says so. Nothing here calibrates that case, and a
+fixture for it cannot go in this directory as it stands, because the rule these
+recipes are checked against is that nothing before the operation under test may
+be looser than an extrude — and a fillet is 0.30.
 
 ## The path that could not run at all
 

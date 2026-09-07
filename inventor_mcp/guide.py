@@ -130,6 +130,14 @@ draft       {"op":"draft","faces":{"filter":"vertical"},"plane":"xy","angle":"2 
              leave the tool. Unlike an extrude's `taper` this works on faces that
              already exist, which is what you want on walls built before the tooling
              was thought about.
+move_face   {"op":"move_face","faces":{"kind":"face","filter":"top"},"direction":"z",
+             "distance":"lift"}
+             Translates faces of a solid that already exists. The one way to alter
+             imported geometry: a translated STEP body has no sketches to work from.
+             A planar face moved along its own normal changes the part by area times
+             distance, and one slid along its own plane changes nothing -- so the
+             direction matters more than the sign. `flip` reverses it; `distance` is
+             always positive. Its COM half has never run against Inventor.
 boss        {"op":"boss","positions":[[20,0],[-20,0]],"plane":"Top","diameter":6,
              "height":10,"hole_diameter":2.5,"tap":"M3x0.5"}
              A mounting post with a pilot down it. Inventor's own Boss cannot be made

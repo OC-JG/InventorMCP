@@ -1518,7 +1518,7 @@ class TestEveryMutatingCallRebuilds:
     #: Methods that change the model and must therefore rebuild it.
     MUTATORS = ["set_parameter", "build_sketch", "extrude", "revolve", "hole",
                 "fillet", "chamfer", "shell", "work_plane", "work_point",
-                "work_axis"]
+                "work_axis", "move_face"]
 
     @pytest.mark.parametrize("method", MUTATORS)
     def test_it_runs_inside_a_batch(self, method):

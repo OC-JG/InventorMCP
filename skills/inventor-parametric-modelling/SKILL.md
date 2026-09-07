@@ -555,4 +555,11 @@ fastener rather than deriving one.
   and `columns` accept an expression, so `"count": "bolts_per_side * 2"` works
   and a count is revisable like a length. A fractional result is refused rather
   than rounded, since 4.5 holes is a mistake.
+- **`move_face` has never run against a live Inventor**, and unlike the
+  operations above it the COM signature itself is unconfirmed rather than just
+  the behaviour. It is exact in the simulator -- a planar face moved along its
+  own normal changes the part by area times distance -- so a rehearsal of it
+  means something; a live success does not, yet. It is the only way to alter
+  imported geometry, which is why it exists. Check the `measured` block against
+  the arithmetic by hand before reporting such a part finished.
 - Assemblies, drawings and sheet metal are not supported at all.

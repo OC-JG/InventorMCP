@@ -56,7 +56,7 @@ three are hygiene the code had earned the right to skip until it stopped being
 able to.
 
 **1. The simulator's volume model becomes a per-body ledger.** This is the only
-real redesign. Fifteen of the sixteen `ponytail:` markers (the repository's
+real redesign. Sixteen of the seventeen `ponytail:` markers (the repository's
 word for a deliberate approximation) live in `backend/mock/` — it was thirteen
 of fourteen when this was written, and the sentence said so until 2026-09-03,
 which is what put this file under `test_roadmap_still_true.py` — and the worst
@@ -503,6 +503,43 @@ actually bitten.
       a correct recipe teaches the reader to ignore the field.
 - [ ] **Sketch-driven pattern, thicken, move face** — Tier 2 in
       `FEATURE_COVERAGE.md`, all with public `Add` methods.
+
+      **`move_face` landed on 2026-09-07 and this item stays open for the
+      other two.** It was taken first of the three because it is the only one
+      of them that adds a *kind* of reach rather than a feature: a translated
+      STEP body has no sketches and no parameters, so `import_geometry` could
+      read a part for DFM and then change nothing about it, and every other
+      operation in the schema needs geometry it created itself. Tier 2's own
+      note says as much.
+
+      Measured in the simulator and exactly, which is the part worth recording:
+      a planar face of area A translated by v changes the solid by `A*(v·n̂)`,
+      so the arithmetic is a dot product rather than an estimate, and a face
+      slid along its own plane changes nothing for the same reason it changes
+      `A*d` when pushed along its normal. Both fixtures agree with the hand
+      derivation to the digit — `lifted_face` +6.4000 cm³ and `widened_wall`
+      +0.2400 — which makes them predictions a live run can break rather than
+      numbers to be copied down.
+
+      **The COM half has never executed, and unusually the signature is not
+      known either.** Every other call in that backend was read off a type
+      library before it was written; here `FEATURE_COVERAGE.md` records only
+      that `MoveFaceFeatures` has `Add` and `CreateDefinition`, and not what the
+      definition's setter is called. So the backend tries three spellings that
+      can only mean direction-and-distance and names every one it tried when
+      none work, rather than one guess that fails as "Exception occurred".
+      `PREDICTED["move_face"]` is at the placeholder 0.50 accordingly — the
+      arithmetic would justify an extrude's 0.02 and nothing has run.
+- [ ] **Measure `move_face` against a live Inventor**, which for this one means
+      reading the real signature first: `python scripts/com_signatures.py
+      --search MoveFace`, then `--only move-face`. Split from the item above
+      for the reason the work axis was: a tick covering unmeasured COM is the
+      claim this file exists not to make. What the run has to answer is in
+      `INVENTOR_SETUP.md` under the unmeasured section, and the short version is
+      that "it built" proves nothing — the two fixtures are shaped so that a
+      selector reaching a different face, a direction read relative to the face
+      rather than the model, and a distance expression that never reaches
+      Inventor's dimension each show up as a different wrong number.
 - [x] **`save_part` names the conflict** when the path is already open —
       defect 3. *(2026-09-07.)* The item said "names the conflict" and the fix
       turned out not to be a message at all: Inventor's refusal to overwrite a

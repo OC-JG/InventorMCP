@@ -270,6 +270,11 @@ and `work_axis` were written on 2026-09-03 in a session with no Inventor to
 reach, so **three COM calls in `backend/com/backend.py` have never executed**.
 The simulator side is measured and tested; the live side is a proposal.
 
+Those three have since been measured -- see *Running all five*, below, and the
+six runs it took. **`move_face`, added 2026-09-07, is the section's current
+occupant** and is a step worse than they were: they had signatures read off a
+type library, and this one does not. It has its own subsection at the end.
+
 What a live run has to confirm, in this order:
 
 1. **`WorkPoints.AddByPoint(sketchPoint)`** — that it exists, takes a sketch
@@ -461,6 +466,90 @@ for.
   numbers show is that a *positional* rule -- the first three, three and one --
   matches this release, and that wants confirming on another before anything
   relies on it.
+
+
+### `move_face`, where the signature itself is unknown
+
+Added 2026-09-07, in another session with no Inventor to reach. The difference
+from the five above is worth being precise about, because it changes what a run
+should do first.
+
+Each of those five was written against a signature somebody had read: the call
+existed in the type library, its arguments were known, and what a live run had
+to settle was behaviour. **Here even the call is uncertain.** What
+`FEATURE_COVERAGE.md` records is that `MoveFaceFeatures` has `Add` and
+`CreateDefinition` -- read off the type library -- and *not* what the definition
+object's setter is called. Nothing in this repository has ever seen a
+`MoveFaceDefinition`.
+
+So the backend does not guess once. It tries, in order,
+`SetDirectionAndDistance`, `SetDirectionMove` and
+`SetDirectionAndDistanceMoveData`, and if none of them exist or take the
+arguments it names every attempt and its error. Two things about that list:
+
+* **Every candidate can only mean direction-and-distance.** A free-drag or
+  point-to-point setter takes different arguments with different meanings, and
+  one of those quietly accepting a direction and a distance is the failure mode
+  this whole file exists to prevent -- a part that builds and is wrong. They are
+  left out even though one of them might be the real method.
+* **A wrong argument order cannot pass silently.** The direction is a COM object
+  and the distance an expression string, so swapping them is a type mismatch.
+  What the list cannot rule out is a third argument whose default means
+  something, which is the first thing to look for in the real signature.
+
+**So start by reading it, not by running the check:**
+
+    python scripts/com_signatures.py --search MoveFace
+    python scripts/com_signatures.py MoveFaceFeatures
+
+Then:
+
+    python scripts/live_acceptance.py --only move-face
+
+What the run has to answer, in this order:
+
+1. **`MoveFaceFeatures.CreateDefinition(faces)`** -- that it exists under that
+   name, and takes a `FaceCollection` and nothing else. `_move_face_definition`
+   also tries `CreateMoveFaceDefinition`, because Inventor's other definition
+   factories are named for their feature (`CreateShellDefinition`,
+   `CreateFaceDraftDefinition`) and the longer name is as likely on any release.
+2. **Which setter the definition actually has**, and whether the distance goes
+   in as an expression string. Every length in this server reaches Inventor as
+   an expression so the dimension keeps its parameter; a setter that insists on
+   a number would take that away and is worth knowing about.
+3. **Whether a negative distance is accepted.** `flip` is passed as
+   `-(expression)` rather than through a reversal property, because no such
+   property has been read. If Inventor refuses it, the fix is that property, and
+   this is the cheapest thing in the run to get wrong without noticing -- a
+   refusal is loud, but a *silently ignored* sign is a face that moves the wrong
+   way, and the fixtures below are what catch it.
+
+And then the thing worth checking beyond "did it run", which for this operation
+is not one number but three. `check_move_face` builds
+`examples/calibration/lifted_face.json` and `widened_wall.json`, whose true
+answers are exact rather than estimated -- a prism's face keeps its area as it
+translates, so the solid changes by exactly area times distance:
+
+* **+6.4000 cm^3** for the plate whose top face rises 2 mm (32 cm^2 x 0.2 cm),
+  and the distance is the parameter `lift`, so **changing `lift` has to change
+  the volume**. That is the defect 11 lesson applied before it can be repeated:
+  a feature can build, measure right, and be parametric in name only.
+* **+0.2400 cm^3** for the plate with one side wall pushed 1 mm out
+  (40 x 6 x 1 mm). Its face is picked out of four by a selector rather than
+  being the only cap, so it fails if the COM selector reaches a different face
+  than the simulator's; and it moves along an axis that is not the extrude's
+  own, so it fails if Inventor reads the direction relative to the face rather
+  than to the model. Its figure is deliberately small beside the 19.2 cm^3 plate
+  it sits on, so a move that took the whole wall with it is a large fraction
+  rather than a rounding error.
+* **A sign, on both.** Both moves add material. A negative delta means the
+  faces went the other way, which is the `flip` question above and is the
+  failure a magnitude-only check would pass.
+
+If a fixture disagrees, the answer is a fault to find and not a tolerance to
+widen: these are derivations rather than estimates.
+`PREDICTED["move_face"]` sits at the placeholder 0.50 and should come down to an
+extrude's 0.02 once a run agrees, rather than to something in between.
 
 ## Known-shaky areas
 

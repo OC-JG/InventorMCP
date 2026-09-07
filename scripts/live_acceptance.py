@@ -907,6 +907,145 @@ def _live_deltas(session: Session, recipe: PartRecipe) -> dict[int, float]:
     return deltas
 
 
+#: The two `move_face` instruments, with the answer derived by hand rather than
+#: recorded from a run -- which is what makes them able to fail. A rectangular
+#: prism's face keeps its area as it translates, so the solid changes by exactly
+#: area times distance, and the simulator arrives at the same figure from a dot
+#: product of the move against the face's own normal.
+#:
+#: Keyed by fixture stem: (expected cm^3, the parameter that drives the move,
+#: what a disagreement points at).
+MOVE_FACE_FIXTURES = {
+    "lifted_face": (
+        6.4,
+        "lift",
+        "80 x 40 x 2 mm of plate added on top: 32 cm^2 of face moved 0.2 cm. "
+        "Too small by a factor near one wall's worth means only some of the cap "
+        "moved; a negative figure means the face went down, which is the `flip` "
+        "sign reaching Inventor as the opposite of what was asked.",
+    ),
+    "widened_wall": (
+        0.24,
+        "grow",
+        "40 x 6 x 1 mm added on one side: 2.4 cm^2 of wall moved 0.1 cm. This is "
+        "the one that fails if the COM selector reaches a different face than "
+        "the simulator's, or if Inventor reads `direction` relative to the face "
+        "rather than to the model -- either way the number belongs to some other "
+        "face's area.",
+    ),
+}
+
+
+def check_move_face(session: Session, report: Report) -> None:
+    """`move_face`, whose COM half has never executed -- nor been read.
+
+    ``docs/INVENTOR_SETUP.md`` has the ordered list of what this has to settle
+    and why this one is worse off than the five work-geometry behaviours were:
+    they had signatures somebody had read off a type library, and here the
+    definition object's setter is unknown, so the backend tries three spellings
+    and names them all when none works.
+
+    **Read the signature before running this.** ``python
+    scripts/com_signatures.py --search MoveFace`` costs nothing and answers in
+    one go what this check can only narrow down.
+
+    Three readings per fixture, for the reason defect 11 cost four runs: a
+    feature that builds, and even one that measures right, can still be
+    parametric in name only.
+
+    * **The magnitude**, against a figure derived beforehand rather than
+      recorded afterwards. Both fixtures are prisms, so the true answer is exact
+      and a disagreement is a fault to find rather than a tolerance to widen.
+    * **The sign.** Both moves add material. A magnitude-only check passes a
+      face that moved the right distance the wrong way, which is exactly what a
+      `flip` argument Inventor reads backwards would produce.
+    * **The parametric chain.** The distance is a parameter in both fixtures, so
+      changing it has to change the volume -- and by its own derived amount,
+      since the geometry is the same face moving further.
+    """
+    print("\n--- move_face: the COM half, which has never run")
+    if session.backend.name == "mock":
+        # The simulator is the half that is already measured and tested. Running
+        # it here would print six passes about arithmetic `tests/test_move_face.py`
+        # already holds, which is worse than not running: the point is the COM.
+        report.skip("move-face: not run",
+                    "the simulator implements it exactly and would pass itself. "
+                    "Use --backend inventor.")
+        return
+
+    for stem, (expected, driver, what_it_means) in MOVE_FACE_FIXTURES.items():
+        print(f"\n--- move_face: {stem}")
+        path = CALIBRATION / f"{stem}.json"
+        recipe = PartRecipe.model_validate(json.loads(path.read_text(encoding="utf-8")))
+        context, broken = build(session, recipe)
+        if broken:
+            # The first failure is the informative one: it carries the hint
+            # naming every setter spelling that was tried and what each said.
+            report.check(False, f"move-face: {stem} builds in Inventor", broken[0][:600])
+            if context:
+                session.backend.close_document(context.doc_id, save=False)
+                session.forget(context.doc_id)
+            continue
+        report.check(True, f"move-face: {stem} builds in Inventor")
+
+        before = measure(session, context)
+        if before is None or "volume_cm3" not in before:
+            report.check(False, f"move-face: {stem} can be measured")
+            session.backend.close_document(context.doc_id, save=False)
+            session.forget(context.doc_id)
+            continue
+
+        # The plate on its own, so the move's own contribution is the difference.
+        plate = _plate_volume(recipe)
+        moved = before["volume_cm3"] - plate
+        report.check(
+            abs(moved - expected) < 5e-3,
+            f"move-face: {stem} moved {expected:+.4f} cm^3 -- measured {moved:+.4f}",
+            f"derived from the geometry, not from a run. {what_it_means}")
+
+        # And the same thing again with the driving parameter doubled. The face
+        # moves twice as far over the same area, so the contribution doubles.
+        try:
+            session.backend.set_parameter(
+                context.doc_id, driver,
+                str(2 * _parameter_value(recipe, driver)), units=recipe.units)
+            session.backend.rebuild(context.doc_id)
+        except Exception as exc:
+            report.check(False, f"move-face: {stem}'s {driver} could not be changed",
+                         f"{type(exc).__name__}: {exc}")
+        else:
+            after = measure(session, context)
+            twice = None if after is None else after.get("volume_cm3", 0.0) - plate
+            report.check(
+                twice is not None and abs(twice - 2 * expected) < 5e-3,
+                f"move-face: doubling {driver} doubled it to {2 * expected:+.4f} "
+                f"cm^3 -- measured {twice if twice is None else round(twice, 4)}",
+                "The feature built and the expression is not driving it: this is "
+                "defect 11's failure, where a work axis measured correctly once "
+                "and was parametric in name only. Check that the distance "
+                "reached Inventor as an expression rather than as a number.")
+        session.backend.close_document(context.doc_id, save=False)
+        session.forget(context.doc_id)
+
+
+def _plate_volume(recipe: PartRecipe) -> float:
+    """The fixture's plate before its face is moved, in cm^3, from the recipe.
+
+    Read out of the parameters rather than measured before the move, because the
+    whole recipe is built in one pass and a second build to get a baseline would
+    be a second part to keep straight. Both fixtures are the same plate.
+    """
+    values = {spec.name: float(spec.value) for spec in recipe.parameters}
+    return (values["plate_w"] / 10) * (values["plate_d"] / 10) * (values["plate_t"] / 10)
+
+
+def _parameter_value(recipe: PartRecipe, name: str) -> float:
+    for spec in recipe.parameters:
+        if spec.name == name:
+            return float(spec.value)
+    raise KeyError(f"{recipe.name} has no parameter {name!r}")
+
+
 def check_work_geometry(session: Session, report: Report) -> None:
     """The five Phase 2 behaviours whose COM half has never executed.
 
@@ -1543,6 +1682,7 @@ CHECKS = {
     "constants": check_constants,
     "calibration": check_calibration,
     "work-geometry": check_work_geometry,
+    "move-face": check_move_face,
     "views": check_views,
 }
 

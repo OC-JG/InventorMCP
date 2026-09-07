@@ -64,6 +64,7 @@ from ..base import (
     ScreenshotRequest,
     CombineRequest,
     DraftRequest,
+    MoveFaceRequest,
     EmbossRequest,
     ShellRequest,
     SplitRequest,
@@ -1755,6 +1756,165 @@ class MockBackend(Backend):
         document.features.append(feature)
         document.modified = True
         self._record("draft", name=name, faces=len(faces))
+        return _feature_info(feature)
+
+    def _axis_direction(
+        self, document: _Document, axis: AxisSpec
+    ) -> tuple[float, float, float]:
+        """A unit vector in model space for whatever the caller named as an axis.
+
+        The three routes `resolve_axis` produces, answered the same way the rest
+        of this file answers them: an origin axis from its name, a created work
+        axis from the direction it was built with, a sketch line from its own
+        plane's mapping, an edge from the direction recorded when it was
+        synthesised. A named thing that is not there raises rather than falling
+        back to `z` -- a move along an axis nobody asked for is the quiet wrong
+        answer this backend exists to make loud.
+        """
+        if axis.kind == "work_axis":
+            if axis.value.lower() in ("x", "y", "z"):
+                unit = [0.0, 0.0, 0.0]
+                unit["xyz".index(axis.value.lower())] = 1.0
+                return (unit[0], unit[1], unit[2])
+            if axis.value in document.work_axes:
+                return document.work_axes[axis.value][1]
+            known = ", ".join(sorted(document.work_axes)) or "(none)"
+            raise FeatureError(
+                f"No work axis named {axis.value!r} to move along.",
+                hint=f"Work axes in this part: {known}.",
+            )
+
+        if axis.kind == "edge":
+            for topo in document.topology:
+                if topo.id == axis.value:
+                    if topo.direction is None:
+                        raise FeatureError(
+                            f"Edge {axis.value!r} has no recorded direction, so it "
+                            "cannot say which way to move.",
+                            hint="A circular or arc edge is not a direction. Use a "
+                            "straight edge, an origin axis, or a work axis.",
+                        )
+                    return topo.direction
+            raise SelectionError(
+                f"Unknown edge handle {axis.value!r}.",
+                hint="Handles change whenever the model rebuilds; re-run `select_topology`.",
+            )
+
+        # sketch_line
+        sketch = (
+            document.find_sketch(axis.sketch)
+            if axis.sketch
+            else (document.sketches[-1] if document.sketches else None)
+        )
+        if sketch is None:
+            raise FeatureError("There is no sketch to take a direction from.")
+        for primitive in sketch.plan.resolve_label(axis.value):
+            if isinstance(primitive, PLine):
+                return _edge_direction(sketch.base_plane, primitive)
+        raise FeatureError(
+            f"Sketch {sketch.name!r} has no line named {axis.value!r} to move along.",
+            hint="Give the sketch line a `name` in the recipe and reference it here.",
+        )
+
+    def move_face(self, doc_id: str, request: MoveFaceRequest) -> FeatureInfo:
+        """Translate faces along a direction, charging the volume they sweep.
+
+        The arithmetic is exact and worth stating, because it is the reason this
+        operation is predictable where Inventor's other two move styles are not:
+        a planar face of area A translated by a vector v changes the solid by
+        `A * (v . n)`, its own normal doing the projecting. So a face slid along
+        its own plane changes nothing, and one pushed out along its normal
+        changes by area times distance -- and the simulator gets both from the
+        dot product rather than from a rule about which faces count.
+
+        Exact while the moved face keeps its area, which is true of a wall on a
+        prism and is what a wall-thickness or clearance move is. It is not true
+        of a face bounded by a fillet or a draft, where the neighbours the face
+        stretches into are not parallel to the move.
+
+        ponytail: the ledger is not updated, only the volume and the moved
+        face's own position. So a cut driven through a face that has been moved
+        is charged the thickness the part had before the move -- the prisms in
+        `document.slabs` still describe the original solid. Enough to say what a
+        move did; not enough to be measured through afterwards. The volume also
+        lands on the first body, because a `_Topo` does not record which body it
+        belongs to and there is nothing here to aim with; on a single-body part,
+        which is every case this operation is for so far, that is the right one.
+        """
+        document = self._doc(doc_id)
+        if document.volume <= 0:
+            raise FeatureError(
+                "Nothing to move: the part has no solid body yet.",
+                hint="`move_face` changes a solid that already exists -- extrude "
+                "something first, or `import_geometry` a part to alter.",
+            )
+        faces = self._match(document, request.faces)
+        if not faces:
+            raise FeatureError(
+                "No faces matched, so there is nothing to move.",
+                hint="Run `select_topology` with the same selector to see what it matches.",
+            )
+        direction = self._axis_direction(document, request.direction)
+        distance = request.distance.value * (-1.0 if request.flip else 1.0)
+        shift = tuple(component * distance for component in direction)
+
+        swept = 0.0
+        unanswerable: list[str] = []
+        for topo in faces:
+            if topo.normal is None or topo.area is None:
+                unanswerable.append(topo.description)
+                continue
+            along = sum(a * b for a, b in zip(shift, topo.normal))
+            swept += topo.area * along
+        moved = document.charge(swept)
+
+        # The faces really are somewhere else now, and a later selector says
+        # `near`. Moving their midpoints is most of what makes a second
+        # operation on a moved part select what the caller means.
+        for topo in faces:
+            topo.midpoint = tuple(  # type: ignore[assignment]
+                position + step for position, step in zip(topo.midpoint, shift)
+            )
+        self._expand_bounds(document, [topo.midpoint for topo in faces])
+
+        how = ("exact where the moved face keeps its area: area times the move "
+               "along the face's own normal")
+        detail: dict[str, Any] = {
+            "faces": len(faces),
+            "direction": request.direction.value,
+            "distance": request.distance.as_dict(),
+            "flip": request.flip,
+            # `or 0.0` so a flipped move along an axis it does not touch reads
+            # as 0.0 rather than -0.0, which looks like a sign that means something.
+            "shift_cm": [round(component, 6) or 0.0 for component in shift],
+            "volume_from": how,
+        }
+        if unanswerable:
+            # A cylindrical or swept face has no single normal here, so the dot
+            # product has nothing to project onto and the honest answer is that
+            # this backend cannot say. `estimated` is what `rehearse` reads to
+            # leave the step out of the divergence comparison, rather than
+            # inventing a tolerance wide enough to cover a number nobody has.
+            detail["estimated"] = True
+            detail["faces_not_answered_for"] = unanswerable
+            detail["volume_from"] = (
+                f"{how}; {len(unanswerable)} of the matched faces "
+                f"{'has' if len(unanswerable) == 1 else 'have'} no normal here and "
+                "contributed nothing to the figure"
+            )
+        # "move", not "move_face": `_feature_name` capitalises what it is
+        # given, and Move1 reads better in a browser than Move_face1.
+        name = self._feature_name(document, request.name, "move")
+        feature = _Feature(
+            id=self._next("feat"),
+            name=name,
+            kind="move_face",
+            volume_delta=moved,
+            detail=detail,
+        )
+        document.features.append(feature)
+        document.modified = True
+        self._record("move_face", name=name, faces=len(faces))
         return _feature_info(feature)
 
     def combine(self, doc_id: str, request: CombineRequest) -> FeatureInfo:

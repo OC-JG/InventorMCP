@@ -1,0 +1,58 @@
+{
+  "name": "CalibrationLiftedFace",
+  "description": "A plain plate whose top face is then pushed 2 mm further up. The instrument for `move_face`, and the only calibration fixture here whose true answer is exact rather than estimated: a rectangular prism's cap keeps its area as it translates, so the solid gains exactly area times distance, 32 cm^2 x 0.2 cm = 6.4 cm^3, and the simulator's dot product says the same thing for the same reason. That makes this a prediction Inventor can break rather than a number to be measured and copied down. It matters because the assumption the estimate rests on -- that the moved face keeps its area -- is true here and is not true of a face bounded by a fillet or a draft, so a run that agrees puts a number on the arithmetic and says nothing yet about the harder case. The distance is a parameter, deliberately: this operation exists for imported geometry, which has no parameters to drive, and the one thing a live run can still confirm is that the expression reaches Inventor's own dimension on a part built here.",
+  "units": "mm",
+  "parameters": [
+    {
+      "name": "plate_w",
+      "value": 80
+    },
+    {
+      "name": "plate_d",
+      "value": 40
+    },
+    {
+      "name": "plate_t",
+      "value": 6
+    },
+    {
+      "name": "lift",
+      "value": 2,
+      "comment": "how much taller the plate becomes; 80 x 40 x 2 mm is 6.4 cm^3"
+    }
+  ],
+  "operations": [
+    {
+      "op": "sketch",
+      "name": "Outline",
+      "plane": "xy",
+      "entities": [
+        {
+          "type": "rectangle",
+          "center": [
+            0,
+            0
+          ],
+          "width": "plate_w",
+          "height": "plate_d"
+        }
+      ]
+    },
+    {
+      "op": "extrude",
+      "name": "Plate",
+      "sketch": "Outline",
+      "distance": "plate_t"
+    },
+    {
+      "op": "move_face",
+      "name": "Lift",
+      "faces": {
+        "kind": "face",
+        "filter": "top"
+      },
+      "direction": "z",
+      "distance": "lift"
+    }
+  ]
+}

@@ -237,6 +237,7 @@ every time. Measured on the last two that went in:
 |---|---|---|
 | `coil` | schema, base, com, mock, builder (+ tests) | 344 |
 | `draft`, `combine`, `split`, `boss` | the same five (+ guide, docs, tests) | 726 |
+| `move_face` | the same five, plus guide and the tolerance table | 376 |
 
 Nothing in `units`, `expressions`, `geometry`, `plan`, `session` or `tools` had
 to move for either, and the tool count did not change. That is the layering
@@ -306,10 +307,13 @@ release is a fresh chance for the fallback to be consulted and be wrong.
 
 **The simulator against the real thing.** Every estimate in `mock/` is
 calibrated against a number somebody measured in Inventor, and `PREDICTED` in
-`builder.py` says how far each is trusted. Those tolerances only stay honest if
-live acceptance runs keep happening: four operations in that table — coil,
-draft, emboss, split — have never been compared against Inventor at all and sit
-at a placeholder 0.5. `scripts/live_acceptance.py` is where that debt is paid.
+`rehearsal.py` says how far each is trusted. Those tolerances only stay honest
+if live acceptance runs keep happening. The four that once sat at a placeholder
+0.5 — coil, draft, emboss, split — were all measured on 2026-09-03, and
+`move_face` sits there now for a different reason: its COM call has never
+executed, so there is no run behind any number for it at all.
+`scripts/live_acceptance.py` is where that debt is paid, `--only calibration`
+and `--only move-face` respectively.
 
 **The DFM analyser.** A pinned submodule with thresholds this project restates
 rather than imports, because the tool states them inline and does not export

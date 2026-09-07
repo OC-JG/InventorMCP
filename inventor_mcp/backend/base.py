@@ -358,6 +358,21 @@ class DraftRequest:
 
 
 @dataclass
+class MoveFaceRequest:
+    """Faces of an existing solid, and where they go.
+
+    `distance` is always positive and `flip` is the only way to reverse it, so
+    there is one spelling of a given move rather than two that have to agree.
+    """
+
+    faces: ResolvedSelector
+    direction: AxisSpec
+    distance: Driven
+    flip: bool = False
+    name: str | None = None
+
+
+@dataclass
 class CombineRequest:
     base: int
     tools: Sequence[int]
@@ -585,6 +600,9 @@ class Backend(ABC):
 
     @abstractmethod
     def draft(self, doc_id: str, request: DraftRequest) -> FeatureInfo: ...
+
+    @abstractmethod
+    def move_face(self, doc_id: str, request: MoveFaceRequest) -> FeatureInfo: ...
 
     @abstractmethod
     def combine(self, doc_id: str, request: CombineRequest) -> FeatureInfo: ...

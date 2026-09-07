@@ -4,6 +4,87 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
 ## Unreleased
 
+### Added
+- **`move_face`: the one way to change geometry this server did not build.**
+  Tier 2's third item, taken first of the three because it is the only one that
+  adds a *kind* of reach rather than a feature. `import_geometry` could read a
+  STEP part for DFM analysis and then alter nothing about it: translated
+  geometry has no sketches and no parameters, so every other operation in the
+  schema has nothing to take hold of.
+
+  `{"op":"move_face","faces":{...},"direction":"z","distance":"lift"}` --
+  faces picked by the same selectors as a fillet, a direction that is anything
+  `resolve_axis` accepts, and a distance that is an expression like every other
+  length here. `flip` is the only way to reverse it, so there is one spelling
+  per move rather than two that have to agree.
+
+  **The arithmetic is a dot product rather than an estimate**, which is the
+  reason this operation can be predicted at all: a planar face of area A
+  translated by v changes the solid by exactly `A*(v.n)`, its own normal doing
+  the projecting. A face pushed along its normal changes the part by area times
+  distance; one slid along its own plane changes nothing; and both come out of
+  the same expression rather than a rule about which faces count. The two new
+  calibration fixtures say +6.4000 and +0.2400 cm^3, each agreeing with the
+  hand derivation to the digit, so they are predictions a live run can break in
+  the sense `drafted_block` was.
+
+  Only the direction-and-distance move is offered. Inventor's planar drag and
+  rotate-about-a-line are deliberately absent: this is the shape a wall
+  thickness or a clearance is expressed in, and the other two have no
+  predictable result to check against.
+
+  **What the simulator will not answer for, it says so about.** A cylindrical
+  face has no single normal here, so the dot product has nothing to project
+  onto, and the step declares itself an estimate -- which is what `rehearse`
+  reads to leave it out of the divergence comparison, the same seam a trimmed
+  revolve uses. A tolerance loose enough to cover a number nobody has is loose
+  enough to cover a fault.
+
+  **The COM half has never executed, and unusually the signature is not known
+  either.** Every other call in that backend was read off a type library before
+  it was written; here `FEATURE_COVERAGE.md` records only that
+  `MoveFaceFeatures` has `Add` and `CreateDefinition`, and not what the
+  definition's setter is called. So the backend tries three spellings, each of
+  which can only mean direction-and-distance, and names every one it tried when
+  none work -- rather than one guess that comes back as a bare "Exception
+  occurred". A free-drag or point-to-point setter is deliberately not among
+  them: one of those accepting a direction and a distance by accident is the
+  quietly wrong part these notes exist to prevent. `PREDICTED["move_face"]` is
+  at the placeholder 0.50 accordingly; the arithmetic would justify an
+  extrude's 0.02 and nothing has run.
+
+  `scripts/live_acceptance.py --only move-face` is that run, and it takes three
+  readings per fixture rather than one, because defect 11 cost four runs to the
+  belief that a feature which builds and measures right must be parametric: the
+  magnitude against the derivation, the *sign* (a magnitude-only check passes a
+  face that moved the right distance the wrong way), and the driving parameter
+  doubled. `docs/INVENTOR_SETUP.md` has the ordered list, and says to read the
+  real signature with `scripts/com_signatures.py --search MoveFace` before
+  spending a seat on the check.
+
+  One approximation, marked as one: the ledger is not updated, only the volume
+  and the moved face's own position. So a cut driven through a moved face is
+  charged the thickness the part had before the move, and
+  `tests/test_move_face.py` pins that rather than leaving it to the comment, so
+  whoever fixes it is sent to the `ponytail:` that says it is broken.
+
+### Fixed
+- **Three documentation facts that had gone stale, found while adding the
+  above** rather than by a test, which is the point of noting them.
+  `FEATURE_COVERAGE.md` said seventeen collections covered and listed
+  seventeen names; the count and the list are now checked against each other
+  (`test_the_coverage_count_matches_the_list_it_introduces`), because that
+  sentence is two spellings of one fact and the rule from `DECISIONS.md`
+  applies to it. `ARCHITECTURE.md` still located `PREDICTED` in `builder.py`,
+  which the Phase 1 split moved to `rehearsal.py`, and still said coil, draft,
+  emboss and split had never been compared against Inventor, which stopped
+  being true on 2026-09-03. `examples/calibration/README.md` said the same
+  about `split` three paragraphs above its own table showing it at 0.0%.
+
+  Also: the calibration README's table regex read its operation column as
+  `[a-z]+`, so `move_face` was the first row it would have silently declined to
+  check. Both columns take an underscore now.
+
 ### Fixed
 - **The DFM loop's baseline was measured on whatever state the caller left the
   document in.** Audited after defect 9, and this was the one real gap: each
