@@ -560,3 +560,11 @@ Each of these was hit while building real parts, and each passed
     `_bolt_circle_prediction` refuses to return a figure at all when a hole
     would be clipped, naming the reason. A prediction whose assumptions are not
     met is not a looser prediction; it is a different question's answer.
+
+    *Confirmed on the corrected geometry, sixth run: **0.18636 mm measured
+    against 0.18636 derived**, twelve of twelve checks passing.* And the run
+    reports the volume **unchanged** across the move, which is the independent
+    signal that the precondition held -- identical material removed at both
+    positions means nothing was clipped at either. Three readings agreeing on
+    one mechanism is what makes this a measurement rather than a number that
+    came out close.

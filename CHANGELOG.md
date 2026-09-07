@@ -5,6 +5,28 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 ## Unreleased
 
 ### Changed
+- **The work axis is confirmed, twelve of twelve.** Sixth live run, Inventor
+  2027.1: **0.18636 mm measured against 0.18636 derived** — a prediction met
+  head-on rather than a derivation reconstructed afterwards, which is what the
+  fifth run's tick had rested on.
+
+  Three readings agree on one mechanism, which is what makes it a measurement
+  rather than a number that came out close: the magnitude matches the
+  derivation; the same bolt circle about `z` measures 0.37273 mm away, so the
+  axis is not on the origin; and the volume is **unchanged** across the
+  parameter move, which is the independent signal that no hole was clipped and
+  the derivation's precondition therefore held. That third note did not print on
+  the fifth run — its absence was the clue that the geometry, not the axis, was
+  the problem.
+
+  `INVENTOR_SETUP.md` now records the expected output of the whole check, so a
+  future run has something to compare against rather than only a pass count.
+- **The save conflict's live half is measured.** All three save checks pass on
+  2027.1: the first save writes the file, the second is refused by name, and
+  closing the holder makes the path writable. So the remedy defect 3's hint puts
+  in front of a caller is real — the half no test suite could answer.
+
+### Changed
 - **The work axis is measured, and the last failure was the prediction rather
   than the part.** Fifth live run, Inventor 2027.1: the same bolt circle about a
   created `normal_to_plane` axis and about `z` measured **0.37273 mm apart**, so

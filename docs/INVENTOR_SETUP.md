@@ -417,6 +417,28 @@ What the second run left open, and what to do about each:
   preconditions before the part.** The geometry now runs `bolt_x` 20 to 35,
   which keeps every hole on the plate, and `_bolt_circle_prediction` refuses to
   return a figure at all when one would be clipped.
+
+### Where it ended up
+
+`--only work-geometry` passes **twelve of twelve** on 2027.1, with one
+deliberate skip (`hole` + `bodies`, which Inventor cannot do). What to expect,
+so a future run has something to compare against:
+
+    parameter names Inventor took: bolt_x, PCD, pcd_1, bolt_pcd, dia, pitch, bolt_spacing
+    parameter name REFUSED: pcd ... cd
+    work_planes holds 3: ['YZ Plane', 'XZ Plane', 'XY Plane']
+    work_axes   holds 3: ['X Axis', 'Y Axis', 'Z Axis']
+    work_points holds 2: ['Center Point', 'Datum']
+    carrier sketch Datum_carrier fully_constrained=True, dimensions=1, refused_constraints=0
+    centre of mass moved 0.18636 mm on bolt_x 20 -> 35, derived 0.18636
+    about the axis vs about Z, centres of mass 0.37273 mm apart
+
+The three numbers at the bottom are the ones that matter and they check each
+other: the magnitude against the derivation, the discriminator saying the axis
+is not on the origin, and -- printed as a note -- the volume unchanged across
+the move, which is what says no hole was clipped and the derivation therefore
+applied. Any two of those agreeing while the third does not is worth stopping
+for.
 * **`hole` + `bodies` is not available on 2027.1.** `HoleFeature` has no
   `AffectedBodies`; see the gap list in `FEATURE_COVERAGE.md`. The acceptance
   check skips it with that reason rather than failing every run, and `rehearse`

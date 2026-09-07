@@ -333,11 +333,21 @@ actually bitten.
       `_repeat` and a ledger-sized change; the warning makes the mistake
       *visible*, where `work_axis` only made it avoidable.
 - [x] **Measure the work axis against a live Inventor.** *Done 2026-09-07,
-      Inventor 2027.1, after five runs and four defects.* The three COM calls
-      execute; a `normal_to_plane` axis is genuinely off-centre (the same bolt
-      circle about it and about `z` measure 0.37273 mm apart); and it tracks its
-      driving parameter -- **0.12263 mm of centre-of-mass movement against a
-      hand derivation of 0.12263**, agreeing to five decimal places.
+      Inventor 2027.1, after six runs and four defects. Twelve of twelve checks
+      pass.* The three COM calls execute; a `normal_to_plane` axis is genuinely
+      off-centre (the same bolt circle about it and about `z` measure 0.37273 mm
+      apart); and it tracks its driving parameter -- **0.18636 mm of
+      centre-of-mass movement against a derived 0.18636**, on geometry chosen so
+      the derivation is exact.
+
+      Three independent readings agree, which is why this is a tick rather than
+      a number that came out close. The magnitude matches the derivation; the
+      discriminator against `z` says the axis is not on the origin; and the
+      volume is **unchanged** across the parameter move, which is what says no
+      hole was clipped and the derivation's precondition therefore held. The
+      fifth run's 0.12263 was the same axis measured on geometry where one hole
+      crossed the plate edge, and reproducing that figure by hand is what
+      established the axis was right before the check could say so.
 
       That agreement is with the *clipped* derivation, and the story of it is
       the item's real lesson. The check predicted 0.18640 from one line of
@@ -513,8 +523,10 @@ actually bitten.
       written longhand has to keep working however the ids compare. Both are
       pinned by tests, one of them against a backend whose ids never match.
 
-      Unmeasured live, like the rest of Phase 2's COM: what a run has to confirm
-      is that Inventor takes the save once the named document is closed.
+      *Measured live 2026-09-07:* all three save checks pass on 2027.1 -- the
+      first save writes the file, the second is refused by name, and closing the
+      holder makes the path writable. So the remedy the hint puts in front of a
+      caller is real, which was the half a test suite could not answer.
 
 ### Phase 3 — drawings
 
