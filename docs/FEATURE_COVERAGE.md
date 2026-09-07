@@ -253,6 +253,23 @@ Each of these was hit while building real parts, and each passed
    as ever: what a COM run has to confirm is that Inventor accepts the save once
    the named document is closed.
 
+   *Amended 2026-09-07, from what the first live run showed about cost.* The
+   guard originally asked `list_documents`, and that connection reported **1033
+   open documents** behind an assembly. On the COM backend that listing reads
+   six properties per document, scans the held handles by COM identity for each,
+   **and registers every document it did not recognise** -- so one save would
+   have minted a thousand session handles and left the next call comparing a
+   million COM identities. The guard now asks `document_at_path`, one narrow
+   question each backend answers as cheaply as it can: on COM, one
+   `FullFileName` read per document on the miss path and nothing else, with the
+   display name and the held-handle scan paid only for an actual match.
+
+   That also surfaced a case the first version could not name. A document open
+   because the **user** opened it in Inventor's UI has no session handle, so
+   `document_at_path` returns no id and the refusal says "opened outside this
+   session" and tells the caller to close it in Inventor -- rather than offering
+   `close_part(document=None)`, which would be worse than saying nothing.
+
 4. **`capture_view` orientation names do not describe what you get.** On a part
    built on XY and extruded in +Z, `front` and `back` return top and bottom views,
    and `top` returns a side elevation with **Z rendered inverted** -- which reads

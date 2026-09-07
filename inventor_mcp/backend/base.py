@@ -667,14 +667,14 @@ class Backend(ABC):
         caller routes around it -- the reasoning ``apply_parameter`` records for
         the freeze guard: a rule enforced in one path is not a rule.
 
-        The listing is the right source on both: ``list_documents`` reads
-        Inventor's own ``Documents`` collection, so it sees a file the user
-        opened in the UI as well as one this session opened. Saving in place
-        (no ``path``, which both backends read as ``Save``) cannot collide and
-        is not checked; neither is saving onto the path this document is already
-        at, which is an in-place save written out longhand and must stay allowed
+        The question goes to :meth:`document_at_path`, which sees every open
+        document and not only the ones this session opened -- a file the user
+        opened in Inventor's UI collides just as hard. Saving in place (no
+        ``path``, which both backends read as ``Save``) cannot collide and is not
+        checked; neither is saving onto the path this document is already at,
+        which is an in-place save written out longhand and must stay allowed
         however the ids compare -- so it is settled from the document's own path
-        before the listing is consulted, never by comparing ids.
+        first, never by comparing ids.
         """
         if not path:
             return
@@ -682,20 +682,51 @@ class Backend(ABC):
         own = self.document_path(doc_id)
         if own and target == _same_file_key(own):
             return
-        for other in self.list_documents():
-            if other.id == doc_id or not other.path:
-                continue
-            if _same_file_key(other.path) != target:
-                continue
-            raise DocumentError(
-                f"{os.path.basename(path)} is already open in this Inventor "
-                f"session, as document {other.id!r} ({other.name}).",
-                hint="Inventor will not write a file it has open. Close that "
-                     f"document first (`close_part(document={other.id!r})`), or "
-                     "save this one under another name -- a revision suffix on "
-                     "the path is the usual answer when the open copy is still "
-                     "wanted.",
-            )
+        holder = self.document_at_path(path)
+        if holder is None:
+            return
+        other_id, other_name = holder
+        if other_id == doc_id:
+            # Its own path after all, by a route `document_path` could not
+            # answer. Reporting a document as blocking itself would be worse
+            # than the bare exception this replaces.
+            return
+        where = f" as document {other_id!r} ({other_name})" if other_id else (
+            f" as {other_name}, opened outside this session")
+        remedy = (f"Close that document first (`close_part(document={other_id!r})`)"
+                  if other_id else
+                  f"Close {other_name} in Inventor")
+        raise DocumentError(
+            f"{os.path.basename(path)} is already open in this Inventor "
+            f"session,{where}.",
+            hint=f"Inventor will not write a file it has open. {remedy}, or save "
+                 "this one under another name -- a revision suffix on the path is "
+                 "the usual answer when the open copy is still wanted.",
+        )
+
+    def document_at_path(self, path: str) -> tuple[str | None, str] | None:
+        """Which open document occupies *path*, as ``(session id, name)``.
+
+        The id is ``None`` for a document this session did not open -- one the
+        user opened in Inventor's UI -- which is a real case and needs naming
+        differently, since there is no handle to close by.
+
+        A separate method from ``list_documents`` because the cost matters and
+        the listing's is unbounded. On the COM backend that listing reads six
+        properties per document, scans held handles by COM identity for each,
+        and **registers every document it did not recognise**; against a session
+        with an assembly open -- 1033 documents on the machine this was found on
+        -- a save would have cost a thousand registrations and a million
+        identity comparisons on the next call. This asks one question instead,
+        so a backend can answer it with one property read per document and
+        register nothing. The default is the honest slow version, correct for
+        any backend whose listing is cheap.
+        """
+        target = _same_file_key(path)
+        for info in self.list_documents():
+            if info.path and _same_file_key(info.path) == target:
+                return info.id, info.name
+        return None
 
     def document_path(self, doc_id: str) -> str | None:
         """Where this document lives on disk, or ``None`` if nowhere yet.
