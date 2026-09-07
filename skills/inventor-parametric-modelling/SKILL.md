@@ -58,6 +58,12 @@ still build the wrong part, and these are the ways it does:
   warning is the only thing that says so.
 - **``` `thread` does not work on the Inventor this was measured against ```** —
   the operation is refused before it reaches Inventor. Use a `hole` with `tap`.
+- **``` `hole.bodies` does not work on the Inventor this was measured against ```**
+  — a hole is made in one call, with no definition object to aim first, so
+  Inventor drills the primary body whatever `bodies` says. The simulator
+  honours it, so the volumes will agree and the part will be wrong. Cut the
+  second body with an `extrude` carrying `bodies`, or `combine` with
+  `operation: "cut"`.
 
 Then read `steps` and check each `volume_change_cm3` against what you meant. A
 9 mm hole 6 mm deep removes π×4.5²×6 = 0.382 cm³. If the rehearsal says

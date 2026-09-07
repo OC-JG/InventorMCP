@@ -383,7 +383,9 @@ class TestTheRehearsalWarningsAreAllListed:
     far-wall warning and the pattern-axis one both shipped unlisted and were
     added by hand afterwards, the second of them arriving with its wording
     truncated, which this caught on the merge that brought it in -- and when
-    this was written three of the eight were missing outright.
+    this was written three of the eight were missing outright. A ninth -- `hole.bodies`,
+    which Inventor ignores -- arrived unlisted while this branch was open
+    and was caught by CI on the merge that brought it in.
 
     Nothing to import: the warnings are inline f-strings at their call sites.
     So the templates are read out of the source instead. A `{"where": ...,
@@ -399,7 +401,7 @@ class TestTheRehearsalWarningsAreAllListed:
       warning listed where nobody reading it has that report is noise.
     * the wrong-side warning's *runtime* wording. No recipe has been found that
       provokes it: an `extrude` cut is measured against the simulator's ledger
-      of prisms and so is never charged a positive volume. The other seven each
+      of prisms and so is never charged a positive volume. The other eight each
       have a recipe below; that one is pinned by its source alone.
     """
 
@@ -463,8 +465,16 @@ class TestTheRehearsalWarningsAreAllListed:
             "site, or exempt it here and say why.")
 
     def test_every_warning_the_code_can_emit_is_listed(self, skill):
-        """The drift that happened twice, both times in this direction."""
+        """The drift that keeps happening, always in this direction.
+
+        The count is checked alongside, because two of the warnings share a
+        shape: `` `thread` `` and `` `hole.bodies` `` differ only in the dot,
+        and the looser of the two patterns matches either bullet. Patterns
+        alone would then read a deleted bullet as a doubled match.
+        """
         bullets = self.bullets(skill)
+        assert len(bullets) == len(self.readable()), (
+            f"{len(self.readable())} warnings, {len(bullets)} bullets")
         unlisted = sorted(
             f"{where} ({pattern})" for where, pattern in self.readable().items()
             if not any(re.fullmatch(pattern, bullet) for bullet in bullets))
@@ -525,7 +535,7 @@ class TestTheRehearsalWarningsAreAllListed:
     ]
 
     #: A recipe that provokes each warning, and the words it should come back
-    #: saying. Seven of the eight; the eighth is in the class docstring.
+    #: saying. Eight of the nine; the ninth is in the class docstring.
     PROVOKES = [
         ("a cut whose profile misses the part",
          PLATE + [STRAY, {"op": "extrude", "sketch": "F", "distance": 20,
@@ -553,7 +563,13 @@ class TestTheRehearsalWarningsAreAllListed:
          PLATE + [{"op": "thread",
                    "faces": {"kind": "face", "filter": "cylindrical"},
                    "designation": "M5x0.8"}],
-         [], "does not work on the Inventor"),
+         [], "`thread` does not work on the Inventor"),
+        ("a field on an operation this Inventor ignores",
+         PLATE + [{"op": "sketch", "name": "Pilot", "plane": "xy", "entities": [
+                       {"type": "point", "position": [0, 0]}]},
+                  {"op": "hole", "name": "Bore", "sketch": "Pilot",
+                   "diameter": 6, "through_all": True, "bodies": [1]}],
+         [], "`hole.bodies` does not work on the Inventor"),
     ]
 
     @pytest.mark.parametrize("label,operations,parameters,phrase", PROVOKES,

@@ -30,7 +30,10 @@ import re
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-COVERAGE = (ROOT / "docs/FEATURE_COVERAGE.md").read_text()
+# `encoding` on purpose: the bullets this file matches on contain em
+# dashes, and `read_text()` defaults to the locale codec -- cp1252 on
+# Windows, where every gap name silently stopped matching.
+COVERAGE = (ROOT / "docs/FEATURE_COVERAGE.md").read_text(encoding="utf-8")
 
 # Which recipe operation, if it exists, closes each gap the list names. A gap
 # with no operation that could close it -- sketch fillet, project geometry --
