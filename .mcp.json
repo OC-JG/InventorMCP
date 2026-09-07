@@ -2,7 +2,7 @@
   "mcpServers": {
     "inventor": {
       "command": "python",
-      "args": ["-m", "inventor_mcp", "--backend", "auto"],
+      "args": ["scripts/serve.py", "--backend", "auto"],
       "env": {}
     }
   }

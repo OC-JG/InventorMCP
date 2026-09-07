@@ -79,6 +79,13 @@ directory with Claude Code it will offer to enable the server for you. Check it 
 claude mcp list
 ```
 
+That config runs [`scripts/serve.py`](scripts/serve.py) rather than
+`python -m inventor_mcp` directly. The launcher needs only a Python — any Python —
+and re-executes the server on the first interpreter that can actually import it,
+preferring the repo's own `.venv`. It is there because the config file cannot know
+which `python` a client will find, and the bare one is usually the wrong one; see
+[When the connection fails](#when-the-connection-fails).
+
 ### Claude Desktop
 
 Edit the config file — create it if it does not exist:
@@ -155,6 +162,112 @@ simulator — useful, but it will not produce a real part. Run with
 
 Then try: *"Model a 120 x 80 x 8 mm aluminium mounting plate with 10 mm corner radii
 and four M6 clearance holes 12 mm in from each edge."*
+
+### Which Claude can drive Inventor
+
+Inventor is Windows software driven over COM, so **the server has to run on the
+machine that has Inventor.** That is not a configuration detail — a client
+running anywhere else cannot reach a CAD seat from there, whatever the config
+says:
+
+| How you use Claude | Can it drive Inventor? |
+|---|---|
+| Claude Code CLI on the Windows machine | Yes |
+| Claude Code inside Claude Desktop, on the Windows machine | Yes — it reads this repo's `.mcp.json`, **not** `claude_desktop_config.json` |
+| Claude Desktop's own MCP config, on the Windows machine | Yes — `%APPDATA%\Claude\claude_desktop_config.json`, which `install.ps1` writes |
+| Claude Code on the web, or any container or cloud session | **No.** Linux, no Inventor, no COM. The simulator only |
+
+A web session still validates recipes, runs the static checks and rehearses a
+build against the simulator — useful, and it writes no CAD file. `--doctor` says
+so in as many words when it is not on Windows, rather than reporting eight green
+lines about a machine that cannot do the job. The `.claude/hooks/session-start.sh`
+hook installs the package into a `.venv` so a web session at least has a server
+that starts; `scripts/serve.py` then finds it without being told.
+
+> **`.mcp.json` names a bare `"python"`, and it has to.** The file is shared and
+> the interpreter is somewhere different on every machine, so it cannot carry an
+> absolute path. That leaves the command resolved through `PATH` — and a
+> GUI-launched client is handed the environment Windows gives GUI processes, not
+> your shell's. On Windows the first `python` is often the WindowsApps execution
+> alias, which resolves in a console and not reliably outside one. If the server
+> starts by hand and not under your client, **that gap is the first thing to
+> suspect**: register it with the absolute path to `.venv\Scripts\python.exe`
+> instead of relying on `.mcp.json`. `--doctor` warns about this even when the
+> launch it can test succeeds, because it cannot test the launch that matters.
+
+### When the connection fails
+
+If the client reports `CONNECTION_CLOSED`, "Connection closed", or just shows the
+server as failed, run:
+
+```powershell
+.venv\Scripts\python.exe -m inventor_mcp --doctor
+```
+
+```
+[ ok ] python       3.11 at C:\...\InventorMCP\.venv\Scripts\python.exe
+[FAIL] mcp sdk      not importable: No module named 'mcp'
+[ ok ] pywin32      11.0.0; Inventor is reachable
+[ -- ] server       not checked: mcp sdk missing
+[warn] analyser     not found: the DFM tool is not where this could find it
+
+The server will not start: mcp sdk
+```
+
+It walks the whole chain — interpreter, SDK, pydantic, pywin32, the backend
+`auto` picks, whether the server assembles, Node, the DFM analyser, and the
+command your client actually launches — and prints the repair for anything that
+is not `ok`. It does not connect to Inventor, and it deliberately needs none of
+the things it reports on, so it still runs on the install where the server does
+not.
+
+The last of those is the one to read first, because it is the only line that
+answers for the client rather than for the interpreter you just typed a path to.
+Every other check describes *this* Python; a client launches a different command,
+out of a config file, with no shell and no virtualenv. The `clients` line finds
+those configs — `%APPDATA%\Claude\claude_desktop_config.json` and this repo's
+`.mcp.json` — runs what each one says, and then **speaks MCP to it**: an
+`initialize` request over stdio, exactly as a client would. Starting is not
+serving, and a server that starts and then fails or hangs on the handshake looks
+identical from the outside. So the line tells them apart — crashed (quoting the
+stderr your client throws away), hung, answering with something that is not
+JSON-RPC (a stray `print` on stdout will do it), or serving, with the protocol
+version the two ends agreed. Eight green lines above a red `clients` line means
+the package is fine and the wiring is not.
+
+Almost every case is one of three:
+
+| What the doctor says | What happened |
+|---|---|
+| `mcp sdk` / `pydantic` not importable | The client launched a Python the package is not installed into. Register the server by the **absolute path** to `.venv\Scripts\python.exe`, or use the shipped `.mcp.json`, which finds it for you. |
+| `pywin32` not importable | The server starts but offers only the simulator, so `connect` cannot reach Inventor. `pip install -e ".[inventor]"` |
+| `analyser` not found | The DFM tools have no analyser to call. `git submodule update --init dfm` |
+
+A closed connection is not a crash you can read: an MCP server that raises before
+it answers `initialize` has written its traceback to a stderr the client discards,
+which is why every cause looks identical from the outside. The doctor is that
+traceback, printed where you can see it.
+
+If every line comes back `ok` and `connect` still fails, the server is not the
+problem — the COM connection to Inventor is. Start Inventor, then add `--connect`:
+
+```powershell
+.venv\Scripts\python.exe -m inventor_mcp --doctor --connect
+```
+
+That attaches to the session already open — `GetActiveObject`, never `Dispatch`,
+so it cannot launch Inventor or take a licence — and separates the three reasons
+the attach fails, which `connect` alone reports identically:
+
+| What it says | What happened |
+|---|---|
+| `Inventor.Application` is not registered | Inventor's COM registration is gone. Repair the install from Autodesk Access, or run Inventor once as administrator so it re-registers. |
+| access denied | The two processes are at **different Windows integrity levels** — one is elevated and the other is not, and the running-object table is per level. Run Inventor and whatever launches the server the same way; neither elevated is the better answer. |
+| no running Inventor session | Inventor is closed, or open where this process cannot see it: another Windows user, another remote-desktop session, or the elevation split above. |
+
+The elevation mismatch is the one that fits "it worked yesterday": nothing about
+the install has to change for it to start happening — launching Inventor as
+administrator once is enough.
 
 ---
 

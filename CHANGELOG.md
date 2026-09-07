@@ -5,6 +5,257 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 ## Unreleased
 
 ### Fixed
+- **The server would not start from the shipped `.mcp.json`, and no client could
+  say why.** Connecting to Inventor failed from Claude and from the DFM tools at
+  once, with every client reporting the same four words — `Connection closed` —
+  and the suite green throughout.
+
+  The project-scoped `.mcp.json` launched `python -m inventor_mcp` with a bare
+  `python`. An MCP client resolves that without the shell's `PATH` and without
+  any virtualenv the shell had active, so it was not the `.venv` that
+  `install.ps1` fills and registers by absolute path. That interpreter had no
+  `mcp` installed; `inventor_mcp/__main__.py` imported the server at module
+  level, so `ModuleNotFoundError` was raised before a byte of protocol was
+  written and the process exited. The traceback went to stderr, which a client
+  discards. `CONNECTION_CLOSED` is all that was left, and it is the same message
+  for a missing dependency, the wrong interpreter, a half-finished install and a
+  genuine crash.
+
+  The README already warned, in as many words, that a bare `"python"` is the
+  commonest reason an MCP server shows as failed. Two facts that had to agree,
+  and nothing was checking one against the other.
+
+  Three changes, and the second is the one that matters next time:
+
+  - `.mcp.json` now runs **`scripts/serve.py`**, which needs only a Python — any
+    Python, standard library only — and re-executes the server on the first
+    interpreter that can import it, preferring the repository's own `.venv`. A
+    config file cannot know which `python` a client will find; this one does not
+    have to.
+  - **`python -m inventor_mcp --doctor`** walks the whole chain — interpreter,
+    SDK (naming which server class the shim found), pydantic, pywin32, the
+    backend `auto` picks, whether the server assembles, Node, the analyser — and
+    prints the repair for anything that is not `ok`. It imports none of the
+    things it reports on, so it runs on the install where the server does not,
+    and it does not connect to Inventor: a diagnostic that changes what it is
+    diagnosing is not one. Dependent checks are *skipped* rather than allowed
+    their own verdict, so a missing pydantic is named once instead of four times
+    as a broken backend, a broken server and a missing analyser.
+  - `__main__.py` no longer imports the server at module level, and answers
+    `--doctor` before it tries: that import *was* the silent failure, and the
+    doctor's whole job is to run where it fails. A startup failure now names the
+    interpreter and the package directory on stderr, because the interpreter is
+    nearly always the answer.
+
+  Found while writing the launcher, and worth recording because the fix
+  reintroduced the bug it was fixing: a virtualenv's `bin/python` is a symlink to
+  the interpreter it was built from, so `Path(venv).resolve() ==
+  Path(sys.executable).resolve()` is **true** for a venv that is emphatically not
+  the interpreter now running. Identifying candidates by resolved path sent the
+  server down the in-process path on the very Python that could not import it.
+  The launcher carries "is this the running one" as a flag rather than deriving
+  it, and `tests/test_connection_failures.py` builds exactly that symlink.
+
+  `install.ps1`'s final check is now `--doctor` rather than its own inline
+  script, so the install and the diagnosis cannot disagree about what working
+  means.
+
+- **A healthy server that cannot reach Inventor read as an unexplained
+  failure.** On the machine with the seat, every line of the report above came
+  back `ok` — interpreter, SDK, pydantic, pywin32, backend, server, Node,
+  analyser — which is exactly what ruled the server out and left the COM
+  connection as the only thing between the two. The doctor stopped short of it
+  on purpose, and that made the one remaining link the one it said nothing
+  about.
+
+  `--doctor --connect` is that link. It **attaches** to a session already open —
+  `GetActiveObject`, never `Dispatch`, asserted off the syntax tree because the
+  docstring explaining the rule contains the word it forbids — so it can neither
+  launch Inventor nor take a licence to answer a question about whether Inventor
+  was running. Off by default for the same reason the rest of the doctor never
+  connects, and because its answer means nothing until Inventor is up.
+
+  What it buys is the HRESULT, and three repairs that `connect` reports
+  identically: an unregistered `Inventor.Application` (a repair, not a
+  reinstall); `E_ACCESSDENIED`, which is the two processes sitting at different
+  Windows integrity levels — the running-object table is per level, so an
+  elevated Inventor is invisible to an unelevated server and the reverse; and
+  `MK_E_UNAVAILABLE`, nothing in the table at all, which is a **warning** rather
+  than a failure, because Inventor being closed is not a broken install and a
+  doctor that exits non-zero on a healthy machine teaches people to ignore its
+  exit code.
+
+  The elevation mismatch is the one that fits "it worked yesterday". Nothing
+  about the install has to change for it to start: somebody launching Inventor
+  as administrator once is enough.
+
+  **The first version of that check accused a working install.** It probed the
+  ProgID with `pythoncom.CLSIDFromProgID`, which does not exist. The
+  `AttributeError` was swallowed by a broad `except` and reported as
+  ``` `Inventor.Application` is not registered on this machine ``` — on a
+  machine whose Inventor was registered and working, with a hint recommending an
+  install repair that would have fixed nothing. Confident, wrong, and pointed at
+  the wrong component: the failure mode a diagnostic exists to prevent, produced
+  by the diagnostic.
+
+  Two things were wrong, and the API name was the smaller one. The real defect
+  was a probe whose own breakage was indistinguishable from the fault it looked
+  for. So the question is answered from the registry — `winreg`, standard
+  library, and what "registered" actually *means* here, with no API name to
+  guess — and the answer is three-valued: registered, definitely not registered,
+  and **could not tell**. Only a definite no fails the check; a probe that
+  cannot answer says so. `check_inventor` branches on `present is False` rather
+  than `not present`, because `None` is falsey and that spelling is the same bug
+  again — which is asserted off the syntax tree, since both spellings pass every
+  behavioural test.
+
+  `CurVer` is reported alongside, so a session that is registered but not
+  running reads as "no running Inventor session to attach to (registered as
+  Inventor.Application.28)" — which rules the registration out on the spot
+  instead of leaving it as the next thing to suspect.
+
+- **Eight green lines, and the client still could not start the server.** On the
+  machine with the seat, every check passed — interpreter, SDK, pydantic,
+  pywin32, backend, server, Node, analyser, and a live attach to Inventor
+  2027.1 — while the connection went on failing. The reason is that all of them
+  describe **the interpreter running the doctor**, which is the one somebody
+  typed an absolute path to. A client launches a different command, out of a
+  config file, with no shell and no virtualenv, and nothing was checking that
+  command. A report of eight `ok` lines was consistent with a client that could
+  not start the server at all, which makes it a report that answered a question
+  nobody was asking.
+
+  The `clients` check closes it. It finds the configs a client actually reads —
+  `%APPDATA%\Claude\claude_desktop_config.json`, the macOS and Linux
+  equivalents, and this repository's `.mcp.json` — picks out the entries whose
+  command runs *this* server (matched on the command, not on the key being
+  called `inventor`, since it may be registered under any name and a config
+  naming a different server is none of its business), and launches each one with
+  `--doctor` appended. It is not a model of the client's launch; it is the
+  launch, and the thing launched answers for its own health. A marker in the
+  child's environment stops the probe probing itself.
+
+  Three details earned their own tests. A config that exists and will not parse
+  is a *finding*, not an absence — the client cannot read it either, and the
+  symptom is identical to the server never having been registered. The quoted
+  reason is the child's own verdict rather than the first or last line of its
+  output, because a failing launcher's last line is the closing advice
+  ("`Then: ... --doctor`"), which says nothing out of context and was what the
+  first version printed. And a failing `clients` check no longer prints "the
+  server will not start", which is simply false when it starts from the path
+  just typed and sends somebody to reinstall a package that was never the
+  problem.
+
+  Two earlier tests had to be split apart: they asserted that a healthy install
+  reports no failures, which stopped being the same claim once a check could
+  fail for the machine's configuration rather than the install's health. The
+  report's completeness and the exit code it implies are now separate
+  assertions, and `doctor_from` exists so the verdict can be tested against
+  findings chosen for the purpose.
+
+- **Starting is not serving, and `clients` was only checking that it started.**
+  With every line green and the desktop config naming an absolute virtualenv
+  interpreter, the connection still failed — and `ok` on that line meant only
+  "the process started, imported everything and exited 0". A server that does
+  all of that and then fails or hangs answering `initialize` is
+  indistinguishable from the outside: the client reports `CONNECTION_CLOSED`,
+  which is what it says about a server it never heard from. The gap between
+  starting and serving was the last place the fault could be hiding, and
+  nothing was looking there.
+
+  So the probe now speaks MCP over stdio: `initialize`, one line, one answer.
+  Raw JSON-RPC rather than the SDK's own client, because what is in doubt is
+  the wire, and an SDK client talking to an SDK server is blind to precisely
+  the mismatch worth finding. It distinguishes a crash (quoting the stderr the
+  client discards) from a **hang** — different faults, one symptom, different
+  repairs — and from a stdout that is not clean, which a stray `print` or a
+  logging handler left on stdout will do and which makes a client drop the
+  connection over output the server thought was harmless. On success it reports
+  the protocol version the two ends settled on.
+
+  **The hang check hung.** It closed the stream before terminating the child,
+  and closing waits on the buffer lock that the blocked `readline()` holds —
+  so it returned the correct answer after 120 seconds against a child that
+  slept for 120. The wording was right and the timeout did nothing; against a
+  real hung server the doctor would never have come back. Kill first, close
+  second, and the test asserts the elapsed time rather than only the message,
+  because the message was never what was broken. That one ordering was also the
+  whole of a 132-second test file, now 14.
+
+  A `no_client_probe` fixture keeps the tests that only need the *shape* of a
+  report from launching servers to get it.
+
+- **The report was green about a machine that cannot do the job.** On a host
+  with no Windows there is no CAD seat and cannot be, and "everything the server
+  needs is here" is true of the package while being wildly misleading about the
+  machine — the whole purpose of this server is driving real Inventor. Not a
+  fault to repair but the wrong machine, so `--doctor` now states it above the
+  verdict, where it cannot be read past. `README.md` gains the table of which
+  Claude can reach a CAD seat and which cannot.
+
+- **A web session could not start the server at all.** A fresh container clones
+  the repository and installs nothing, so `inventor_mcp` does not import,
+  `pytest` collects nothing, and the `inventor` server in `.mcp.json` exits
+  before it can speak — `CONNECTION_CLOSED`, the same four words, from a
+  different cause. `.claude/hooks/session-start.sh` installs the package into a
+  `.venv`, which fixes both halves in one place: `pip install -e .` into the
+  container's own Python fails outright on a distro-managed package pip will not
+  uninstall, and `scripts/serve.py` looks for `.venv` first, so the
+  dependencies landing there is also what lets `.mcp.json` start a working
+  server. It runs only when `CLAUDE_CODE_REMOTE` is set — a hook that rebuilds
+  an environment under somebody's feet is a hook that breaks their setup — skips
+  the Windows-only `inventor` extra, and treats a private submodule it cannot
+  fetch as a warning rather than a failure.
+
+- **The one thing the `clients` probe cannot see, reported anyway.**
+  `.mcp.json` names a bare `"python"`, and has to: the file is shared and the
+  interpreter is somewhere different on every machine. So the command is
+  resolved through `PATH`, the probe launches it from a shell where that
+  resolves, and a GUI-launched client — Claude Code inside the desktop app, an
+  IDE extension — is handed the environment Windows gives GUI processes
+  instead. On Windows the first `python` is frequently the WindowsApps execution
+  alias, which resolves in a console and not reliably outside one. A bare
+  command therefore probes green here and can still fail there, silently, which
+  is exactly the original symptom. The check now warns while still reporting
+  that the launch worked: reporting only what it could test would be a claim it
+  cannot support.
+
+- **Two cross-platform faults in the session hook's own tests, found by
+  reading the diff rather than by CI.** `st_mode & 0o111` asserted the execute
+  bit against the *filesystem*, and CPython on Windows derives those bits from
+  the file extension — .exe, .bat, .cmd, .com — not from anything stored. So a
+  `.sh` reports no exec bit there however it was committed: a test that passed
+  on Linux, failed on the Windows machine with the CAD seat (where
+  `install.ps1` installs pytest precisely so the suite can run), and asked the
+  wrong question on both. What has to be executable is the file **git ships** to
+  the container that runs it, so that is what is asserted — `git ls-files -s`,
+  expecting `100755`.
+
+  And `.gitattributes` said only `* text=auto`, which hands a Windows checkout
+  CRLF. `bash` then takes the trailing `\r` as part of the command and fails
+  naming neither the file nor the reason. `*.sh text eol=lf` pins it, with a
+  test holding the rule in place. Latent rather than live — the hook runs in a
+  Linux container, where the checkout is LF either way — but it was a trap set
+  for whoever next runs one of these from a Windows clone.
+
+- **A `.venv` that was also the running interpreter got a redundant subprocess.**
+  Found by a test that broke once the session hook created one: `candidates()`
+  deduped `sys.executable` behind the venv entry and left it flagged
+  not-current, so the launcher spawned a copy of the interpreter it was already
+  inside. Harmless and wrong. The earlier assertion ("the running interpreter is
+  tried last") was the wrong shape for the property; it is now stated as *it is
+  always a candidate and always flagged as itself*.
+
+  Recorded for what it rules out: this SDK negotiates `2024-11-05`,
+  `2025-03-26`, `2025-06-18` and its own latest, all four answered, so an
+  unpinned `mcp>=1.2` moving under a working install is **not** what breaks a
+  client that speaks an older protocol. That is asserted rather than assumed,
+  since the dependency floor lets the SDK change without anything here
+  changing. Twenty-one tests hold the pair of facts together: what `.mcp.json`
+  launches, that the README's warning still stands, that nothing importable-only
+  on a healthy install sits at the top of `__main__` or `preflight`, and that the
+  explanation goes to stderr rather than the stream carrying the protocol.
+
 - **Five defects in the drawing layer, found by asking for a drawing of all
   eleven shipped parts.** None of them by writing a test first. The fixture the
   drawing tests were built on is a plate with four well-behaved parameters, and

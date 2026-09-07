@@ -108,7 +108,27 @@ def main(argv: list[str] | None = None) -> int:
         default=os.environ.get("INVENTOR_MCP_LOG_LEVEL", "INFO"),
         help="Python logging level.",
     )
+    # Listed here so `--help` mentions it, but normally answered in
+    # `__main__.main` before this module is imported at all -- the doctor has to
+    # work on the install where importing this file is what fails.
+    parser.add_argument(
+        "--doctor",
+        action="store_true",
+        help="Check everything the server needs and report what is missing, "
+             "instead of starting.",
+    )
+    parser.add_argument(
+        "--connect",
+        action="store_true",
+        help="With --doctor, also attach to a running Inventor and report what "
+             "that says. Attaches only; it will not launch Inventor.",
+    )
     args = parser.parse_args(argv)
+
+    if args.doctor:
+        from .preflight import doctor
+
+        return doctor(connect=args.connect)
 
     # stderr only: stdout carries the MCP protocol on the stdio transport.
     logging.basicConfig(
