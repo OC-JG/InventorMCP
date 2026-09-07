@@ -1335,9 +1335,10 @@ class DrawingRecipe(Base):
     )
     template: str | None = Field(
         None,
-        description="Path to a .dwg or .idw template carrying the title block. "
-        "Without one the sheet has no title block, which is not a drawing "
-        "anybody can send to a factory.",
+        description="A .dwg or .idw template carrying the title block: a full "
+        "path, or a bare filename to look for in Inventor's own templates "
+        "folder and one level below it. Without one the sheet has no title "
+        "block, which is not a drawing anybody can send to a factory.",
     )
     projection: Literal["first_angle", "third_angle"] = Field(
         "third_angle",

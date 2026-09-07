@@ -1048,59 +1048,63 @@ def _parameter_value(recipe: PartRecipe, name: str) -> float:
 
 
 def check_thicken(session: Session, report: Report) -> None:
-    """`thicken`, whose COM half has never executed -- nor been read.
+    """`thicken`, measured on Inventor 2027.1 on 2026-09-07.
 
-    Two questions, one fixture each, and neither is about arithmetic. On a
+    Two questions, one fixture each, and neither was about arithmetic. On a
     single planar face `thicken` and `move_face` come out identical by
     construction, so the magnitude is already established by `--only move-face`
-    and `tests/test_thicken.py`. What a live seat is needed for is:
+    and `tests/test_thicken.py`. What needed a seat was:
 
     * **the corners**, which `thickened_walls` isolates. Four walls grown 1 mm
       outward is the case a single direction cannot express, and the four layers
       do not meet: a 1 x 1 x 6 mm notch at each corner belongs to no wall. So
-      the answer is 1.4400 cm^3 if Inventor leaves them and 1.4640 if it closes
-      them. Both are defensible; this reports which, rather than asserting the
-      one the simulator happens to sum.
+      the answer was 1.4400 cm^3 if Inventor left them and 1.4640 if it closed
+      them, and both were defensible -- so this *reported* which rather than
+      asserting the one the simulator happened to sum. **It closes them.** The
+      simulator was 1.7% low on every multi-face thicken until
+      `_thicken_corners` was derived from that reading, and this now asserts the
+      measured figure.
     * **the side**, which `thinned_wall` isolates and no magnitude reveals.
       `THICKEN_SHARE` says a `negative` layer lies behind the face, in the
-      material, so cutting it removes 0.24 cm^3. That is set algebra and says
-      nothing about whether Inventor agrees. Three outcomes are
-      distinguishable and this asserts the one the table claims.
+      material, so cutting it removes 0.24 cm^3. That was set algebra and said
+      nothing about whether Inventor agreed. Three outcomes were
+      distinguishable; it measured -0.2400, the one the table claims.
 
     That second one is defect 5's lesson applied in advance. A `trim` kept the
     wrong half of a part for as long as the feature existed, and one of the runs
     that found it was 1.2% apart -- inside every tolerance -- because the volume
     was right for the half it kept. Only a fixture whose wrong answers are
     *different numbers* catches a side.
+
+    Both are assertions now rather than readings, which is the point of writing
+    a measurement down: the next release that disagrees fails the check instead
+    of quietly reporting a third number.
     """
-    print("\n--- thicken: the COM half, which has never run")
+    print("\n--- thicken: measured 2026-09-07, and asserted since")
     if session.backend.name == "mock":
         report.skip("thicken: not run",
                     "the simulator implements the table it would be checked "
                     "against, so it would only confirm itself. Use --backend inventor.")
         return
 
-    # 1. The corners. Reported rather than asserted: nobody has measured which
-    #    of the two Inventor does, and a check that picked one would be
-    #    inventing the answer it then confirms.
+    # 1. The corners. Asserted now, because 2027.1 answered: 1.4640, the
+    #    closed one. It shipped as a report rather than an assertion precisely
+    #    so this run could settle it without a check inventing the answer it
+    #    then confirmed -- and the open figure is kept here because it is what a
+    #    release that stopped closing them would measure.
     walls = _thicken_fixture(session, report, "thickened_walls")
     if walls is not None:
         left, closed = 1.44, 1.464
-        matched = ("the notches left open" if abs(walls - left) < 5e-3 else
-                   "the corners closed" if abs(walls - closed) < 5e-3 else None)
         report.check(
-            matched is not None,
-            f"thicken: four walls moved {walls:+.4f} cm^3, which is "
-            f"{matched or 'neither candidate'}",
-            f"expected {left:+.4f} with the corner notches left open or "
-            f"{closed:+.4f} with them closed -- 4 x 6 mm^3 apart. Neither means "
-            "the layer is not area times thickness per face, which is the one "
-            "part of this that was thought to be arithmetic.")
-        if matched:
-            report.note(
-                f"The corner question is answered: {matched}. If it is the "
-                f"closed one, the simulator's {left:+.4f} is low by 1.7% on any "
-                "multi-face thicken and the ledger should gain the corner term.")
+            abs(walls - closed) < 5e-3,
+            f"thicken: four walls moved {walls:+.4f} cm^3 against {closed:+.4f} "
+            "measured -- the corners close",
+            f"{left:+.4f} would mean this release leaves the corner notches "
+            f"open, 4 x 6 mm^3 less; the simulator's `_thicken_corners` was "
+            "derived from the closed reading and would have to become "
+            "conditional. Anything else means the layer is not area times "
+            "thickness per face, which is the one part of this that is "
+            "arithmetic.")
 
     # 2. The side. Asserted, because the table makes a definite claim and the
     #    two ways of being wrong are different numbers.
@@ -1114,7 +1118,9 @@ def check_thicken(session: Session, report: Report) -> None:
             "solid, so there was nothing to cut and THICKEN_SHARE has the side "
             "inverted; a positive figure means something else again. Fix the "
             "table in backend/base.py rather than the tolerance -- being wrong "
-            "about a side is what defect 5 was.")
+            "about a side is what defect 5 was. 2027.1 measured -0.2400 on "
+            "2026-09-07, so a different answer here is a change in Inventor or "
+            "in the selector, not an open question.")
 
 
 def _thicken_fixture(session: Session, report: Report, stem: str) -> float | None:
@@ -1988,28 +1994,32 @@ CHECKS = {
 }
 
 
-#: The groups whose COM half has never executed, in the order to run them.
+#: The groups whose COM half has not built anything yet, in the order to run
+#: them.
 #: `--only unmeasured` expands to this, because a CAD seat is the scarce
-#: resource here and five separate runs is five chances to stop after the first
+#: resource here and separate runs are separate chances to stop after the first
 #: interesting failure -- which is how the work axis took six sessions.
 #:
 #: The order is by what the next one depends on rather than by size. Nothing in
-#: the drawing group needs the three feature groups, but a feature that will not
-#: build is a shorter thing to diagnose than a sheet that will not dimension, so
-#: the cheap answers come first.
-UNMEASURED = ("move-face", "thicken", "sketch-driven-pattern", "drawing")
+#: the drawing group needs the feature groups, but a feature that will not build
+#: is a shorter thing to diagnose than a sheet that will not dimension, so the
+#: cheap answers come first.
+#:
+#: `thicken` left this list on 2026-09-07: its signature was read, its side and
+#: its corners were measured, and both fixtures now agree with Inventor to four
+#: decimals. The other three stayed -- two of them because the feature takes a
+#: definition object whose class the type library does not publish, and the
+#: drawing surface because it never got past creating the document.
+UNMEASURED = ("move-face", "sketch-driven-pattern", "drawing")
 
 #: What to read before spending the seat, because each of these answers in a
-#: second what a run narrows down over several. Printed rather than assumed:
-#: `move_face`, `thicken` and `sketch_driven_pattern` were all written without a
-#: signature in front of anybody, and the drawing surface rests on a property
-#: nothing here has ever held.
+#: second what a run narrows down over several. The signature reading is done;
+#: what is left is a *live* probe, because `MoveFaceTypeDefinition` and the
+#: sketch-driven-pattern definition have no generated class to read and
+#: `GeneralDimension` has no generated module until a drawing document has been
+#: opened. `dir()` on a live object answers all three.
 READ_FIRST = (
-    "python scripts/com_signatures.py --search MoveFace",
-    "python scripts/com_signatures.py ThickenFeatures",
-    "python scripts/com_signatures.py SketchDrivenPatternFeatures",
-    "python scripts/com_signatures.py GeneralDimension",
-    "python scripts/com_signatures.py DrawingDimensions",
+    "python scripts/probe_definitions.py",
 )
 
 
@@ -2041,11 +2051,11 @@ def main(argv: list[str] | None = None) -> int:
     if any(part.lower() == "unmeasured" for part in asked):
         asked = [part for part in asked if part.lower() != "unmeasured"]
         asked.extend(UNMEASURED)
-        print("\nThe groups whose COM half has never executed, in order:")
+        print("\nThe groups whose COM half has not built anything yet, in order:")
         print("  " + ", ".join(UNMEASURED))
-        print("\nRead these first -- each answers in a second what a run narrows")
-        print("down over several, and three of these calls were written without a")
-        print("signature in front of anybody:")
+        print("\nRun this first -- two of these features take a definition object")
+        print("whose class the type library does not publish, so a live dir() is")
+        print("the only thing that answers what goes on it:")
         for line in READ_FIRST:
             print(f"  {line}")
         print("=" * 70)

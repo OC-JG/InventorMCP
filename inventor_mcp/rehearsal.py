@@ -124,7 +124,27 @@ from .session import DocumentContext
 #: What 0.50 still catches is what any tolerance under 1.0 catches -- a sign
 #: flip, and a change where none was predicted, which for this operation means
 #: Inventor moved the faces the other way or did not move them at all.
-#: `thicken` is at 0.50 for the same reason as `move_face` and one more of its
+#: `thicken` came down from the placeholder 0.50 to 0.02 on 2026-09-07, when it
+#: was measured on Inventor 2027.1 -- and both of the things below that were
+#: unmeasured when this note was written are now answered, so read it as history:
+#:
+#: * **the side is confirmed.** `thinned_wall` removed **-0.2400 cm^3** against
+#:   -0.2400 derived, so a `negative` layer does lie behind the face and
+#:   `THICKEN_SHARE` has it right;
+#: * **the corners close.** `thickened_walls` came back **+1.4640** where the
+#:   sum of four layers is 1.4400: Inventor fills the notch where two layers
+#:   meet. The simulator does too now -- `_thicken_corners` derives `t^2 * h`
+#:   per shared edge -- and both fixtures agree to four decimals.
+#:
+#: So 0.02, the same as an extrude and a shell, because what is left is exact
+#: prism arithmetic. A curved face is still first-order and still marks the step
+#: `estimated`, which keeps it out of the comparison rather than needing a
+#: looser number here.
+#:
+#: The original note follows, because the reasoning it records is why the
+#: fixtures were shaped so the answers were distinguishable at all:
+#:
+#: `thicken` was at 0.50 for the same reason as `move_face` and one more of its
 #: own. The arithmetic is exact for a planar face -- its area times the layer --
 #: and it is first-order for a curved one, missing a term in the square of the
 #: thickness. But the number also rests on `THICKEN_SHARE`, which says which
@@ -164,7 +184,7 @@ PREDICTED = {
     "loft": 0.35,
     "emboss": 0.40,
     "move_face": 0.50,
-    "thicken": 0.50,
+    "thicken": 0.02,
 }
 
 

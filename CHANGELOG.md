@@ -4,6 +4,138 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
 ## Unreleased
 
+### Measured
+
+- **`thicken` ran against Inventor 2027.1 and came out working — the other
+  three Phase 3 surfaces did not.** *(2026-09-07.)* One live run, four
+  operations, and the value of it was not in the one that passed.
+
+  **The side is what the shared table said.** `examples/calibration/
+  thinned_wall.json` -- one wall thinned 1 mm from behind -- removed
+  **-0.2400 cm^3** against -0.2400 derived, and left the plate 79 mm wide. So a
+  `negative` layer lies behind the face where the material is, and
+  `THICKEN_SHARE` in `backend/base.py` has it right. The fixture was shaped so
+  the three ways it could go were three different numbers, because a tolerance
+  cannot catch being wrong about a side: defect 5's `trim` kept the opposite
+  half of a part while measuring 1.2% out.
+
+  **The corners close, and the simulator was 1.7% low.**
+  `examples/calibration/thickened_walls.json` -- four walls grown 1 mm outward
+  -- came back at **+1.4640 cm^3** where the four layers sum to 1.4400.
+  Inventor fills the 1 x 1 x 6 mm notch at each corner: 4 x 6 mm^3 is 0.0240,
+  and the sum is exact. That fixture shipped *reporting* which of two defensible
+  answers Inventor gave rather than asserting one, and this is what that was
+  for -- a check that had picked one would have been inventing the answer it
+  then confirmed.
+
+  `_thicken_corners` in the mock now derives the term rather than fudging it:
+  two selected faces whose normals are perpendicular share an edge, and the
+  notch is a square of the layer's own reach swept along it, `(share x t)^2 x h`.
+  A `symmetric` layer reaching half as far gets a quarter of the corner. The
+  sign is `+` in both directions, which looks wrong and is not -- growing walls
+  leaves gaps to fill, thinning them makes the layers overlap so the union
+  subtracts *less*. Both fixtures now agree with Inventor to four decimals and
+  `PREDICTED["thicken"]` came down **0.50 -> 0.02**, an extrude's tolerance,
+  because what is left is exact prism arithmetic.
+
+- **Reading the signature first was worth the second it cost, and the reason is
+  uncomfortable.** `ThickenFeatures.Add(Faces, Distance, ExtentDirection,
+  Operation, [AutomaticFaceChain], [CreateVerticalSurfaces],
+  [AutomaticBlending])`.
+
+  `CreateThickenDefinition` does not exist on this release. The backend tried it
+  first on the reasoning that a definition's properties are *named* and so
+  cannot be filled in the wrong order -- sound reasoning about a method that has
+  never existed. And there is no `IsOffset` argument: slot 4 is
+  `AutomaticFaceChain`, and the `False` passed there for the offset mode's sake
+  was landing on a flag where `False` is *also* correct, because chaining would
+  extend the selection past the faces the selector named. **A value passed for a
+  wrong reason that happens to be right is not a measurement**, and only reading
+  the signature told the two apart.
+
+  One measured call needs no guard, so the attempt list and the factor-of-four
+  result check are gone with it -- that guard existed because a variant and two
+  enum integers can be misordered without raising, and `_call_named` puts the
+  argument names at the call site where a permutation is not possible.
+
+### Fixed
+
+- **The drawing surface stopped at its first call, on the argument nobody
+  checked.** *(2026-09-07.)* `new_drawing` was the one call in the drawing
+  surface described as carrying no risk at all: `Documents.Add` is measured and
+  `kDrawingDocumentObject` has been in the constants table since before anything
+  used it. Both true, and the live run answered *"Creating the drawing document
+  failed: Exception occurred."*
+
+  `Documents.Add` takes a **path**. The shipped recipe says `"ISO.idw"`. A bare
+  filename is not a path, so Inventor refused and named nothing -- the error
+  this project has spent the most effort learning not to produce.
+
+  A bare name is what somebody means, though, and Inventor keeps its templates
+  in a folder it knows. `_drawing_template` resolves one against
+  `FileManager.TemplatesPath` and its immediate subfolders -- an install
+  configured for ISO has `Standard.idw` at the top and `ISO.idw` one level down,
+  under a locale or a `Metric`, and which depends on the install rather than the
+  release -- takes an absolute path as given, and where it finds nothing refuses
+  with **every path it tried** rather than the last. One level, not a walk: a
+  template found four folders deep is as likely to be somebody's saved copy as
+  the one they meant. The
+  result detail reports which template was used and where it came from, replacing
+  a `sheet_from` that only said "the template" or "Inventor's default".
+
+  Not yet verified: no run has been made since. The lesson is not about
+  templates -- two calls in that sentence were measured, the argument between
+  them was not, and "carries no risk at all" was a claim about a call rather
+  than about a call *and its arguments*.
+
+- **`sketch_driven_pattern` was calling a signature this release does not
+  have.** *(2026-09-07.)* Inventor's wrapper answered "Add() takes from 1 to 2
+  positional arguments but 5 were given". The measured signature is
+  **`SketchDrivenPatternFeatures.Add(Definition)`** -- one object -- so the
+  three named arguments through `_patterned` could never have worked, and
+  `_patterned` is not what builds this. It now creates a definition, sets the
+  compute type on it (`kAdjustToModelCompute`, the same measurement that made
+  patterning a hole work at all) and calls `Add(definition)`.
+
+  The type library publishes no factory and no definition class for it, so two
+  spellings are tried and the refusal prints what the live collection offered.
+  A wrong argument order still cannot pass silently -- a feature collection, a
+  sketch and a sketch point are three different COM types -- which is why trying
+  a factory's arguments is safe where guessing `thicken`'s were not.
+
+- **`move_face`'s candidate setters are all absent, and the type library will
+  not say what replaces them.** *(2026-09-07.)* The run answered "Nothing on
+  this release's MoveFaceDefinition would take a direction and a distance", and
+  the follow-up came back empty: `--search MoveFaceType` finds nothing at all,
+  even though `MoveFaceDefinition` carries a `MoveFaceType` and a
+  `MoveFaceTypeDefinition`. The classes those return are not published.
+
+  Two changes, neither of them a guess about semantics. The same narrow setter
+  list is now tried on `MoveFaceTypeDefinition` as well as on the definition --
+  Inventor's usual shape is a definition holding a type and the type holding its
+  own parameters -- and the `MoveFaceType` is deliberately *not* set on the way
+  past, because which value means direction-and-distance is a claim nothing has
+  read and a wrong one could be accepted. And the refusal now prints what both
+  objects offered, so **one live run is the probe**: the alternative is what
+  happened here, where a run says "nothing would work", the type library says
+  nothing more, and a second session on the CAD machine goes and asks `dir()`.
+
+### Added
+
+- **`scripts/probe_definitions.py`**, which asks live COM objects what they
+  offer because the type library will not. *(2026-09-07.)* `dir()` plus a probed
+  attribute list for `MoveFaceFeatures`, `MoveFaceDefinition`, whatever
+  `MoveFaceType`/`MoveFaceTypeDefinition` return, `SketchDrivenPatternFeatures`
+  and its definition; and `FileManager`'s `GetTemplateFile`, `TemplatesPath`,
+  `DesignDataPath` and `WorkspacePath`, which is what the drawing failure turned
+  on. It builds nothing and saves nothing. Off Windows it exits with
+  `BackendUnavailableError` and touches nothing, which is what it does in this
+  repository's own CI.
+
+  It exists because a CAD seat is the scarce thing here -- `INVENTOR_SETUP.md`
+  counts six sessions and four defects for one work axis -- and two of the four
+  remaining unmeasured surfaces are blocked on the same unpublished shape.
+
 ### Fixed
 - **The server would not start from the shipped `.mcp.json`, and no client could
   say why.** Connecting to Inventor failed from Claude and from the DFM tools at

@@ -566,7 +566,9 @@ fastener rather than deriving one.
   and `columns` accept an expression, so `"count": "bolts_per_side * 2"` works
   and a count is revisable like a length. A fractional result is refused rather
   than rounded, since 4.5 holes is a mistake.
-- **`sketch_driven_pattern` has never run against a live Inventor either.**
+- **`sketch_driven_pattern` has never built anything in a live Inventor**, and
+  the first attempt was refused on the call's shape rather than its arguments —
+  so treat it as unavailable there until a run says otherwise.
   Reach for it only when the feature is not already position-shaped: `hole`
   takes a list of points and `boss` a list of positions, so irregular holes and
   bosses need no pattern. The seed sits on `reference` and the occurrences go on
@@ -575,18 +577,21 @@ fastener rather than deriving one.
   would show as a duplicate feature rather than a wrong volume. It is the only
   pattern the simulator places rather than counts, so a rehearsal of it can tell
   you an occurrence landed off the part.
-- **`thicken` has never run against a live Inventor either**, and what is
-  unmeasured about it is not a number: the arithmetic is exact per planar face,
-  and what nobody has confirmed is which side of a face a `negative` layer lies
-  on. So `positive` + `join` to grow a part and `negative` + `cut` to thin it
-  are the pairs to write; if a rehearsal warns that a layer changes nothing,
-  believe it. It is the way to grow every wall of a box at once, which
-  `move_face` cannot say with a single direction. Turning a *surface* into a
-  wall — Inventor's other use for this feature — is not reachable here at all,
-  because nothing in this server creates a surface.
-- **`move_face` has never run against a live Inventor**, and unlike the
-  operations above it the COM signature itself is unconfirmed rather than just
-  the behaviour. It is exact in the simulator -- a planar face moved along its
+- **`thicken` is measured** — Inventor 2027.1, 2026-09-07, both fixtures to
+  four decimals. A `negative` layer does lie behind the face where the material
+  is, so `positive` + `join` grows a part and `negative` + `cut` thins it; those
+  are the pairs to write, and if a rehearsal warns that a layer changes nothing,
+  believe it. Inventor also **closes the corner** where two thickened faces
+  meet, so growing four walls of a box adds slightly more than the four layers
+  sum to and the simulator now says so. It is the way to grow every wall at once,
+  which `move_face` cannot express with a single direction. Turning a *surface*
+  into a wall — Inventor's other use for this feature — is not reachable here at
+  all, because nothing in this server creates a surface.
+- **`move_face` has never built anything in a live Inventor**, and unlike the
+  operations above it the COM call itself is the problem rather than the
+  behaviour: the definition object exists and nothing measured on it takes a
+  direction and a distance, so a live attempt refuses rather than building
+  something wrong. It is exact in the simulator -- a planar face moved along its
   own normal changes the part by area times distance -- so a rehearsal of it
   means something; a live success does not, yet. It is the only way to alter
   imported geometry, which is why it exists. Check the `measured` block against

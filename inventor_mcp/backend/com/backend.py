@@ -2871,25 +2871,32 @@ class ComBackend(Backend):
         with self._batch(document), self._translate_errors("MoveFace"):
             definition, made_by = self._move_face_definition(features, faces)
             failures: list[str] = []
-            for setter_name in self._MOVE_FACE_SETTERS:
-                setter = getattr(definition, setter_name, None)
-                if setter is None:
-                    failures.append(f"{setter_name}: the definition has no such method")
-                    continue
-                try:
-                    setter(direction, distance)
-                except Exception as exc:
-                    failures.append(f"{setter_name}: {_com_message(exc)}")
+            for where, holder in self._move_face_holders(definition):
+                for setter_name in self._MOVE_FACE_SETTERS:
+                    setter = getattr(holder, setter_name, None)
+                    if setter is None:
+                        failures.append(f"{where}.{setter_name}: no such method")
+                        continue
+                    try:
+                        setter(direction, distance)
+                    except Exception as exc:
+                        failures.append(f"{where}.{setter_name}: {_com_message(exc)}")
+                        continue
+                    break
+                else:
                     continue
                 break
             else:
                 raise FeatureError(
                     "Nothing on this release's MoveFaceDefinition would take a "
                     f"direction and a distance: {'; '.join(failures)}",
-                    hint="Read the real signature with `python scripts/com_signatures.py "
-                    "--search MoveFace` and follow it here. This is the one call in "
-                    "this backend that has never run against an Inventor -- "
-                    "docs/INVENTOR_SETUP.md says so and says what to confirm.",
+                    hint="This is the measured state, not a guess: 2027.1 has "
+                    "`MoveFaceFeatures.Add(Definition)` and a `MoveFaceDefinition` "
+                    "with `MoveFaceType` and `MoveFaceTypeDefinition`, and the type "
+                    "library publishes no class for either -- `--search MoveFaceType` "
+                    "finds nothing. Ask the live objects instead: `python "
+                    "scripts/probe_definitions.py`. What they offered this time: "
+                    + self._move_face_offered(definition),
                 )
             try:
                 feature = features.Add(definition)
@@ -2915,6 +2922,52 @@ class ComBackend(Backend):
                 None if before is None or after is None else round(after - before, 6)
             ),
         })
+
+    def _move_face_holders(self, definition: Any) -> list[tuple[str, Any]]:  # pragma: no cover
+        """The objects a direction-and-distance setter could be on, in order.
+
+        **Measured on 2027.1**: `MoveFaceDefinition` exists and none of the
+        three setters is on it. What the type library does say is that the
+        definition carries a `MoveFaceType` and a `MoveFaceTypeDefinition`,
+        which is Inventor's usual shape -- a definition holding a *type*, the
+        type holding that type's own parameters -- so the child object is where
+        a direction and a distance would go. It is tried second rather than
+        assumed, and the candidate setters stay the same narrow three, so this
+        widens where to look without widening what may be called.
+
+        The type is not set on the way past. Which `MoveFaceType` value means
+        direction-and-distance is a semantic claim nothing here has read, and a
+        wrong one could be accepted -- the failure this file exists to prevent.
+        Whatever the child offers by default is what gets asked.
+        """
+        holders = [("MoveFaceDefinition", definition)]
+        try:
+            child = definition.MoveFaceTypeDefinition
+        except Exception:  # pragma: no cover - absent or version-specific
+            child = None
+        if child is not None:
+            holders.append(("MoveFaceDefinition.MoveFaceTypeDefinition", child))
+        return holders
+
+    def _move_face_offered(self, definition: Any) -> str:  # pragma: no cover
+        """What the definition and its type-definition actually offer, as text.
+
+        The failure carries this so that **one live run is the probe**. The
+        alternative is what happened on 2026-09-07: a run says "nothing would
+        take a direction and a distance", the type library says nothing further,
+        and a second session on the CAD machine goes and asks `dir()`. A CAD
+        seat is the scarce thing in this project -- `docs/INVENTOR_SETUP.md`
+        counts the round trips -- so the answer travels with the refusal.
+        """
+        parts: list[str] = []
+        for where, holder in self._move_face_holders(definition):
+            try:
+                names = sorted(n for n in dir(holder) if not n.startswith("_"))
+            except Exception:  # pragma: no cover - hostile COM object
+                names = []
+            shown = ", ".join(names[:40]) or "nothing dir() could read"
+            parts.append(f"{where} offers {shown}")
+        return "; ".join(parts)
 
     def _move_face_definition(self, features: Any, faces: Any) -> tuple[Any, str]:  # pragma: no cover
         """A `MoveFaceDefinition` for *faces*, and which call produced it.
@@ -3017,50 +3070,48 @@ class ComBackend(Backend):
 
     def _add_thicken(self, features: Any, faces: Any,
                      request: ThickenRequest) -> tuple[Any, str]:  # pragma: no cover
-        """Build the thicken feature, by whichever route this release offers.
+        """Build the thicken feature. One call, and its signature is measured.
 
-        The definition route is tried first where it exists, because a
-        definition's properties are named and so cannot be filled in the wrong
-        order -- which is the specific failure this whole method is careful
-        about. `Add`'s arguments are then Inventor's documented order and are
-        never permuted: a permutation that Inventor accepts is a part built
-        wrongly, and unlike `_profiles`'s two forms there is nothing here to
-        tell the two apart at the call.
+        *Measured on Inventor 2027.1, 2026-09-07*, which turned a tower of
+        attempts into a single call:
 
-        What *is* tried twice is the trailing `VerifyResults`, present and
-        absent. That is the same optional-with-a-default problem `AddForSolid`
-        had, where leaving it out sends a missing variant Inventor rejects as a
-        type mismatch, and appending an optional flag cannot change what the
-        earlier arguments mean.
+            ThickenFeatures.Add(Faces, Distance, ExtentDirection, Operation,
+                                [AutomaticFaceChain], [CreateVerticalSurfaces],
+                                [AutomaticBlending])
+
+        Two things that were wrong before the read. **There is no
+        `CreateThickenDefinition`** -- `ThickenFeatures` offers `Add` and
+        nothing else -- so the definition route this tried first was reaching
+        for something that has never existed. And **there is no `IsOffset`
+        argument**: slot 4 is `AutomaticFaceChain`, and the `False` passed there
+        for the offset mode's sake was right by accident. See the comment at the
+        call.
         """
-        direction = self._k(EXTENT_DIRECTIONS[request.direction])
-        operation = self._k(BOOLEAN_OPERATIONS[request.operation])
-        thickness = request.thickness.expression
-        failures: list[str] = []
-
-        factory = getattr(features, "CreateThickenDefinition", None)
-        if factory is not None:
-            try:
-                definition = factory(faces, thickness, direction, operation)
-                return features.Add(definition), "CreateThickenDefinition + Add"
-            except Exception as exc:
-                failures.append(f"CreateThickenDefinition: {_com_message(exc)}")
-
-        # IsOffset is False throughout: the offset mode produces a surface body
-        # and nothing in this server can hold one. `schema.ThickenOp` says so.
-        for arguments in ((faces, thickness, direction, operation, False),
-                          (faces, thickness, direction, operation, False, True)):
-            try:
-                return features.Add(*arguments), f"Add with {len(arguments)} arguments"
-            except Exception as exc:
-                failures.append(f"Add/{len(arguments)}: {_com_message(exc)}")
-
-        raise FeatureError(
-            f"No route to a thicken feature on this release: {'; '.join(failures)}",
-            hint="Read what it really takes with `python scripts/com_signatures.py "
-            "ThickenFeatures`. This call has never run against an Inventor -- "
-            "docs/INVENTOR_SETUP.md says so and says what to confirm.",
-        )
+        return _call_named(features.Add, [
+            ("Faces", faces),
+            ("Distance", request.thickness.expression),
+            ("ExtentDirection", self._k(EXTENT_DIRECTIONS[request.direction])),
+            ("Operation", self._k(BOOLEAN_OPERATIONS[request.operation])),
+            # False, and now for the right reason. This slot was passed `False`
+            # believing it was an `IsOffset` flag -- the offset mode being the
+            # thing this server cannot hold, since it produces a surface body.
+            # The measured signature says there is no IsOffset argument at all
+            # and slot 4 is `AutomaticFaceChain`. The call worked anyway, which
+            # is the part worth recording: a value passed for a wrong reason
+            # that happens to be right is not a measurement, and only reading
+            # the signature told the two apart.
+            #
+            # False is still what a recipe wants. Chaining extends the selection
+            # to tangent-connected faces, so a recipe naming four walls would
+            # get however many the chain reaches -- and the selector said which
+            # faces it meant.
+            ("AutomaticFaceChain", False),
+            # Inventor's own defaults for the last two. Nothing here has an
+            # opinion about vertical surfaces or blending, and a guess would be
+            # a guess whichever way it went.
+            ("CreateVerticalSurfaces", DEFAULTED),
+            ("AutomaticBlending", DEFAULTED),
+        ]), "Add"
 
     # -- drawings ----------------------------------------------------------
     #: A view direction mapped onto Inventor's own orientation enum name. The
@@ -3110,16 +3161,70 @@ class ComBackend(Backend):
         app = self._require_app()
         with self._translate_errors("Creating the drawing document", DocumentError):
             drawing_type = self._k("kDrawingDocumentObject")
-            path = template or app.FileManager.GetTemplateFile(drawing_type)
+            path, found = self._drawing_template(app, drawing_type, template)
             document = _specialise(app.Documents.Add(drawing_type, path, True))
             try:
                 document.DisplayName = name
             except Exception:
                 pass
         info = self._register(document, units, "deg")
-        info.detail = {"sheet_asked_for": sheet,
-                       "sheet_from": "the template" if template else "Inventor's default"}
+        info.detail = {"sheet_asked_for": sheet, "template": path,
+                       "template_from": found}
         return info
+
+    def _drawing_template(self, app: Any, drawing_type: int,
+                          template: str | None) -> tuple[str, str]:  # pragma: no cover
+        """The template file to make the drawing from, and where it was found.
+
+        **Measured on 2026-09-07: this is what the first live run failed on.**
+        `Documents.Add` was handed the recipe's `template` verbatim, the shipped
+        drawing said `"ISO.idw"`, and a bare filename is not a path -- so
+        Inventor answered "Exception occurred" and named nothing, which is the
+        error this project has spent the most time learning to avoid producing.
+
+        A bare name is what somebody means, though: Inventor keeps its templates
+        in a folder it knows, so a name is resolved against
+        `FileManager.TemplatesPath` before being given up on -- and against that
+        folder's immediate subfolders too, because that is where the
+        standards-specific ones live. An install configured for ISO has
+        `Standard.idw` at the top and `ISO.idw` one level down under a locale or
+        a `Metric`, and which one depends on the install rather than the release.
+        One level, not a walk: a template found four folders deep is as likely
+        to be somebody's saved copy as the one they meant.
+
+        The failure names every place it looked rather than just the last one.
+        """
+        if not template:
+            return (str(app.FileManager.GetTemplateFile(drawing_type)),
+                    "Inventor's default drawing template")
+        if os.path.isfile(template):
+            return (os.path.abspath(template), "the path given")
+        tried = [os.path.abspath(template)]
+        try:
+            folder = str(app.FileManager.TemplatesPath)
+        except Exception:  # pragma: no cover - version-specific
+            folder = ""
+        if folder:
+            candidate = os.path.join(folder, template)
+            tried.append(candidate)
+            if os.path.isfile(candidate):
+                return (candidate, f"Inventor's templates folder ({folder})")
+            try:
+                inner = sorted(entry.path for entry in os.scandir(folder)
+                               if entry.is_dir())
+            except OSError:  # pragma: no cover - unreadable templates folder
+                inner = []
+            for sub in inner:
+                candidate = os.path.join(sub, template)
+                tried.append(candidate)
+                if os.path.isfile(candidate):
+                    return (candidate, f"a subfolder of Inventor's templates ({sub})")
+        raise DocumentError(
+            f"No such drawing template: {template!r}.",
+            hint="Give a full path to a .idw or .dwg, or leave `template` out to "
+            "use Inventor's default -- which has a title block, so a sheet made "
+            "without one is still sendable. Looked in: " + ", ".join(tried),
+        )
 
     def place_view(self, doc_id: str, request: ViewRequest) -> ViewInfo:  # pragma: no cover
         """A base view of a part, on this drawing's active sheet.
@@ -3533,26 +3638,37 @@ class ComBackend(Backend):
                               ) -> FeatureInfo:  # pragma: no cover
         """Copy features to a sketch's points.
 
-        **Never executed against a real Inventor**, and its signature has never
-        been read -- the third such call, after `move_face` and `thicken`.
-        `docs/INVENTOR_SETUP.md` has what a run must settle, and the question
-        that matters is not the signature: it is **whether Inventor puts an
-        occurrence on the reference point as well**, because that is an
-        off-by-one occurrence in the volume and a duplicate feature sitting
-        exactly on the seed.
+        **Run against Inventor 2027.1 on 2026-09-07, where it failed**, and the
+        failure was a shape rather than a detail: this went through `_patterned`
+        with three named arguments and Inventor's wrapper answered *"Add() takes
+        from 1 to 2 positional arguments but 5 were given"*. The measured
+        signature is **`SketchDrivenPatternFeatures.Add(Definition)`** -- one
+        object, like `move_face` -- so the three-argument call could never have
+        worked on this release, and `_patterned` cannot be what makes it.
 
-        `_patterned` does the work, which is why this is short. It carries the
-        argument names beside their values so the positions are documented at
-        the call, and it already handles the compute-type question a pattern of
-        a hole needs -- measured on 2027.1, where patterning a hole fails
-        outright until the compute type is `kAdjustToModelCompute`. There is no
-        reason to think a sketch-driven pattern of a hole differs.
+        What the type library will *not* say is where the definition comes
+        from: `--search SketchDrivenPattern` publishes `Add` and nothing else,
+        no factory and no definition class. So the factory is discovered here,
+        the same way `move_face`'s setter is, and the refusal carries what the
+        live object offered -- `python scripts/probe_definitions.py` asks the
+        same question deliberately.
 
-        No result guard here, unlike `thicken`. The arguments are a collection,
-        a sketch and a point, so a wrong order is a type mismatch rather than a
-        part built wrongly -- and the occurrence-count question is caught by the
-        divergence check instead: `PREDICTED["sketch_driven_pattern"]` is 0.02,
-        and one occurrence too many on a three-point pattern is 33% out.
+        Two things carried over from before the run, because they are still
+        true. **A wrong argument order cannot pass silently**: the three are a
+        feature collection, a sketch and a sketch point, which are three
+        different COM types, so a misorder is a type mismatch rather than a part
+        built wrongly -- that is why trying a factory's arguments is safe when
+        guessing `thicken`'s were not. And **the compute type still matters**:
+        measured on 2027.1, patterning a hole fails outright until the compute
+        type is `kAdjustToModelCompute`, and there is no reason a sketch-driven
+        pattern of a hole differs. It is set on the definition when the
+        definition has somewhere to put it.
+
+        The question a *successful* run still has to settle is unchanged and is
+        not about the signature: **whether Inventor puts an occurrence on the
+        reference point as well**, which is an off-by-one occurrence in the
+        volume and a duplicate feature sitting exactly on the seed.
+        `docs/INVENTOR_SETUP.md` has the three readings that tell them apart.
         """
         document = self._doc(doc_id)
         parents = self._feature_collection(doc_id, request.features)
@@ -3560,15 +3676,10 @@ class ComBackend(Backend):
         reference = self._sketch_point(sketch, request.reference_index)
         features = document.ComponentDefinition.Features.SketchDrivenPatternFeatures
         with self._batch(document), self._translate_errors("Sketch driven pattern"):
-            feature, compute = _patterned(features.Add, self._k, [
-                ("ParentFeatures", parents),
-                ("Sketch", sketch),
-                # Inventor's own dialog offers the seed's centroid or a point
-                # you pick, and the recipe always names a point: a centroid is
-                # not something the simulator has, so a default that used one
-                # could not be rehearsed. See `_NO_CENTROID` in the mock.
-                ("ReferencePoint", reference),
-            ])
+            definition, made_by = self._sketch_driven_definition(
+                features, parents, sketch, reference)
+            compute = self._pattern_compute(definition)
+            feature = features.Add(definition)
             if request.name:
                 feature.Name = request.name
         return _feature_info(feature, "sketch_driven_pattern", {
@@ -3576,8 +3687,74 @@ class ComBackend(Backend):
             "sketch": request.sketch,
             "points": len(request.point_indices) or None,
             "reference_index": request.reference_index,
+            "definition_from": made_by,
             "compute": compute,
         })
+
+    #: The spellings tried for the factory that makes a sketch-driven pattern
+    #: definition. Inventor names some definition factories for their feature
+    #: (`CreateShellDefinition`) and some not (`CreateDefinition`), and this
+    #: release publishes neither for this collection, so both are tried.
+    _SKETCH_DRIVEN_FACTORIES = ("CreateDefinition",
+                                "CreateSketchDrivenPatternDefinition")
+
+    def _sketch_driven_definition(self, features: Any, parents: Any, sketch: Any,
+                                  reference: Any) -> tuple[Any, str]:  # pragma: no cover
+        """A definition for the pattern, and which call produced it.
+
+        The three arguments are given by name first and positionally second,
+        which is `_call_named`'s job, and neither can be silently wrong: a
+        feature collection, a sketch and a sketch point are three different COM
+        types. `ReferencePoint` is always supplied because Inventor's own dialog
+        offers the seed's centroid *or* a point you pick, the recipe always
+        names a point, and a centroid is not something the simulator has -- so a
+        default that used one could not be rehearsed. See `_NO_CENTROID` in the
+        mock.
+        """
+        arguments = [("ParentFeatures", parents), ("Sketch", sketch),
+                     ("ReferencePoint", reference)]
+        failures: list[str] = []
+        for name in self._SKETCH_DRIVEN_FACTORIES:
+            factory = getattr(features, name, None)
+            if factory is None:
+                failures.append(f"{name}: the collection has no such method")
+                continue
+            try:
+                return _call_named(factory, arguments), name
+            except Exception as exc:
+                failures.append(f"{name}: {_com_message(exc)}")
+        try:
+            offered = ", ".join(sorted(n for n in dir(features)
+                                       if not n.startswith("_"))[:40])
+        except Exception:  # pragma: no cover - hostile COM object
+            offered = "nothing dir() could read"
+        raise FeatureError(
+            "No route to a sketch-driven pattern definition on this release: "
+            + "; ".join(failures),
+            hint="Measured on 2027.1: `Add` takes one Definition and the type "
+            "library publishes no factory for it. Ask the live object with "
+            "`python scripts/probe_definitions.py`. SketchDrivenPatternFeatures "
+            f"offers {offered}.",
+        )
+
+    def _pattern_compute(self, definition: Any) -> str:  # pragma: no cover
+        """Ask for recomputed occurrences, and report whether it took.
+
+        Same measurement as `_patterned`'s, applied to a definition instead of
+        a call: on 2027.1 patterning a hole fails outright until the compute
+        type is `kAdjustToModelCompute`, because identical compute copies faces
+        and a blind hole's second occurrence has nothing to remove until the
+        boss beneath it exists. Recompute is therefore what to ask for.
+
+        A release without the property is not an error -- it gets its own
+        default, and the detail says so rather than the code pretending it was
+        set.
+        """
+        try:
+            definition.ComputeType = self._k("kAdjustToModelCompute")
+        except Exception:  # pragma: no cover - version-specific
+            return "the definition's own default"
+        return "adjust to model"
 
     def _sketch_point(self, sketch: Any, index: int) -> Any:  # pragma: no cover
         """The *index*-th hole-centre point of a sketch, counted as the plan counts.

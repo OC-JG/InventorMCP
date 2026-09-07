@@ -150,15 +150,28 @@ also passes the simulator rehearsal.
 
    **What is unmeasured here is unusual, and worth naming exactly.** Every other
    COM call in this server was read off a type library before it was written.
-   This one was not: what is recorded above is that `MoveFaceFeatures` has `Add`
-   and `CreateDefinition`, and *not* what the definition's setter is called. So
-   the backend tries three spellings, each of which can only mean direction and
-   distance, and names every one it tried when none of them work -- rather than
-   one guess that comes back as a bare "Exception occurred". A free-drag or
+   This one was not: what was recorded above is that `MoveFaceFeatures` has
+   `Add` and `CreateDefinition`, and *not* what the definition's setter is
+   called. So the backend tries spellings, each of which can only mean direction
+   and distance, and names every one it tried when none work -- rather than one
+   guess that comes back as a bare "Exception occurred". A free-drag or
    point-to-point setter is deliberately not among them: one of those accepting
    a direction and a distance by accident is exactly the quietly wrong part this
-   file exists to catch. `docs/INVENTOR_SETUP.md` has what a live run must
-   confirm, and `scripts/com_signatures.py --search MoveFace` is where it starts.
+   file exists to catch.
+
+   **A live run on 2027.1 on 2026-09-07 said all three are absent**, and the
+   type library will not answer the follow-up. `MoveFaceFeatures.Add` takes one
+   Definition, `CreateDefinition` produces one, and `MoveFaceDefinition` carries
+   a `MoveFaceType` and a `MoveFaceTypeDefinition` whose classes are published
+   nowhere -- `--search MoveFaceType` finds nothing at all. The likely shape is
+   Inventor's usual one, a definition holding a type and the type holding its own
+   parameters, so the same narrow setter list is now tried on the child object
+   as well; the type is deliberately *not* set on the way past, because which
+   `MoveFaceType` value means direction-and-distance is a semantic claim nothing
+   has read and a wrong one could be accepted. The refusal prints what both
+   objects offered, so one run answers the question.
+   `scripts/probe_definitions.py` asks it directly, and
+   `docs/INVENTOR_SETUP.md` has the rest.
 
 6. **Thicken.** *Added 2026-09-07 as `{"op":"thicken",...}`, and it closes half
    of what this item asked for.* The half it closes is the wall-thickness one: a
@@ -190,26 +203,41 @@ also passes the simulator rehearsal.
    direction is arbitrary relative to the face so the dot product has no answer,
    while here the direction *is* the face's own normal.
 
-   **What is genuinely unmeasured is a side and a corner, not a number.**
-   `THICKEN_SHARE` in `backend/base.py` says which side of a face a `negative`
-   layer lies on, and therefore that `positive` + `cut` and `negative` + `join`
-   do nothing at all -- the layer is where the material already is not, or
-   already is. That is sound set algebra about a boolean against a slab and it
-   is silent on whether Inventor agrees, so the two cancelling pairs are warned
-   about at rehearsal rather than refused: a refusal would prevent the run that
-   settles it. And four walls grown outward leave a 1 x 1 x 6 mm notch at each
-   corner belonging to no wall, so the answer is 1.4400 cm^3 if Inventor leaves
-   them and 1.4640 if it closes them. `examples/calibration/thickened_walls.json`
-   and `thinned_wall.json` isolate one question each; a tolerance cannot catch
-   being wrong about a side, which is what defect 5 was.
+   **The side and the corner were the unmeasured parts, and both were measured
+   on Inventor 2027.1 on 2026-09-07.** `THICKEN_SHARE` in `backend/base.py` says
+   which side of a face a `negative` layer lies on, and therefore that
+   `positive` + `cut` and `negative` + `join` do nothing at all -- the layer is
+   where the material already is not, or already is. That was sound set algebra
+   about a boolean against a slab and silent on whether Inventor agreed, so the
+   two cancelling pairs are warned about at rehearsal rather than refused: a
+   refusal would have prevented the run that settled it.
+   `examples/calibration/thinned_wall.json` isolated the side and removed
+   **-0.2400 cm^3** against -0.2400 derived, so the table has it right. A
+   tolerance could not have caught being wrong about a side, which is what
+   defect 5 was; three distinguishable numbers could.
 
-   The COM call has never executed and its signature has never been read, the
-   same as `move_face` -- with one difference that is handled in the code rather
-   than left to a run. Its arguments are a variant and two enum *integers*, so a
-   wrong order need not raise: it would be accepted and build something
-   enormous. So the backend measures the result against the area-times-thickness
-   prediction and refuses anything outside a factor of four, deleting the
-   feature rather than leaving it in the part.
+   The corner was the other one, and it went the other way. Four walls grown
+   outward leave a 1 x 1 x 6 mm notch at each corner belonging to no wall, so
+   the answer was 1.4400 cm^3 if Inventor left them and 1.4640 if it closed
+   them. `examples/calibration/thickened_walls.json` came back at **1.4640**:
+   Inventor closes them, and the simulator was 1.7% low on every multi-face
+   thicken until `_thicken_corners` added `(share x t)^2 x h` per shared edge.
+   Both fixtures now agree with Inventor to four decimals and
+   `PREDICTED["thicken"]` is 0.02, an extrude's tolerance.
+
+   **The COM call is measured too, and it was not what the code assumed.**
+   `ThickenFeatures.Add(Faces, Distance, ExtentDirection, Operation,
+   [AutomaticFaceChain], [CreateVerticalSurfaces], [AutomaticBlending])`. There
+   is no `CreateThickenDefinition` on this release, so the definition route the
+   backend tried first was reaching for a method that has never existed; and
+   there is no `IsOffset` argument, so the `False` passed in slot 4 for the
+   offset mode's sake was landing on `AutomaticFaceChain` -- where `False` is
+   also correct, because chaining would extend the selection past the faces the
+   selector named. It worked for a reason that was not the reason given. The
+   factor-of-four result guard that existed because a variant and two enum
+   *integers* can be misordered without raising is gone with the attempt list:
+   `_call_named` puts the argument names at the call site, and a permutation is
+   not possible when the names are there.
 
 5. **SketchDrivenPattern.** *Added 2026-09-07 as
    `{"op":"sketch_driven_pattern",...}`. The simulator **places** its
@@ -261,11 +289,22 @@ also passes the simulator rehearsal.
    shell's cavity, and a shell is not a thing anyone patterns.
 
    `PREDICTED["sketch_driven_pattern"]` is **0.02 rather than the placeholder**,
-   which looks inconsistent beside the other two unmeasured operations and is
-   not. Its arithmetic is the rule the other patterns use and is measured. What
-   is unmeasured is whether Inventor also places an occurrence on the reference
-   point -- an off-by-one *occurrence*, 33% on a three-point pattern -- and a
-   tight tolerance reports that where 0.5 would hide it.
+   which looks inconsistent beside `move_face` and is not. Its arithmetic is the
+   rule the other patterns use and is measured. What is unmeasured is whether
+   Inventor also places an occurrence on the reference point -- an off-by-one
+   *occurrence*, 33% on a three-point pattern -- and a tight tolerance reports
+   that where 0.5 would hide it.
+
+   **The COM call was run on 2027.1 on 2026-09-07 and rejected, on its shape.**
+   `SketchDrivenPatternFeatures.Add` takes **one Definition**, not the
+   collection, sketch and point this passed through `_patterned`, so the call
+   could never have worked here. The backend now builds a definition, sets the
+   compute type on it and calls `Add(definition)`. Where the definition comes
+   from is not in the type library at all -- `--search SketchDrivenPattern`
+   publishes `Add` and nothing else -- so two factory spellings are tried and
+   the refusal prints what the live collection offered.
+   `scripts/probe_definitions.py` asks it directly, together with `move_face`'s
+   unpublished definition objects.
 
 ### Tier 2 -- frequently wanted, no current workaround
 
