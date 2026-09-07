@@ -4,6 +4,65 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
 ## Unreleased
 
+### Fixed
+- **A parameter change rebuilt nothing, so every measurement after it was of the
+  part as it had been** — defect 9, found on the third live run.
+  `document.Update()` is called from `_batch`, and `set_parameter` was **the
+  only mutating call in the COM backend that did not run inside one**. It set
+  the expression and returned; Inventor kept the old geometry, and
+  `mass_properties`, `topology_counts` and every export read it.
+
+  Found by measurement rather than by reading: the work-axis bolt circle's
+  centre of mass moved 0.00000 mm when `bolt_x` went 30 → 45, against a figure
+  derived beforehand of 0.18640. The carrier sketch came back
+  `fully_constrained=True` with its one driving dimension in place, which is
+  what said the parametric chain was sound and something else was wrong.
+
+  **It reaches well beyond work axes.** `set_parameters` is the tool whose whole
+  promise is "change a driving dimension; the model updates", and the DFM loop's
+  argument for itself is that it acts, *rebuilds* and re-measures rather than
+  reporting and handing off. A loop that drove a parameter and re-measured was
+  reading the part it started with. The fix is the existing mechanism, not a new
+  one: the edit runs inside `self._batch(document)` like every feature call.
+
+  `check_work_geometry` now reads the parameter back before judging the
+  geometry, so the three reasons a measurement can sit still — the parameter
+  never took, the model never rebuilt, the axis was not really driven — can be
+  told apart next time. Unmeasured until the next run.
+- **The work-geometry check was reaching into COM from the wrong thread.** Its
+  work-point lookup read `ComponentDefinition` from the script and got "the
+  application called an interface that was marshalled for a different thread" —
+  precisely the failure `describe_feature`'s docstring already records — which
+  then read as a missing work point and cost a run. It is a backend method now,
+  `list_work_geometry`, implemented on both backends: a COM object returned to a
+  script is not a COM object the script may use.
+
+### Added
+- **`list_work_geometry`**, on both backends, reporting the work planes, axes
+  and points a part holds. Separate from `list_features` because the two
+  backends genuinely disagree there — the mock keeps everything in one list,
+  Inventor keeps work geometry out of `ComponentDefinition.Features` — and
+  reconciling them needs a fact nothing has measured: whether Inventor's own
+  origin planes and axes sit in those collections and how a created one is told
+  from them. So this reports what is there and the acceptance run prints it,
+  rather than a guess going into the listing `edit_feature` and the DFM loop
+  both trust.
+- **Why Inventor refuses a parameter name, in the hint** — defect 10, measured.
+  Asking 2027.1 for nine names in one document: it took `bolt_x`, `PCD`,
+  `pcd_1`, `bolt_pcd`, `dia`, `pitch` and `bolt_spacing`, and refused `cd` and
+  `pcd`. `cd` is the candela and `pcd` the pico-candela, so the rule is an SI
+  prefix plus a unit symbol, **case-sensitively** — which is why `PCD` is fine.
+  Wider than a list could cover (`mm`, `ms`, `kg`, `ncd`, `kA`…), and this
+  server's unit table does not know candela, so it cannot pre-empt them.
+  `_diagnose_parameter`'s hint names the cause and says to lengthen, underscore
+  or capitalise; the acceptance run keeps the probe as a regression check, so a
+  release that changes its mind shows up there rather than in somebody's recipe.
+
+  Also answered on that run: the refused `horizontal_align` on every carrier
+  sketch **does not matter** — they all come out `fully_constrained=True`, so
+  Inventor was declining a constraint it had already inferred, and the "keeps a
+  degree of freedom" in that message is over-claiming.
+
 ### Changed
 - **What the first two live runs actually measured.** The work-geometry check
   ran twice on Inventor 2027.1 on 2026-09-07. After the sketch-label fix below,

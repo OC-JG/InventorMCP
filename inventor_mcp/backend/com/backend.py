@@ -1256,7 +1256,16 @@ class ComBackend(Backend):
                       comment: str = "", key: bool = False) -> ParamInfo:  # pragma: no cover
         document = self._doc(doc_id)
         parameters = document.ComponentDefinition.Parameters
-        with self._translate_errors(f"Setting parameter {name!r}", ParameterError):
+        # `_batch` is what calls `document.Update()`, and until 2026-09-07 this
+        # was the only mutating call outside one -- so a parameter change set the
+        # expression and rebuilt nothing, and every measurement afterwards was of
+        # the part as it had been. Measured: the work-axis bolt circle's centre of
+        # mass moved 0.00000 mm on `bolt_x` 30 -> 45, against a derived 0.18640.
+        # It reaches further than work axes: `set_parameters` is the tool that
+        # says "change a driving dimension; the model updates", and the DFM loop
+        # drives a parameter and then re-measures.
+        with self._batch(document), self._translate_errors(
+                f"Setting parameter {name!r}", ParameterError):
             existing = _find_parameter(parameters, name)
             if existing is not None:
                 parameter = existing
@@ -1327,7 +1336,7 @@ class ComBackend(Backend):
         except Exception:
             pass
         return (f"A throwaway parameter with the same units succeeded, so Inventor is "
-                f"objecting to the name {name!r} itself. Try renaming it.")
+                f"objecting to the name {name!r} itself. {_why_a_name_is_refused(name)}")
 
     def list_parameters(self, doc_id: str, *,
                         include_model: bool = False) -> list[ParamInfo]:  # pragma: no cover
@@ -3080,6 +3089,37 @@ class ComBackend(Backend):
         return _feature_info(feature, "thread", {"designation": request.designation})
 
     # -- model state -------------------------------------------------------
+    def list_work_geometry(self, doc_id: str) -> dict[str, list[str]]:  # pragma: no cover
+        """The names in `WorkPlanes`, `WorkAxes` and `WorkPoints`.
+
+        A backend method rather than something a script reads for itself, for
+        the reason `describe_feature` records: reaching into a returned COM
+        object from another thread fails with "the application called an
+        interface that was marshalled for a different thread". The first
+        version of the work-geometry acceptance check did exactly that and got
+        exactly that error, which then read as a missing work point.
+
+        It exists because `list_features` walks `ComponentDefinition.Features`
+        and Inventor keeps work geometry elsewhere, so the two backends disagree
+        about whether a work point is a feature. Fixing that needs to know
+        whether Inventor's *origin* planes, axes and point sit in these same
+        collections and how a created one is told from them, which nothing here
+        has measured -- so this reports the names and the acceptance run prints
+        them, rather than a guess going into the listing everything else trusts.
+        """
+        component = self._doc(doc_id).ComponentDefinition
+        found: dict[str, list[str]] = {}
+        for key, attribute in (("work_planes", "WorkPlanes"),
+                               ("work_axes", "WorkAxes"),
+                               ("work_points", "WorkPoints")):
+            try:
+                collection = getattr(component, attribute)
+                found[key] = [str(collection.Item(index).Name)
+                              for index in range(1, int(collection.Count) + 1)]
+            except Exception as exc:
+                found[key] = [f"<unreadable: {_com_message(exc)}>"]
+        return found
+
     def list_features(self, doc_id: str) -> list[FeatureInfo]:  # pragma: no cover
         document = self._doc(doc_id)
         features = document.ComponentDefinition.Features
@@ -3584,6 +3624,38 @@ def _named_work_plane(component: Any, name: str) -> Any:  # pragma: no cover - W
         f"No work plane named {name!r}.",
         hint="Use 'xy', 'xz', 'yz', or create one with the `work_plane` operation first.",
     )
+
+
+def _why_a_name_is_refused(name: str) -> str:
+    """The measured reason Inventor turns down a parameter name, where it fits.
+
+    Measured on 2026-09-07, Inventor 2027.1, by asking it for nine names in one
+    document: it took ``bolt_x``, ``PCD``, ``pcd_1``, ``bolt_pcd``, ``dia``,
+    ``pitch`` and ``bolt_spacing``, and refused ``cd`` and ``pcd``.
+
+    ``cd`` is the candela and ``pcd`` is the pico-candela, so **Inventor refuses
+    a name it can read as a unit, including one built from an SI prefix and a
+    unit symbol** -- and it is case-sensitive, which is why ``PCD`` is fine. That
+    is a far wider set than a list of names could cover: ``mm``, ``ms``, ``kg``,
+    ``ncd``, ``mcd``, ``kA`` and many more are all names Inventor will decline,
+    and this server's own unit table does not know candela at all, so it cannot
+    detect them in advance. What it can do is stop the failure being a mystery.
+    """
+    lowered = name.lower()
+    prefixes = "y z a f p n u m c d da h k M G T P E Z Y"
+    if len(name) <= 4 and lowered == name:
+        return (
+            "Inventor refuses a name it can read as a unit, and it is "
+            f"case-sensitive -- {name.upper()!r} may well be accepted where "
+            f"{name!r} is not. Measured on 2027.1: 'cd' (candela) and 'pcd' "
+            "(pico-candela) were both refused while 'PCD', 'pcd_1' and "
+            "'bolt_pcd' were taken. A short lower-case name risks colliding "
+            f"with a unit symbol or an SI prefix on one ({prefixes}), so "
+            "lengthen it, add an underscore, or capitalise it."
+        )
+    return ("Inventor refuses a name it can read as a unit -- measured on "
+            "2027.1 for 'cd' and 'pcd' -- so check the name against Inventor's "
+            "unit symbols. Otherwise try lengthening it.")
 
 
 #: The label the carrier sketch gives its one point, so it can be found again.

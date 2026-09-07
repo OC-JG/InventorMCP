@@ -9,6 +9,7 @@ mock backend's interpretation of the same inputs.
 
 from __future__ import annotations
 
+import pathlib
 import sys
 
 import pytest
@@ -1498,3 +1499,125 @@ class TestTheMeasuredEnumValues:
             constants.resolve("kJoinOperation")
             constants.resolve("kJoinOperation")
         assert sum("kJoinOperation" in r.message for r in caplog.records) == 1
+
+
+class TestEveryMutatingCallRebuilds:
+    """`document.Update()` comes from `_batch`, so a mutation outside one is a
+    mutation Inventor has not applied yet.
+
+    `set_parameter` was the only one, and it cost a live run: the work-axis bolt
+    circle's centre of mass moved 0.00000 mm against a derived 0.18640, because
+    the expression changed and nothing rebuilt. Defect 9. The reach is the point
+    -- `set_parameters` promises "the model updates", and the DFM loop's whole
+    argument is that it acts, rebuilds and re-measures.
+
+    Source-level, because the call needs Windows and a CAD seat. That is weaker
+    than running it, and it is what can be held here.
+    """
+
+    #: Methods that change the model and must therefore rebuild it.
+    MUTATORS = ["set_parameter", "build_sketch", "extrude", "revolve", "hole",
+                "fillet", "chamfer", "shell", "work_plane", "work_point",
+                "work_axis"]
+
+    @pytest.mark.parametrize("method", MUTATORS)
+    def test_it_runs_inside_a_batch(self, method):
+        import inspect
+
+        source = inspect.getsource(getattr(com.ComBackend, method))
+        assert "self._batch(" in source, (
+            f"{method} changes the model outside `_batch`, so nothing calls "
+            "document.Update() and every measurement afterwards reads the part "
+            "as it was -- defect 9")
+
+    def test_batch_is_still_what_updates(self):
+        """If the update moved out of `_batch`, the test above proves nothing."""
+        import inspect
+
+        assert "document.Update()" in inspect.getsource(com.ComBackend._batch.__wrapped__)
+
+
+class TestWhyInventorRefusesAName:
+    """Defect 10, measured on 2027.1 by asking it for nine names.
+
+    It took `bolt_x`, `PCD`, `pcd_1`, `bolt_pcd`, `dia`, `pitch` and
+    `bolt_spacing`; it refused `cd` and `pcd`. The candela and the
+    pico-candela -- so an SI prefix plus a unit symbol, case-sensitively.
+    """
+
+    def test_a_short_lower_case_name_is_told_about_the_case_rule(self):
+        why = com._why_a_name_is_refused("pcd")
+        assert "case-sensitive" in why
+        assert "'PCD'" in why
+
+    def test_it_quotes_the_two_names_actually_measured(self):
+        why = com._why_a_name_is_refused("pcd")
+        assert "candela" in why and "pico-candela" in why
+
+    def test_a_long_name_gets_the_rule_without_the_capitalise_advice(self):
+        """Suggesting `BOLT_PITCH_DIAMETER` to somebody would be noise."""
+        why = com._why_a_name_is_refused("bolt_pitch_diameter")
+        assert "unit" in why
+        assert "case-sensitive" not in why
+
+    def test_an_already_capitalised_name_is_not_told_to_capitalise(self):
+        assert "case-sensitive" not in com._why_a_name_is_refused("PCD")
+
+    def test_the_diagnosis_reaches_the_hint(self):
+        """Otherwise the measurement sits in a helper nobody reads."""
+        import inspect
+
+        source = inspect.getsource(com.ComBackend._diagnose_parameter)
+        assert "_why_a_name_is_refused" in source
+
+
+class TestWorkGeometryIsAskedOfTheBackend:
+    """The thread rule, which the acceptance check broke and paid for.
+
+    `describe_feature`'s docstring already recorded it: reaching into a returned
+    COM object from another thread fails with "the application called an
+    interface that was marshalled for a different thread". The work-geometry
+    check read `ComponentDefinition` from the script, got exactly that, and
+    reported a missing work point.
+    """
+
+    def test_both_backends_answer_it(self):
+        from inventor_mcp.backend.mock.backend import MockBackend
+
+        for implementation in (MockBackend, com.ComBackend):
+            assert "list_work_geometry" in vars(implementation), (
+                f"{implementation.__name__} does not implement it, so a caller "
+                "gets NotImplementedError from the base and reaches for COM "
+                "directly -- which is the failure this replaced")
+
+    def test_they_agree_on_the_keys(self):
+        """A caller reading `work_points` from one and `workPoints` from the
+        other is the drift the ABC exists to prevent."""
+        import inspect
+
+        sources = [inspect.getsource(getattr(cls, "list_work_geometry"))
+                   for cls in (com.ComBackend,
+                               __import__("inventor_mcp.backend.mock.backend",
+                                          fromlist=["MockBackend"]).MockBackend)]
+        for key in ("work_planes", "work_axes", "work_points"):
+            for source in sources:
+                assert key in source, f"{key} missing from one implementation"
+
+    def test_the_acceptance_check_does_not_reach_into_com_itself(self):
+        """The regression: a script may hold a COM object and may not use it.
+
+        Parsed rather than grepped, because the file explains this rule in prose
+        and a text search matches its own explanation -- which is how the first
+        version of this test failed.
+        """
+        import ast
+
+        source = (pathlib.Path(__file__).resolve().parent.parent
+                  / "scripts" / "live_acceptance.py").read_text()
+        reached = [node.attr for node in ast.walk(ast.parse(source))
+                   if isinstance(node, ast.Attribute)
+                   and node.attr in ("ComponentDefinition", "MassProperties",
+                                     "WorkPoints", "WorkAxes", "WorkPlanes")]
+        assert not reached, (
+            f"live_acceptance.py reaches into COM itself ({sorted(set(reached))}); "
+            "that is the wrong-thread failure that cost a run. Ask the backend.")

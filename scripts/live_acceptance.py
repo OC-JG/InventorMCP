@@ -983,14 +983,12 @@ def check_work_geometry(session: Session, report: Report) -> None:
         # cannot be fixed by guessing, because Inventor's *origin* planes and
         # axes live in those same collections and nothing here has measured how
         # to tell them apart. So the facts needed to fix it are printed below.
-        _report_work_geometry_collections(session, context, report)
-        # Existence asked the way the code that needs it asks: `two_points`
-        # resolves a work point by name out of `WorkPoints`, so if that finds
-        # it, the thing exists and is reachable.
-        report.check(_work_point_exists(session, context, "Datum"),
-                     "work-geometry: the work point can be found by name",
-                     "`_named_work_point` could not find 'Datum' in WorkPoints, "
-                     "so nothing downstream could reference it either.")
+        found = _work_geometry(session, context, report)
+        report.check("Datum" in found.get("work_points", []),
+                     "work-geometry: the work point is in WorkPoints, by name",
+                     f"work_points holds {found.get('work_points')}. Nothing "
+                     "downstream could reference it either -- `two_points` "
+                     "resolves a work point by name out of that collection.")
         _report_carrier_sketches(session, context, report)
         session.backend.close_document(context.doc_id, save=False)
         session.forget(context.doc_id)
@@ -1061,6 +1059,28 @@ def check_work_geometry(session: Session, report: Report) -> None:
             report.check(False, "work-geometry: bolt_x can be changed",
                          f"{type(exc).__name__}: {exc}")
         else:
+            # Three things can make the centre of mass sit still, and they want
+            # different fixes: the parameter never took, the model never
+            # rebuilt, or the axis is not really driven by it. Read the
+            # parameter back first, so a failure below cannot be blamed on the
+            # wrong one. The 2026-09-07 run could not tell them apart, and the
+            # answer turned out to be the middle one -- `set_parameter` was the
+            # only mutating call outside `_batch`, so nothing called
+            # `document.Update()` and every later measurement was of the part
+            # as it had been.
+            readback = next(
+                (p for p in session.backend.list_parameters(context.doc_id)
+                 if p.name == "bolt_x"), None)
+            report.check(
+                readback is not None and abs(readback.value - 45.0) < 1e-6,
+                "work-geometry: bolt_x reads back as 45 after being set",
+                f"read back {readback.value if readback else None}. If this "
+                "fails the parameter never took, and the centre-of-mass check "
+                "below is measuring the wrong thing.")
+            if before.volume == after.volume:
+                report.note("work-geometry: the volume did not change either, "
+                            "which is expected -- moving a bolt circle removes "
+                            "the same material from somewhere else.")
             moved = _centre_shift_mm(before, after)
             if moved is None:
                 # Not a failure of the work axis: a backend that reports no
@@ -1197,8 +1217,16 @@ def _probe_parameter_names(session: Session, report: Report) -> None:
     Reported, never failed on: this is a measurement of Inventor, and a name it
     declines is a fact to record rather than a fault in this repository.
     """
+    # Answered on 2026-09-07: it took bolt_x, PCD, pcd_1, bolt_pcd, dia, pitch
+    # and bolt_spacing, and refused `cd` and `pcd`. `cd` is the candela and
+    # `pcd` the pico-candela, so Inventor refuses a name it can read as a unit,
+    # SI prefix included, and is case-sensitive about it. Kept as a regression
+    # check rather than deleted: the rule is now in
+    # `_why_a_name_is_refused`'s hint, and a release that changed its mind
+    # should show up here rather than in somebody's recipe.
     candidates = ["bolt_x", "pcd", "PCD", "pcd_1", "bolt_pcd", "cd", "dia",
                   "pitch", "bolt_spacing"]
+    expected_refusals = {"pcd", "cd"}
     backend = session.ensure_backend()
     document = backend.new_part("ParameterNames", units="mm")
     context = session.register(document, "mm", "deg")
@@ -1214,50 +1242,38 @@ def _probe_parameter_names(session: Session, report: Report) -> None:
         report.note(f"parameter names Inventor took: {', '.join(accepted) or '(none)'}")
         for entry in refused:
             report.note(f"parameter name REFUSED: {entry}")
-        if refused:
-            report.note("A refused name belongs in `RESERVED_NAMES` with the "
-                        "measurement beside it, and `apply_parameter` should say "
-                        "so before Inventor does.")
+        names = {entry.split(" ", 1)[0] for entry in refused}
+        report.check(
+            names == expected_refusals,
+            "work-geometry: Inventor still refuses exactly the unit-like names",
+            f"refused {sorted(names)}, expected {sorted(expected_refusals)}. "
+            "`cd` is the candela and `pcd` the pico-candela; the rule measured "
+            "on 2027.1 is that a name Inventor can read as a unit is refused, "
+            "SI prefix included, case-sensitively. A change here means "
+            "`_why_a_name_is_refused` needs rewriting.")
     finally:
         backend.close_document(context.doc_id, save=False)
         session.forget(context.doc_id)
 
 
-def _report_work_geometry_collections(session: Session, context,
-                                      report: Report) -> None:
-    """What Inventor keeps in WorkPlanes, WorkAxes and WorkPoints, by name.
+def _work_geometry(session: Session, context, report: Report) -> dict[str, list[str]]:
+    """What the part holds in WorkPlanes, WorkAxes and WorkPoints, by name.
 
-    `list_features` walks `ComponentDefinition.Features` and Inventor keeps work
-    geometry elsewhere, so the two backends disagree about whether a work point
-    is a feature. Fixing that needs one fact nobody here has measured: whether
-    the *origin* planes, axes and point sit in these same collections, and if so
-    how a created one is told from them. So the names are printed.
+    Through the backend, not by reaching into `ComponentDefinition` from here.
+    The first version of this did the latter and got exactly the error
+    `describe_feature`'s docstring warns about -- "the application called an
+    interface that was marshalled for a different thread" -- which then read as
+    a missing work point and cost a run. A COM object returned to a script is
+    not a COM object the script may use.
     """
     try:
-        component = session.backend._doc(context.doc_id).ComponentDefinition
+        found = session.backend.list_work_geometry(context.doc_id)
     except Exception as exc:
-        report.note(f"work-geometry: could not read the collections ({exc})")
-        return
-    for label in ("WorkPlanes", "WorkAxes", "WorkPoints"):
-        try:
-            collection = getattr(component, label)
-            names = [str(collection.Item(i).Name)
-                     for i in range(1, int(collection.Count) + 1)]
-        except Exception as exc:
-            report.note(f"work-geometry: {label} unreadable ({exc})")
-            continue
-        report.note(f"work-geometry: {label} holds {len(names)}: {names}")
-
-
-def _work_point_exists(session: Session, context, name: str) -> bool:
-    """Whether a work point of that name is reachable the way callers reach it."""
-    from inventor_mcp.backend.com.backend import _named_work_point
-
-    try:
-        component = session.backend._doc(context.doc_id).ComponentDefinition
-        return _named_work_point(component, name) is not None
-    except Exception:
-        return False
+        report.note(f"work-geometry: could not list the collections ({exc})")
+        return {}
+    for key, names in found.items():
+        report.note(f"work-geometry: {key} holds {len(names)}: {names}")
+    return found
 
 
 def _report_carrier_sketches(session: Session, context, report: Report) -> None:
