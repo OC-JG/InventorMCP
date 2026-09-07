@@ -15,8 +15,9 @@ Slot SnapFit Split Sweep Thicken Thread Trim Unwrap iFeatures
 
 **Covered today, 17 of the 53 collections:** Extrude, Revolve, Sweep, Loft,
 Coil, Hole, Fillet, Chamfer, Shell, RectangularPattern, CircularPattern, Mirror,
-Thread, Emboss, FaceDraft, Combine, Split. Work planes and material are covered
-too and are not `Features` collections, so they sit outside the count. `boss` and
+Thread, Emboss, FaceDraft, Combine, Split. Work planes, work axes, work points
+and material are covered too and are not `Features` collections, so they sit
+outside the count. `boss` and
 `rib` exist as recipe operations but are built from primitives, because neither
 Inventor feature can be created through the API -- see below.
 
@@ -140,15 +141,30 @@ NonParametricBase). Assemblies and sheet metal remain out of scope by design.
 
 Found by using the server rather than by reading its API surface:
 
-* **No work axis or work point.** Only work planes exist. A circular pattern about
-  anything other than an origin axis has nowhere to point.
+* ~~**No work axis or work point.**~~ *Closed 2026-09-03 in the simulator, and
+  unmeasured against Inventor.* `work_point` and `work_axis` are recipe
+  operations now, and `work_axis` with `kind: "normal_to_plane"` is the thing a
+  bolt circle off the origin needs -- an axis standing perpendicular to the face
+  it patterns, stated in that face's own coordinates. The three COM calls it
+  rests on (`WorkPoints.AddByPoint`, `WorkAxes.AddByTwoPoints`,
+  `WorkAxes.AddByLine`) have never executed; the roadmap keeps that as its own
+  open item rather than letting this tick cover it. Note also that the original
+  reason recorded here -- that a pattern could only turn about an origin axis --
+  was **wrong**: `resolve_axis` has always taken a named sketch line. What is
+  true is that no line on a face can be that face's pattern axis, which is
+  defect 7 below.
 * **No sketch fillet or chamfer.** Corner rounding has to happen as a model
   feature, which is often not where it belongs.
 * **No project geometry or sketch offset**, so a sketch cannot reference the edges
   of the solid it sits on.
-* **`hole` still only drills the primary body.** `extrude` can now be aimed with
-  `bodies`, but `HoleFeatures` was not given the same treatment, so a hole in a
-  second body still needs an `extrude` cut.
+* ~~**`hole` still only drills the primary body.**~~ *Closed 2026-09-03 in the
+  simulator, and unmeasured against Inventor.* `hole` takes `bodies` exactly as
+  `extrude` does, and the two share one `_aimed_body` rather than carrying a
+  copy each. The COM side differs in a way worth knowing: a hole is aimed
+  *after* it is built, because `HoleFeatures.Add...` makes the feature in one
+  call and there is no definition object to put `AffectedBodies` on, so the
+  backend sets it on the finished feature and treats a refusal as a hard error.
+  Also unmeasured.
 
 ## Defects worth fixing, with evidence
 
