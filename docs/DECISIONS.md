@@ -283,16 +283,34 @@ instead, and each cost a real failure:
   roughest -- each marked `ponytail:` by its own author -- had no entry at all,
   so the divergence check was silent in exactly the places somebody had flagged
   as least trustworthy;
-* the DFM job's green tick against whether the analyser ran at all.
+* the DFM job's green tick against whether the analyser ran at all;
+* **the roadmap against the tree, which is the one that proves the rule is not
+  yet a habit.** `ROADMAP.md` is where restructure 2 -- this rule -- was written
+  down, and it was itself the last document not under it. It said thirteen of
+  fourteen `ponytail:` markers lived in `backend/mock/` when there were sixteen,
+  fifteen of them there; it quoted four calibrated tolerances that nothing held
+  against `PREDICTED`; and one ticked item said "fixed the same day" without
+  saying which day. Found on 2026-09-03 by going looking, not by anything
+  failing, which is exactly the failure mode this list describes.
 
 So the rule, and it is not "be careful": **a fact stated in two places does not
 merge without a test that they still say the same thing.** The tests are cheap
 -- most of them read one file and one Python object and compare -- and they fail
 in the place the drift happened, naming it. `tests/test_docs_still_true.py`,
-`tests/test_supported_pythons.py`, `tests/test_dfm_targets.py`, the
-`dfm-unavailable:` sentinel in `tests/conftest.py`, and the check that the
-snapshot policy and the defect it works around still agree are the ones in place
-now.
+`tests/test_supported_pythons.py`, `tests/test_dfm_targets.py`,
+`tests/test_roadmap_still_true.py`, the `dfm-unavailable:` sentinel in
+`tests/conftest.py`, and the check that the snapshot policy and the defect it
+works around still agree are the ones in place now.
+
+What a drift test has to earn, learned from writing the roadmap's: it must be
+able to fail, and it must fail *narrowly*. Each of the roadmap's claims was
+mutated in turn -- fourteen markers for fifteen, nine examples for eleven, a
+retuned tolerance, five restructures for four -- and each mutation was caught by
+exactly one test. A drift test nothing can break is decoration, and one that
+breaks in five places when a paragraph is re-flowed will be deleted by the next
+person who re-flows a paragraph. Three of these tests were wrong when first
+written, in that direction, and calling five sound entries undated is the same
+false-positive habit the run warnings are written to avoid.
 
 A corollary worth stating because it is the tempting way out: the answer to a
 duplication is usually the test, not the removal. The cheat-sheet is duplicated

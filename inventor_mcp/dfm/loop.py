@@ -32,8 +32,10 @@ circle. Import it by path -- ``from inventor_mcp.dfm.loop import improve``.
 
 from __future__ import annotations
 
+import itertools
 import os
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -59,6 +61,22 @@ DEFAULT_ROUNDS = 4
 #: score to a whole number, so anything below one point is not a change it
 #: reported.
 NOTICEABLE = 0.5
+
+_serial = itertools.count()
+
+
+def run_moment() -> str:
+    """A stamp for this run's files that no other run can repeat.
+
+    Not the timestamp alone. Windows' system clock ticks about every 15.6ms, so
+    two runs started back to back read the *same* microseconds -- and the second
+    then writes its mesh and report over the first's, which is the very
+    overwrite the stamp is here to prevent. A finer format does not help: the
+    clock is what is coarse, not the format. The pid and a per-process counter
+    make the name unique by construction instead of by luck.
+    """
+    moment = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
+    return f"{moment}-{os.getpid()}-{next(_serial)}"
 
 
 @dataclass
@@ -360,11 +378,8 @@ def improve(
     # round-N files -- and the "before" of a comparison is then routinely the
     # file the "after" run just replaced, so compare_manufacture compares a
     # part with itself and reports that the fix did nothing.
-    from datetime import datetime, timezone
-
-    moment = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
     base = Path(workspace) if workspace else Path.cwd() / ".dfm"
-    room = base / f"{context.name}-{moment}"
+    room = base / f"{context.name}-{run_moment()}"
     room.mkdir(parents=True, exist_ok=True)
 
     result = LoopResult(frozen=guard.as_dict(), settings=dict(dfm_settings),

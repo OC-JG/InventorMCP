@@ -268,6 +268,9 @@ class HoleRequest:
     tap_class: str | None = None
     tap_right_handed: bool = True
     tap_full_depth: bool = True
+    #: Bodies the hole may affect, 1-based in creation order. Empty leaves
+    #: Inventor's default, which is the first body only.
+    bodies: Sequence[int] = ()
     name: str | None = None
 
 
@@ -385,6 +388,31 @@ class WorkPlaneRequest:
     second: str | None = None
     offset: Driven | None = None
     angle: Driven | None = None
+    name: str | None = None
+
+
+@dataclass
+class WorkPointRequest:
+    plane: str = "xy"
+    at: tuple[Driven, Driven] = ()  # type: ignore[assignment]
+    offset: Driven | None = None
+    name: str | None = None
+
+
+@dataclass
+class WorkAxisRequest:
+    """Where a work axis comes from.
+
+    ``kind`` decides which of the remaining fields carries the answer, and the
+    schema has already refused the combinations that name none of them.
+    """
+
+    kind: str = "normal_to_plane"
+    plane: str = "xy"
+    at: tuple[Driven, Driven] = ()  # type: ignore[assignment]
+    points: Sequence[str] = ()
+    line: str | None = None
+    sketch: str | None = None
     name: str | None = None
 
 
@@ -524,6 +552,12 @@ class Backend(ABC):
 
     @abstractmethod
     def work_plane(self, doc_id: str, request: WorkPlaneRequest) -> FeatureInfo: ...
+
+    @abstractmethod
+    def work_point(self, doc_id: str, request: WorkPointRequest) -> FeatureInfo: ...
+
+    @abstractmethod
+    def work_axis(self, doc_id: str, request: WorkAxisRequest) -> FeatureInfo: ...
 
     @abstractmethod
     def draft(self, doc_id: str, request: DraftRequest) -> FeatureInfo: ...

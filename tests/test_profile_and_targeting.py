@@ -186,3 +186,65 @@ class TestBodyTargeting:
     def test_no_bodies_given_leaves_inventors_default(self, session):
         out = build(session, TWO_BODIES + [dict(BORE)], stop_on_error=True)
         assert out["operations"][-1]["detail"]["bodies"] is None
+
+
+#: The same two blocks, with a hole-centre point over the second one instead of
+#: a circle to cut. A `hole` needs a point; an `extrude` cut needs a profile.
+TWO_BODIES_PILOT = TWO_BODIES[:-1] + [
+    {"op": "sketch", "name": "Pilot", "plane": "xy", "entities": [
+        {"type": "point", "position": [50, 10]}]},
+]
+DRILL = {"op": "hole", "name": "Bore", "sketch": "Pilot", "diameter": 8,
+         "through_all": True, "direction": "negative"}
+
+
+class TestAHoleCanBeAimedTheSameWay:
+    """`hole` gains the multi-body targeting `extrude` already had.
+
+    The volumes here are the simulator's own arithmetic, not Inventor's: an
+    8 mm bore through 10 mm of the second 20x20x10 block. What makes them worth
+    asserting is the comparison between the two cases -- aimed at body 2 the
+    bore is charged against material, aimed at body 1 it is over thin air.
+    """
+
+    def test_a_hole_can_be_aimed_at_the_second_body(self, session):
+        out = build(session, TWO_BODIES_PILOT + [dict(DRILL, bodies=[2])])
+        assert out["ok"] is True
+        expected = (2 * 20 * 20 * 10 - math.pi * 16 * 10) / 1000
+        assert volume(out) == pytest.approx(expected, abs=0.002)
+        assert out["operations"][-1]["detail"]["bodies"] == [2]
+
+    def test_a_body_that_does_not_exist_is_refused(self, session):
+        out = build(session, TWO_BODIES_PILOT + [dict(DRILL, bodies=[3])],
+                    stop_on_error=True)
+        assert out["ok"] is False
+        assert "no body 3" in out["errors"][0]["error"]
+
+    def test_no_bodies_given_leaves_inventors_default(self, session):
+        out = build(session, TWO_BODIES_PILOT + [dict(DRILL)], stop_on_error=True)
+        assert out["operations"][-1]["detail"]["bodies"] is None
+
+    def test_the_bore_is_charged_to_the_body_it_was_aimed_at(self, session):
+        """Not merely accepted into the detail dictionary: body B is the one
+        that got smaller, and body A is left whole.
+
+        The total volume cannot show this. Both blocks are 8 cm^3 and the
+        simulator over-estimates rather than under-estimates a feature whose
+        point no prism covers -- deliberately, as `_through_all_distance` says
+        -- so a bore aimed at the wrong body is still charged a full 10 mm of
+        depth and the two runs agree to the digit. Per body they do not, which
+        is why the ledger keeps volumes per body and never aggregates them.
+        """
+        out = build(session, TWO_BODIES_PILOT + [dict(DRILL, bodies=[2])])
+        document = session.backend._doc(out["document"])
+        bore = math.pi * 0.4 ** 2 * 1.0
+        assert document.bodies[0] == pytest.approx(4.0), "body A should be untouched"
+        assert document.bodies[1] == pytest.approx(4.0 - bore)
+
+    def test_the_bore_is_recorded_against_that_body_in_the_ledger(self, session):
+        """So a later feature over the same point sees the hole on the right
+        body, rather than on whichever one was built first."""
+        out = build(session, TWO_BODIES_PILOT + [dict(DRILL, bodies=[2])])
+        document = session.backend._doc(out["document"])
+        bores = [slab for slab in document.slabs if slab.source == "hole"]
+        assert [slab.body for slab in bores] == [1]

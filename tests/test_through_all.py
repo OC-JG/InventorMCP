@@ -301,3 +301,99 @@ class TestSeparateProfilesInOneSketch:
         assert bosses, "the recipe should build them, not just name their holes"
         assert bosses[0]["measured"]["volume_change_cm3"] == pytest.approx(
             4 * math.pi * 0.35**2 * 2.75, rel=1e-5)
+
+
+HOLLOW_BOX = [
+    {"op": "sketch", "name": "Outline", "plane": "xy", "entities": [
+        {"type": "rectangle", "center": [0, 0], "width": 60, "height": 40}]},
+    {"op": "extrude", "name": "Body", "sketch": "Outline", "distance": 20},
+    {"op": "shell", "name": "Hollow", "thickness": 2.5,
+     "faces": {"kind": "face", "filter": "top"}},
+    {"op": "sketch", "name": "Route", "plane": "yz", "entities": [
+        {"type": "point", "position": [0, 10]}]},
+]
+
+SOLID_PLATE = [
+    {"op": "sketch", "name": "Outline", "plane": "xy", "entities": [
+        {"type": "rectangle", "center": [0, 0], "width": 60, "height": 40}]},
+    {"op": "extrude", "name": "Body", "sketch": "Outline", "distance": 10},
+    {"op": "sketch", "name": "Pilot", "plane": "xy", "entities": [
+        {"type": "point", "position": [0, 0]}]},
+]
+
+
+def warnings_for(operations: list[dict]) -> list[str]:
+    from inventor_mcp.rehearsal import rehearse
+
+    report = rehearse(PartRecipe.model_validate(
+        {"name": "T", "units": "mm", "operations": operations}))
+    return [entry["warning"] for entry in report["warnings"]]
+
+
+class TestAThroughHoleThatDrillsTheNearWallOnly:
+    """Defect 1: Inventor's through-all extent stops where it first leaves
+    material, so a hole across a hollow box drills one wall and the part looks
+    built. Nothing in the volumes says so. The count of material pieces the
+    drill axis crosses does, and the simulator has that count already.
+    """
+
+    def test_a_hole_across_a_hollow_box_is_warned_about(self):
+        told = warnings_for(HOLLOW_BOX + [
+            {"op": "hole", "name": "Cable", "sketch": "Route",
+             "diameter": 6, "through_all": True}])
+        assert any("crosses 2 walls" in entry for entry in told), told
+
+    def test_the_warning_names_the_substitute_that_works(self):
+        from inventor_mcp.rehearsal import rehearse
+
+        report = rehearse(PartRecipe.model_validate({
+            "name": "T", "units": "mm", "operations": HOLLOW_BOX + [
+                {"op": "hole", "name": "Cable", "sketch": "Route",
+                 "diameter": 6, "through_all": True}]}))
+        why = next(entry["why"] for entry in report["warnings"]
+                   if "walls" in entry["warning"])
+        assert "symmetric" in why
+
+    def test_an_ordinary_through_hole_says_nothing(self):
+        """A warning that fires on a correct recipe teaches the reader to skip
+        the field, so the quiet case matters as much as the loud one."""
+        assert warnings_for(SOLID_PLATE + [
+            {"op": "hole", "name": "Bolt", "sketch": "Pilot",
+             "diameter": 6, "through_all": True}]) == []
+
+    def test_a_blind_hole_says_nothing_even_across_a_hollow(self):
+        """A blind hole was never going to reach the far wall, and does not
+        claim to. Only `through_all` makes the promise this breaks."""
+        assert warnings_for(HOLLOW_BOX + [
+            {"op": "hole", "name": "Cable", "sketch": "Route",
+             "diameter": 6, "depth": 2}]) == []
+
+    def test_the_wall_count_is_recorded_on_the_feature(self, session):
+        out = build_part(session, PartRecipe.model_validate({
+            "name": "T", "units": "mm", "operations": HOLLOW_BOX + [
+                {"op": "hole", "name": "Cable", "sketch": "Route",
+                 "diameter": 6, "through_all": True}]}))
+        hole = next(s for s in out["operations"] if s["op"] == "hole")
+        assert hole["detail"]["walls_on_the_axis"] == 2
+
+    def test_a_solid_part_records_one_wall(self, session):
+        out = build_part(session, PartRecipe.model_validate({
+            "name": "T", "units": "mm", "operations": SOLID_PLATE + [
+                {"op": "hole", "name": "Bolt", "sketch": "Pilot",
+                 "diameter": 6, "through_all": True}]}))
+        hole = next(s for s in out["operations"] if s["op"] == "hole")
+        assert hole["detail"]["walls_on_the_axis"] == 1
+
+    def test_no_shipped_example_triggers_it(self):
+        """Eleven real parts, and the enclosure among them -- the part defect 1
+        was found on, which has since been built with the substitute. A false
+        positive here would be the warning's own undoing.
+        """
+        import json
+
+        for path in sorted(Path(__file__).resolve().parent.parent.glob("examples/*.json")):
+            from inventor_mcp.rehearsal import rehearse
+
+            report = rehearse(PartRecipe.model_validate(json.loads(path.read_text())))
+            offending = [entry for entry in report["warnings"] if "walls" in entry["warning"]]
+            assert offending == [], f"{path.name}: {offending}"
