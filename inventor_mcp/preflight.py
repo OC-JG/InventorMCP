@@ -25,11 +25,14 @@ Two rules follow from what it is for, and both matter more than they look:
 
 from __future__ import annotations
 
+import json
+import os
 import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 #: The oldest Python this package claims, as a pair so the check needs nothing
 #: read from disk -- ``pyproject.toml`` is not installed beside the code in a
@@ -265,6 +268,182 @@ def check_analyser() -> Finding:
         )
 
 
+#: Set in a probe's environment so the probe does not probe itself. Without it
+#: ``check_registration`` launches a doctor that launches a doctor.
+DOCTOR_CHILD = "INVENTOR_MCP_DOCTOR_CHILD"
+
+
+class ConfigUnreadable(Exception):
+    """A client config that exists and cannot be parsed.
+
+    Its own type because it is a finding rather than an absence: a config the
+    client cannot read is a server the client will not start, and the symptom is
+    identical to the server never having been registered.
+    """
+
+
+def client_configs() -> list[Path]:
+    """The config files an MCP client reads to learn how to launch this server.
+
+    Every one that exists, not the first: a machine can carry both the desktop
+    app's config and the repository's project-scoped ``.mcp.json``, and having
+    one of them right is no help if the client is reading the other.
+    """
+    found = []
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        found.append(Path(appdata) / "Claude" / "claude_desktop_config.json")
+    home = Path.home()
+    found.append(
+        home / "Library" / "Application Support" / "Claude"
+        / "claude_desktop_config.json"
+    )
+    found.append(home / ".config" / "Claude" / "claude_desktop_config.json")
+    found.append(Path(__file__).resolve().parents[1] / ".mcp.json")
+    return [path for path in found if path.is_file()]
+
+
+def server_entries(config: Path) -> list[tuple[str, list[str]]]:
+    """The launch commands in *config* that are this server, as (name, argv).
+
+    Matched on what the command actually runs rather than on the key being
+    called ``inventor``: it may have been registered under another name, and a
+    config naming a *different* MCP server is none of this check's business.
+    """
+    try:
+        data = json.loads(config.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ConfigUnreadable(f"{config.name}: {exc}") from exc
+    servers = data.get("mcpServers") if isinstance(data, dict) else None
+    if not isinstance(servers, dict):
+        return []
+
+    found: list[tuple[str, list[str]]] = []
+    for name, entry in servers.items():
+        if not isinstance(entry, dict):
+            continue
+        command = entry.get("command")
+        args = entry.get("args") or []
+        if not isinstance(command, str) or not isinstance(args, list):
+            continue
+        argv = [command, *(str(arg) for arg in args)]
+        if any("inventor_mcp" in arg or "serve.py" in arg for arg in argv[1:]):
+            found.append((str(name), argv))
+    return found
+
+
+def probe(argv: list[str]) -> tuple[bool, str]:
+    """Launch *argv* the way the client would, and ask it to report on itself.
+
+    ``--doctor`` appended to whatever the config says. That is what makes this
+    worth having: it is not a reimplementation of the client's launch, it *is*
+    the client's launch, and the thing launched answers for its own health. Both
+    shapes take the flag -- ``-m inventor_mcp --backend auto --doctor`` and
+    ``scripts/serve.py --backend auto --doctor`` -- because both end at the same
+    argument parser.
+
+    The child runs with ``DOCTOR_CHILD`` set, so it skips this check and there
+    is no recursion.
+    """
+    environment = dict(os.environ)
+    environment[DOCTOR_CHILD] = "1"
+    try:
+        done = subprocess.run(
+            [*argv, "--doctor"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=180, env=environment,
+            # A relative `scripts/serve.py` in a project-scoped config is
+            # resolved against the client's working directory, which for that
+            # config is the project. Reproduce that rather than this shell's.
+            cwd=str(Path(__file__).resolve().parents[1]),
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, f"would not launch: {exc}"
+    if done.returncode == 0:
+        return True, "starts"
+    return False, _why(done.stdout, done.stderr) or f"exited {done.returncode} silently"
+
+
+#: How a doctor states its verdict. Recognised so a probe can quote the child's
+#: own conclusion rather than guessing at which line of its output mattered.
+_VERDICTS = ("The server will not start", "cannot start", "cannot reach Inventor")
+
+
+def _why(stdout: str | None, stderr: str | None) -> str:
+    """The one line of a failed probe's output worth repeating.
+
+    Neither the first line nor the last will do. A child that got as far as
+    running its own checks ends with a verdict naming what failed, and that is
+    the line; a child that died launching writes an explanation whose *last*
+    line is the closing advice -- "Then: ... --doctor" -- which is useless
+    quoted out of context and was what the first version of this printed.
+    """
+    lines = [
+        line.strip()
+        for line in ((stderr or "") + "\n" + (stdout or "")).splitlines()
+        if line.strip()
+    ]
+    for line in lines:
+        if any(verdict in line for verdict in _VERDICTS):
+            return line
+    return lines[0] if lines else ""
+
+
+def check_registration() -> Finding:
+    """Whether the command a *client* launches can start the server.
+
+    The check every other one here was standing in for, and the reason they
+    could all pass while nothing worked. ``python``, ``mcp sdk``, ``server`` and
+    the rest describe the interpreter running this doctor -- the one somebody
+    typed a path to. A client launches a different command, out of a config
+    file, with no shell and no virtualenv, and *that* command is the one that has
+    to work. On the machine this was written for, every other line read ``ok``
+    and the connection still closed.
+    """
+    if os.environ.get(DOCTOR_CHILD):
+        return Finding("clients", SKIP, "not checked from inside a client probe")
+
+    configs = client_configs()
+    if not configs:
+        return Finding(
+            "clients", WARN, "no client config found",
+            hint="Nothing on this machine is configured to launch the server. "
+                 "Register it with the absolute path to this interpreter: "
+                 f"`{sys.executable} -m inventor_mcp`",
+        )
+
+    working: list[str] = []
+    broken: list[str] = []
+    for config in configs:
+        try:
+            entries = server_entries(config)
+        except ConfigUnreadable as exc:
+            broken.append(f"{exc} -- the client cannot read it either")
+            continue
+        for name, argv in entries:
+            ok, detail = probe(argv)
+            where = f"{config.name}:{name}"
+            (working if ok else broken).append(where if ok else f"{where} {detail}")
+
+    if broken:
+        return Finding(
+            "clients", FAIL, "; ".join(broken),
+            hint="This is the command your client runs, and it does not start "
+                 "the server -- whatever this report says about the interpreter "
+                 "you typed. Point that config at an absolute interpreter path: "
+                 f"`{sys.executable}`. Then restart the client; the desktop app "
+                 "has to be quit from its tray icon, not just closed.",
+        )
+    if not working:
+        return Finding(
+            "clients", WARN,
+            f"{len(configs)} config(s) found, none registering this server",
+            hint="Register it with the absolute path to this interpreter: "
+                 f"`{sys.executable} -m inventor_mcp`",
+        )
+    return Finding("clients", OK, "; ".join(working) + " -- launches a working server")
+
+
 #: Inventor's version-independent ProgID. The versioned ones -- ``.27``, ``.28``
 #: -- are what an install actually writes; this one is the alias pointing at
 #: whichever is current, which is why ``CurVer`` below is worth reporting.
@@ -478,6 +657,10 @@ CHECKS = (
     (check_server, True),
     (check_node, False),
     (check_analyser, True),
+    # Last of the default checks, and the only one that answers for the client
+    # rather than for this shell. It launches a subprocess per registration, so
+    # everything cheap has already reported by the time it runs.
+    (check_registration, True),
 )
 
 #: Run only when asked, because it is the one check that touches Inventor.
@@ -550,9 +733,20 @@ def report(findings: list[Finding], out=None) -> None:
         # a server that will not start. Reporting the second for the first sends
         # somebody to reinstall a package that was never the problem.
         names = ", ".join(f.name for f in broken)
-        if [f.name for f in broken] == ["inventor"]:
+        failed = [f.name for f in broken]
+        if failed == ["inventor"]:
             print(f"The server starts, but it cannot reach Inventor: {names}",
                   file=stream)
+        elif failed == ["clients"]:
+            # The distinction the whole check exists to draw. Every other line
+            # can read `ok` -- and did -- while the command a client launches is
+            # a different command that does not work. Saying "the server will
+            # not start" here is false, and sends somebody to reinstall a
+            # package that starts perfectly well from the path they just typed.
+            print(
+                "The server starts from here, but the command your client "
+                "launches does not.", file=stream,
+            )
         else:
             print(f"The server will not start: {names}", file=stream)
     elif any(f.status == WARN for f in findings):
@@ -565,8 +759,18 @@ def report(findings: list[Finding], out=None) -> None:
 
 
 def doctor(out=None, connect: bool = False) -> int:
-    """Run every check, print the report, and exit non-zero if the server is dead."""
-    findings = run_checks(connect=connect)
+    """Run every check, print the report, and exit non-zero if something failed."""
+    return doctor_from(run_checks(connect=connect), out=out)
+
+
+def doctor_from(findings: list[Finding], out=None) -> int:
+    """Print *findings* and return the exit code they imply.
+
+    Split from ``doctor`` so the verdict can be tested against findings chosen
+    for the purpose. Warnings do not fail: Node and the analyser being absent
+    leaves the modelling half working, and a non-zero exit on a machine that is
+    fine for what it is used for teaches people to ignore the exit code.
+    """
     report(findings, out=out)
     return 1 if any(f.status == FAIL for f in findings) else 0
 

@@ -183,10 +183,20 @@ The server will not start: mcp sdk
 ```
 
 It walks the whole chain — interpreter, SDK, pydantic, pywin32, the backend
-`auto` picks, whether the server assembles, Node, and the DFM analyser — and
-prints the repair for anything that is not `ok`. It does not connect to Inventor,
-and it deliberately needs none of the things it reports on, so it still runs on
-the install where the server does not.
+`auto` picks, whether the server assembles, Node, the DFM analyser, and the
+command your client actually launches — and prints the repair for anything that
+is not `ok`. It does not connect to Inventor, and it deliberately needs none of
+the things it reports on, so it still runs on the install where the server does
+not.
+
+The last of those is the one to read first, because it is the only line that
+answers for the client rather than for the interpreter you just typed a path to.
+Every other check describes *this* Python; a client launches a different command,
+out of a config file, with no shell and no virtualenv. The `clients` line finds
+those configs — `%APPDATA%\Claude\claude_desktop_config.json` and this repo's
+`.mcp.json` — runs what each one says with `--doctor` appended, and reports
+whether the thing that came up could serve. Eight green lines above a red
+`clients` line means the package is fine and the wiring is not.
 
 Almost every case is one of three:
 

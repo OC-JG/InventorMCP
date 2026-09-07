@@ -160,28 +160,56 @@ class TestTheDoctorRunsWhereTheServerCannot:
             assert finding.detail, finding
             assert finding.line()
 
+    #: Checks that describe the machine's *configuration* rather than this
+    #: install. `clients` launches whatever a client config names, and on a
+    #: machine where no client is wired up correctly it fails while the install
+    #: is perfectly sound -- which is the whole point of it, and makes it the
+    #: wrong thing to assert about an install.
+    ABOUT_THE_MACHINE = ("clients",)
+
     def test_a_healthy_install_is_reported_as_healthy(self):
         """Run under the suite's own interpreter, which by definition has the deps.
 
         The analyser and Node are allowed to be missing -- they are warnings, and
         the offline CI legs have neither. A FAIL here means the interpreter
-        running the tests could not start the server, which the next assertion
-        would also have caught, later and less clearly.
+        running the tests could not start the server.
         """
         from inventor_mcp import preflight
 
-        broken = [f for f in preflight.run_checks() if f.status == preflight.FAIL]
+        broken = [
+            f for f in preflight.run_checks()
+            if f.status == preflight.FAIL and f.name not in self.ABOUT_THE_MACHINE
+        ]
         assert not broken, [(f.name, f.detail) for f in broken]
 
-    def test_it_exits_zero_and_names_what_is_missing(self):
+    def test_the_report_names_every_check_it_ran(self):
+        """Separated from the exit code deliberately.
+
+        The two used to be one assertion, and it broke the moment a check could
+        fail for a reason that is not the install's fault: a `clients` failure is
+        a real non-zero exit on a machine with a misconfigured client and a
+        healthy package. The report's completeness is the property worth holding
+        here; the exit code has its own test below.
+        """
         from inventor_mcp import preflight
 
         out = io.StringIO()
-        assert preflight.doctor(out=out) == 0
+        preflight.doctor(out=out)
         printed = out.getvalue()
         assert "preflight" in printed
         for finding in preflight.run_checks():
             assert finding.name in printed, finding.name
+
+    def test_the_exit_code_follows_the_failures(self):
+        from inventor_mcp import preflight
+
+        healthy = [preflight.Finding("server", preflight.OK, "builds")]
+        warned = [preflight.Finding("node", preflight.WARN, "absent", hint="get it")]
+        failed = [preflight.Finding("mcp sdk", preflight.FAIL, "gone", hint="fix")]
+
+        assert preflight.doctor_from(healthy, out=io.StringIO()) == 0
+        assert preflight.doctor_from(healthy + warned, out=io.StringIO()) == 0
+        assert preflight.doctor_from(healthy + failed, out=io.StringIO()) == 1
 
     def test_every_problem_carries_a_repair(self):
         """A finding that is not OK and has no hint leaves somebody stuck.
@@ -668,3 +696,162 @@ class TestWhetherInventorIsRegisteredAtAll:
             preflight.Registration(preflight.PROGID, None, reason="could not read"),
         )
         assert "registered as" not in finding.detail
+
+
+class TestTheCheckThatAnswersForTheClient:
+    """Every other check passed while nothing worked, and this is why.
+
+    `python`, `mcp sdk`, `pydantic`, `pywin32`, `backend`, `server`, `node`,
+    `analyser` and a live attach to Inventor 2027.1 all read `ok` on the machine
+    with the seat -- because every one of them describes **the interpreter
+    running the doctor**, which is the one somebody typed an absolute path to.
+    A client launches a different command, out of a config file, with no shell
+    and no virtualenv. Nothing was checking that command, so a report of eight
+    green lines was consistent with a client that could not start the server at
+    all.
+
+    So this check launches what the config says, appends `--doctor`, and lets
+    the thing launched answer for itself. It is not a model of the client's
+    launch; it is the launch.
+    """
+
+    def config(self, path: pathlib.Path, command: str, args: list[str]) -> pathlib.Path:
+        path.write_text(
+            json.dumps({"mcpServers": {"inventor": {
+                "command": command, "args": args,
+            }}}),
+            encoding="utf-8",
+        )
+        return path
+
+    def test_it_reads_the_launch_command_out_of_a_config(self, tmp_path):
+        from inventor_mcp import preflight
+
+        written = self.config(
+            tmp_path / "claude_desktop_config.json",
+            "C:\\python.exe", ["-m", "inventor_mcp", "--backend", "auto"],
+        )
+        assert preflight.server_entries(written) == [
+            ("inventor", ["C:\\python.exe", "-m", "inventor_mcp",
+                          "--backend", "auto"]),
+        ]
+
+    def test_it_matches_on_the_command_not_the_key(self, tmp_path):
+        """Registered under another name is still this server; a different
+        server registered as `inventor` is not, and is none of our business."""
+        from inventor_mcp import preflight
+
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps({"mcpServers": {
+            "cad": {"command": "py", "args": ["-m", "inventor_mcp"]},
+            "inventor": {"command": "node", "args": ["some-other-server.js"]},
+        }}), encoding="utf-8")
+        assert [name for name, _ in preflight.server_entries(path)] == ["cad"]
+
+    def test_a_config_that_does_not_parse_is_a_finding_not_an_absence(self, tmp_path):
+        """The client cannot read it either, and the symptom is identical to the
+        server never having been registered."""
+        from inventor_mcp import preflight
+
+        path = tmp_path / "config.json"
+        path.write_text("{ not json", encoding="utf-8")
+        with pytest.raises(preflight.ConfigUnreadable):
+            preflight.server_entries(path)
+
+    def test_a_config_with_no_mcpservers_yields_nothing(self, tmp_path):
+        from inventor_mcp import preflight
+
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps({"theme": "dark"}), encoding="utf-8")
+        assert preflight.server_entries(path) == []
+
+    def test_the_repos_own_config_is_among_the_places_looked(self):
+        from inventor_mcp import preflight
+
+        assert (ROOT / ".mcp.json") in preflight.client_configs()
+
+    def test_a_working_command_probes_clean(self):
+        """The suite's interpreter with `-m inventor_mcp` is, by definition, a
+        command that starts the server."""
+        from inventor_mcp import preflight
+
+        ok, detail = preflight.probe([sys.executable, "-m", "inventor_mcp"])
+        assert ok, detail
+
+    def test_a_command_that_cannot_serve_is_caught(self, tmp_path):
+        from inventor_mcp import preflight
+
+        ok, detail = preflight.probe([str(tmp_path / "nope"), "-m", "inventor_mcp"])
+        assert not ok
+        assert "would not launch" in detail
+
+    def test_the_probe_does_not_probe_itself(self, monkeypatch):
+        """`--doctor` appended to the config's own command means the child runs
+        this very check. Without the marker it launches a doctor that launches a
+        doctor, and so on."""
+        from inventor_mcp import preflight
+
+        monkeypatch.setenv(preflight.DOCTOR_CHILD, "1")
+        assert preflight.check_registration().status == preflight.SKIP
+
+    def test_the_quoted_reason_is_the_verdict_not_the_closing_advice(self):
+        """A launcher that fails ends its explanation with "Then: ... --doctor",
+        which says nothing quoted on its own -- and was what the first version
+        of this printed."""
+        from inventor_mcp import preflight
+
+        stderr = (
+            "inventor-mcp cannot start: no interpreter here can import it.\n"
+            "\n"
+            "  tried: /usr/bin/python\n"
+            "\n"
+            "  Then:  .venv/bin/python -m inventor_mcp --doctor\n"
+        )
+        assert preflight._why(None, stderr) == (
+            "inventor-mcp cannot start: no interpreter here can import it."
+        )
+
+    def test_a_childs_own_summary_is_preferred_to_its_first_line(self):
+        from inventor_mcp import preflight
+
+        stdout = (
+            "inventor-mcp 0.1.0 preflight\n"
+            "[FAIL] mcp sdk      not importable\n"
+            "The server will not start: mcp sdk\n"
+        )
+        assert preflight._why(stdout, "") == "The server will not start: mcp sdk"
+
+    def test_silence_still_reports_something(self):
+        from inventor_mcp import preflight
+
+        assert preflight._why("", "") == ""
+
+    def test_a_broken_client_command_is_not_called_a_broken_server(self):
+        """The distinction the check exists to draw.
+
+        "The server will not start" is false when it starts perfectly from the
+        path somebody just typed, and it sends them to reinstall a package that
+        was never the problem.
+        """
+        from inventor_mcp import preflight
+
+        out = io.StringIO()
+        preflight.report([
+            preflight.Finding("server", preflight.OK, "builds"),
+            preflight.Finding("clients", preflight.FAIL, "config:inventor died",
+                              hint="point it at an absolute path"),
+        ], out=out)
+        printed = out.getvalue()
+        assert "the command your client launches does not" in printed
+        assert "The server will not start" not in printed
+
+    def test_no_config_anywhere_is_a_warning(self, tmp_path, monkeypatch):
+        """Nothing registered is not a broken install -- it is an install that
+        has not been wired to a client yet."""
+        from inventor_mcp import preflight
+
+        monkeypatch.setattr(preflight, "client_configs", lambda: [])
+        monkeypatch.delenv(preflight.DOCTOR_CHILD, raising=False)
+        finding = preflight.check_registration()
+        assert finding.status == preflight.WARN
+        assert sys.executable in (finding.hint or "")

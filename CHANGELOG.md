@@ -112,7 +112,46 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   `CurVer` is reported alongside, so a session that is registered but not
   running reads as "no running Inventor session to attach to (registered as
   Inventor.Application.28)" — which rules the registration out on the spot
-  instead of leaving it as the next thing to suspect. Twenty-one tests hold the pair of facts together: what `.mcp.json`
+  instead of leaving it as the next thing to suspect.
+
+- **Eight green lines, and the client still could not start the server.** On the
+  machine with the seat, every check passed — interpreter, SDK, pydantic,
+  pywin32, backend, server, Node, analyser, and a live attach to Inventor
+  2027.1 — while the connection went on failing. The reason is that all of them
+  describe **the interpreter running the doctor**, which is the one somebody
+  typed an absolute path to. A client launches a different command, out of a
+  config file, with no shell and no virtualenv, and nothing was checking that
+  command. A report of eight `ok` lines was consistent with a client that could
+  not start the server at all, which makes it a report that answered a question
+  nobody was asking.
+
+  The `clients` check closes it. It finds the configs a client actually reads —
+  `%APPDATA%\Claude\claude_desktop_config.json`, the macOS and Linux
+  equivalents, and this repository's `.mcp.json` — picks out the entries whose
+  command runs *this* server (matched on the command, not on the key being
+  called `inventor`, since it may be registered under any name and a config
+  naming a different server is none of its business), and launches each one with
+  `--doctor` appended. It is not a model of the client's launch; it is the
+  launch, and the thing launched answers for its own health. A marker in the
+  child's environment stops the probe probing itself.
+
+  Three details earned their own tests. A config that exists and will not parse
+  is a *finding*, not an absence — the client cannot read it either, and the
+  symptom is identical to the server never having been registered. The quoted
+  reason is the child's own verdict rather than the first or last line of its
+  output, because a failing launcher's last line is the closing advice
+  ("`Then: ... --doctor`"), which says nothing out of context and was what the
+  first version printed. And a failing `clients` check no longer prints "the
+  server will not start", which is simply false when it starts from the path
+  just typed and sends somebody to reinstall a package that was never the
+  problem.
+
+  Two earlier tests had to be split apart: they asserted that a healthy install
+  reports no failures, which stopped being the same claim once a check could
+  fail for the machine's configuration rather than the install's health. The
+  report's completeness and the exit code it implies are now separate
+  assertions, and `doctor_from` exists so the verdict can be tested against
+  findings chosen for the purpose. Twenty-one tests hold the pair of facts together: what `.mcp.json`
   launches, that the README's warning still stands, that nothing importable-only
   on a healthy install sits at the top of `__main__` or `preflight`, and that the
   explanation goes to stderr rather than the stream carrying the protocol.
