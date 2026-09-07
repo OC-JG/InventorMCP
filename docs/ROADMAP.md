@@ -298,6 +298,29 @@ actually bitten.
       from the simulator, because `_repeat` counts occurrences without ever
       reading the axis. `work_axis` makes that mistake avoidable; it does not
       make it detectable, and the note in `FEATURE_COVERAGE.md` says what would.
+      *A warning for it landed on 2026-09-07 -- see the item below.*
+- [x] **Warn about a pattern axis lying in the patterned face** — defect 7,
+      the item above's leftover. *(2026-09-07.)* A warning rather than a
+      finding, and the reason is the limit of a static check rather than
+      caution: a pattern about an in-plane axis is meaningless as a bolt circle
+      and a legitimate way to write a 180-degree flip, and nothing static tells
+      the two apart. So it fires only where the geometry is certain -- an origin
+      axis lying in the seed's plane, a sketch line on that plane, or one on a
+      work plane offset from it -- and declines on the four cases where an
+      answer was available and would have been wrong.
+
+      One of those four is worth recording here rather than only in
+      `FEATURE_COVERAGE.md`: **the simulator would have given the wrong answer
+      and the check does not take it.** `mock.work_plane` files every work plane
+      against an origin base whatever its `kind`, so it believes an angled plane
+      is parallel to its base; a check that read the simulator's own table would
+      report a correct angled-plane recipe as a fault. The plane chain is walked
+      from the recipe instead, honouring `offset` and nothing else.
+
+      This does not close defect 7. The fix is still the simulator placing
+      occurrences rather than counting them, which is the `ponytail` on
+      `_repeat` and a ledger-sized change; the warning makes the mistake
+      *visible*, where `work_axis` only made it avoidable.
 - [ ] **Measure the work axis against a live Inventor.** Split from the item
       above rather than left inside it, because a tick that covers unmeasured
       COM would be the kind of claim this file exists not to make.

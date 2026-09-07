@@ -38,6 +38,19 @@ still build the wrong part, and these are the ways it does:
 - **`a, b drive nothing`** — those parameters are declared and never referenced,
   so the part is not revisable through them. Write the sizes that depend on them
   as expressions.
+- **`a through hole whose axis crosses N walls`** — Inventor's through-all
+  extent stops where it first leaves material, so a hole across a hollow box
+  drills the near wall and leaves the far one solid. Use an `extrude` cut with
+  `direction: "symmetric"` and `extent: "through_all"` instead. Expect the
+  volume on that step to disagree too: the simulator charges every wall the axis
+  meets and Inventor drills one.
+- **`the pattern axis 'X' lies in ...`** — a `circular_pattern` turns about an
+  axis perpendicular to the face it patterns, and this one is flat in that face,
+  so the occurrences revolve out of the material rather than around it. Use
+  `work_axis` with `kind: "normal_to_plane"` on the plane the feature was built
+  on; a 180-degree flip is a `mirror`. **The volume will look right either
+  way** — the simulator counts occurrences and never reads the axis — so this
+  warning is the only thing that says so.
 
 Then read `steps` and check each `volume_change_cm3` against what you meant. A
 9 mm hole 6 mm deep removes π×4.5²×6 = 0.382 cm³. If the rehearsal says

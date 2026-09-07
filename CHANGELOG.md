@@ -4,7 +4,62 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
 ## Unreleased
 
+### Added
+- **A pattern axis lying flat in the patterned face is warned about** — defect
+  7, found on 2026-09-03 while checking whether the roadmap's reason for wanting
+  a work axis was true, and open since. A `circular_pattern` turns about an axis
+  perpendicular to the face it patterns; a sketch line lies *in* its own sketch
+  plane; so a plate sketched on XY whose pattern axis is a line drawn on XY asks
+  Inventor to revolve the holes about an axis lying flat in the plate. Nothing
+  caught it — `check_recipe` passes it, `validate_recipe` passes it, and the
+  simulator returns `ok: true` with a plausible volume, because `_repeat`
+  multiplies the seed's volume delta and never reads the axis at all. The
+  warning says that outright, because a reader checking volumes learns nothing.
+
+  **A warning rather than a finding**, and the reason is the honest limit of a
+  static check rather than caution: a pattern about an in-plane axis is
+  meaningless as a bolt circle and a legitimate way to write a 180-degree flip,
+  and nothing static tells the two apart. So it names both substitutes —
+  `work_axis` with `kind: "normal_to_plane"`, or `mirror`.
+
+  It fires on three certain shapes: an origin axis lying in the seed's plane
+  (`x` or `y` under a plate sketched on XY, which is the cheapest way to make
+  the mistake since `axis` defaults to `"z"`), a sketch line on that plane, and
+  one on a work plane offset from it, following the chain however long. It
+  declines on four where an answer was available and would have been wrong — an
+  angled work plane, a revolved seed, a `two_points` work axis, and a pattern
+  whose axis is right for one seed and wrong for another.
+
+  **The simulator would have got one of those wrong and the check does not take
+  its word.** `mock.work_plane` files every work plane against an origin base
+  whatever its `kind`, so it believes an angled plane is parallel to its base;
+  reading that table would have reported a correct angled-plane recipe as a
+  fault. The plane chain is walked from the recipe instead, honouring `offset`
+  and nothing else. Only `extrude` and `hole` seed a judgement, because only
+  there does the sketch plane describe the resulting faces — a revolve's
+  geometry does not sit in its sketch plane, and the shipped belt pulley is
+  exactly that case.
+
+  Fires on the reproduction and on none of the eleven shipped examples or seven
+  calibration fixtures. `tests/test_pattern_axis.py` holds both directions, and
+  the label resolution is narrowed to the sketches that existed when the pattern
+  ran — resolving against the finished document lets a later sketch claim the
+  name, and that mutation was checked to fail the test.
+
+  This does not close defect 7: the fix is still the simulator placing
+  occurrences rather than counting them. The warning makes the mistake visible,
+  where `work_axis` only made it avoidable.
+
 ### Fixed
+- **The gap list said two things a merge had just made false.** Merging the
+  Phase 2 work-geometry branch closed two entries in `FEATURE_COVERAGE.md`'s
+  *Gaps that are not feature collections* — work axis and work point, and `hole`
+  drilling only the primary body — and neither bullet knew it. The list still
+  told a reader to reach for an `extrude` cut where a `hole` with `bodies` now
+  works. Both are struck through, with the note in each that the COM half is
+  unmeasured, and `tests/test_coverage_gaps_still_true.py` holds the list to the
+  schema in both directions: a gap declared open while the operation exists
+  fails, and so does one struck through with nothing behind it.
 - **The roadmap is under the drift rule it was written in.** `DECISIONS.md`'s
   rule is that a fact stated in two places does not merge without a test that
   they agree. `ROADMAP.md` is where that rule was written down, and was the last

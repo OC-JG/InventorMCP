@@ -318,3 +318,30 @@ Each of these was hit while building real parts, and each passed
    `centre_shift_mm` catch a pattern about the wrong axis, which is the same
    signal that caught the `trim` inversion. That is a ledger-sized change and
    is not attempted here.
+
+   *Warned about since 2026-09-07, and not fixed.* The ledger change above is
+   still the fix; what landed is `rehearse` saying so where it can be certain,
+   the same shape as defect 1. It is a **warning rather than a finding**,
+   because the honest limit of a static check is that a pattern about an
+   in-plane axis is meaningless as a bolt circle and a legitimate way to write a
+   180-degree flip, and nothing static can tell which was meant. So it names
+   both substitutes -- `work_axis` with `kind: "normal_to_plane"`, or `mirror`
+   -- and says outright that the volume will look right, which is the reason the
+   defect survived being looked at.
+
+   Certain in three ways, and quiet otherwise. It fires when the axis is an
+   origin axis lying in the seed's plane (`x` or `y` under a plate sketched on
+   XY -- the cheapest way to make the mistake, since `axis` defaults to `"z"`),
+   when it is a sketch line on that plane, and when it is one on a work plane
+   offset from it, following the offset chain however long. It declines on an
+   angled work plane -- **which the simulator gets wrong**, since
+   `mock.work_plane` files every work plane against an origin base whatever its
+   `kind`, so inheriting that would report a correct angled recipe as a fault --
+   on a revolved seed, whose geometry does not sit in its sketch plane, on a
+   `two_points` work axis, on an `edge:` handle, and on a pattern whose axis is
+   right for one seed and wrong for another.
+
+   Only `extrude` and `hole` seed a judgement, because only for those does the
+   sketch plane really describe the resulting faces. `tests/test_pattern_axis.py`
+   holds both directions, including that no shipped example or calibration
+   fixture fires it.

@@ -19,7 +19,11 @@ from collections.abc import Sequence
 from typing import Any
 
 from .builder import apply_operation, apply_parameter, measure
-from .checks import _undriven_parameters, check_recipe
+from .checks import (
+    _pattern_axes_in_the_patterned_plane,
+    _undriven_parameters,
+    check_recipe,
+)
 from .schema import Operation, PartRecipe
 from .session import DocumentContext
 
@@ -422,6 +426,7 @@ def rehearse(recipe: PartRecipe) -> dict[str, Any]:
     report["rehearsed"] = True
     report["result"] = measure(session, context)
     report["warnings"].extend(_undriven_parameters(recipe, context))
+    report["warnings"].extend(_pattern_axes_in_the_patterned_plane(recipe, context))
     return report
 
 
