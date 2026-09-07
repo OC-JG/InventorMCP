@@ -381,22 +381,28 @@ evidence of a missing call.
 
 What the second run left open, and what to do about each:
 
-* **Inventor refused the parameter name `pcd`** -- `Inventor refused the
-  parameter 'pcd' = '30 mm' (units 'mm'): Exception occurred.` -- while taking
-  `bolt_x` in the same recipe. Nothing in `RESERVED_NAMES` or the unit table
-  explains it. The check now probes a spread of candidate names (`pcd`, `PCD`,
-  `pcd_1`, `bolt_pcd`, `cd`, `dia`, `pitch`) chosen to separate the possible
-  reasons, and reports which Inventor takes. A name it declines belongs in
-  `RESERVED_NAMES` with the measurement beside it, so `apply_parameter` says so
-  before Inventor does.
+* **Inventor refuses a parameter name it can read as a unit.** *Answered.* It
+  took `bolt_x`, `PCD`, `pcd_1`, `bolt_pcd`, `dia`, `pitch` and `bolt_spacing`,
+  and refused **`cd`** and **`pcd`** -- the candela and the pico-candela. So the
+  rule is an SI prefix plus a unit symbol, and it is **case-sensitive**, which
+  is why `PCD` is accepted where `pcd` is not. Wider than any list could cover
+  (`mm`, `ms`, `kg`, `ncd`, `kA`...), and this server's unit table does not know
+  candela, so it cannot pre-empt them; `_diagnose_parameter`'s hint names the
+  cause instead. The probe stays in the run as a regression check.
 * **The carrier sketches print `horizontal_align(__origin__, point1) was
-  refused`**, and the message goes on to say the sketch keeps a degree of
-  freedom. That may be over-claiming -- `DECISIONS.md` records that a
-  constraint Inventor refuses is usually one it inferred for itself -- and it
-  matters more here than usual, because a carrier point free to move is a work
-  axis that does not track its parameter. Inventor gives no degree-of-freedom
-  count, so the check now reports each carrier sketch's `fully_constrained`,
-  which is the answer available.
+  refused`, and it does not matter.** *Answered:* every carrier sketch comes out
+  `fully_constrained=True` with its one driving dimension in place, so the
+  refusal is Inventor declining a constraint it had already inferred -- exactly
+  what `DECISIONS.md` says usually happens -- and the "keeps a degree of
+  freedom" in that message is over-claiming. Worth knowing precisely because a
+  carrier point free to move would be a work axis that does not track its
+  parameter, and this rules that out.
+* **A parameter change rebuilt nothing.** *Found on the third run and fixed --
+  defect 9.* `set_parameter` was the only mutating call outside `_batch`, and
+  `_batch` is what calls `document.Update()`, so the geometry stayed as it was
+  and every measurement afterwards read the old part. It is why the bolt circle
+  measured 0.00000 mm of movement against a derived 0.18640. Reaches the DFM
+  loop and `set_parameters`, not only this check.
 * **`hole` + `bodies` is not available on 2027.1.** `HoleFeature` has no
   `AffectedBodies`; see the gap list in `FEATURE_COVERAGE.md`. The acceptance
   check skips it with that reason rather than failing every run, and `rehearse`

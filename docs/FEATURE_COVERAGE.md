@@ -453,3 +453,48 @@ Each of these was hit while building real parts, and each passed
 
    **Still unmeasured**: whether `AddByPoint` then works. The run never reached
    it. That is the roadmap's open item, not this one.
+
+9. ~~**A parameter change rebuilt nothing, so every measurement after it was of
+   the part as it had been.**~~ *Found and fixed 2026-09-07, third live run.*
+
+   `set_parameter` set the expression and returned. `document.Update()` is
+   called from `_batch`, and **`set_parameter` was the only mutating call in the
+   COM backend that did not run inside one** -- so Inventor kept the old
+   geometry and `mass_properties`, `topology_counts` and every export read it.
+
+   Found by measurement, not by reading: the work-axis bolt circle's centre of
+   mass moved **0.00000 mm** when `bolt_x` went 30 to 45, against a figure
+   derived beforehand of 0.18640. The carrier sketch was reported
+   `fully_constrained=True` with its one driving dimension in place, so the
+   parametric chain was sound and nothing was rebuilding it.
+
+   **It reaches much further than work axes.** `set_parameters` is the tool
+   whose whole promise is "change a driving dimension; the model updates", and
+   the DFM loop's argument for itself is that it *acts, rebuilds and
+   re-measures* rather than reporting and handing off. A loop that drove a
+   parameter and then re-measured was reading the part it started with.
+
+   The fix is the existing mechanism, not a new one: the edit runs inside
+   `self._batch(document)`, exactly as every feature call does. `check_work_geometry`
+   now also reads the parameter back before judging the geometry, so the three
+   reasons a measurement can sit still -- the parameter never took, the model
+   never rebuilt, the axis was not really driven -- can be told apart next time.
+
+10. **Inventor refuses a parameter name it can read as a unit.** *Measured
+    2026-09-07 and not a defect in this repository, but it produced a bare
+    "Exception occurred" and cost a run.*
+
+    Asking Inventor 2027.1 for nine names in one document: it took `bolt_x`,
+    `PCD`, `pcd_1`, `bolt_pcd`, `dia`, `pitch` and `bolt_spacing`, and refused
+    **`cd`** and **`pcd`**. `cd` is the candela; `pcd` is the pico-candela. So
+    the rule is an SI prefix plus a unit symbol, and it is **case-sensitive** --
+    which is why `PCD` is fine and `pcd` is not.
+
+    That is a far wider set than a list of names could cover: `mm`, `ms`, `kg`,
+    `ncd`, `kA` and many more are all names Inventor will decline, and this
+    server's unit table does not know candela at all, so it cannot detect them
+    in advance. What it can do is stop the failure being a mystery, and
+    `_diagnose_parameter`'s hint now names the cause and says to lengthen,
+    underscore or capitalise the name. The acceptance run keeps the probe as a
+    regression check, so a release that changes its mind shows up there rather
+    than in somebody's recipe.

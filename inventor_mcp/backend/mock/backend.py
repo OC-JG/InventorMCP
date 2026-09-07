@@ -2367,6 +2367,23 @@ class MockBackend(Backend):
     def list_features(self, doc_id: str) -> list[FeatureInfo]:
         return [_feature_info(feature) for feature in self._doc(doc_id).features]
 
+    def list_work_geometry(self, doc_id: str) -> dict[str, list[str]]:
+        """Read out of the one feature list, which is where the mock keeps them.
+
+        The divergence this method exists to expose is visible right here: these
+        names are also in `list_features`, and on Inventor they are not. The
+        mock is not wrong to hold them together -- it has no separate
+        collections -- but a caller told by one backend that a work point is a
+        feature and by the other that it is not is being misled by whichever it
+        asked second.
+        """
+        document = self._doc(doc_id)
+        kinds = {"work_planes": "work_plane", "work_axes": "work_axis",
+                 "work_points": "work_point"}
+        return {key: [feature.name for feature in document.features
+                      if feature.kind == kind]
+                for key, kind in kinds.items()}
+
     def suppress_feature(self, doc_id: str, name: str, suppressed: bool) -> FeatureInfo:
         feature = self._doc(doc_id).find_feature(name)
         feature.suppressed = suppressed

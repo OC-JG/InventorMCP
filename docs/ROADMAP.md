@@ -370,6 +370,27 @@ actually bitten.
       Inventor took, and the run carries a probe over candidate names so the
       next one says which it declines and why the shape of the name matters.
 
+      **Third run: the reason the bolt circle would not move was not the work
+      axis at all.** `set_parameter` was the only mutating call in the COM
+      backend outside `_batch`, and `_batch` is what calls `document.Update()`
+      -- so a parameter change rebuilt nothing and every measurement afterwards
+      was of the part as it had been. Defect 9, and it reaches the DFM loop and
+      `set_parameters` rather than only this check. The carrier sketch was
+      `fully_constrained=True` with its driving dimension in place all along,
+      which is what said the parametric chain was sound and something else was
+      wrong. Fixed; unmeasured until the next run.
+
+      That run also settled the parameter name: Inventor **refuses a name it can
+      read as a unit** -- `cd` is the candela, `pcd` the pico-candela -- and is
+      case-sensitive about it, so `PCD` is accepted. Defect 10.
+
+      And one of the failures was this file's own instrument, not Inventor: the
+      work point read as missing because the check reached into
+      `ComponentDefinition` from the script's thread and got "the application
+      called an interface that was marshalled for a different thread" --
+      precisely the failure `describe_feature` already records. It is a backend
+      method now, `list_work_geometry`, implemented on both.
+
       Two more things the run measured, neither of them what it was aimed at:
       **`hole` + `bodies` cannot work on Inventor** -- 2027.1's `HoleFeature`
       has no `AffectedBodies` at all -- and **work geometry does not appear in

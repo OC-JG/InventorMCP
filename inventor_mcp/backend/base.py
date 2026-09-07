@@ -710,6 +710,27 @@ class Backend(ABC):
                  "the usual answer when the open copy is still wanted.",
         )
 
+    def list_work_geometry(self, doc_id: str) -> dict[str, list[str]]:
+        """The work planes, axes and points this part holds, by name.
+
+        Separate from ``list_features`` because the two backends disagree about
+        whether work geometry *is* a feature, and the disagreement is real
+        rather than a bug in one of them: the mock keeps everything in one list,
+        while Inventor keeps work geometry in ``WorkPlanes``, ``WorkAxes`` and
+        ``WorkPoints`` and ``ComponentDefinition.Features`` does not include it.
+        Measured 2026-09-07, where ``list_features`` on a part carrying a work
+        point returned only the extrude.
+
+        Reconciling them needs a fact nothing here has measured -- whether
+        Inventor's own origin planes and axes sit in those collections, and how a
+        created one is told from them -- so this reports what is there and the
+        acceptance run prints it. A guess would go into the listing that
+        ``edit_feature`` and the DFM loop both trust.
+        """
+        raise NotImplementedError(
+            f"The {self.name} backend cannot list work geometry."
+        )
+
     def document_at_path(self, path: str) -> tuple[str | None, str] | None:
         """Which open document occupies *path*, as ``(session id, name)``.
 
