@@ -157,14 +157,26 @@ Found by using the server rather than by reading its API surface:
   feature, which is often not where it belongs.
 * **No project geometry or sketch offset**, so a sketch cannot reference the edges
   of the solid it sits on.
-* ~~**`hole` still only drills the primary body.**~~ *Closed 2026-09-03 in the
-  simulator, and unmeasured against Inventor.* `hole` takes `bodies` exactly as
-  `extrude` does, and the two share one `_aimed_body` rather than carrying a
-  copy each. The COM side differs in a way worth knowing: a hole is aimed
-  *after* it is built, because `HoleFeatures.Add...` makes the feature in one
-  call and there is no definition object to put `AffectedBodies` on, so the
-  backend sets it on the finished feature and treats a refusal as a hard error.
-  Also unmeasured.
+* **`hole` still only drills the primary body — on Inventor.** *Measured
+  2026-09-07 and the answer is no.* The simulator honours `bodies` on a `hole`
+  exactly as on an `extrude`, and it was written on 2026-09-03 expecting the COM
+  side to follow. It cannot: **Inventor 2027.1's `HoleFeature` has no
+  `AffectedBodies` property at all.** Setting it raises `object has no attribute
+  'AffectedBodies'`, which is the hard error the backend was already written to
+  treat as one — a hole on the wrong body takes real material out of a part that
+  looks finished, so failing loudly was the right call and is what happened.
+
+  The reason is structural rather than a version quirk: `extrude` is aimed
+  through an `ExtrudeDefinition` *before* the feature exists, and
+  `HoleFeatures.Add...` makes the feature in a single call, so there is nothing
+  to aim. `rehearse` now warns on `hole` + `bodies`
+  (`_KNOWN_BROKEN_FIELDS`) so a caller learns at rehearsal rather than on a CAD
+  seat, and names the substitutes: an `extrude` cut carrying `bodies`, which is
+  measured and works, or `combine` with operation `cut`.
+
+  The schema keeps the field, because the simulator honours it and a recipe
+  written for a later Inventor should still rehearse. If a release ever grows
+  the property, the acceptance check stops skipping and the warning should go.
 
 ## Defects worth fixing, with evidence
 

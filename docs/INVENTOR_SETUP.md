@@ -363,7 +363,49 @@ the work axis.
 For defect 4, `scripts/com_signatures.py` now reads the whole `Camera` interface.
 If it reports the eye and the up vector, the orientation names can be measured as
 numbers rather than judged by looking at renders -- which is what `check_views`
-says is missing before any of it can be asserted.
+says is missing before any of it can be asserted. **Asked on 2026-09-07 and the
+type library has no `Camera` module**, so that route is closed: measuring the
+orientations needs a live probe against the object, the way
+`scripts/probe_convexity.py` works, not a signature read.
+
+### What the 2026-09-07 runs measured
+
+The same read is worth recording for the three calls this section is about:
+`com_signatures.py` lists only `WorkPoints.AddAtCentroid` and
+`WorkAxes.AddByAnalyticEdge`, and **none of `AddByPoint`, `AddByTwoPoints` or
+`AddByLine` appears in the generated wrapper at all** -- yet all three execute.
+makepy writes a module per interface it generates and skips members; late
+binding asks the object rather than the wrapper, which is the reason this server
+uses it, and this is the clearest case of it so far. A missing signature is not
+evidence of a missing call.
+
+What the second run left open, and what to do about each:
+
+* **Inventor refused the parameter name `pcd`** -- `Inventor refused the
+  parameter 'pcd' = '30 mm' (units 'mm'): Exception occurred.` -- while taking
+  `bolt_x` in the same recipe. Nothing in `RESERVED_NAMES` or the unit table
+  explains it. The check now probes a spread of candidate names (`pcd`, `PCD`,
+  `pcd_1`, `bolt_pcd`, `cd`, `dia`, `pitch`) chosen to separate the possible
+  reasons, and reports which Inventor takes. A name it declines belongs in
+  `RESERVED_NAMES` with the measurement beside it, so `apply_parameter` says so
+  before Inventor does.
+* **The carrier sketches print `horizontal_align(__origin__, point1) was
+  refused`**, and the message goes on to say the sketch keeps a degree of
+  freedom. That may be over-claiming -- `DECISIONS.md` records that a
+  constraint Inventor refuses is usually one it inferred for itself -- and it
+  matters more here than usual, because a carrier point free to move is a work
+  axis that does not track its parameter. Inventor gives no degree-of-freedom
+  count, so the check now reports each carrier sketch's `fully_constrained`,
+  which is the answer available.
+* **`hole` + `bodies` is not available on 2027.1.** `HoleFeature` has no
+  `AffectedBodies`; see the gap list in `FEATURE_COVERAGE.md`. The acceptance
+  check skips it with that reason rather than failing every run, and `rehearse`
+  warns on the field.
+* **Work geometry is absent from `list_features`.** The COM backend walks
+  `ComponentDefinition.Features`; Inventor keeps work planes, axes and points in
+  their own collections, and the mock puts them all in one list. The check now
+  prints what those three collections hold, because fixing the divergence needs
+  to know whether Inventor's own origin planes and axes are in there too.
 
 ## Known-shaky areas
 

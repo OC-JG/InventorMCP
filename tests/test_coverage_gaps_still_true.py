@@ -38,7 +38,18 @@ COVERAGE = (ROOT / "docs/FEATURE_COVERAGE.md").read_text()
 # operations, so the schema cannot answer for them.
 GAP_OPERATIONS = {
     "No work axis or work point": {"work_axis", "work_point"},
-    "`hole` still only drills the primary body": {"hole:bodies"},
+    "`hole` still only drills the primary body — on Inventor": {"hole:bodies"},
+}
+
+#: A gap the *schema* closed and Inventor did not. `hole` + `bodies` is the
+#: first: the simulator honours it, and Inventor 2027.1's `HoleFeature` has no
+#: `AffectedBodies` at all, measured 2026-09-07. So the bullet stays open while
+#: the field exists, which is neither of the two states this file first knew
+#: about -- and the third test below is what stops that reading as staleness.
+#: The claim is checked against `_KNOWN_BROKEN_FIELDS`, so a gap can only sit
+#: here while the code agrees Inventor cannot do it.
+LIVE_ONLY_GAPS = {
+    "`hole` still only drills the primary body — on Inventor": ("hole", "bodies"),
 }
 
 
@@ -92,10 +103,50 @@ def test_a_gap_still_declared_open_is_still_open(gap):
     """The failure this file was written for."""
     if not gap_bullets()[gap]:
         pytest.skip("the document already records this gap as closed")
+    if gap in LIVE_ONLY_GAPS:
+        pytest.skip("the schema closed this one and Inventor did not; "
+                    "test_a_gap_open_only_live_says_so_in_the_code covers it")
     landed = sorted(c for c in GAP_OPERATIONS[gap] if schema_can(c))
     assert not landed, (
         f"{gap!r} is listed as an open gap, and the schema has {landed}. The "
         "list tells a reader to use a workaround that is no longer needed.")
+
+
+@pytest.mark.parametrize("gap", sorted(LIVE_ONLY_GAPS))
+def test_a_gap_open_only_live_says_so_in_the_code(gap):
+    """A gap the schema closed and Inventor did not needs three things to agree.
+
+    The bullet has to be open, because the workaround is still the only thing
+    that works; the schema has to still carry the field, because the simulator
+    honours it and a recipe written for a later Inventor should still rehearse;
+    and `_KNOWN_BROKEN_FIELDS` has to say Inventor cannot do it, because that is
+    what warns a caller at rehearsal instead of on a CAD seat.
+
+    Drop any one of the three and a reader is misled: an unwarned field looks
+    supported, a struck-through bullet hides the workaround they need, and a
+    warning with no field behind it is noise.
+    """
+    from inventor_mcp.rehearsal import _KNOWN_BROKEN_FIELDS
+
+    assert gap_bullets()[gap], (
+        f"{gap!r} is struck through, but Inventor still cannot do it -- the "
+        "workaround the bullet names is the only thing that works.")
+    field = LIVE_ONLY_GAPS[gap]
+    assert schema_can(f"{field[0]}:{field[1]}"), (
+        f"{gap!r} is recorded as schema-closed and the schema has no "
+        f"{field[1]!r} on {field[0]!r}. Move it back to an ordinary gap.")
+    assert field in _KNOWN_BROKEN_FIELDS, (
+        f"{gap!r} says Inventor cannot do this and `_KNOWN_BROKEN_FIELDS` does "
+        f"not carry {field}, so nothing warns a caller before they spend a seat.")
+
+
+def test_nothing_is_warned_about_that_the_schema_does_not_offer():
+    """The reverse: a broken-field entry for a field nobody can set is noise."""
+    from inventor_mcp.rehearsal import _KNOWN_BROKEN_FIELDS
+
+    missing = sorted(f"{op}.{field}" for op, field in _KNOWN_BROKEN_FIELDS
+                     if not schema_can(f"{op}:{field}"))
+    assert not missing, f"warned about, and not in the schema: {missing}"
 
 
 @pytest.mark.parametrize("gap", sorted(GAP_OPERATIONS))

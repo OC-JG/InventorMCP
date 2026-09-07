@@ -354,13 +354,32 @@ actually bitten.
       same day by keeping the entity Inventor hands back at creation. The four
       checks below it skipped by design, which is what that ordering is for.
 
-      So this stays open, and the three calls stay unmeasured: the run proved
-      the instrument works and the labels did not. What it has not yet done is
-      execute `AddByPoint`. **The same run also could not read the type
-      library** -- a corrupt `gen_py` cache, seven enums on unverified fallback
-      values, and `com_signatures.py` unable to start -- so the next run wants
-      that cleared first, and the enum warnings gone from its output, before any
-      of its numbers are trusted.
+      **Second run, same day, with the labels fixed and the type library
+      readable: all three calls execute.** `WorkPoints.AddByPoint`,
+      `WorkAxes.AddByTwoPoints` and `WorkAxes.AddByLine` are measured as
+      existing and working on 2027.1 -- and the type library does not generate a
+      module for any of them, so late binding is what makes them reachable,
+      which is the argument `INVENTOR_SETUP.md` already makes for it.
+
+      **This still stays open, because "it runs" was never the test.** The
+      measurement that matters -- whether the bolt circle moves when its
+      driving parameter does -- was blocked by something else entirely:
+      Inventor refused the parameter name `pcd` with a bare "Exception
+      occurred", while taking `bolt_x` in the same recipe, and nothing in
+      `RESERVED_NAMES` or the unit table explains it. The recipe now uses a name
+      Inventor took, and the run carries a probe over candidate names so the
+      next one says which it declines and why the shape of the name matters.
+
+      Two more things the run measured, neither of them what it was aimed at:
+      **`hole` + `bodies` cannot work on Inventor** -- 2027.1's `HoleFeature`
+      has no `AffectedBodies` at all -- and **work geometry does not appear in
+      `list_features`** on the COM backend, because that walks
+      `ComponentDefinition.Features` and Inventor keeps work planes, axes and
+      points in their own collections. The mock puts all of it in one list, so
+      the two backends disagree; the fix needs one fact nobody has measured
+      (whether Inventor's *origin* planes and axes sit in those same
+      collections, and how a created one is told from them), so the run now
+      prints the collections' contents rather than guessing.
 - [x] **`hole` gains `bodies`**, the multi-body targeting `extrude` already
       has. *(2026-09-03.)* Every piece it needed was already parameterised by
       body -- `charge`, `_through_all_distance`, `_material_spans` and

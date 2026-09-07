@@ -296,6 +296,24 @@ _KNOWN_BROKEN = {
 }
 
 
+#: The same, for a *field* rather than a whole operation: the op works and one
+#: knob on it does not. Keyed by ``(op, field)`` and warned about only when the
+#: field is actually set, because refusing `hole` outright over a knob nobody
+#: used would be far worse than the gap.
+_KNOWN_BROKEN_FIELDS = {
+    ("hole", "bodies"): (
+        "Inventor 2027.1's HoleFeature has no AffectedBodies -- measured on "
+        "2026-09-07, where setting it raised \"object has no attribute "
+        "'AffectedBodies'\". Unlike `extrude`, a hole is made in one call and "
+        "there is no definition object to aim beforehand, so there is nothing "
+        "to set. The simulator honours `bodies` and Inventor will not, so the "
+        "hole lands on the primary body. Cut the second body with an `extrude` "
+        "carrying `bodies`, which is measured and works, or `combine` with "
+        "operation 'cut'."
+    ),
+}
+
+
 #: Simulator gaps, so a rehearsal does not report them as recipe faults. A
 #: thread is cosmetic and moves no volume in Inventor either. Patterns and
 #: mirrors used to be here, back when an occurrence's volume was not modelled --
@@ -366,6 +384,14 @@ def rehearse(recipe: PartRecipe) -> dict[str, Any]:
                            "measured against",
                 "why": _KNOWN_BROKEN[op.op],
             })
+        for (broken_op, field), why in _KNOWN_BROKEN_FIELDS.items():
+            if op.op == broken_op and getattr(op, field, None):
+                report["warnings"].append({
+                    "where": where,
+                    "warning": f"`{broken_op}.{field}` does not work on the "
+                               "Inventor this was measured against",
+                    "why": why,
+                })
         # Where the part was before this operation: a cut has to be judged
         # against what it was aimed at, not against what it left behind.
         was = measure(session, context) or {}
