@@ -1988,6 +1988,31 @@ CHECKS = {
 }
 
 
+#: The groups whose COM half has never executed, in the order to run them.
+#: `--only unmeasured` expands to this, because a CAD seat is the scarce
+#: resource here and five separate runs is five chances to stop after the first
+#: interesting failure -- which is how the work axis took six sessions.
+#:
+#: The order is by what the next one depends on rather than by size. Nothing in
+#: the drawing group needs the three feature groups, but a feature that will not
+#: build is a shorter thing to diagnose than a sheet that will not dimension, so
+#: the cheap answers come first.
+UNMEASURED = ("move-face", "thicken", "sketch-driven-pattern", "drawing")
+
+#: What to read before spending the seat, because each of these answers in a
+#: second what a run narrows down over several. Printed rather than assumed:
+#: `move_face`, `thicken` and `sketch_driven_pattern` were all written without a
+#: signature in front of anybody, and the drawing surface rests on a property
+#: nothing here has ever held.
+READ_FIRST = (
+    "python scripts/com_signatures.py --search MoveFace",
+    "python scripts/com_signatures.py ThickenFeatures",
+    "python scripts/com_signatures.py SketchDrivenPatternFeatures",
+    "python scripts/com_signatures.py GeneralDimension",
+    "python scripts/com_signatures.py DrawingDimensions",
+)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--record", action="store_true",
@@ -2012,8 +2037,21 @@ def main(argv: list[str] | None = None) -> int:
               "Use --backend inventor.")
     print("=" * 70)
 
+    asked = list(args.only)
+    if any(part.lower() == "unmeasured" for part in asked):
+        asked = [part for part in asked if part.lower() != "unmeasured"]
+        asked.extend(UNMEASURED)
+        print("\nThe groups whose COM half has never executed, in order:")
+        print("  " + ", ".join(UNMEASURED))
+        print("\nRead these first -- each answers in a second what a run narrows")
+        print("down over several, and three of these calls were written without a")
+        print("signature in front of anybody:")
+        for line in READ_FIRST:
+            print(f"  {line}")
+        print("=" * 70)
+
     def wanted(name: str) -> bool:
-        return not args.only or any(part.lower() in name.lower() for part in args.only)
+        return not asked or any(part.lower() in name.lower() for part in asked)
 
     # An example is selected either by the group name or by its own -- the first
     # version required the group, so `--only pipe_bend` matched nothing at all

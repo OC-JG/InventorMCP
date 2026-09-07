@@ -806,6 +806,62 @@ per-machine fact rather than a release fact, and `export`'s
 written-but-not-there check is what reports it: Inventor answers success and no
 file appears.
 
+
+### One CAD session, in order
+
+Four surfaces were written in one session with no Inventor to reach:
+`move_face`, `thicken`, `sketch_driven_pattern` and the whole drawing layer.
+Each has its own subsection above saying what it rests on. This is the order to
+take them in, because a CAD seat is the scarce thing and the work axis is what
+happens otherwise -- **six sessions, four defects, none of them the thing being
+measured.**
+
+**Read the signatures first.** Each of these answers in a second what a run
+narrows down over several, and three of the four calls were written without a
+signature in front of anybody:
+
+    python scripts/com_signatures.py --search MoveFace
+    python scripts/com_signatures.py ThickenFeatures
+    python scripts/com_signatures.py SketchDrivenPatternFeatures
+    python scripts/com_signatures.py GeneralDimension
+    python scripts/com_signatures.py DrawingDimensions
+
+**Then one run:**
+
+    python scripts/live_acceptance.py --only unmeasured
+
+which expands to the four groups in the order above and prints the list again.
+
+**Two answers would change a design rather than fix a call**, and they are worth
+looking for before anything else in the output:
+
+1. **Can a retrieved `DrawingDimension` name the model parameter it came from?**
+   If not, retrieve-and-filter cannot work and dimensioning goes back to placing
+   against `DrawingCurve` geometry -- a different and much larger piece of work.
+2. **Does `thicken`'s `negative` mean the side `THICKEN_SHARE` says?** A
+   tolerance cannot catch being wrong about a side; defect 5's `trim` was 1.2%
+   out while keeping the opposite half of the part. `thinned_wall` is shaped so
+   the three possible answers are three different numbers.
+
+**And three checks the simulator can never be evidence for**, so their first
+real reading is this run:
+
+* a view's **extent** against the part -- in the simulator the extent is
+  computed *from* the part, so the check compares it with itself;
+* whether a view **direction's name describes what you get** -- defect 4 on a
+  different API, where `capture_view`'s `front` returns a top view;
+* whether Inventor's **first and third angle** are the ones implemented here,
+  which only a *projected* view can answer, because nothing asserted its
+  direction.
+
+**What cannot be run anywhere but that machine.** Worth stating plainly, because
+it is the reason all of the above is still outstanding: the COM backend is the
+only route to a real Inventor, `pywin32` exists only on Windows, and
+`--backend auto` resolves to the simulator wherever it does not. A session on
+another platform can write this code, test the half that needs no CAD, and get
+no further -- which is exactly how these four surfaces came to be written
+unmeasured, and is not a defect in any of them.
+
 ## Known-shaky areas
 
 These are the parts of the COM backend most likely to need adjustment, and why:
