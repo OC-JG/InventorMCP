@@ -25,7 +25,7 @@ def main(argv: list[str] | None = None) -> int:
     if "--doctor" in args:
         from .preflight import doctor
 
-        return doctor()
+        return doctor(connect="--connect" in args)
 
     try:
         from .server import main as serve

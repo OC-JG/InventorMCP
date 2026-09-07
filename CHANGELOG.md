@@ -58,7 +58,36 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
   `install.ps1`'s final check is now `--doctor` rather than its own inline
   script, so the install and the diagnosis cannot disagree about what working
-  means. Twenty-one tests hold the pair of facts together: what `.mcp.json`
+  means.
+
+- **A healthy server that cannot reach Inventor read as an unexplained
+  failure.** On the machine with the seat, every line of the report above came
+  back `ok` — interpreter, SDK, pydantic, pywin32, backend, server, Node,
+  analyser — which is exactly what ruled the server out and left the COM
+  connection as the only thing between the two. The doctor stopped short of it
+  on purpose, and that made the one remaining link the one it said nothing
+  about.
+
+  `--doctor --connect` is that link. It **attaches** to a session already open —
+  `GetActiveObject`, never `Dispatch`, asserted off the syntax tree because the
+  docstring explaining the rule contains the word it forbids — so it can neither
+  launch Inventor nor take a licence to answer a question about whether Inventor
+  was running. Off by default for the same reason the rest of the doctor never
+  connects, and because its answer means nothing until Inventor is up.
+
+  What it buys is the HRESULT, and three repairs that `connect` reports
+  identically: an unregistered `Inventor.Application` (a repair, not a
+  reinstall); `E_ACCESSDENIED`, which is the two processes sitting at different
+  Windows integrity levels — the running-object table is per level, so an
+  elevated Inventor is invisible to an unelevated server and the reverse; and
+  `MK_E_UNAVAILABLE`, nothing in the table at all, which is a **warning** rather
+  than a failure, because Inventor being closed is not a broken install and a
+  doctor that exits non-zero on a healthy machine teaches people to ignore its
+  exit code.
+
+  The elevation mismatch is the one that fits "it worked yesterday". Nothing
+  about the install has to change for it to start: somebody launching Inventor
+  as administrator once is enough. Twenty-one tests hold the pair of facts together: what `.mcp.json`
   launches, that the README's warning still stands, that nothing importable-only
   on a healthy install sits at the top of `__main__` or `preflight`, and that the
   explanation goes to stderr rather than the stream carrying the protocol.

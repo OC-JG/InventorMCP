@@ -357,3 +357,138 @@ def test_doctor_is_documented_by_help(capsys):
         main(["--help"])
     assert exit_code.value.code == 0
     assert "--doctor" in capsys.readouterr().out
+
+
+class TestWhenTheServerIsFineAndInventorIsNot:
+    """The link the doctor deliberately does not touch until it is asked to.
+
+    Every other check passed on the machine with the Inventor seat -- interpreter,
+    SDK, pywin32, backend, server, Node, analyser, all `ok` -- which is what
+    ruled the server out and left the COM connection as the only thing between
+    the two. ``--doctor --connect`` is that link, and it attaches to a running
+    session rather than dispatching one, so it can neither launch Inventor nor
+    take a licence to answer the question.
+
+    The three failures below are three different repairs, and ``GetActiveObject``
+    reports the first two identically. The HRESULT is the only thing that tells
+    them apart, so the mapping is asserted here rather than trusted -- these
+    branches cannot run on the offline legs at all.
+    """
+
+    def com_error(self, hresult: int) -> Exception:
+        """A stand-in for ``pythoncom.com_error``, which is Windows-only.
+
+        pywin32 puts the HRESULT in ``args[0]`` and, on newer builds, also on an
+        ``hresult`` attribute. Both are read, so both are set here.
+        """
+        exc = OSError(hresult, "stand-in for a com_error")
+        exc.hresult = hresult  # type: ignore[attr-defined]
+        return exc
+
+    def test_access_denied_is_named_as_an_elevation_mismatch(self):
+        """The answer that fits "it worked yesterday" better than any other.
+
+        The running-object table is per Windows integrity level, so an elevated
+        Inventor is invisible to an unelevated server and the other way round.
+        Nothing about the install has to change for this to start happening --
+        somebody launching Inventor as administrator once is enough.
+        """
+        from inventor_mcp import preflight
+
+        finding = preflight._no_running_inventor(
+            self.com_error(preflight._E_ACCESSDENIED)
+        )
+        assert finding.status == preflight.FAIL
+        assert "integrity" in (finding.hint or "")
+        assert "administrator" in (finding.hint or "")
+
+    def test_an_unresolvable_progid_asks_for_a_repair_not_a_reinstall(self):
+        from inventor_mcp import preflight
+
+        finding = preflight._no_running_inventor(
+            self.com_error(preflight._CO_E_CLASSSTRING)
+        )
+        assert finding.status == preflight.FAIL
+        assert "repair" in (finding.hint or "").lower()
+
+    def test_nothing_running_is_a_warning_not_a_failure(self):
+        """Inventor being closed is not a broken install.
+
+        A FAIL here would make the doctor exit non-zero on a perfectly healthy
+        machine that simply had Inventor shut, which teaches people to ignore
+        the exit code.
+        """
+        from inventor_mcp import preflight
+
+        finding = preflight._no_running_inventor(
+            self.com_error(preflight._MK_E_UNAVAILABLE)
+        )
+        assert finding.status == preflight.WARN
+        assert "Start Inventor" in (finding.hint or "")
+
+    def test_an_hresult_nobody_predicted_still_reports(self):
+        from inventor_mcp import preflight
+
+        finding = preflight._no_running_inventor(self.com_error(-2147467259))
+        assert finding.status == preflight.FAIL
+        assert finding.hint
+
+    def test_an_exception_carrying_no_hresult_is_read_as_not_running(self):
+        """``GetActiveObject`` can raise something that is not a ``com_error``.
+
+        Treated as "not running" rather than as a hard failure: it is the
+        commonest case by a wide margin, and the hint covers the rest.
+        """
+        from inventor_mcp import preflight
+
+        finding = preflight._no_running_inventor(RuntimeError("no idea"))
+        assert finding.status == preflight.WARN
+
+    def test_the_check_is_off_unless_asked(self):
+        """It needs Inventor running before its answer means anything, so it
+        cannot be part of the default report."""
+        from inventor_mcp import preflight
+
+        default = {f.name for f in preflight.run_checks()}
+        asked = {f.name for f in preflight.run_checks(connect=True)}
+        assert "inventor" not in default
+        assert "inventor" in asked
+
+    def test_it_attaches_and_never_dispatches(self):
+        """``Dispatch`` would start Inventor and take a licence to answer a
+        question about whether it was running.
+
+        Read off the syntax tree rather than the text: the docstring above says
+        the word ``Dispatch`` in the course of explaining why the code does not,
+        and a substring search cannot tell the promise from the breach.
+        """
+        tree = ast.parse(
+            (ROOT / "inventor_mcp" / "preflight.py").read_text(encoding="utf-8")
+        )
+        check = next(
+            node for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "check_inventor"
+        )
+        called = {
+            node.func.attr for node in ast.walk(check)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        }
+        assert "GetActiveObject" in called
+        for launches in ("Dispatch", "DispatchEx", "EnsureDispatch"):
+            assert launches not in called, f"check_inventor calls {launches}"
+
+    def test_a_failure_here_does_not_read_as_a_server_that_will_not_start(self):
+        """Two different jobs. Reporting the wrong one sends somebody to
+        reinstall a package that was never the problem."""
+        from inventor_mcp import preflight
+
+        findings = [
+            preflight.Finding("server", preflight.OK, "builds"),
+            preflight.Finding("inventor", preflight.FAIL, "access denied",
+                              hint="both elevated, or neither"),
+        ]
+        out = io.StringIO()
+        preflight.report(findings, out=out)
+        printed = out.getvalue()
+        assert "cannot reach Inventor" in printed
+        assert "will not start" not in printed

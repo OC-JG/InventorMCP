@@ -201,6 +201,27 @@ it answers `initialize` has written its traceback to a stderr the client discard
 which is why every cause looks identical from the outside. The doctor is that
 traceback, printed where you can see it.
 
+If every line comes back `ok` and `connect` still fails, the server is not the
+problem — the COM connection to Inventor is. Start Inventor, then add `--connect`:
+
+```powershell
+.venv\Scripts\python.exe -m inventor_mcp --doctor --connect
+```
+
+That attaches to the session already open — `GetActiveObject`, never `Dispatch`,
+so it cannot launch Inventor or take a licence — and separates the three reasons
+the attach fails, which `connect` alone reports identically:
+
+| What it says | What happened |
+|---|---|
+| `Inventor.Application` is not registered | Inventor's COM registration is gone. Repair the install from Autodesk Access, or run Inventor once as administrator so it re-registers. |
+| access denied | The two processes are at **different Windows integrity levels** — one is elevated and the other is not, and the running-object table is per level. Run Inventor and whatever launches the server the same way; neither elevated is the better answer. |
+| no running Inventor session | Inventor is closed, or open where this process cannot see it: another Windows user, another remote-desktop session, or the elevation split above. |
+
+The elevation mismatch is the one that fits "it worked yesterday": nothing about
+the install has to change for it to start happening — launching Inventor as
+administrator once is enough.
+
 ---
 
 ## How it works

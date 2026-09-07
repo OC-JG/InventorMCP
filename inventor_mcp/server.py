@@ -117,12 +117,18 @@ def main(argv: list[str] | None = None) -> int:
         help="Check everything the server needs and report what is missing, "
              "instead of starting.",
     )
+    parser.add_argument(
+        "--connect",
+        action="store_true",
+        help="With --doctor, also attach to a running Inventor and report what "
+             "that says. Attaches only; it will not launch Inventor.",
+    )
     args = parser.parse_args(argv)
 
     if args.doctor:
         from .preflight import doctor
 
-        return doctor()
+        return doctor(connect=args.connect)
 
     # stderr only: stdout carries the MCP protocol on the stdio transport.
     logging.basicConfig(

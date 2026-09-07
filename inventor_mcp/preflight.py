@@ -265,6 +265,126 @@ def check_analyser() -> Finding:
         )
 
 
+#: HRESULTs worth telling apart, because they mean different repairs. Everything
+#: else is reported with whatever text Inventor supplied.
+_MK_E_UNAVAILABLE = -2147221021      # 0x800401E3: nothing in the running-object table
+_CO_E_CLASSSTRING = -2147221005      # 0x800401F3: the ProgID resolves to nothing
+_E_ACCESSDENIED = -2147024891        # 0x80070005: refused, usually across integrity levels
+
+
+def check_inventor() -> Finding:
+    """Whether a *running* Inventor can actually be reached from this process.
+
+    Off by default -- ``--doctor --connect`` -- and the last check, because it is
+    the only one that touches Inventor at all. Even then it only attaches to a
+    session that is already open: ``GetActiveObject``, never ``Dispatch``, so it
+    cannot launch Inventor or take a licence. What it costs is that Inventor has
+    to be running for the answer to mean anything, which is the trade the
+    default makes the other way.
+
+    The three failures it separates are the three different repairs:
+
+    * the ProgID resolves to nothing -- Inventor's COM registration is absent or
+      broken, which is what a repair, an uninstall of one version, or a
+      half-finished update leaves behind;
+    * the ProgID is registered but nothing is in the running-object table --
+      Inventor is not running, or is running somewhere this process cannot see
+      it;
+    * access denied -- the two processes are at different Windows integrity
+      levels. One of them started elevated. This is the answer that fits "it
+      worked yesterday" better than any other, because nothing about the install
+      has to have changed for it to start happening.
+    """
+    if sys.platform != "win32":
+        return Finding(
+            "inventor", SKIP, f"not applicable on {sys.platform}",
+        )
+    try:
+        import pythoncom  # type: ignore[import-not-found]
+        import win32com.client  # type: ignore[import-not-found]
+    except Exception as exc:
+        return Finding(
+            "inventor", WARN, f"pywin32 not importable: {exc}",
+            hint="Without pywin32 there is nothing to connect with. "
+                 "`python -m pip install -e '.[inventor]'`",
+        )
+
+    pythoncom.CoInitialize()
+    try:
+        # Asked first and separately: "Inventor is not running" and "Inventor is
+        # not registered" are the same exception from GetActiveObject, and they
+        # are not the same problem.
+        try:
+            pythoncom.CLSIDFromProgID("Inventor.Application")
+        except Exception as exc:
+            return Finding(
+                "inventor", FAIL,
+                f"`Inventor.Application` is not registered on this machine: {exc}",
+                hint="Inventor's COM registration is missing, so nothing can "
+                     "automate it -- the server included. Repair the Inventor "
+                     "install from Autodesk Access, or run Inventor once as "
+                     "administrator to let it re-register itself.",
+            )
+        try:
+            app = win32com.client.GetActiveObject("Inventor.Application")
+        except Exception as exc:
+            return _no_running_inventor(exc)
+
+        try:
+            version = app.SoftwareVersion.DisplayVersion
+            build = app.SoftwareVersion.BuildIdentifier
+        except Exception as exc:
+            return Finding(
+                "inventor", WARN,
+                f"attached, but it would not say which version: {exc}",
+                hint="The connection is there. Something about this session is "
+                     "refusing property reads -- a modal dialog waiting for an "
+                     "answer will do it. Clear anything Inventor is asking and "
+                     "try again.",
+            )
+        return Finding("inventor", OK, f"attached to {version} (build {build})")
+    finally:
+        try:
+            pythoncom.CoUninitialize()
+        except Exception:  # pragma: no cover - Windows only
+            pass
+
+
+def _no_running_inventor(exc: BaseException) -> Finding:
+    """``GetActiveObject`` refused. Which of the three reasons it was."""
+    code = getattr(exc, "hresult", None)
+    if code is None:
+        args = getattr(exc, "args", ())
+        code = args[0] if args and isinstance(args[0], int) else None
+
+    if code == _E_ACCESSDENIED:
+        return Finding(
+            "inventor", FAIL, "access denied reaching the running Inventor",
+            hint="The two processes are at different Windows integrity levels: "
+                 "one of them is elevated and the other is not. Run Inventor "
+                 "and whatever launches the server the same way -- both as "
+                 "administrator, or neither. Neither is the better answer.",
+        )
+    if code == _CO_E_CLASSSTRING:
+        return Finding(
+            "inventor", FAIL, f"`Inventor.Application` did not resolve: {exc}",
+            hint="Repair the Inventor install from Autodesk Access.",
+        )
+    if code == _MK_E_UNAVAILABLE or code is None:
+        return Finding(
+            "inventor", WARN, "no running Inventor session to attach to",
+            hint="Start Inventor and run this again. If Inventor *is* open, it "
+                 "is open somewhere this process cannot see it: a different "
+                 "Windows user, a different remote-desktop session, or one of "
+                 "the two elevated and the other not.",
+        )
+    return Finding(
+        "inventor", FAIL, f"could not attach: {exc}",
+        hint="Inventor is registered but refused the attach. Start Inventor by "
+             "hand, confirm it opens normally, and try again.",
+    )
+
+
 #: In the order the chain actually runs, so the first FAIL is the one to fix,
 #: each paired with whether it needs the package's dependencies to mean anything.
 CHECKS = (
@@ -278,18 +398,25 @@ CHECKS = (
     (check_analyser, True),
 )
 
+#: Run only when asked, because it is the one check that touches Inventor.
+OPTIONAL_CHECKS = ((check_inventor, False),)
 
-def run_checks() -> list[Finding]:
+
+def run_checks(connect: bool = False) -> list[Finding]:
     """Every check, in order, with a crash in one reported rather than raised.
 
     Order is not cosmetic. ``backend`` and ``server`` both import the package,
     so on an install with no ``mcp`` they fail too -- with their own reasons,
     which are true and useless. Once a dependency has failed they are skipped
     instead, leaving one problem named in the summary rather than four.
+
+    *connect* adds the one check that reaches Inventor. Off by default: a
+    diagnostic that changes the thing it is diagnosing is not one, and this one
+    needs Inventor to be running before its answer means anything.
     """
     findings: list[Finding] = []
     missing: list[str] = []
-    for check, needs_dependencies in CHECKS:
+    for check, needs_dependencies in CHECKS + (OPTIONAL_CHECKS if connect else ()):
         if needs_dependencies and missing:
             findings.append(
                 Finding(
@@ -335,10 +462,17 @@ def report(findings: list[Finding], out=None) -> None:
     if broken:
         # Named rather than counted. "1 problem" sends somebody back up the
         # page; the name is the thing they act on.
-        print(
-            "The server will not start: " + ", ".join(f.name for f in broken),
-            file=stream,
-        )
+        #
+        # And said as what it is: `inventor` failing is a server that starts
+        # perfectly and cannot reach the CAD seat, which is a different job from
+        # a server that will not start. Reporting the second for the first sends
+        # somebody to reinstall a package that was never the problem.
+        names = ", ".join(f.name for f in broken)
+        if [f.name for f in broken] == ["inventor"]:
+            print(f"The server starts, but it cannot reach Inventor: {names}",
+                  file=stream)
+        else:
+            print(f"The server will not start: {names}", file=stream)
     elif any(f.status == WARN for f in findings):
         print(
             "The server starts. Some tools are unavailable -- see above.",
@@ -348,9 +482,9 @@ def report(findings: list[Finding], out=None) -> None:
         print("Everything the server needs is here.", file=stream)
 
 
-def doctor(out=None) -> int:
+def doctor(out=None, connect: bool = False) -> int:
     """Run every check, print the report, and exit non-zero if the server is dead."""
-    findings = run_checks()
+    findings = run_checks(connect=connect)
     report(findings, out=out)
     return 1 if any(f.status == FAIL for f in findings) else 0
 
