@@ -7,8 +7,9 @@ a void at all. The plate below is the reproduction -- six 5 mm bores on a circle
 whose centre is a parameter -- and it reported `(0, 0, 0.5)` for every value of
 that parameter. A real centroid sits 0.37283 mm off that in X at `bolt_x` 30 and
 moves a further 0.18640 mm at 45, both derived from the arithmetic the
-acceptance script asserts against rather than read off a seat: the live run of
-2026-09-07 stopped at defect 8 without reaching this check.
+acceptance script asserts against rather than read off a seat. Two runs on
+2026-09-07 have tried: the first stopped at defect 8, the second got past it and
+was blocked by Inventor refusing the parameter name `pcd`.
 
 `scripts/live_acceptance.py`'s `check_work_geometry` is what made it expensive
 rather than merely untidy. It judges the off-centre bolt-circle axis by how far
@@ -32,7 +33,7 @@ def plate(session, bolt_x: float, *, pattern: bool = True):
         {"op": "work_axis", "name": "BoltAxis", "kind": "normal_to_plane",
          "plane": "xy", "at": ["bolt_x", 0]},
         {"op": "sketch", "name": "Pilot", "plane": "xy", "entities": [
-            {"type": "point", "position": ["bolt_x + pcd / 2", 0]}]},
+            {"type": "point", "position": ["bolt_x + bolt_spacing / 2", 0]}]},
         {"op": "hole", "name": "Bolt1", "sketch": "Pilot", "diameter": 5,
          "through_all": True, "direction": "negative"},
     ]
@@ -41,7 +42,7 @@ def plate(session, bolt_x: float, *, pattern: bool = True):
                            "features": ["Bolt1"], "axis": "BoltAxis", "count": 6})
     result = build_part(session, PartRecipe.model_validate({
         "name": "Plate", "units": "mm",
-        "parameters": [{"name": "pcd", "value": 60},
+        "parameters": [{"name": "bolt_spacing", "value": 60},
                        {"name": "bolt_x", "value": bolt_x}],
         "operations": operations,
     }))

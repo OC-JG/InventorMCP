@@ -69,8 +69,8 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   45 mm.
 
   A real centroid does neither. **Derived, not measured** — from the same
-  arithmetic that check already asserts against, and stated that way because the
-  one live run got nowhere near it: six 5 mm bores remove 1.178097 cm^3 centred
+  arithmetic that check already asserts against, and stated that way because no
+  live run has reached it: six 5 mm bores remove 1.178097 cm^3 centred
   on the circle, so at 30 mm the centroid sits 0.37283 mm off the box centre in
   X, and moving the circle to 45 mm shifts it a further 0.18640 mm. The box
   centre reports zero and zero.
