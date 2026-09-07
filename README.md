@@ -163,6 +163,38 @@ simulator — useful, but it will not produce a real part. Run with
 Then try: *"Model a 120 x 80 x 8 mm aluminium mounting plate with 10 mm corner radii
 and four M6 clearance holes 12 mm in from each edge."*
 
+### Which Claude can drive Inventor
+
+Inventor is Windows software driven over COM, so **the server has to run on the
+machine that has Inventor.** That is not a configuration detail — a client
+running anywhere else cannot reach a CAD seat from there, whatever the config
+says:
+
+| How you use Claude | Can it drive Inventor? |
+|---|---|
+| Claude Code CLI on the Windows machine | Yes |
+| Claude Code inside Claude Desktop, on the Windows machine | Yes — it reads this repo's `.mcp.json`, **not** `claude_desktop_config.json` |
+| Claude Desktop's own MCP config, on the Windows machine | Yes — `%APPDATA%\Claude\claude_desktop_config.json`, which `install.ps1` writes |
+| Claude Code on the web, or any container or cloud session | **No.** Linux, no Inventor, no COM. The simulator only |
+
+A web session still validates recipes, runs the static checks and rehearses a
+build against the simulator — useful, and it writes no CAD file. `--doctor` says
+so in as many words when it is not on Windows, rather than reporting eight green
+lines about a machine that cannot do the job. The `.claude/hooks/session-start.sh`
+hook installs the package into a `.venv` so a web session at least has a server
+that starts; `scripts/serve.py` then finds it without being told.
+
+> **`.mcp.json` names a bare `"python"`, and it has to.** The file is shared and
+> the interpreter is somewhere different on every machine, so it cannot carry an
+> absolute path. That leaves the command resolved through `PATH` — and a
+> GUI-launched client is handed the environment Windows gives GUI processes, not
+> your shell's. On Windows the first `python` is often the WindowsApps execution
+> alias, which resolves in a console and not reliably outside one. If the server
+> starts by hand and not under your client, **that gap is the first thing to
+> suspect**: register it with the absolute path to `.venv\Scripts\python.exe`
+> instead of relying on `.mcp.json`. `--doctor` warns about this even when the
+> launch it can test succeeds, because it cannot test the launch that matters.
+
 ### When the connection fails
 
 If the client reports `CONNECTION_CLOSED`, "Connection closed", or just shows the

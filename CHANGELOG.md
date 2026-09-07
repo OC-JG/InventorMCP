@@ -185,6 +185,49 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   A `no_client_probe` fixture keeps the tests that only need the *shape* of a
   report from launching servers to get it.
 
+- **The report was green about a machine that cannot do the job.** On a host
+  with no Windows there is no CAD seat and cannot be, and "everything the server
+  needs is here" is true of the package while being wildly misleading about the
+  machine — the whole purpose of this server is driving real Inventor. Not a
+  fault to repair but the wrong machine, so `--doctor` now states it above the
+  verdict, where it cannot be read past. `README.md` gains the table of which
+  Claude can reach a CAD seat and which cannot.
+
+- **A web session could not start the server at all.** A fresh container clones
+  the repository and installs nothing, so `inventor_mcp` does not import,
+  `pytest` collects nothing, and the `inventor` server in `.mcp.json` exits
+  before it can speak — `CONNECTION_CLOSED`, the same four words, from a
+  different cause. `.claude/hooks/session-start.sh` installs the package into a
+  `.venv`, which fixes both halves in one place: `pip install -e .` into the
+  container's own Python fails outright on a distro-managed package pip will not
+  uninstall, and `scripts/serve.py` looks for `.venv` first, so the
+  dependencies landing there is also what lets `.mcp.json` start a working
+  server. It runs only when `CLAUDE_CODE_REMOTE` is set — a hook that rebuilds
+  an environment under somebody's feet is a hook that breaks their setup — skips
+  the Windows-only `inventor` extra, and treats a private submodule it cannot
+  fetch as a warning rather than a failure.
+
+- **The one thing the `clients` probe cannot see, reported anyway.**
+  `.mcp.json` names a bare `"python"`, and has to: the file is shared and the
+  interpreter is somewhere different on every machine. So the command is
+  resolved through `PATH`, the probe launches it from a shell where that
+  resolves, and a GUI-launched client — Claude Code inside the desktop app, an
+  IDE extension — is handed the environment Windows gives GUI processes
+  instead. On Windows the first `python` is frequently the WindowsApps execution
+  alias, which resolves in a console and not reliably outside one. A bare
+  command therefore probes green here and can still fail there, silently, which
+  is exactly the original symptom. The check now warns while still reporting
+  that the launch worked: reporting only what it could test would be a claim it
+  cannot support.
+
+- **A `.venv` that was also the running interpreter got a redundant subprocess.**
+  Found by a test that broke once the session hook created one: `candidates()`
+  deduped `sys.executable` behind the venv entry and left it flagged
+  not-current, so the launcher spawned a copy of the interpreter it was already
+  inside. Harmless and wrong. The earlier assertion ("the running interpreter is
+  tried last") was the wrong shape for the property; it is now stated as *it is
+  always a candidate and always flagged as itself*.
+
   Recorded for what it rules out: this SDK negotiates `2024-11-05`,
   `2025-03-26`, `2025-06-18` and its own latest, all four answered, so an
   unpinned `mcp>=1.2` moving under a working install is **not** what breaks a

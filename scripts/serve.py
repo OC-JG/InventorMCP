@@ -72,13 +72,20 @@ def candidates() -> list[tuple[str, bool]]:
     """
     found: list[tuple[str, bool]] = []
     seen: set[str] = set()
-    for python, is_current in ((p, False) for p in VENV_PYTHONS):
+    for python in VENV_PYTHONS:
         # A venv interpreter that is not there is not a candidate.
         if not python.is_file():
             continue
-        if str(python) not in seen:
-            seen.add(str(python))
-            found.append((str(python), is_current))
+        text = str(python)
+        if text in seen:
+            continue
+        seen.add(text)
+        # The venv may *be* what the client launched -- which is the arrangement
+        # this is trying to bring about, so it had better be recognised when it
+        # arrives. Compared as strings, exactly: an identical path is the same
+        # interpreter, and `resolve()` is what must not be used here, for the
+        # reason in the docstring above.
+        found.append((text, text == sys.executable))
     # Last, because it is the one already known to be whatever the client
     # happened to launch -- which is the thing being worked around.
     if sys.executable and sys.executable not in seen:

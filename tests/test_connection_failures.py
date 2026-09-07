@@ -346,13 +346,30 @@ class TestTheLauncher:
         current = [python for python, is_current in found if is_current]
         assert current == [sys.executable], found
 
-    def test_the_running_interpreter_is_tried_last(self):
-        """It is the one the client happened to launch, which is the thing being
-        worked around. The venv the installer fills goes first."""
+    def test_the_running_interpreter_is_always_a_candidate_and_flagged(self):
+        """Whatever the client launched must be offered, and recognised as
+        itself. Written as one property rather than "it is last", which was the
+        earlier assertion and was wrong the moment a `.venv` existed *and* was
+        the interpreter running: the venv entry then deduped `sys.executable`
+        away and carried `False`, so the launcher spawned a redundant copy of
+        the very interpreter it was already inside.
+        """
         launcher = load_launcher()
         found = launcher.candidates()
+
         assert found, "sys.executable is always a candidate"
-        assert found[-1] == (sys.executable, True), found
+        assert sys.executable in [python for python, _ in found]
+        current = [python for python, is_current in found if is_current]
+        assert current == [sys.executable], found
+
+    def test_the_venv_is_tried_before_whatever_the_client_launched(self):
+        """The installer fills `.venv`, so it is the best guess -- and the
+        interpreter the client happened to pick is the thing being worked
+        around, so it goes last."""
+        launcher = load_launcher()
+        found = [python for python, _ in launcher.candidates()]
+        if len(found) > 1:
+            assert found[-1] == sys.executable, found
 
     def test_it_asks_for_the_import_that_actually_breaks(self):
         """Both ``mcp`` and the package, not just the package.
@@ -1005,3 +1022,155 @@ class TestStartingIsNotServing:
         }
         assert "mcp.client.stdio" not in imported
         assert "mcp.types" in imported, "the protocol version should come from the SDK"
+
+
+class TestTheOneThingTheProbeCannotSee:
+    """A bare command probes green from a shell and can still fail under a client.
+
+    `.mcp.json` says `"command": "python"`. The probe launches it and it serves,
+    because the probe runs from a shell whose PATH resolves `python`. A
+    GUI-launched client — Claude Code running inside the desktop app, an IDE
+    extension — is handed the environment Windows gives GUI processes, which is
+    not that PATH. On Windows the gap is sharper: the first `python` on many
+    machines is the WindowsApps execution alias, which resolves for a console
+    session and not reliably for a process spawned without that context.
+
+    So the check reports it while still saying the launch worked. Reporting only
+    what it could test would be a claim it cannot support, and this is the one
+    failure mode left that looks exactly like the original symptom: a server
+    that never speaks, and a client that says only that the connection closed.
+    """
+
+    def test_a_bare_command_is_recognised(self):
+        from inventor_mcp import preflight
+
+        assert preflight.resolves_by_path("python")
+        assert preflight.resolves_by_path("python.exe")
+
+    def test_a_path_is_not(self):
+        """Both separators, because the string comes out of a config file that
+        may name a Windows path while something on another platform reads it."""
+        from inventor_mcp import preflight
+
+        assert not preflight.resolves_by_path("C:\\Users\\J\\.venv\\python.exe")
+        assert not preflight.resolves_by_path("/usr/local/bin/python")
+        assert not preflight.resolves_by_path(".venv/bin/python")
+        assert not preflight.resolves_by_path(".venv\\Scripts\\python.exe")
+
+    def test_the_repos_own_config_is_the_case_in_point(self):
+        """Kept honest deliberately. `.mcp.json` cannot name an absolute path --
+        it is shared, and the interpreter is somewhere different on every
+        machine -- so the fragility is real and permanent, and the doctor says
+        so rather than the README alone."""
+        config = json.loads((ROOT / ".mcp.json").read_text(encoding="utf-8"))
+        from inventor_mcp import preflight
+
+        command = config["mcpServers"]["inventor"]["command"]
+        assert preflight.resolves_by_path(command), (
+            "if .mcp.json ever names an absolute interpreter this test should "
+            "go, along with the warning it justifies"
+        )
+
+    def test_a_working_bare_command_still_warns(self, tmp_path, monkeypatch):
+        from inventor_mcp import preflight
+
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps({"mcpServers": {"inventor": {
+            "command": "python", "args": ["-m", "inventor_mcp"],
+        }}}), encoding="utf-8")
+        monkeypatch.setattr(preflight, "client_configs", lambda: [path])
+        monkeypatch.setattr(preflight, "probe", lambda argv: (True, "serves"))
+        monkeypatch.delenv(preflight.DOCTOR_CHILD, raising=False)
+
+        finding = preflight.check_registration()
+        assert finding.status == preflight.WARN
+        assert "PATH" in finding.detail
+        assert "absolute path" in (finding.hint or "")
+
+    def test_an_absolute_command_that_works_is_simply_ok(self, tmp_path, monkeypatch):
+        """The warning has to be about the bare name, not about every success,
+        or it is noise that gets tuned out."""
+        from inventor_mcp import preflight
+
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps({"mcpServers": {"inventor": {
+            "command": sys.executable, "args": ["-m", "inventor_mcp"],
+        }}}), encoding="utf-8")
+        monkeypatch.setattr(preflight, "client_configs", lambda: [path])
+        monkeypatch.setattr(preflight, "probe", lambda argv: (True, "serves"))
+        monkeypatch.delenv(preflight.DOCTOR_CHILD, raising=False)
+
+        assert preflight.check_registration().status == preflight.OK
+
+    def test_a_launch_that_fails_outright_still_fails(self, tmp_path, monkeypatch):
+        """A bare command that does not even start is a failure, not a warning
+        about a hypothetical."""
+        from inventor_mcp import preflight
+
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps({"mcpServers": {"inventor": {
+            "command": "python", "args": ["-m", "inventor_mcp"],
+        }}}), encoding="utf-8")
+        monkeypatch.setattr(preflight, "client_configs", lambda: [path])
+        monkeypatch.setattr(preflight, "probe", lambda argv: (False, "died"))
+        monkeypatch.delenv(preflight.DOCTOR_CHILD, raising=False)
+
+        assert preflight.check_registration().status == preflight.FAIL
+
+
+class TestTheHookThatMakesAWebSessionRun:
+    """A fresh container clones the repo and installs nothing.
+
+    So `inventor_mcp` does not import, `pytest` collects nothing, and the
+    `inventor` server in `.mcp.json` exits before it can speak -- reported as
+    `CONNECTION_CLOSED` with no reason attached, which is the same four words
+    this whole file is about, from a different cause.
+    """
+
+    HOOK = pathlib.Path("/home/user/InventorMCP/.claude/hooks/session-start.sh")
+
+    def hook(self) -> str:
+        return (ROOT / ".claude" / "hooks" / "session-start.sh").read_text(
+            encoding="utf-8"
+        )
+
+    def test_it_is_registered(self):
+        settings = json.loads(
+            (ROOT / ".claude" / "settings.json").read_text(encoding="utf-8")
+        )
+        commands = [
+            hook["command"]
+            for entry in settings["hooks"]["SessionStart"]
+            for hook in entry["hooks"]
+        ]
+        assert any("session-start.sh" in c for c in commands), commands
+
+    def test_it_is_executable(self):
+        assert (ROOT / ".claude" / "hooks" / "session-start.sh").stat().st_mode & 0o111
+
+    def test_it_leaves_a_local_machine_alone(self):
+        """A hook that rebuilds an environment under somebody's feet is a hook
+        that breaks their setup. The Windows machine with the CAD seat has a
+        real one already."""
+        assert "CLAUDE_CODE_REMOTE" in self.hook()
+
+    def test_it_installs_into_a_venv_that_the_launcher_will_find(self):
+        """Two problems, one place. `pip install -e .` into the container's own
+        Python fails on a distro-managed package pip will not uninstall; and
+        `scripts/serve.py` looks for `.venv` first, so the dependencies landing
+        there is also what lets `.mcp.json` start a working server."""
+        hook = self.hook()
+        assert "venv" in hook
+        assert ".venv/bin/python -m pip install --quiet -e \".[dev]\"" in hook
+
+    def test_it_does_not_ask_for_the_windows_only_extra(self):
+        """pywin32 is Windows-only, and asking for it on Linux fails the
+        install for a backend that could not work there anyway."""
+        assert '[inventor,dev]' not in self.hook()
+
+    def test_a_private_submodule_that_cannot_be_fetched_is_not_fatal(self):
+        """The analyser is a separate private repository. Everything except the
+        DFM tools works without it, and `--doctor` names the fix."""
+        hook = self.hook()
+        assert "git submodule update --init --depth 1 dfm" in hook
+        assert "|| echo" in hook

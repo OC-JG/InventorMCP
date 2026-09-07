@@ -496,6 +496,30 @@ def _died(child: subprocess.Popen) -> str:
     return f"{ending}: {reason}" if reason else f"{ending} silently"
 
 
+def resolves_by_path(command: str) -> bool:
+    """Whether *command* is a bare name that has to be found on ``PATH``.
+
+    The one thing a probe from here cannot test, and the reason it is reported
+    anyway. This check launches the config's command from a shell, where
+    ``python`` resolves to whatever that shell's ``PATH`` says. A GUI-launched
+    client -- Claude Code running inside the desktop app, an IDE extension, the
+    desktop app itself -- is handed the environment Windows gives GUI processes,
+    which is not the one an interactive ``cmd`` gets. On Windows the gap is
+    sharper still: the first ``python`` on many machines is the WindowsApps
+    execution alias, which resolves for the logged-in user in a console and not
+    reliably for a process spawned without that context.
+
+    So a bare command probes green here and can still fail there, silently,
+    which a client reports as ``CONNECTION_CLOSED``. An absolute path removes
+    the variable rather than reasoning about it.
+
+    Both separators are checked rather than using ``os.path``: this is asked
+    about a string out of a config file, which may name a Windows path while
+    something reads it on another platform.
+    """
+    return not any(separator in command for separator in ("/", "\\"))
+
+
 def probe(argv: list[str]) -> tuple[bool, str]:
     """Whether the client's own command produces a server that answers.
 
@@ -573,6 +597,8 @@ def check_registration() -> Finding:
 
     working: list[str] = []
     broken: list[str] = []
+    #: Registrations that probe green but name a command only PATH can find.
+    fragile: list[str] = []
     for config in configs:
         try:
             entries = server_entries(config)
@@ -585,7 +611,10 @@ def check_registration() -> Finding:
             # version the two ends settled on, which is the first thing worth
             # knowing when a client that can start the server still will not
             # talk to it.
-            (working if ok else broken).append(f"{config.name}:{name} {detail}")
+            where = f"{config.name}:{name}"
+            (working if ok else broken).append(f"{where} {detail}")
+            if ok and resolves_by_path(argv[0]) and argv[0] not in fragile:
+                fragile.append(argv[0])
 
     if broken:
         return Finding(
@@ -602,6 +631,24 @@ def check_registration() -> Finding:
             f"{len(configs)} config(s) found, none registering this server",
             hint="Register it with the absolute path to this interpreter: "
                  f"`{sys.executable} -m inventor_mcp`",
+        )
+    if fragile:
+        # Green, and reported anyway. This is the one failure mode the probe
+        # above is structurally unable to see, so silence here would be a claim
+        # the check cannot support.
+        return Finding(
+            "clients", WARN,
+            "; ".join(working) + " -- but `"
+            + "`, `".join(fragile)
+            + "` is resolved through PATH, which this cannot test",
+            hint="It starts when launched from a shell, which is how this was "
+                 "just tested, and that is not how your client launches it. A "
+                 "GUI-launched client gets the environment Windows gives GUI "
+                 "processes, not your shell's PATH -- and on Windows the first "
+                 "`python` is often the WindowsApps alias, which does not "
+                 "resolve reliably outside a console. This check cannot "
+                 "reproduce that, so it cannot clear it. Use an absolute path: "
+                 f"`{sys.executable}`.",
         )
     return Finding("clients", OK, "; ".join(working))
 
@@ -883,6 +930,29 @@ def report(findings: list[Finding], out=None) -> None:
         print("", file=stream)
         for finding in needs_work:
             print(f"{finding.name}: {finding.hint}", file=stream)
+
+    # Said before the verdict, because it changes what the verdict means. A
+    # report of eight green lines and "everything the server needs is here" is
+    # true of the package and wildly misleading about the machine: the whole
+    # point of this server is driving a real CAD seat, and on a host with no
+    # Windows there is no seat to drive and never will be. That is not a fault
+    # to repair -- it is the wrong machine -- so it is stated rather than
+    # failed, and stated where it cannot be read past.
+    if sys.platform != "win32":
+        print("", file=stream)
+        print(
+            f"Note: this is {sys.platform}, so there is no Inventor here and "
+            "cannot be.\n"
+            "  Everything below concerns the simulator. Recipes validate and "
+            "the checks run,\n"
+            "  but nothing reaches a CAD seat: no part is built and no file is "
+            "written. To\n"
+            "  drive Inventor, the server has to run on the Windows machine "
+            "that has it --\n"
+            "  a client in a container or a browser session cannot reach one "
+            "from here.",
+            file=stream,
+        )
 
     print("", file=stream)
     broken = [f for f in findings if f.status == FAIL]
