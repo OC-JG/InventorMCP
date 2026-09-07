@@ -2442,10 +2442,15 @@ class MockBackend(Backend):
         centroid's whole job is to move when material moves, and a box centre
         moves for nothing: a 120x80x10 plate with six 5 mm bores on a circle
         30 mm off-axis reported ``(0, 0, 0.5)``, and putting the circle at 45 mm
-        reported ``(0, 0, 0.5)`` again. Inventor differs by 0.37 mm in X on that
-        part, and `scripts/live_acceptance.py` judges the bolt-circle axis by
-        exactly this shift -- so the fake centroid did not merely mislead, it
-        failed a check the work axis had passed.
+        reported ``(0, 0, 0.5)`` again. A real centroid does neither -- the bores
+        remove 1.178097 cm^3 centred on the circle, which at 30 mm puts it
+        0.37283 mm off the box centre in X and moves it a further 0.18640 mm at
+        45. Derived and not measured: the live run of 2026-09-07 stopped at
+        defect 8, so no seat has read this figure off Inventor yet.
+
+        `scripts/live_acceptance.py` judges the bolt-circle axis by exactly that
+        shift, so the invented centroid did not merely mislead -- it failed a
+        check the work axis had passed.
 
         Nothing is reported instead, because there is nothing honest to report.
         The ledger of signed prisms could give a real centroid for a prismatic

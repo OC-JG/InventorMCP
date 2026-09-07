@@ -5,7 +5,10 @@ part's centroid. That is not an approximation of a centroid, it is a different
 quantity: a centroid moves when material moves, a box centre does not move for
 a void at all. The plate below is the reproduction -- six 5 mm bores on a circle
 whose centre is a parameter -- and it reported `(0, 0, 0.5)` for every value of
-that parameter, where Inventor differs by 0.37 mm in X between two of them.
+that parameter. A real centroid sits 0.37283 mm off that in X at `bolt_x` 30 and
+moves a further 0.18640 mm at 45, both derived from the arithmetic the
+acceptance script asserts against rather than read off a seat: the live run of
+2026-09-07 stopped at defect 8 without reaching this check.
 
 `scripts/live_acceptance.py`'s `check_work_geometry` is what made it expensive
 rather than merely untidy. It judges the off-centre bolt-circle axis by how far
