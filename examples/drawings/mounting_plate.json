@@ -1,0 +1,52 @@
+{
+  "name": "MountingPlateDrawing",
+  "description": "A three-view drawing of examples/mounting_plate.json, dimensioning every parameter that plate declares. Written against a real shipped part rather than a fixture, because a schema nobody has pointed at a whole recipe is a schema whose gaps have not been found yet -- the argument ARCHITECTURE.md makes for keeping the examples executable. The hole positions are dimensioned as edge_margin rather than as a pitch, which is how the part drives them: a drawing that stated the 96 mm pitch instead would be stating a number the part derives, and `rehearse_drawing_recipe` would report the margin as undimensioned even though the sheet pins the holes. Both readings are defensible on paper and only one of them matches the model, which is the sort of thing this check exists to make visible.",
+  "part": "MountingPlate",
+  "units": "mm",
+  "sheet": "a3",
+  "template": "ISO.idw",
+  "projection": "first_angle",
+  "scale": "1:1",
+  "views": [
+    {
+      "name": "FRONT",
+      "direction": "front",
+      "at": [
+        100,
+        180
+      ],
+      "dimension": [
+        "plate_w",
+        "thk"
+      ]
+    },
+    {
+      "name": "TOP",
+      "direction": "top",
+      "at": [
+        100,
+        80
+      ],
+      "dimension": [
+        "plate_d",
+        "hole_d",
+        "edge_margin",
+        "corner_r"
+      ]
+    },
+    {
+      "name": "ISO",
+      "direction": "iso",
+      "at": [
+        280,
+        180
+      ],
+      "scale": 0.5
+    }
+  ],
+  "notes": [
+    "ALL DIMENSIONS IN MILLIMETRES",
+    "REMOVE ALL BURRS AND SHARP EDGES",
+    "MATERIAL AND FINISH PER PART RECORD"
+  ]
+}

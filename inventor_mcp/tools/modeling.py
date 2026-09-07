@@ -103,6 +103,49 @@ def register(server: Any, session: Session) -> None:
         return result
 
     @server.tool(
+        description="Rehearse a DRAWING of a part, against the part it draws.\n\n"
+        "The other direction from `check_against_drawing`, which reads a sheet "
+        "somebody else produced. This takes a `drawing` recipe -- sheet, "
+        "projection, views by direction, and for each view WHICH OF THE PART'S "
+        "PARAMETERS it dimensions -- and works out what that sheet would say, "
+        "then holds it against the part.\n\n"
+        "Naming parameters rather than geometry is the point: the part's "
+        "parameters are its design intent, so a drawing recipe knows which "
+        "dimensions matter instead of inferring them.\n\n"
+        "It reports the `ledger` -- every view and every dimension it states, "
+        "resolved to a number -- and a `round_trip`: dimensions that reconcile "
+        "with the part (`matched`), dimensions stating a value the part does not "
+        "have (`states_what_the_part_does_not_have`), and the useful one, "
+        "`undimensioned` -- numbers the part states that the sheet never gives. "
+        "That last is the drawing fault you cannot see by looking, because every "
+        "dimension that is on the sheet is correct.\n\n"
+        "Nothing is drawn: no sheet is created and no Inventor is needed. See "
+        "`drawing_recipe_schema` for the shape.",
+    )
+    @guard
+    def rehearse_drawing_recipe(
+        drawing: Annotated[dict[str, Any], Field(
+            description="The drawing recipe. See `drawing_recipe_schema`.")],
+        recipe: Annotated[dict[str, Any], Field(
+            description="The part recipe the drawing is of.")],
+    ) -> dict[str, Any]:
+        from ..drafting import rehearse_drawing
+        from ..schema import DrawingRecipe
+
+        return rehearse_drawing(
+            DrawingRecipe.model_validate(drawing), PartRecipe.model_validate(recipe))
+
+    @server.tool(
+        description="The JSON Schema for a drawing recipe -- what to write when you "
+        "want a drawing OF a part, as opposed to reading one somebody sent you.",
+    )
+    @guard
+    def drawing_recipe_schema() -> dict[str, Any]:
+        from ..schema import DrawingRecipe
+
+        return {"json_schema": DrawingRecipe.model_json_schema()}
+
+    @server.tool(
         description="The JSON Schema for a drawing reading -- what to write down "
         "when you look at a 2D drawing, before writing any recipe.",
     )

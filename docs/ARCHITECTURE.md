@@ -170,8 +170,8 @@ number that says how much a rehearsal is worth.
 
 ### `tools/` — the MCP surface
 
-Thirty tools rather than one per feature type -- thirty-one when the escape
-hatch is on. Feature creation goes through `apply_operations` with the same
+Thirty-two tools rather than one per feature type -- thirty-three when the
+escape hatch is on. Feature creation goes through `apply_operations` with the same
 operation objects a recipe uses, which keeps the tool list small and means there
 is one syntax to learn instead of two. Most of the count is not modelling: seven
 document-lifecycle tools and eleven manufacturability ones.
@@ -201,13 +201,26 @@ copy stays in the list.
 
 - **Assemblies.** Parts first. The recipe schema has no `iam` concept and adding one
   properly means constraints between components, which is a second design problem.
-- **Producing drawings.** No drawing views, no sheets, no title blocks -- the
-  same reasoning as assemblies. *Reading* one is a different thing and is
-  supported: `check_against_drawing` compares a `DrawingReading` against a
-  recipe, and `drawing.py` holds the schema for it. The distinction is the point
-  of the design, and `docs/DECISIONS.md` argues it under "A drawing is read, not
-  traced": tracing a drawing's outlines gives exact geometry and no parameters,
-  which is the one thing this project exists not to produce.
+- **Producing drawings** -- *still true of the sheet and no longer true of the
+  description of one.* Nothing creates a `DrawingDocument`: no views are placed,
+  no dimensions drawn, no title block filled in. What landed on 2026-09-07 is
+  the other half, and it is the half that needs no Inventor: `DrawingRecipe` is
+  a second root in `schema.py` beside `PartRecipe`, and `drafting.py` rehearses
+  one against the part it draws -- a ledger of which views state which
+  dimensions, and no picture.
+
+  Two modules, two directions, and the names are worth keeping straight.
+  `drawing.py` **reads**: a `DrawingReading` is what somebody wrote down looking
+  at a sheet, and `check_against_drawing` holds a recipe up to it. `drafting.py`
+  **produces**: it says what a sheet would state and puts that through
+  `drawing.compare`, the same function, with only its vocabulary turned round.
+
+  The 2D-to-3D direction is still the one `docs/DECISIONS.md` argues for under
+  "A drawing is read, not traced", and this does not contradict it: tracing a
+  drawing's outlines gives geometry with no parameters, while *generating* a
+  drawing from a part whose parameters are known is the opposite problem. What
+  the generating direction is for is the fault reading cannot find -- a number
+  the part states that the sheet never gives.
 - **Sheet metal.** A different feature set with its own rules, and none of it is
   reachable from the recipe schema.
 - **A real geometry kernel in the mock.** The point of the mock is fast feedback on

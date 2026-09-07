@@ -1193,3 +1193,138 @@ class PartRecipe(Base):
 def recipe_json_schema() -> dict:
     """The recipe JSON Schema, published as an MCP resource."""
     return PartRecipe.model_json_schema()
+
+
+# ---------------------------------------------------------------------------
+# Drawings
+# ---------------------------------------------------------------------------
+
+#: Which way a base view looks at the part. The names are the ones a drawing
+#: uses, and they are checked against the part rather than trusted: defect 4 in
+#: `docs/FEATURE_COVERAGE.md` is `capture_view`'s orientation names not
+#: describing what they return, and a drawing view is a different API reached
+#: the same way -- through a name nobody here has measured.
+ViewDirection = Literal["front", "rear", "top", "bottom", "left", "right", "iso"]
+
+
+class DrawingViewSpec(Base):
+    """One view on the sheet, and which of the part's parameters it dimensions.
+
+    `dimension` is the differentiator and the reason this schema exists. A
+    drawing generator has to decide which dimensions matter, and the field's
+    tools guess -- reaching 80-90% by inference from the geometry. A recipe does
+    not have to guess: the part's parameters *are* its design intent, so naming
+    them is saying "these are the numbers that matter", which is a statement the
+    author already made when they wrote the part.
+
+    So an entry here is normally a parameter name. An expression of parameters
+    is accepted too, for the dimension a drawing states that the model derives
+    -- an overall width of `plate_w + 2 * wall`, say -- and it is resolved
+    through the same evaluator as every other number here.
+    """
+
+    name: Name = Field(description="The view's label on the sheet: 'FRONT', 'TOP'.")
+    direction: ViewDirection = Field(
+        "front", description="Which way this view looks at the part."
+    )
+    at: Point2D = Field(
+        default_factory=lambda: [0.0, 0.0],
+        description="Where on the sheet the view's centre goes, in sheet units.",
+    )
+    scale: ValueSpec = Field(
+        1.0,
+        description="View scale as a factor: 0.5 is half size. Written on the "
+        "sheet as a ratio; given here as a number so it can be an expression.",
+    )
+    dimension: list[str] = Field(
+        default_factory=list,
+        description="Parameters to dimension on this view, or expressions of them. "
+        "A parameter named here must exist in the part.",
+    )
+    reference: list[str] = Field(
+        default_factory=list,
+        description="The same, for dimensions shown in brackets: they restate "
+        "something fixed elsewhere and drive nothing.",
+    )
+    style: Literal["hidden_line", "hidden_line_removed", "shaded"] = Field(
+        "hidden_line_removed", description="How the view is drawn."
+    )
+
+
+class DrawingRecipe(Base):
+    """A description of a drawing *of* a part, which is a different noun.
+
+    The second root in this schema, and the reason there had to be one:
+    `PartRecipe` describes a solid, and a drawing describes views of one. Nothing
+    below the schema changes -- the resolver, the expression evaluator and the
+    unit table are the same, and a dimension's value is `Resolved` like every
+    other number, carrying the expression that produced it.
+
+    What this does *not* do is draw anything. It says what a drawing should say,
+    which is enough to check it against the part before a CAD seat is spent on
+    it -- the same argument `validate_recipe` makes for a part. Producing the
+    sheet in Inventor is a separate piece of work and is not written yet.
+    """
+
+    name: str = Field("Drawing", description="Drawing name, also the default file name.")
+    description: str = Field("", description="What the drawing is for, in one line.")
+    part: str | None = Field(
+        None,
+        description="Name of the part this draws. Informational: the part is "
+        "supplied to the rehearsal as its own recipe.",
+    )
+    units: LengthUnit = Field(
+        "mm", description="Unit the dimensions on this sheet are read in."
+    )
+    angle_units: AngleUnit = Field("deg", description="Unit for angle dimensions.")
+    sheet: Literal["a0", "a1", "a2", "a3", "a4", "custom"] = Field(
+        "a3", description="Sheet size. 'custom' needs `sheet_size`."
+    )
+    sheet_size: Point2D | None = Field(
+        None, description="For 'custom': [width, height] in `units`."
+    )
+    template: str | None = Field(
+        None,
+        description="Path to a .dwg or .idw template carrying the title block. "
+        "Without one the sheet has no title block, which is not a drawing "
+        "anybody can send to a factory.",
+    )
+    projection: Literal["first_angle", "third_angle"] = Field(
+        "third_angle",
+        description="Which side of the front view the right-hand view goes on. "
+        "There is no 'unknown' here: a drawing being *produced* has to pick one, "
+        "and getting it wrong mirrors the part for whoever reads it.",
+    )
+    scale: str = Field("1:1", description="The sheet's stated scale, as written.")
+    views: Annotated[list[DrawingViewSpec], Field(min_length=1)] = Field(
+        description="At least one view. A drawing with no view is a title block."
+    )
+    notes: list[str] = Field(
+        default_factory=list,
+        description="The note block: finishes, general tolerances, 'ALL FILLETS R2 "
+        "UNLESS STATED'.",
+    )
+
+    @model_validator(mode="after")
+    def _custom_sheets_have_a_size(self) -> "DrawingRecipe":
+        if self.sheet == "custom" and self.sheet_size is None:
+            raise ValueError("A 'custom' sheet needs `sheet_size` as [width, height].")
+        if self.sheet != "custom" and self.sheet_size is not None:
+            raise ValueError(
+                f"`sheet_size` only means something on a 'custom' sheet, not {self.sheet!r}."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _view_names_are_distinct(self) -> "DrawingRecipe":
+        """Two views with one name cannot both be referred to, or told apart.
+
+        A dimension is reported against the view it appears on, so duplicate
+        names would make the report ambiguous about a sheet that is itself fine
+        -- which is worse than refusing it.
+        """
+        seen = [view.name for view in self.views]
+        repeated = sorted({name for name in seen if seen.count(name) > 1})
+        if repeated:
+            raise ValueError(f"Two or more views share a name: {', '.join(repeated)}.")
+        return self

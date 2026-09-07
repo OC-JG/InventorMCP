@@ -5,6 +5,70 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 ## Unreleased
 
 ### Added
+- **Phase 3 opens: `DrawingRecipe`, a second root beside `PartRecipe`.** A
+  drawing describes *views of* a solid rather than a solid, which is a different
+  noun at the top of the document — the first thing in this project that
+  `PartRecipe` could not be stretched to cover.
+
+  `{"name": ..., "sheet": "a3", "projection": "first_angle", "views": [...]}`,
+  and each view carries `direction`, where it sits on the sheet, its scale, and
+  **`dimension` — which of the part's parameters it states.** That last is the
+  differentiator and the reason the schema is shaped this way: a drawing
+  generator has to decide which dimensions matter, and the field's tools infer
+  it from the geometry and reach 80–90%. A recipe does not have to infer
+  anything, because the part's parameters *are* the design intent. Naming them
+  is a statement the author already made when they wrote the part.
+
+  **Nothing is drawn.** No `DrawingDocument`, no views placed, no title block —
+  that API has not been read here and is the largest single piece left in the
+  project. What landed is the description of a drawing and the rehearsal of one,
+  which is the half that needs no Inventor and is worth having on its own for
+  the same reason `validate_recipe` is.
+
+  **`drafting.py` is the new module, and the naming matters.** `drawing.py`
+  *reads* — a `DrawingReading` is what somebody wrote down looking at a sheet.
+  `drafting.py` *produces* — it works out what a sheet would say and puts that
+  through `drawing.compare`, the same function the reading direction uses,
+  reused rather than reimplemented. Only its vocabulary is translated.
+
+  **What the ledger finds on its own is the point.** A drawing can be wrong in
+  ways the part cannot correct, and the one that matters is **a number the part
+  states that the sheet never gives** — an under-dimensioned drawing. It is the
+  only drawing fault that is invisible when you look at the sheet, because every
+  dimension on it is correct, and a factory cannot make what a drawing does not
+  say. It falls out of `compare`'s `invented` list read the other way round: a
+  number the model asserts and the drawing does not give is not an invention on
+  anybody's part when the drawing is the thing being produced.
+
+  Reported as a **warning rather than a failure**, because it can be deliberate
+  — a value a general note covers, or one the reader is meant to derive — and a
+  check that refused a legitimate sheet would teach the reader to ignore it.
+  Alongside it, a second and independent reading of the same defect: which axes
+  of the part's overall size no dimension on the sheet states. Worked out from
+  the dimensions rather than from the views, deliberately, because a produced
+  view's extent is whatever the part is — so asking a view what it shows would
+  be asking the part about itself.
+
+  A value the part *derives* from numbers the sheet does state is not counted.
+  `examples/drawings/mounting_plate.json` is the case in point: the plate drives
+  its four holes from `edge_margin`, the sheet states that, and the 96 mm pitch
+  the part computes comes back under `derived` rather than as a fault. A drawing
+  stating the pitch and omitting the margin would pin the same holes and be
+  reported as leaving the margin undimensioned — both defensible on paper, only
+  one matching the model, which is exactly what this check makes visible.
+
+  Two tools: `rehearse_drawing_recipe` and `drawing_recipe_schema`, taking the
+  count to thirty-two. And a shipped drawing of a shipped part, because a schema
+  nobody has aimed at a whole eleven-parameter recipe is one whose gaps are
+  still hiding — the argument `ARCHITECTURE.md` already makes about keeping the
+  examples executable.
+
+  Everything below the schema is reused unchanged, which was the second Phase 3
+  item: `resolve.Resolver` seeded from the part's rehearsal resolves each
+  dimension, so it carries the expression that produced it, and a sheet can be
+  dimensioned in inches from a part modelled in millimetres.
+
+### Added
 - **`sketch_driven_pattern`: the last of Tier 2, and the only pattern here that
   places its occurrences.** Copies features to a sketch's points, for a layout
   that follows nothing in particular. The seed sits on `reference` and the

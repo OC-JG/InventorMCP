@@ -647,18 +647,50 @@ actually bitten.
 
 The market's 2026 feature, and a gap in the whole open-source field.
 
-- [ ] A **`DrawingRecipe` root** beside `PartRecipe`: sheet and template,
+- [x] A **`DrawingRecipe` root** beside `PartRecipe`: sheet and template,
       views by direction, and — the differentiator — **which parameters to
       dimension**. DraftAid guesses which dimensions matter and reaches
       80–90%; a recipe *knows*, because the parameters are the design intent.
-- [ ] Everything below the schema (resolution, expressions, units) is reused
+      *(2026-09-07. In `schema.py` beside `PartRecipe`, with `DrawingViewSpec`
+      carrying `dimension` as a list of parameter names — or expressions of
+      them, for the dimension a sheet states and the model derives.)*
+- [x] Everything below the schema (resolution, expressions, units) is reused
       unchanged; the drawing's dimension values are `Resolved` like every
-      other number.
+      other number. *(2026-09-07; `resolve.Resolver` seeded from the part's
+      rehearsal, so a dimension carries the expression that produced it and a
+      sheet can be read in inches from a part modelled in millimetres.)*
 - [ ] **The round trip is the test.** Build the part, generate the drawing,
       run `check_against_drawing` on the result, and every dimension has to
       reconcile with the part it was drawn from. Measured, not assumed.
-- [ ] Simulator support is a drawing *ledger* — which views, which dimensions,
-      which parameters reached them — not a renderer.
+
+      **Half of this is done and it is the half that needed no Inventor.**
+      `drafting.rehearse_drawing` turns the ledger into a `DrawingReading` and
+      puts it through `drawing.compare` — the same function the reading
+      direction uses, reused rather than reimplemented, with only its
+      vocabulary turned round. What is left is the *generate* step: nothing
+      creates a `DrawingDocument` yet, so no sheet has been produced and
+      nothing has been read back off one.
+- [x] Simulator support is a drawing *ledger* — which views, which dimensions,
+      which parameters reached them — not a renderer. *(2026-09-07, in
+      `drafting.py`. No picture, deliberately: the simulator's job is to say how
+      far a prediction is trusted, not to be a second renderer.)*
+
+      **What the ledger finds on its own is worth more than it sounds.** A
+      drawing can be wrong in ways the part cannot correct, and the one that
+      matters is a number the part states that the sheet never gives — an
+      under-dimensioned drawing. It is the only drawing fault that is invisible
+      when you look at the sheet, because every dimension on it is correct. It
+      falls out of `compare`'s `invented` list read in the other direction: a
+      number the model asserts and the drawing does not give is not an invention
+      when the drawing is the thing being produced, it is a dimension nobody
+      asked for.
+- [ ] **Produce the sheet in Inventor.** A `DrawingDocument`, sheets, base and
+      projected views, and dimensions placed against the geometry a named
+      parameter drives. None of it is written and none of that API has been read
+      here — `DocInfo.kind` already carries a document kind and
+      `kDrawingDocumentObject` is already in the constants table, which is the
+      whole of the groundwork. This is the largest single piece left in the
+      project and it is what closes the round trip above.
 
 ### Phase 4 — assemblies
 
