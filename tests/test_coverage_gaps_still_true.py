@@ -54,6 +54,10 @@ GAP_OPERATIONS = {
 #: here while the code agrees Inventor cannot do it.
 LIVE_ONLY_GAPS = {
     "`hole` still only drills the primary body — on Inventor": ("hole", "bodies"),
+    # The second: `WorkPlaneOp.kind` offers `angle` and `tangent`, the simulator
+    # accepts both, and the COM backend refuses both since 2026-09-08 -- it
+    # built an offset plane before that. Defect 12.
+    "`work_plane` builds only `offset` and `midplane` on Inventor": ("work_plane", "kind"),
 }
 
 

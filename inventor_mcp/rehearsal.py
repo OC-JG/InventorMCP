@@ -324,11 +324,14 @@ _MUST_MOVE = {"mirror", "rectangular_pattern", "circular_pattern"}
 #: because the alternative is a live run that fails on something already known.
 _KNOWN_BROKEN = {
     "thread": (
-        "Inventor 2027.1's ThreadFeatures has no CreateThreadDefinition -- its "
-        "only method is Add(Face, StartEdge, ThreadInfo, ...) and nothing in the "
-        "type library named for threads creates a ThreadInfo. Use a `hole` with "
-        "`tap` instead, which is measured and works: Inventor cuts the thread's "
-        "minor diameter and records the designation on the feature."
+        "The `thread` operation has never built on an Inventor. Its COM half now "
+        "follows the published call -- ThreadFeatures.Add(Face, StartEdge, "
+        "ThreadInfo, ...) with a ThreadInfo from HoleFeatures.CreateTapInfo, "
+        "which the published type hierarchy says is a StandardThreadInfo -- and "
+        "that route is unmeasured, so it stays refused until a live run says it "
+        "works. Use a `hole` with `tap` instead, which is measured and works: "
+        "Inventor cuts the thread's minor diameter and records the designation "
+        "on the feature."
     ),
 }
 
@@ -348,6 +351,24 @@ _KNOWN_BROKEN_FIELDS = {
         "carrying `bodies`, which is measured and works, or `combine` with "
         "operation 'cut'."
     ),
+    ("work_plane", "kind"): (
+        "The COM backend builds only 'offset' and 'midplane' work planes. Until "
+        "2026-09-08 a recipe asking for 'angle' or 'tangent' got an offset plane "
+        "and an `ok` from Inventor; it is refused there now -- defect 12 in "
+        "docs/FEATURE_COVERAGE.md. Inventor's call is "
+        "WorkPlanes.AddByLinePlaneAndAngle(axis, plane, angle) and the schema has "
+        "no field naming the axis, so the angled plane cannot be asked for yet. "
+        "The simulator files every work plane against its base whatever the kind, "
+        "so the rehearsal will not notice either. Use an offset plane and draw "
+        "the angle into the sketch on it."
+    ),
+}
+
+#: For a broken *field*, the values that are broken. A field absent from here
+#: is broken whenever it is set; `work_plane.kind` is set on every work plane
+#: (it defaults to 'offset') and is only broken for two of its four values.
+_KNOWN_BROKEN_VALUES: dict[tuple[str, str], set[str]] = {
+    ("work_plane", "kind"): {"angle", "tangent"},
 }
 
 
@@ -422,11 +443,22 @@ def rehearse(recipe: PartRecipe) -> dict[str, Any]:
                 "why": _KNOWN_BROKEN[op.op],
             })
         for (broken_op, field), why in _KNOWN_BROKEN_FIELDS.items():
-            if op.op == broken_op and getattr(op, field, None):
+            value = getattr(op, field, None) if op.op == broken_op else None
+            broken_values = _KNOWN_BROKEN_VALUES.get((broken_op, field))
+            if not value or (broken_values is not None and value not in broken_values):
+                continue
+            if broken_values is None:
                 report["warnings"].append({
                     "where": where,
                     "warning": f"`{broken_op}.{field}` does not work on the "
                                "Inventor this was measured against",
+                    "why": why,
+                })
+            else:
+                report["warnings"].append({
+                    "where": where,
+                    "warning": f"`{broken_op}.{field}` set to {value!r} does not "
+                               "work on the Inventor this was measured against",
                     "why": why,
                 })
         # Where the part was before this operation: a cut has to be judged

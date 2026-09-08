@@ -1551,10 +1551,58 @@ class TestEveryMutatingCallRebuilds:
             "as it was -- defect 9")
 
     def test_batch_is_still_what_updates(self):
-        """If the update moved out of `_batch`, the test above proves nothing."""
+        """If the update moved out of `_batch`, the test above proves nothing.
+
+        Since 2026-09-08 the call is `_update(document)`, which prefers the
+        published `Document.Update2` -- it returns False when a feature failed
+        to compute, where `Update` returns nothing -- and falls back to `Update`
+        on a release without it. Both spellings are pinned: the batch has to
+        call the helper, and the helper has to reach one of the two.
+        """
         import inspect
 
-        assert "document.Update()" in inspect.getsource(com.ComBackend._batch.__wrapped__)
+        assert "_update(document)" in inspect.getsource(com.ComBackend._batch.__wrapped__)
+        helper = inspect.getsource(com._update)
+        assert "Update2" in helper and "document.Update()" in helper
+
+
+class TestUpdateReportsFailures:
+    """`Document.Update2([AcceptErrorsAndContinue]) As Boolean` is documented to
+    return False when any entity failed to compute. `Update` says nothing, which
+    is why a feature that could not build was only ever found by the volume it
+    failed to move."""
+
+    class _Document:
+        DisplayName = "Part1"
+
+        def __init__(self, outcome, has_update2=True):
+            self.calls = []
+            self._outcome = outcome
+            if has_update2:
+                self.Update2 = self._update2
+
+        def _update2(self, accept_errors):
+            self.calls.append(("Update2", accept_errors))
+            return self._outcome
+
+        def Update(self):
+            self.calls.append(("Update",))
+
+    def test_update2_is_preferred_and_its_verdict_returned(self):
+        document = self._Document(True)
+        assert com._update(document) is True
+        assert document.calls == [("Update2", True)]
+
+    def test_a_failed_compute_is_logged_not_raised(self, caplog):
+        document = self._Document(False)
+        with caplog.at_level("WARNING", logger="inventor_mcp.com"):
+            assert com._update(document) is False
+        assert any("failed to compute" in record.message for record in caplog.records)
+
+    def test_a_release_without_update2_gets_update(self):
+        document = self._Document(None, has_update2=False)
+        assert com._update(document) is None
+        assert document.calls == [("Update",)]
 
 
 class TestWhyInventorRefusesAName:

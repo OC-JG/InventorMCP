@@ -99,7 +99,58 @@ FALLBACK: dict[str, int] = {
     # Both confirmed against 2027.1's type library by scripts/dump_constants.py.
     "kFullyConstrainedConstraintStatus": 51713,
     "kUnderConstrainedConstraintStatus": 51714,
-    # WeldBeadReliefShapeEnum placeholder kept out; add values here as needed.
+    # The other two members, from the published ConstraintStatusEnum page:
+    # `_over_constrained` compares against the first and had it as a literal.
+    "kOverConstrainedConstraintStatus": 51715,
+    "kUnknownConstraintStatus": 51716,
+    # ------------------------------------------------------------------------
+    # Everything below this line came from Autodesk's published 2027 reference
+    # (help.autodesk.com/cloudhelp/2027/ENU/Inventor-API, read 2026-09-08) and
+    # NOT from a type library. The entries above were measured against 2027.1's
+    # own library on 2026-08-21 and cross-checked against the same published
+    # pages on 2026-09-08: forty-eight of the fifty-one agreed exactly, and the
+    # three render styles are not in the pages that were read, so they stand on
+    # the measurement alone. A published number is a second, independent
+    # source; it is not a measurement, and `describe()` still reports these as
+    # "fallback" when they are used.
+    #
+    # HealthStatusEnum. Not in 2027.1's type library at all -- `dump_constants.py
+    # --find Health` finds nothing -- so this table is the only source there
+    # will ever be on that release, and 11778 is the value seven just-built,
+    # individually verified features all reported. The published page agrees:
+    # 11778 is kUpToDateHealth. `rebuild` translates the rest by these names.
+    "kUnknownHealth": 11777,
+    "kUpToDateHealth": 11778,
+    "kOutOfDateHealth": 11779,
+    "kDriverLostHealth": 11780,
+    "kInErrorHealth": 11781,
+    "kDeletedHealth": 11782,
+    "kCannotComputeHealth": 11783,
+    "kSuppressedHealth": 11784,
+    "kBeyondStopNodeHealth": 11785,
+    "kInconsistentHealth": 11786,
+    "kRedundantHealth": 11787,
+    "kNewlyAddedHealth": 11788,
+    "kInvalidLimitsHealth": 11789,
+    "kJointDOFLockedHealth": 11790,
+    # ViewOrientationTypeEnum, the members the drawing surface names and the
+    # five measured entries above do not cover. Front is 10764, out of
+    # sequence; the published page says so and so does the library.
+    "kBottomViewOrientation": 10757,
+    "kLeftViewOrientation": 10758,
+    "kIsoTopLeftViewOrientation": 10760,
+    "kArbitraryViewOrientation": 10763,
+    # DrawingViewStyleEnum, named by `_VIEW_STYLES`.
+    "kHiddenLineDrawingViewStyle": 32257,
+    "kHiddenLineRemovedDrawingViewStyle": 32258,
+    "kShadedDrawingViewStyle": 32259,
+    "kShadedHiddenLineDrawingViewStyle": 32261,
+}
+
+#: HealthStatusEnum value -> name, for reporting a status Inventor will not
+#: translate itself. Built from the table rather than typed twice.
+HEALTH_STATUS_NAMES: dict[int, str] = {
+    value: name for name, value in FALLBACK.items() if name.endswith("Health")
 }
 
 #: Fallback values that were once disputed, and are now measured.  Every entry

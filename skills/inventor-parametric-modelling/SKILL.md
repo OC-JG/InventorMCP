@@ -75,6 +75,12 @@ still build the wrong part, and these are the ways it does:
   honours it, so the volumes will agree and the part will be wrong. Cut the
   second body with an `extrude` carrying `bodies`, or `combine` with
   `operation: "cut"`.
+- **``` `work_plane.kind` set to 'angle' does not work on the Inventor this was measured against ```**
+  — and the same for `'tangent'`. The COM backend builds only `offset` and
+  `midplane` planes and now refuses the other two; until 2026-09-08 it built an
+  offset plane instead and reported success. The simulator files every work
+  plane against its base whatever the kind, so the volumes will agree there
+  too. Use an offset plane and draw the angle into the sketch on it.
 
 Then read `steps` and check each `volume_change_cm3` against what you meant. A
 9 mm hole 6 mm deep removes π×4.5²×6 = 0.382 cm³. If the rehearsal says
