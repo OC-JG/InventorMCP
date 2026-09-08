@@ -48,6 +48,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -103,21 +104,39 @@ def typeinfo(obj: Any) -> None:
         return
     print(f"      {attr.cFuncs} function(s), {attr.cVars} variable(s)")
     for index in range(attr.cFuncs):
+        # One try around the whole member, not around the lookup alone: the
+        # first version guarded `GetFuncDesc` and then read `desc.cParams`
+        # outside the guard, which does not exist -- `PyFUNCDESC` carries
+        # `args` and `cParamsOpt` -- so an AttributeError of mine killed the
+        # run after printing one line. A probe that dies on its own formatting
+        # wastes the seat it was spending.
         try:
             desc = info.GetFuncDesc(index)
             name = info.GetNames(desc.memid)[0]
-        except Exception:
+        except Exception as exc:
+            print(f"      function {index} unreadable: {type(exc).__name__}: {exc}")
             continue
         if name in BORING:
             continue
-        kind = INVOKE.get(desc.invkind, str(desc.invkind))
-        print(f"      {name:34s} {kind:6s} {desc.cParams} arg(s)")
+        # The name and the kind are what this is for, so they are printed even
+        # if the argument count cannot be worked out. `getattr` throughout
+        # because a guessed attribute is what broke the last run: `cParams` is
+        # not on `PyFUNCDESC` at all.
+        kind = INVOKE.get(getattr(desc, "invkind", None), str(getattr(desc, "invkind", "?")))
+        args = getattr(desc, "args", None)
+        optional = getattr(desc, "cParamsOpt", 0) or 0
+        if args is None:
+            counted = "argument count unavailable"
+        else:
+            counted = f"{len(args)} arg(s)"
+            if optional:
+                counted += f", {optional} optional"
+        print(f"      {name:34s} {kind:6s} {counted}")
     for index in range(attr.cVars):
         try:
-            name = info.GetNames(info.GetVarDesc(index).memid)[0]
-        except Exception:
-            continue
-        print(f"      {name:34s} field")
+            print(f"      {info.GetNames(info.GetVarDesc(index).memid)[0]:34s} field")
+        except Exception as exc:
+            print(f"      variable {index} unreadable: {type(exc).__name__}: {exc}")
 
 
 def members(obj: Any, label: str, dynamic: Any) -> None:
@@ -177,42 +196,84 @@ def probe_templates(backend: Any) -> None:
     print("=" * 70)
     print("THE DRAWING TEMPLATE")
     print("=" * 70)
-    manager = backend._require_app().FileManager
+    app = backend._require_app()
+    manager = app.FileManager
     drawing_type = backend._k("kDrawingDocumentObject")
     print(f"    kDrawingDocumentObject   {drawing_type}")
+    folders: list[str] = []
     try:
-        print(f"    GetTemplateFile          {manager.GetTemplateFile(drawing_type)}")
+        default = str(manager.GetTemplateFile(drawing_type))
+        print(f"    GetTemplateFile          {default}")
+        folders.append(os.path.dirname(default))
     except Exception as exc:
         print(f"    GetTemplateFile raises: {exc}")
-    folder = ""
-    for name in ("TemplatesPath", "DesignDataPath", "WorkspacePath"):
-        try:
-            value = getattr(manager, name)
-        except Exception as exc:
-            print(f"    {name:24s} raises: {type(exc).__name__}: {exc}")
+    # `FileManager.TemplatesPath` does not exist on 2027.1 -- measured, and it
+    # raises the same `<unknown>.X` AttributeError that reaching across the
+    # apartment does, which is why this asks the *project* as well. Inventor
+    # documents these three as the project's, and the first probe asked the
+    # wrong object.
+    for owner, label in ((manager, "FileManager"),
+                         (_project(app), "ActiveDesignProject")):
+        if owner is None:
+            print("    ActiveDesignProject      unreachable")
             continue
-        print(f"    {name:24s} {value}")
-        if name == "TemplatesPath":
-            folder = str(value)
-    if not folder:
+        for name in ("TemplatesPath", "DesignDataPath", "WorkspacePath"):
+            try:
+                value = getattr(owner, name)
+            except Exception as exc:
+                print(f"    {label}.{name:20s} raises: {type(exc).__name__}: {exc}")
+                continue
+            print(f"    {label}.{name:20s} {value}")
+            if name == "TemplatesPath" and str(value):
+                folders.append(str(value))
+    _list_templates(folders)
+
+
+def _project(app: Any) -> Any:
+    """The active design project, which is where Inventor keeps its paths."""
+    try:
+        return app.DesignProjectManager.ActiveDesignProject
+    except Exception as exc:
+        print(f"    DesignProjectManager raises: {type(exc).__name__}: {exc}")
+        return None
+
+
+def _list_templates(folders: list[str]) -> None:
+    """Which drawing templates are actually on this machine, and where.
+
+    Both extensions, because the default this machine gave back is a **.dwg**
+    -- `Standard.dwg`, not `Standard.idw` -- and the shipped recipe asks for
+    `"ISO.idw"`. Whether that file exists here is the whole question, and
+    listing only one extension would have answered half of it.
+    """
+    seen: set[str] = set()
+    places: list[str] = []
+    for folder in folders:
+        if not folder or not os.path.isdir(folder):
+            if folder:
+                print(f"\n    not a readable directory: {folder!r}")
+            continue
+        for place in [folder] + sorted(entry.path for entry in os.scandir(folder)
+                                       if entry.is_dir()):
+            key = os.path.normcase(os.path.abspath(place))
+            if key not in seen:
+                seen.add(key)
+                places.append(place)
+    if not places:
+        print("\n    no template folder could be found at all")
         return
-    if not os.path.isdir(folder):
-        print(f"\n    TemplatesPath is not a readable directory: {folder!r}")
-        return
-    print("\n    drawing templates (this folder and one level down):")
-    seen = 0
-    places = [folder] + sorted(entry.path for entry in os.scandir(folder)
-                               if entry.is_dir())
+    print("\n    drawing templates (each folder and one level down):")
+    found = 0
     for place in places:
         try:
-            found = sorted(name for name in os.listdir(place)
-                           if name.lower().endswith(".idw"))
+            names = sorted(name for name in os.listdir(place)
+                           if name.lower().endswith((".idw", ".dwg")))
         except OSError:
             continue
-        for name in found:
+        for name in names:
             print(f"        {os.path.join(place, name)}")
-            seen += 1
-    if not seen:
+            found += 1
+    if not found:
         print("        none -- which is worth knowing on its own")
 
 
@@ -324,11 +385,23 @@ def main(argv: list[str] | None = None) -> int:
         from inventor_mcp.backend.com.backend import _dynamic
 
         inner = raw(backend)
-        probe_templates(inner)
         component = inner._doc(context.doc_id).ComponentDefinition
         transients = inner._require_app().TransientObjects
-        probe_move_face(component, transients, _dynamic)
-        probe_sketch_driven(component, transients, _dynamic)
+        # Each section separately, so one exception does not throw away what the
+        # others already learned. That is the lesson `probe_sweep_and_pattern`
+        # records -- "the sweep probe died on a call I had not wrapped and
+        # reported none of the three it had already made" -- and this probe
+        # repeated it on 2026-09-08 with a bad attribute in its own formatting.
+        for label, work in (
+                ("the drawing template", lambda: probe_templates(inner)),
+                ("move face", lambda: probe_move_face(component, transients, _dynamic)),
+                ("sketch driven pattern",
+                 lambda: probe_sketch_driven(component, transients, _dynamic))):
+            try:
+                work()
+            except Exception:
+                print(f"\n!!! probing {label} failed; the rest still follows")
+                traceback.print_exc(limit=6, file=sys.stdout)
 
     on_thread(backend, everything)
 

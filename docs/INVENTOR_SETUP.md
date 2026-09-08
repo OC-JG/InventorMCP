@@ -751,10 +751,20 @@ The enum was fine. The **template** was not: `Documents.Add` takes a *path*, the
 shipped drawing recipe says `"ISO.idw"`, and a bare filename is not a path. So
 Inventor refused and named nothing, which is the error this file has spent the
 most effort learning not to produce. `_drawing_template` now resolves a bare
-name against `FileManager.TemplatesPath` and its immediate subfolders -- a name
-is what somebody means, Inventor keeps its templates in a folder it knows, and
-an ISO install has `ISO.idw` one level down under a locale or a `Metric` -- and
-where it still cannot find one it refuses with every path it tried. **Unverified**: the fix has not
+name against the folders Inventor itself uses and their immediate subfolders --
+a name is what somebody means -- and where it still cannot find one it refuses
+with every path it tried.
+
+Which folders was wrong on the first attempt, and measured on 2026-09-08:
+`FileManager.TemplatesPath` does not exist on 2027.1. It raises
+`AttributeError: <unknown>.TemplatesPath` from the same object that answers
+`GetTemplateFile` -- a real absence, wearing the same clothes as the
+apartment-threading artefact above. Inventor keeps those paths on the
+*project*, and the strongest source needs no unread property at all: **the
+folder `GetTemplateFile` returns its answer from**, which on this machine is
+`G:\...\oc-berlioz\Templates\Standard.dwg` -- a Shared-drive project folder
+rather than the Inventor install, and a .dwg rather than an .idw. A project can
+put its templates anywhere, so the folder is asked for rather than assumed. **Unverified**: the fix has not
 been run, and it is the first thing the next run reaches.
 
 The lesson is not about templates. Two calls in that sentence were measured and

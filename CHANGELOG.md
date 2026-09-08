@@ -94,21 +94,35 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   this project has spent the most effort learning not to produce.
 
   A bare name is what somebody means, though, and Inventor keeps its templates
-  in a folder it knows. `_drawing_template` resolves one against
-  `FileManager.TemplatesPath` and its immediate subfolders -- an install
-  configured for ISO has `Standard.idw` at the top and `ISO.idw` one level down,
-  under a locale or a `Metric`, and which depends on the install rather than the
-  release -- takes an absolute path as given, and where it finds nothing refuses
-  with **every path it tried** rather than the last. One level, not a walk: a
-  template found four folders deep is as likely to be somebody's saved copy as
-  the one they meant. The
-  result detail reports which template was used and where it came from, replacing
-  a `sheet_from` that only said "the template" or "Inventor's default".
+  in a folder it knows. `_drawing_template` resolves one against those folders
+  and their immediate subfolders, takes an absolute path as given, and where it
+  finds nothing refuses with **every path it tried** rather than the last. One
+  level, not a walk: a template found four folders deep is as likely to be
+  somebody's saved copy as the one they meant. The result detail reports which
+  template was used and where it came from, replacing a `sheet_from` that only
+  said "the template" or "Inventor's default".
 
-  Not yet verified: no run has been made since. The lesson is not about
-  templates -- two calls in that sentence were measured, the argument between
-  them was not, and "carries no risk at all" was a claim about a call rather
-  than about a call *and its arguments*.
+  **Which folders, though, was wrong in the first fix -- measured 2026-09-08.**
+  It asked `FileManager.TemplatesPath`, on the reasonable-sounding basis that a
+  file manager knows where files are. 2027.1's does not have that property: the
+  probe got `AttributeError: <unknown>.TemplatesPath` from the same object that
+  answered `GetTemplateFile` on the line above, so a real absence rather than
+  the apartment-threading artefact that looks identical. Inventor keeps those
+  paths on the *project*. `_template_folders` now asks three things in order of
+  how well each is established, strongest first: **the folder Inventor's own
+  default template is in** (`GetTemplateFile`, measured working, and it follows
+  the active project), then the active project's `TemplatesPath`, then
+  `FileManager`'s for a release that grows one.
+
+  That first source matters more than it sounds. On the machine this serves the
+  default drawing template is a Shared-drive *project* folder rather than the
+  Inventor install -- and a **.dwg** rather than an .idw. A project can put its
+  templates anywhere, so the folder has to be asked for rather than assumed.
+
+  Still unverified end to end: no drawing has been built since. The lesson is
+  not about templates -- two calls in that sentence were measured, the argument
+  between them was not, and "carries no risk at all" was a claim about a call
+  rather than about a call *and its arguments*.
 
 - **`sketch_driven_pattern` was calling a signature this release does not
   have.** *(2026-09-07.)* Inventor's wrapper answered "Add() takes from 1 to 2
@@ -165,6 +179,15 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   the thread that owns Inventor's objects. *(2026-09-08.)* There were two
   identical copies of them in sibling probes and a third was about to be
   written.
+
+  The probe itself needed another pass after that, its own fault rather than
+  Inventor's: it read `desc.cParams` off a `PyFUNCDESC`, which carries `args`
+  and `cParamsOpt` and no `cParams`, and the `AttributeError` killed the run
+  after one line of output. Every member is now read through `getattr` so a
+  name and its kind print even when the argument count cannot be worked out,
+  and each of the three sections is wrapped so one failure does not throw away
+  what the others learned -- exactly the lesson `probe_sweep_and_pattern.py`
+  already records about itself.
 
   It exists because a CAD seat is the scarce thing here -- `INVENTOR_SETUP.md`
   counts six sessions and four defects for one work axis -- and two of the four

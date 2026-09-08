@@ -3182,15 +3182,29 @@ class ComBackend(Backend):
         Inventor answered "Exception occurred" and named nothing, which is the
         error this project has spent the most time learning to avoid producing.
 
-        A bare name is what somebody means, though: Inventor keeps its templates
-        in a folder it knows, so a name is resolved against
-        `FileManager.TemplatesPath` before being given up on -- and against that
-        folder's immediate subfolders too, because that is where the
-        standards-specific ones live. An install configured for ISO has
-        `Standard.idw` at the top and `ISO.idw` one level down under a locale or
-        a `Metric`, and which one depends on the install rather than the release.
-        One level, not a walk: a template found four folders deep is as likely
-        to be somebody's saved copy as the one they meant.
+        A bare name is what somebody means, though, so it is resolved against
+        the folders Inventor itself uses before being given up on -- and against
+        their immediate subfolders too, because that is where the
+        standards-specific templates live. One level, not a walk: a template
+        found four folders deep is as likely to be somebody's saved copy as the
+        one they meant.
+
+        **Where those folders come from was itself wrong, and 2026-09-08
+        measured it.** The first fix asked `FileManager.TemplatesPath`, on the
+        reasonable-sounding basis that a file manager knows where files are. It
+        does not have that property: the probe got
+        `AttributeError: <unknown>.TemplatesPath` from the same object that
+        answered `GetTemplateFile` in the line above -- so a real absence rather
+        than the apartment-threading artefact that looks identical. Inventor
+        keeps those paths on the *project*, not the file manager.
+
+        So `_template_folders` asks three things in order of how well each is
+        established, and the first is the strongest: **the folder Inventor's own
+        default template is in**, which is `GetTemplateFile` measured working on
+        2027.1 and needs no property nobody has read. On the machine this serves
+        that is a Shared-drive project folder, not the Inventor install --
+        `G:\...\oc-berlioz\Templates\Standard.dwg` -- which is the other
+        reason not to guess a path: a project can put its templates anywhere.
 
         The failure names every place it looked rather than just the last one.
         """
@@ -3200,15 +3214,11 @@ class ComBackend(Backend):
         if os.path.isfile(template):
             return (os.path.abspath(template), "the path given")
         tried = [os.path.abspath(template)]
-        try:
-            folder = str(app.FileManager.TemplatesPath)
-        except Exception:  # pragma: no cover - version-specific
-            folder = ""
-        if folder:
+        for folder, source in self._template_folders(app, drawing_type):
             candidate = os.path.join(folder, template)
             tried.append(candidate)
             if os.path.isfile(candidate):
-                return (candidate, f"Inventor's templates folder ({folder})")
+                return (candidate, f"{source} ({folder})")
             try:
                 inner = sorted(entry.path for entry in os.scandir(folder)
                                if entry.is_dir())
@@ -3218,13 +3228,59 @@ class ComBackend(Backend):
                 candidate = os.path.join(sub, template)
                 tried.append(candidate)
                 if os.path.isfile(candidate):
-                    return (candidate, f"a subfolder of Inventor's templates ({sub})")
+                    return (candidate, f"a subfolder of {source} ({sub})")
         raise DocumentError(
             f"No such drawing template: {template!r}.",
             hint="Give a full path to a .idw or .dwg, or leave `template` out to "
             "use Inventor's default -- which has a title block, so a sheet made "
             "without one is still sendable. Looked in: " + ", ".join(tried),
         )
+
+    def _template_folders(self, app: Any, drawing_type: int
+                          ) -> list[tuple[str, str]]:  # pragma: no cover
+        """Every folder a named template could reasonably be in, best first.
+
+        Each is wrapped because each is a different kind of uncertain, and a
+        property that is absent on this release must not stop the one that is
+        not. In order:
+
+        1. **The folder Inventor's own default drawing template is in.**
+           `FileManager.GetTemplateFile` is measured working on 2027.1, so this
+           needs nothing unread -- and it follows the active project, which is
+           where the answer really lives.
+        2. **The active project's `TemplatesPath`**, which is where Inventor
+           documents these paths as living. Unread here, hence second.
+        3. **`FileManager.TemplatesPath`**, which 2027.1 does not have. Kept
+           only because a release that grows it would be free to use it, and
+           dropping it would leave nothing recording that it was tried.
+        """
+        folders: list[tuple[str, str]] = []
+        try:
+            default = str(app.FileManager.GetTemplateFile(drawing_type))
+        except Exception:  # pragma: no cover - version-specific
+            default = ""
+        if default:
+            folders.append((os.path.dirname(default),
+                            "the folder Inventor's own default template is in"))
+        try:
+            folders.append((str(app.DesignProjectManager.ActiveDesignProject
+                                .TemplatesPath), "the active project's templates folder"))
+        except Exception:  # pragma: no cover - version-specific
+            pass
+        try:
+            folders.append((str(app.FileManager.TemplatesPath),
+                            "FileManager's templates folder"))
+        except Exception:  # pragma: no cover - absent on 2027.1, measured
+            pass
+        seen: set[str] = set()
+        unique: list[tuple[str, str]] = []
+        for folder, source in folders:
+            key = os.path.normcase(os.path.abspath(folder)) if folder else ""
+            if not key or key in seen or not os.path.isdir(folder):
+                continue
+            seen.add(key)
+            unique.append((folder, source))
+        return unique
 
     def place_view(self, doc_id: str, request: ViewRequest) -> ViewInfo:  # pragma: no cover
         """A base view of a part, on this drawing's active sheet.
