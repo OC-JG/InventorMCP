@@ -28,6 +28,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from apartment import on_thread, raw  # noqa: E402
+from attempts import Attempts  # noqa: E402
 from inventor_mcp.session import Session  # noqa: E402
 
 #: Inventor's STEP translator add-in. The GUID is the documented one; whether
@@ -37,47 +39,6 @@ STEP_TRANSLATOR = "{90AF7F40-0C01-11D5-8E83-0010B541CD80}"
 #: The user-defined property set, the one whose contents show in the iProperties
 #: dialog under Custom.
 USER_DEFINED = "{D5CDD505-2E9C-101B-9397-08002B2CF9AE}"
-
-
-class Attempts:
-    """Try things, print each result as it happens, let none stop the rest."""
-
-    def __init__(self, explain):
-        self._explain = explain
-        self.worked: dict[str, object] = {}
-
-    def __call__(self, label: str, work):
-        try:
-            outcome = work()
-        except Exception as exc:
-            print(f"  refused {label}\n            {self._explain(exc)}")
-            return None
-        shown = _describe(outcome)
-        print(f"  ok      {label}\n            {shown}")
-        self.worked[label] = outcome
-        return outcome
-
-
-def _describe(value) -> str:
-    for attribute in ("FullFileName", "DisplayName", "Name", "Value"):
-        try:
-            found = getattr(value, attribute)
-        except Exception:
-            continue
-        if found:
-            return f"{type(value).__name__}: {found}"
-    if isinstance(value, (str, int, float, bool)):
-        return repr(value)
-    return type(value).__name__
-
-
-def on_thread(backend, work):
-    worker = getattr(backend, "marshalling_thread", None)
-    return worker.call(work) if worker is not None else work()
-
-
-def raw(backend):
-    return getattr(backend, "unmarshalled", backend)
 
 
 # ---------------------------------------------------------------------------

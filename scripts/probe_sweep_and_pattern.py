@@ -23,53 +23,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from apartment import on_thread, raw  # noqa: E402
+from attempts import Attempts  # noqa: E402
 from inventor_mcp.builder import apply_operation  # noqa: E402
 from inventor_mcp.schema import ExtrudeOp, HoleOp, SketchOp  # noqa: E402
 from inventor_mcp.session import Session  # noqa: E402
-
-
-def raw(backend):
-    """The backend itself, behind the marshalling proxy."""
-    return getattr(backend, "unmarshalled", backend)
-
-
-def on_thread(backend, work):
-    """Run *work* on the apartment that owns Inventor's objects."""
-    worker = getattr(backend, "marshalling_thread", None)
-    return worker.call(work) if worker is not None else work()
-
-
-class Attempts:
-    """Try things, print each result as it happens, and never let one stop the rest.
-
-    The first version collected the answers and printed them at the end, so an
-    exception outside the guarded calls threw away everything it had learned --
-    which is what happened: the sweep probe died on a call I had not wrapped and
-    reported none of the three it had already made.
-    """
-
-    def __init__(self, explain):
-        self._explain = explain
-        self.results: dict[str, object] = {}
-
-    def __call__(self, label: str, work):
-        try:
-            outcome = work()
-        except Exception as exc:
-            print(f"  refused {label}\n            {self._explain(exc)}")
-            return None
-        shown = getattr(outcome, "Name", None) or type(outcome).__name__
-        print(f"  ok      {label}\n            {shown}")
-        self.results[label] = outcome
-        return outcome
-
-    def undo(self, feature) -> None:
-        if feature is None:
-            return
-        try:
-            feature.Delete()
-        except Exception as exc:  # pragma: no cover
-            print(f"            (could not undo it: {str(exc)[:70]})")
 
 
 def census(sketch) -> list[str]:

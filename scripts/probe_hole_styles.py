@@ -36,6 +36,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from apartment import on_thread, raw  # noqa: E402
 from inventor_mcp.backend.base import Driven, HoleRequest  # noqa: E402
 from inventor_mcp.backend.com import holes  # noqa: E402
 from inventor_mcp.builder import apply_operation  # noqa: E402
@@ -324,8 +325,8 @@ def thread_tables(backend, context) -> None:
     ]
 
     def attempt() -> list[tuple[bool, str, str, str, str]]:
-        raw = backend.unmarshalled if hasattr(backend, "unmarshalled") else backend
-        features = raw._doc(context.doc_id).ComponentDefinition.Features.HoleFeatures
+        inner = raw(backend)
+        features = inner._doc(context.doc_id).ComponentDefinition.Features.HoleFeatures
         answers = []
         for thread_type, designation, thread_class in cases:
             try:
@@ -337,9 +338,8 @@ def thread_tables(backend, context) -> None:
                                 str(exc).splitlines()[0][:90]))
         return answers
 
-    worker = getattr(backend, "marshalling_thread", None)
     try:
-        answers = worker.call(attempt) if worker is not None else attempt()
+        answers = on_thread(backend, attempt)
     except Exception as exc:
         print(f"  could not probe the thread tables: {type(exc).__name__}: {exc}")
         return
