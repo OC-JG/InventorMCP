@@ -526,7 +526,8 @@ def _translated(comparison: dict[str, Any], recipe: DrawingRecipe, *,
 
 
 def build_drawing(session: Session, recipe: DrawingRecipe, part: PartRecipe, *,
-                  part_doc_id: str | None = None) -> dict[str, Any]:
+                  part_doc_id: str | None = None,
+                  part_path: str | None = None) -> dict[str, Any]:
     """Make the drawing, then read it back off the sheet and check it.
 
     The round trip, and the order matters: the sheet is read from the backend
@@ -539,6 +540,15 @@ def build_drawing(session: Session, recipe: DrawingRecipe, part: PartRecipe, *,
     are useful: a drawing of a part built in the same call is the ordinary case,
     and a drawing of a part somebody has open is what you want when the part
     took a minute to build.
+
+    **A drawing view is a reference to a model file, so the part has to be on
+    disk.** `part_path` is where to save it, and it is a separate argument
+    rather than something worked out from the recipe's name because writing a
+    file is the caller's decision to make: a part that is already saved is left
+    exactly where it is, and one that is not is saved only when a path was
+    given. Without it Inventor refuses the first view -- measured on 2027.1,
+    2026-09-08, three views refused in a row with nothing but "Exception
+    occurred", which is the failure this argument exists to make impossible.
     """
     from .builder import build_part
 
@@ -567,6 +577,13 @@ def build_drawing(session: Session, recipe: DrawingRecipe, part: PartRecipe, *,
         part_doc_id = built["document"]
     else:
         report["part"] = {"ok": True, "document": part_doc_id, "reused": True}
+
+    # On disk before any view is placed, because a view references a file. Only
+    # when a path was given and only when the part has none: a part somebody
+    # already saved keeps its own location, and nothing here writes over it.
+    saved_to = _on_disk(backend, part_doc_id, part_path)
+    if saved_to is not None:
+        report["part"]["path"] = saved_to
 
     # Checked before any sheet exists, and it has to be here rather than left to
     # the caller having rehearsed: a category error like dimensioning a count
@@ -726,6 +743,28 @@ def _parents_first(recipe: DrawingRecipe) -> list[DrawingViewSpec]:
             placed.add(view.name)
             remaining.remove(view)
     return ordered
+
+
+def _on_disk(backend: Any, part_doc_id: str, part_path: str | None) -> str | None:
+    """Where the part is on disk, saving it to *part_path* if it is nowhere.
+
+    Returns the path the drawing will reference, or None where the question
+    could not be answered -- a backend that does not report a path, which is
+    not a reason to refuse to draw.
+
+    A part that already has a file is never re-saved to a new one. Somebody who
+    passes `part_path` while drawing a part they opened from elsewhere means
+    "put it here if it is nowhere", not "move it".
+    """
+    try:
+        where = backend.document_path(part_doc_id)
+    except Exception:
+        return None
+    if where:
+        return str(where)
+    if not part_path:
+        return None
+    return str(backend.save_document(part_doc_id, part_path).path or part_path)
 
 
 def _view_request(recipe: DrawingRecipe, resolver: Resolver, view: DrawingViewSpec,

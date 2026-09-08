@@ -128,13 +128,19 @@ def register(server: Any, session: Session) -> None:
         part_document: Annotated[str | None, Field(
             description="Id of an already-open part to draw instead of building "
             "one. Use it when the part took a while to build.")] = None,
+        part_path: Annotated[str | None, Field(
+            description="Where to save the PART, if it is not on disk already. "
+            "A drawing view is a reference to a model FILE, so Inventor refuses "
+            "to place a view of a part that exists only in memory. A part that "
+            "already has a path keeps it and nothing is written.")] = None,
     ) -> dict[str, Any]:
         from ..drafting import build_drawing
         from ..schema import DrawingRecipe
 
         return build_drawing(
             session, DrawingRecipe.model_validate(drawing),
-            PartRecipe.model_validate(recipe), part_doc_id=part_document)
+            PartRecipe.model_validate(recipe), part_doc_id=part_document,
+            part_path=part_path)
 
     @server.tool(
         description="Rehearse a DRAWING of a part, against the part it draws.\n\n"

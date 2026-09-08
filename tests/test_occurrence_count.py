@@ -8,9 +8,14 @@ finished part reads `Plate`, `Slot`, `Spread`, because a sketch-driven pattern
 is **one** feature holding its occurrences.
 
 `describe_feature` asks the pattern itself now. The property name is unmeasured,
-so two are tried and the one that answered is reported beside the number, and
-`scripts/live_acceptance.py --only sketch-driven-pattern` reports rather than
-asserts when neither does. These fakes pin that shape without a CAD seat.
+so two are tried and the one that answered is reported beside the number, under
+`pattern_elements` rather than `occurrences` -- that word already means two
+things here, the total including the seed on a rectangular pattern's detail and
+the copies alone on a sketch-driven one's, and a number read off Inventor is a
+third thing whose meaning depends on the release. The acceptance check
+calibrates it against a rectangular pattern whose total is not in doubt, and
+reports rather than concludes where neither name answered. These fakes pin the
+read itself without a CAD seat.
 """
 
 from __future__ import annotations

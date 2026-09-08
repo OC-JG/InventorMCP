@@ -744,13 +744,16 @@ actually bitten.
       −1.2000, which rules out the third and separates neither of the others.
 
       What settles it is the occurrence count on the pattern, and the read is
-      in place now: `describe_feature` asks a pattern feature for
-      `Occurrences` and then `PatternElements`, reports the count with the name
-      that answered, and `check_sketch_driven_pattern` asserts three and
-      explains four. Neither name is measured, so a release keeping them
-      somewhere else reports nothing rather than zero, and the check says the
-      question is still open instead of passing. **So this needs a run, not
-      more code.** Four occurrences means the reference was patterned onto
+      in place: `describe_feature` asks a pattern feature for `Occurrences`
+      and then `PatternElements` and reports the count under
+      `pattern_elements` with the name that answered. **The 2026-09-08 run
+      read 4 from `PatternElements`, which is both answers at once** -- the
+      seed plus three copies, or four copies with one on the reference -- so
+      the number needed calibrating before it could mean anything.
+      `_seed_is_counted` does that on a rectangular pattern of three
+      instances, where the total is not in doubt, and the sketch-driven
+      expectation follows from it. **So this needs one more run, and the run
+      answers it.** Four occurrences means the reference was patterned onto
       itself, and then two things change together: `INVENTOR_SETUP.md`, and the
       `elsewhere` filter in the mock's `sketch_driven_pattern` that excludes
       the reference.

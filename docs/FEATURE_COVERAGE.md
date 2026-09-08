@@ -909,3 +909,64 @@ Each of these was hit while building real parts, and each passed
     taper is on its definition and its distance is not, so
     `definition.Extent.Distance` was unreachable before and would have failed
     the same way.
+
+    **And the same promotion failed a second time, on the unit.** *(Measured
+    2026-09-08, on the run after the fix above: "Inventor refused the
+    expression '1.5 deg' for 'draft_a' (units 'mm')".)* `set_parameter`
+    defaults to millimetres and a taper's expression is an angle, so the
+    promotion created a length parameter and handed it `1.5 deg`. The unit now
+    comes off the property being promoted -- `Parameter.Units` through
+    `unit_from_inventor`, falling back to a length because every other
+    promotable property is one. The simulator had this right all along: it
+    resolves the expression's own dimension and reported `deg`. Same divergence
+    as the word, one layer down.
+
+14. **A pattern's element count was read and could not be interpreted.**
+    *(Measured 2026-09-08.)* `describe_feature` asks a pattern feature for its
+    occurrence collection, `spread_pockets` was built to ask whether Inventor
+    also patterns the reference point, and the read came back **4** on a
+    pattern of four points -- which is *both* answers at once: the seed plus
+    three copies, or four copies with one landing on the reference. A number
+    whose meaning is unknown is not a measurement, and this one was reported as
+    a failure when it was neither a pass nor a fail.
+
+    It is also a warning about a word. `occurrences` already means two things
+    here -- a rectangular pattern's feature detail counts every instance
+    *including* the seed (`count1 * count2`), and a sketch-driven pattern's
+    counts the copies alone -- so the live read has its own name,
+    `pattern_elements`, with `pattern_elements_from` saying which collection
+    answered. Reusing `occurrences` would have made three meanings share one
+    key.
+
+    What settles it is a calibration rather than a guess: `_seed_is_counted`
+    in `scripts/live_acceptance.py` builds a *rectangular* pattern of three
+    instances, where the total is not in doubt, and reads the same collection
+    -- 3 means it counts the seed, 2 means it counts only the copies. The
+    sketch-driven expectation is derived from that, so a release counting the
+    other way does not read as a defect and an uncalibrated one concludes
+    nothing.
+
+15. **Not one drawing view could be placed, and the reason was never in the
+    drawing.** *(Measured 2026-09-08: three views, three refusals, each
+    "Placing the view failed: Exception occurred." and nothing else.)* A
+    drawing view is a *reference to a model file* -- the sheet records which
+    document it draws and re-reads it on every open -- and the part being drawn
+    had only ever existed in memory, because `build_drawing` builds it and
+    nothing saved it. Inventor cannot store a reference to a document with no
+    file, and says so with the message it says everything with.
+
+    `place_view` checks it before the call now and refuses by name, because
+    Inventor's own answer cannot: "the part has not been saved, so there is no
+    file for a drawing view to reference". `build_drawing` and
+    `build_drawing_from_recipe` take a `part_path` for where to put it, kept a
+    separate argument rather than derived from the recipe's name because
+    writing a file is the caller's decision -- a part that already has a path
+    keeps it and nothing is overwritten. And the base-view call now reports
+    everything it was given when it fails at all: the model's file, the
+    position in centimetres beside the sheet's own size, the scale, and the
+    two enum names. Each of those has been a candidate cause and none of them
+    is visible in "Exception occurred".
+
+    The dimension-retrieval design is still unmeasured, and this is why: with
+    no views on the sheet, `GetRetrievableAnnotations2` was never reached. The
+    four failures after the first were all the same failure.

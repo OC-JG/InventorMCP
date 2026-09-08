@@ -1150,6 +1150,65 @@ def _thicken_fixture(session: Session, report: Report, stem: str) -> float | Non
             session.forget(context.doc_id)
 
 
+def _seed_is_counted(session: Session, report: Report) -> bool | None:
+    """Whether the collection `describe_feature` reads includes the seed.
+
+    The calibration the sketch-driven count needs, and it cannot come from the
+    sketch-driven pattern itself: there, "four" is the seed plus three copies
+    *or* four copies with one landing on the reference, and those are opposite
+    answers to the question the fixture asks.
+
+    A **rectangular** pattern has no such ambiguity. `x_count: 3` puts three
+    pockets on the part, one of them the seed, and this reads what the
+    collection then says: 3 means it counts the seed, 2 means it counts only
+    the copies. Returns None where it could not be read at all -- an unmeasured
+    property name and a release that keeps them elsewhere, which is a reason to
+    conclude nothing rather than to guess.
+
+    One extra part built and closed, which is cheap against the alternative of
+    interpreting a number nobody has calibrated.
+    """
+    recipe = PartRecipe.model_validate({
+        "name": "PatternElementBaseline", "units": "mm", "operations": [
+            {"op": "sketch", "name": "S", "plane": "xy", "entities": [
+                {"type": "rectangle", "center": [0, 0], "width": 60, "height": 20}]},
+            {"op": "extrude", "name": "Plate", "sketch": "S", "distance": 6},
+            {"op": "sketch", "name": "P", "plane": "xy", "entities": [
+                {"type": "rectangle", "center": [-20, 0], "width": 4, "height": 4}]},
+            {"op": "extrude", "name": "Pocket", "sketch": "P", "distance": 3,
+             "operation": "cut"},
+            {"op": "rectangular_pattern", "name": "Row", "features": ["Pocket"],
+             "axis1": "x", "count1": 3, "spacing1": 20},
+        ]})
+    context, broken = build(session, recipe)
+    if broken or context is None:
+        report.note("the PatternElements calibration part did not build: "
+                    + (broken[0][:200] if broken else "no document"))
+        if context:
+            session.backend.close_document(context.doc_id, save=False)
+            session.forget(context.doc_id)
+        return None
+    try:
+        described = session.backend.describe_feature(context.doc_id, "Row")
+        count = described.get("pattern_elements")
+        read_from = described.get("pattern_elements_from")
+        if count == 3:
+            report.note(f"{read_from} counts the seed: a 3-instance "
+                        "rectangular pattern reads 3")
+            return True
+        if count == 2:
+            report.note(f"{read_from} counts only the copies: a 3-instance "
+                        "rectangular pattern reads 2")
+            return False
+        report.note(f"the calibration read {count!r} from {read_from!r} on a "
+                    "3-instance rectangular pattern, which is neither 3 nor 2 "
+                    "-- so what that collection counts is still unknown")
+        return None
+    finally:
+        session.backend.close_document(context.doc_id, save=False)
+        session.forget(context.doc_id)
+
+
 def check_sketch_driven_pattern(session: Session, report: Report) -> None:
     """`sketch_driven_pattern`, and the question a volume cannot answer.
 
@@ -1224,13 +1283,13 @@ def check_sketch_driven_pattern(session: Session, report: Report) -> None:
         # Asked of the pattern itself, because counting features cannot count
         # occurrences: a sketch-driven pattern is one feature holding them. The
         # property name is unmeasured -- `describe_feature` tries `Occurrences`
-        # and then `PatternElements` and reports which answered -- so a run that
-        # cannot read it says so rather than the check quietly passing.
+        # and then `PatternElements` and reports which answered.
         pattern = next((name for name in features
                         if name.lower().startswith("spread")), None)
         described = (session.backend.describe_feature(context.doc_id, pattern)
                      if pattern else {})
-        count = described.get("occurrences")
+        count = described.get("pattern_elements")
+        read_from = described.get("pattern_elements_from")
         if count is None:
             report.note(
                 "The pattern's occurrence count could not be read: neither "
@@ -1240,15 +1299,43 @@ def check_sketch_driven_pattern(session: Session, report: Report) -> None:
                 "scripts/probe_definitions.py` would name the collection this "
                 "release keeps them in.")
         else:
-            report.check(
-                count == 3,
-                f"sketch-driven-pattern: the pattern holds 3 occurrences "
-                f"(read {count} from {described.get('occurrences_from')})",
-                f"{count} occurrences means Inventor also patterned the "
-                "reference point, which the volume cannot show because the "
-                "duplicate lands on the seed. Then two things change together: "
-                "docs/INVENTOR_SETUP.md, and the `elsewhere` filter in the "
-                "mock's sketch_driven_pattern that excludes the reference.")
+            # **And the number alone does not answer the question**, which the
+            # 2026-09-08 run is what showed: `PatternElements` came back as 4
+            # on a pattern of four points, and 4 is BOTH "the seed plus three
+            # copies" (the assumption holding) and "four copies, one of them
+            # on the reference" (the assumption failing). Which it is depends
+            # on whether that collection counts the seed, and nothing here had
+            # measured that.
+            #
+            # `_seed_is_counted` measures it, on a rectangular pattern whose
+            # total is not in doubt. So the expected number is derived from a
+            # measurement rather than picked, and a release that counts the
+            # other way does not read as a defect.
+            includes_seed = _seed_is_counted(session, report)
+            if includes_seed is None:
+                report.note(
+                    f"The pattern holds {count} (read from {read_from}), and "
+                    "what that collection counts is unmeasured on this "
+                    "release -- the rectangular-pattern calibration above did "
+                    "not answer. 4 is the seed plus three copies OR four "
+                    "copies with one on the reference, and those are opposite "
+                    "answers. Nothing is concluded.")
+            else:
+                wanted = 4 if includes_seed else 3
+                counting = ("counts the seed" if includes_seed
+                            else "counts only the copies")
+                report.check(
+                    count == wanted,
+                    f"sketch-driven-pattern: {count} occurrences, and the "
+                    f"reference point was not patterned onto itself "
+                    f"({read_from} {counting}, so {wanted} is the four pockets "
+                    "the recipe describes)",
+                    f"{count} where {wanted} was expected of a collection that "
+                    f"{counting}: Inventor also patterned the reference point, "
+                    "which the volume cannot show because the duplicate lands "
+                    "on the seed. Then two things change together: "
+                    "docs/INVENTOR_SETUP.md, and the `elsewhere` filter in the "
+                    "mock's sketch_driven_pattern that excludes the reference.")
     finally:
         session.backend.close_document(context.doc_id, save=False)
         session.forget(context.doc_id)
@@ -1293,8 +1380,17 @@ def check_drawing(session: Session, report: Report) -> None:
     drawing = DrawingRecipe.model_validate(json.loads(path.read_text(encoding="utf-8")))
     part = PartRecipe.model_validate(json.loads(part_path.read_text(encoding="utf-8")))
 
+    # The part goes on disk first, because a drawing view is a reference to a
+    # model FILE. The 2026-09-08 run placed no views at all -- three refusals,
+    # each of them "Exception occurred." and nothing else -- against a part
+    # that had only ever existed in memory. `place_view` says so outright now,
+    # and this is the check taking its own advice.
+    into = ROOT / ".acceptance"
+    into.mkdir(exist_ok=True)
+    part_file = into / "drawn_plate.ipt"
+
     try:
-        outcome = build_drawing(session, drawing, part)
+        outcome = build_drawing(session, drawing, part, part_path=str(part_file))
     except Exception as exc:
         hint = getattr(exc, "hint", None)
         report.check(False, "drawing: the sheet was made",
@@ -1304,6 +1400,11 @@ def check_drawing(session: Session, report: Report) -> None:
 
     made = report.check(bool(outcome.get("document")), "drawing: a drawing document exists",
                         str(outcome.get("findings"))[:400])
+    report.check(bool((outcome.get("part") or {}).get("path")),
+                 "drawing: the part is on disk to be referenced",
+                 "the part has no path, so every view will be refused: a "
+                 "drawing view references a model file. `part_path` is what "
+                 "puts it somewhere.")
     report.check(len(outcome.get("views") or []) == len(drawing.views),
                  f"drawing: all {len(drawing.views)} views were placed",
                  str(outcome.get("findings"))[:400])

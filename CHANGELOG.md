@@ -438,6 +438,37 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   `definition.Extent` is searched too, since an extrude's taper is on its
   definition and its distance is not.
 
+### Fixed
+
+- **A promoted angle went into a millimetre parameter.** *(Measured 2026-09-08
+  on 2027.1, the run after the property-name fix: "Inventor refused the
+  expression '1.5 deg' for 'draft_a' (units 'mm')".)* `set_parameter` defaults
+  to millimetres and a taper's expression is an angle. The unit comes off the
+  property being promoted now -- `Parameter.Units` through
+  `unit_from_inventor`, falling back to a length because every other promotable
+  property is one. The simulator resolved the expression's own dimension and
+  had always reported `deg`, so this is the same divergence as the property
+  name, one layer down.
+
+- **Not one drawing view could be placed, and the reason was never in the
+  drawing.** *(Measured 2026-09-08: three views, three refusals, each "Placing
+  the view failed: Exception occurred." and nothing else.)* A drawing view is a
+  *reference to a model file* -- the sheet records which document it draws and
+  re-reads it on every open -- and the part had only ever existed in memory,
+  because `build_drawing` builds it and nothing saved it.
+
+  `place_view` checks that before the call and refuses by name, since
+  Inventor's own answer cannot. `build_drawing` and
+  `build_drawing_from_recipe` take a **`part_path`** saying where to put the
+  part, a separate argument rather than something derived from the recipe's
+  name because writing a file is the caller's decision -- a part that already
+  has a path keeps it and nothing is overwritten. And the base-view call
+  reports everything it was given when it fails: the model's file, the position
+  in centimetres beside the sheet's own size, the scale and the two enum names.
+  Each has been a candidate cause and none is visible in "Exception occurred".
+  The retrieval design is still unmeasured, and that is why: with no views,
+  `GetRetrievableAnnotations2` was never reached.
+
 ### Added
 
 - **`describe_feature` counts a pattern's occurrences**, which is the reading
@@ -454,9 +485,19 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   facts, and reporting the second as the first is how a check passes by
   measuring nothing. Only pattern features are asked, so a number does not
   appear under that name on a feature where it would mean something else.
-  `scripts/live_acceptance.py --only sketch-driven-pattern` asserts three and
-  explains what four would mean, or says the question is still open. What is
-  left there is a run.
+  It lands under **`pattern_elements`** rather than `occurrences`, because that
+  word already means two things here: a rectangular pattern's feature detail
+  counts every instance *including* the seed, and a sketch-driven pattern's
+  counts the copies alone. A number read off Inventor is a third thing whose
+  meaning depends on the release, so it gets its own key.
+
+  **Which the run then proved was the right worry.** The read came back 4 on a
+  pattern of four points -- both answers at once: the seed plus three copies,
+  or four copies with one on the reference. So `_seed_is_counted` calibrates
+  it against a *rectangular* pattern of three instances, where the total is
+  not in doubt: 3 means the collection counts the seed, 2 means it counts only
+  the copies, and the sketch-driven expectation is derived from that. An
+  uncalibrated release concludes nothing rather than reporting a defect.
 - **A `work_plane` with `kind: "angle"` or `"tangent"` built an offset plane on
   Inventor and reported success.** `WorkPlaneOp` has offered four kinds since it
   was written; the COM backend read `kind` only to spot `midplane` and fell

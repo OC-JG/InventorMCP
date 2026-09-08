@@ -1094,7 +1094,15 @@ class ComBackend(Backend):
         # The new parameter holds exactly what the property held -- a literal
         # keeps its unit, a model-parameter reference keeps its reference -- so
         # the geometry after the promotion is the geometry before it.
-        info = self.set_parameter(doc_id, name, currently)
+        #
+        # **In the property's own units**, which is not a detail. `set_parameter`
+        # defaults to millimetres, and a taper's expression is `1.5 deg`:
+        # `UserParameters.AddByExpression('draft_a', '1.5 deg', 'mm')` is a
+        # length parameter being handed an angle, and Inventor refuses it with
+        # a bare "Exception occurred." Measured on 2027.1, 2026-09-08 -- the
+        # second failure of the same promotion, after the property name.
+        info = self.set_parameter(doc_id, name, currently,
+                                  units=_parameter_units(target))
         target.Expression = name
         return {
             "parameter": name,
@@ -3684,17 +3692,46 @@ class ComBackend(Backend):
         model = self._doc(request.part_doc_id)
         app = self._require_app()
         sheet = document.ActiveSheet
+        if request.parent is None:
+            # Asked before the call, because the call's own answer is "Exception
+            # occurred." and nothing else -- measured 2026-09-08, three views
+            # refused in a row with no reason given.
+            #
+            # A drawing view is a *reference* to a model file: the sheet stores
+            # which document it draws and re-reads it on every open, which a
+            # document that exists only in memory has no way to be. So a part
+            # built in this session has to be saved before it can be drawn, and
+            # saying that is the whole of this refusal.
+            where = _document_path(model)
+            if not where:
+                raise FeatureError(
+                    "The part has not been saved, so there is no file for a "
+                    "drawing view to reference.",
+                    hint="Save it first -- `save_part` -- and then build the "
+                    "drawing. Inventor refuses AddBaseView on an unsaved "
+                    "document with a bare \"Exception occurred.\", which is why "
+                    "this is checked here rather than reported from there.",
+                )
         with self._translate_errors("Placing the view"):
             position = app.TransientGeometry.CreatePoint2d(*request.at)
             if request.parent is None:
-                view = _call_named(sheet.DrawingViews.AddBaseView, [
-                    ("Model", model),
-                    ("Position", position),
-                    ("Scale", float(request.scale)),
-                    ("ViewOrientation",
-                     self._k(self._VIEW_ORIENTATIONS[request.direction])),
-                    ("ViewStyle", self._k(self._VIEW_STYLES[request.style])),
-                ])
+                try:
+                    view = _call_named(sheet.DrawingViews.AddBaseView, [
+                        ("Model", model),
+                        ("Position", position),
+                        ("Scale", float(request.scale)),
+                        ("ViewOrientation",
+                         self._k(self._VIEW_ORIENTATIONS[request.direction])),
+                        ("ViewStyle", self._k(self._VIEW_STYLES[request.style])),
+                    ])
+                except Exception as exc:
+                    # Everything the call was given, because Inventor's own
+                    # answer here is "Exception occurred." and a refusal that
+                    # names nothing is what costs the next run.
+                    raise FeatureError(
+                        f"Placing the base view failed: {self._explain(exc)}",
+                        hint=self._view_call_detail(sheet, model, request),
+                    ) from exc
             else:
                 # A projected view takes no orientation and no scale: which way
                 # it faces is decided by where it sits relative to its parent
@@ -3721,6 +3758,32 @@ class ComBackend(Backend):
             style=request.style,
             extent=_view_extent(view),
         )
+
+    def _view_call_detail(self, sheet: Any, model: Any,
+                          request: ViewRequest) -> str:  # pragma: no cover - Windows only
+        """Everything `AddBaseView` was handed, for a refusal's hint.
+
+        Each of these has been a candidate cause at some point and none of them
+        is visible in "Exception occurred": whether the model has a file at
+        all, whether the position is on the sheet (positions reach here in
+        centimetres and a recipe writes millimetres, so a factor of ten puts a
+        view a long way off an A3), and which orientation and style names were
+        resolved.
+        """
+        parts = [f"model {_document_path(model) or 'UNSAVED'}"]
+        parts.append(f"position {request.at[0]:.3f}, {request.at[1]:.3f} cm")
+        try:
+            parts.append(f"sheet {float(sheet.Width):.3f} x "
+                         f"{float(sheet.Height):.3f} cm")
+        except Exception:
+            parts.append("sheet size unreadable")
+        parts.append(f"scale {float(request.scale):g}")
+        parts.append(self._VIEW_ORIENTATIONS[request.direction])
+        parts.append(self._VIEW_STYLES[request.style])
+        return ("Called with " + ", ".join(parts)
+                + ". A position off the sheet, a model with no file, and an "
+                "orientation this release spells differently all arrive as the "
+                "same bare message, so check them against this list.")
 
     def retrieve_dimensions(self, doc_id: str,
                             request: RetrieveRequest) -> list[DimensionInfo]:  # pragma: no cover
@@ -5031,10 +5094,20 @@ class ComBackend(Backend):
             # not say whether Inventor puts an occurrence on the reference
             # point. Asking every feature would put a number under a name that
             # meant something else on whichever release has one.
+            #
+            # **Under `pattern_elements` rather than `occurrences`**, which is
+            # not fussiness. `occurrences` is already spoken for twice in this
+            # project and means different things: a rectangular pattern's
+            # feature detail counts every instance *including* the seed, and a
+            # sketch-driven pattern's counts the copies only. A number read off
+            # Inventor is a third thing again -- what that release's collection
+            # holds -- so it gets its own name and says which collection
+            # answered, and the acceptance check calibrates what it counts
+            # against a pattern whose total is not in doubt.
             count, from_where = _occurrence_count(feature)
             if count is not None:
-                described["occurrences"] = count
-                described["occurrences_from"] = from_where
+                described["pattern_elements"] = count
+                described["pattern_elements_from"] = from_where
         return described
 
     # -- escape hatch ------------------------------------------------------
@@ -5395,6 +5468,36 @@ def _find_feature(features: Any, name: str) -> Any:  # pragma: no cover - Window
         raise FeatureError(
             f"No feature named {name!r}.", hint=f"Features in this part: {available or '(none)'}."
         ) from None
+
+
+def _document_path(document: Any) -> str:  # pragma: no cover - Windows only
+    """Where this document lives on disk, or "" for one that has never been saved.
+
+    `FullFileName` is empty rather than absent on an unsaved document, and the
+    read itself can fail on a document being closed, so both come back as "".
+    """
+    try:
+        return str(document.FullFileName) or ""
+    except Exception:
+        return ""
+
+
+def _parameter_units(parameter: Any, fallback: str = "mm") -> str:  # pragma: no cover - Windows only
+    """This project's name for the unit a live parameter is measured in.
+
+    For `promote_parameter`, which creates a user parameter to hold what a
+    feature's property held. The unit has to come from the property rather than
+    from a default: an angle promoted into a millimetre parameter is refused,
+    and the refusal is Inventor's usual bare "Exception occurred".
+
+    The fallback is a length because every other promotable property is one,
+    and because a parameter whose units cannot be read is better attempted than
+    refused -- `set_parameter` reports what Inventor said either way.
+    """
+    try:
+        return unit_from_inventor(str(parameter.Units)) or fallback
+    except Exception:
+        return fallback
 
 
 def _parameter_info(parameter: Any, kind: str = "user") -> ParamInfo:  # pragma: no cover

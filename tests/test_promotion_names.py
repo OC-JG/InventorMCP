@@ -160,3 +160,48 @@ class TestBothBackendsAcceptBothWords:
             {"feature": "Block", "property": "wall", "name": "wall_t"}])
         assert out["promoted"] == []
         assert "taper" in out["failed"][0]["error"]
+
+
+class TestAPromotedValueKeepsItsUnit:
+    """A promotion creates a user parameter to hold what a property held, and
+    the unit has to come from the property. `set_parameter` defaults to
+    millimetres, and the taper's expression is `1.5 deg` -- so the first
+    promotion that got past the property name was refused by Inventor for
+    handing an angle to a length parameter, with its usual bare "Exception
+    occurred". Measured on 2027.1, 2026-09-08."""
+
+    class _Parameter:
+        def __init__(self, units):
+            self.Units = units
+
+    def test_inventors_own_spelling_comes_back_as_ours(self):
+        assert com._parameter_units(self._Parameter("deg")) == "deg"
+        assert com._parameter_units(self._Parameter("mm")) == "mm"
+        assert com._parameter_units(self._Parameter("in")) == "in"
+
+    def test_a_spelled_out_unit_resolves_too(self):
+        """Inventor spells some of them out, and `unit_from_inventor` is what
+        knows that -- this is a test that promotion goes through it rather than
+        reading `Units` raw."""
+        assert com._parameter_units(self._Parameter("degree")) == "deg"
+
+    def test_an_unreadable_unit_falls_back_to_a_length(self):
+        """Attempted rather than refused: every promotable property but the
+        taper is a length, and `set_parameter` reports what Inventor says
+        either way. A refusal here would turn an unreadable unit into no
+        promotion at all."""
+        class Angry:
+            @property
+            def Units(self):
+                raise RuntimeError("marshalled for a different thread")
+
+        assert com._parameter_units(Angry()) == "mm"
+        assert com._parameter_units(self._Parameter("")) == "mm"
+        assert com._parameter_units(self._Parameter("furlongs")) == "mm"
+
+    def test_the_promotion_asks_for_the_units_it_read(self):
+        import inspect
+
+        source = inspect.getsource(com.ComBackend.promote_parameter)
+        assert "units=_parameter_units(target)" in source, \
+            "a promoted angle in a millimetre parameter is what Inventor refused"
