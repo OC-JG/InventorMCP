@@ -4,6 +4,320 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
 ## Unreleased
 
+### Measured
+
+- **`move_face` and `sketch_driven_pattern` both build in Inventor, and every
+  fixture in `examples/calibration/` now has a real number beside it.**
+  *(2026-09-08, Inventor 2027.1.)*
+
+  | fixture | derived | Inventor | |
+  |---|---|---|---|
+  | `lifted_face` | +6.4000 cm³ | **+6.4000** | 0.0% |
+  | `lifted_face`, `lift` doubled | +12.8000 cm³ | **+12.8000** | 0.0% |
+  | `widened_wall` | +0.2400 cm³ | **+0.2400** | 0.0% |
+  | `widened_wall`, `grow` doubled | +0.4800 cm³ | **+0.4800** | 0.0% |
+  | `spread_pockets` | −1.2000 cm³ | **−1.2000** | 0.0% |
+
+  **The doubling rows are the reading a volume alone cannot give.** The distance
+  in each `move_face` fixture is a driving parameter, and doubling it doubled the
+  change -- so the expression reaches Inventor's own dimension and the feature is
+  parametric in fact rather than in name. That is defect 11's lesson, which cost
+  four runs to learn the first time and one fixture to check here.
+  `PREDICTED["move_face"]` came down 0.50 → 0.02, the fifth and last operation
+  to come off this file's placeholder.
+
+  **What `spread_pockets` did not answer, by its own design.** The occurrence
+  count is the only thing about that operation still unknown -- whether Inventor
+  places an occurrence on the reference point as well -- and two of its three
+  possible answers are the same volume. The run ruled out the third (−1.6000)
+  and separated neither of the others: the finished part reads `Plate`, `Slot`,
+  `Spread`, because a sketch-driven pattern is **one feature holding its
+  occurrences**, so the check's feature count cannot count occurrences.
+  `feature.Occurrences.Count` is what would, and nothing here has read it. A
+  limitation of the check rather than a finding, and the note it prints now says
+  where the answer is.
+
+  Three failed runs came before this, none of them about arithmetic: a wrong
+  call shape, a setter name that was a fourth spelling, and an argument order
+  that put the distance second. Every one was settled by reading the live
+  object's `ITypeInfo` rather than by another attempt, which is the whole
+  argument of `docs/INVENTOR_SETUP.md` in one operation.
+
+- **`thicken` ran against Inventor 2027.1 and came out working — the other
+  three Phase 3 surfaces did not.** *(2026-09-07.)* One live run, four
+  operations, and the value of it was not in the one that passed.
+
+  **The side is what the shared table said.** `examples/calibration/
+  thinned_wall.json` -- one wall thinned 1 mm from behind -- removed
+  **-0.2400 cm^3** against -0.2400 derived, and left the plate 79 mm wide. So a
+  `negative` layer lies behind the face where the material is, and
+  `THICKEN_SHARE` in `backend/base.py` has it right. The fixture was shaped so
+  the three ways it could go were three different numbers, because a tolerance
+  cannot catch being wrong about a side: defect 5's `trim` kept the opposite
+  half of a part while measuring 1.2% out.
+
+  **The corners close, and the simulator was 1.7% low.**
+  `examples/calibration/thickened_walls.json` -- four walls grown 1 mm outward
+  -- came back at **+1.4640 cm^3** where the four layers sum to 1.4400.
+  Inventor fills the 1 x 1 x 6 mm notch at each corner: 4 x 6 mm^3 is 0.0240,
+  and the sum is exact. That fixture shipped *reporting* which of two defensible
+  answers Inventor gave rather than asserting one, and this is what that was
+  for -- a check that had picked one would have been inventing the answer it
+  then confirmed.
+
+  `_thicken_corners` in the mock now derives the term rather than fudging it:
+  two selected faces whose normals are perpendicular share an edge, and the
+  notch is a square of the layer's own reach swept along it, `(share x t)^2 x h`.
+  A `symmetric` layer reaching half as far gets a quarter of the corner. The
+  sign is `+` in both directions, which looks wrong and is not -- growing walls
+  leaves gaps to fill, thinning them makes the layers overlap so the union
+  subtracts *less*. Both fixtures now agree with Inventor to four decimals and
+  `PREDICTED["thicken"]` came down **0.50 -> 0.02**, an extrude's tolerance,
+  because what is left is exact prism arithmetic.
+
+- **Reading the signature first was worth the second it cost, and the reason is
+  uncomfortable.** `ThickenFeatures.Add(Faces, Distance, ExtentDirection,
+  Operation, [AutomaticFaceChain], [CreateVerticalSurfaces],
+  [AutomaticBlending])`.
+
+  `CreateThickenDefinition` does not exist on this release. The backend tried it
+  first on the reasoning that a definition's properties are *named* and so
+  cannot be filled in the wrong order -- sound reasoning about a method that has
+  never existed. And there is no `IsOffset` argument: slot 4 is
+  `AutomaticFaceChain`, and the `False` passed there for the offset mode's sake
+  was landing on a flag where `False` is *also* correct, because chaining would
+  extend the selection past the faces the selector named. **A value passed for a
+  wrong reason that happens to be right is not a measurement**, and only reading
+  the signature told the two apart.
+
+  One measured call needs no guard, so the attempt list and the factor-of-four
+  result check are gone with it -- that guard existed because a variant and two
+  enum integers can be misordered without raising, and `_call_named` puts the
+  argument names at the call site where a permutation is not possible.
+
+### Fixed
+
+- **The first probe could not read anything, and the error blamed Inventor.**
+  *(2026-09-08.)* `python scripts/probe_definitions.py` on the CAD machine
+  answered `app.FileManager` -> `AttributeError: <unknown>.FileManager`, and
+  then died on `document.ComponentDefinition` with *"the application called an
+  interface that was marshalled for a different thread"*.
+
+  One cause for both. Inventor's API is apartment-threaded and the connection
+  fix pins the backend to a single COM apartment (`backend/com/marshal.py`),
+  routing every public method onto it -- so a *tool* never has to think about
+  this, because a tool only gets plain data back. **A probe is the exception**:
+  its whole job is to hold a live object and ask what it offers, and the proxy
+  hands that object back across the thread boundary where it is already dead.
+  The `AttributeError` is the worse of the two symptoms, because it reads
+  exactly like a property this release does not have. It has it.
+
+  The repository already said so -- `describe_feature` in `backend/base.py`:
+  "reading the properties *there* and returning numbers is the only way to ask
+  what Inventor actually built" -- and two sibling probes already carried the
+  helpers for it. The probe now runs entirely on the apartment and only text
+  comes back, and the helpers live in `scripts/apartment.py` instead of being
+  copied a third time.
+
+- **The drawing surface stopped at its first call, on the argument nobody
+  checked.** *(2026-09-07.)* `new_drawing` was the one call in the drawing
+  surface described as carrying no risk at all: `Documents.Add` is measured and
+  `kDrawingDocumentObject` has been in the constants table since before anything
+  used it. Both true, and the live run answered *"Creating the drawing document
+  failed: Exception occurred."*
+
+  `Documents.Add` takes a **path**. The shipped recipe says `"ISO.idw"`. A bare
+  filename is not a path, so Inventor refused and named nothing -- the error
+  this project has spent the most effort learning not to produce.
+
+  A bare name is what somebody means, though, and Inventor keeps its templates
+  in a folder it knows. `_drawing_template` resolves one against those folders
+  and their immediate subfolders, takes an absolute path as given, and where it
+  finds nothing refuses with **every path it tried** rather than the last. One
+  level, not a walk: a template found four folders deep is as likely to be
+  somebody's saved copy as the one they meant. The result detail reports which
+  template was used and where it came from, replacing a `sheet_from` that only
+  said "the template" or "Inventor's default".
+
+  **Which folders, though, was wrong in the first fix -- measured 2026-09-08.**
+  It asked `FileManager.TemplatesPath`, on the reasonable-sounding basis that a
+  file manager knows where files are. 2027.1's does not have that property: the
+  probe got `AttributeError: <unknown>.TemplatesPath` from the same object that
+  answered `GetTemplateFile` on the line above, so a real absence rather than
+  the apartment-threading artefact that looks identical. Inventor keeps those
+  paths on the *project*. `_template_folders` now asks three things in order of
+  how well each is established, strongest first: **the folder Inventor's own
+  default template is in** (`GetTemplateFile`, measured working, and it follows
+  the active project), then the active project's `TemplatesPath`, then
+  `FileManager`'s for a release that grows one.
+
+  That first source matters more than it sounds. On the machine this serves the
+  default drawing template is a Shared-drive *project* folder rather than the
+  Inventor install -- and a **.dwg** rather than an .idw. A project can put its
+  templates anywhere, so the folder has to be asked for rather than assumed.
+
+  **The listing then settled the shipped recipe.** The active project's
+  templates folder holds `Standard.idw`, `Standard.dwg` and a house
+  `OCB_Standard.idw`, and one level down under `Metric\` are `ISO.idw`,
+  `DIN.idw`, `BSI.idw`, `JIS.idw`, `GB`, `GOST` and `ANSI (mm)` -- so
+  `"ISO.idw"` resolves here, from the subfolder search rather than the folder
+  itself. Had this walked only the top level it would still be failing.
+
+  **And with a real path to a real `ISO.idw` it still failed** -- the same bare
+  "Exception occurred", on the third run. *(Fixed 2026-09-08, still unverified.)*
+  The template dates from an older Inventor and wants **migrating**:
+  interactively that is a dialog, and through the API it is silence. Migrating a
+  file is opening it and saving it, so `_drawing_from` does that on a failure and
+  retries the `Add` once.
+
+  Three things about the shape of that, because it writes to a file this project
+  does not own -- here a company template on a shared drive. It happens **on
+  failure rather than on the way past**, so a working template is never
+  rewritten as a side effect of making a drawing. It saves **only if Inventor
+  marks the document dirty**, so a template that was already current is left
+  exactly as it was. And `template_migrated` in the result detail says which
+  happened, so a run that modified a shared file says so rather than being
+  silently helpful. The retry is once: if a migrated template still will not
+  make a drawing then migration was not the reason, and a loop would turn one
+  bare "Exception occurred" into several.
+
+  The lesson is not about templates. Both causes were in what the call was
+  *given*; the enum and the method were fine all three times. "Carries no risk
+  at all" was a claim about a call, and a call is its arguments too.
+
+- **`sketch_driven_pattern` was calling a signature this release does not
+  have.** *(2026-09-07.)* Inventor's wrapper answered "Add() takes from 1 to 2
+  positional arguments but 5 were given". The measured signature is
+  **`SketchDrivenPatternFeatures.Add(Definition)`** -- one object -- so the
+  three named arguments through `_patterned` could never have worked, and
+  `_patterned` is not what builds this. It now creates a definition, sets the
+  compute type on it (`kAdjustToModelCompute`, the same measurement that made
+  patterning a hole work at all) and calls `Add(definition)`.
+
+  **And on 2026-09-08 the definition was found, by asking the live object's own
+  `ITypeInfo` rather than the type library.** The library publishes no factory
+  and no definition class; the object lists
+  **`CreateDefinition(ParentFeatures, Sketch, BasePoint, ReferenceFaces)`** with
+  the last two optional, and it produces a definition carrying `ParentFeatures`, `Sketch`, `BasePoint`, `ComputeType`
+  (default 47361, settable -- which is where the `kAdjustToModelCompute`
+  measurement goes), `Operation`, `ReferenceFaces`, `AffectedBodies`,
+  `AffectedOccurrences` and a read-only `PatternOfBody`.
+
+  So the attempt list is gone: the backend makes that one call, named through
+  `_call_named` -- `BasePoint` supplied because a recipe always names a point
+  and a centroid is not something the simulator has, `ReferenceFaces` left to
+  Inventor because nothing in a recipe says it.
+  `CreateSketchDrivenPatternDefinition` is measured absent and is gone rather
+  than kept as a fallback. **The COM half of this operation is measured now**;
+  what is unmeasured is what the part comes out as -- the occurrence count on
+  the reference point.
+
+  A wrong argument order still cannot pass silently -- a feature collection, a
+  sketch and a sketch point are three different COM types -- which is why trying
+  the factory's arguments was safe where guessing `thicken`'s were not.
+
+- **`move_face`'s setter is a fourth spelling, found by asking the object.**
+  *(2026-09-07, then 2026-09-08.)* The first run answered "Nothing on this
+  release's MoveFaceDefinition would take a direction and a distance" --
+  `SetDirectionAndDistance`, `SetDirectionMove` and
+  `SetDirectionAndDistanceMoveData` are all absent -- and `--search
+  MoveFaceType` found nothing at all, because the classes those properties
+  return are not published in the type library.
+
+  `ITypeInfo` on the live definition gave the whole interface:
+  `Faces` (get/put), a **read-only** `MoveFaceType`, a `MoveFaceTypeDefinition`
+  that is **`None`** on a fresh definition, a settable `AutomaticBlending`,
+  `Copy`, and three setters -- **`SetDirectionAndDistanceMoveType` (3
+  arguments, none optional)**, `SetPlanarMoveType` (3, one optional) and
+  `SetFreeMoveType` (1).
+
+  Three consequences. The candidate list is gone, replaced by the measured
+  name: three reasonable, narrow guesses were unanimously wrong, and one live
+  read settled it. **The type is implied rather than assigned** -- calling a
+  setter is what makes a definition that kind, so the earlier plan of setting a
+  `MoveFaceType` and then filling in its child object was reaching for a shape
+  this API does not have; deliberately *not* setting the type turned out right
+  for a reason nobody had. And **the third argument is now the only unread
+  thing in the call.**
+
+  **A second probe run then named every parameter**, from the same `GetNames`
+  call that gives the arity -- which the probe had been discarding by reading
+  only `[0]`:
+
+      SetDirectionAndDistanceMoveType(Distance, Direction, DirectionReversed)
+      SetPlanarMoveType(PointOne, PointTwo, Plane)
+      SetFreeMoveType(Transformation)
+
+  **The distance comes first.** Not the direction-then-distance every version of
+  this code assumed. A swap raises rather than building something wrong -- the
+  distance is an expression string and the direction is a COM object -- but "it
+  would have raised" is a poor substitute for knowing, so the order lives in
+  `_MOVE_FACE_SETTER_ARGUMENTS` as data, a test pins it, and
+  `_check_move_face_arguments` compares it against what the live object reports
+  before every call. A measurement stated in code and never checked against the
+  thing measured is the drift this repository writes tests about; here the thing
+  measured can simply be asked.
+
+  **And `DirectionReversed` is what `flip` was waiting for.** It went in as
+  `-(expression)` for as long as no reversal property had been read; now it is
+  the boolean the API provides, and the distance reaches Inventor exactly as the
+  caller wrote it -- which is the whole point of carrying expressions rather
+  than numbers. The feature detail reports `flip_via` so a part built either way
+  says which mechanism carried it.
+
+  The two excluded setters are measured to be what the exclusion assumed:
+  point-to-point and a transformation matrix. Neither could have accepted a
+  direction and a distance by accident, so keeping the candidate list narrow was
+  right -- provably rather than presumably.
+
+  `_parameter_names` had an off-by-one on the way in -- `GetNames` puts the
+  member's own name first, so returning the tuple whole made `[2]` read as the
+  third argument while being the second. It drops the member name now, and
+  `tests/test_move_face.py` pins which end of the tuple is which against fake
+  type information, because the fix is tuple arithmetic and the arithmetic was
+  wrong.
+
+  **So every argument of every call in this operation is measured, and nothing
+  about it has built a part.** That distinction is the point of the section in
+  `INVENTOR_SETUP.md` this still sits in.
+
+### Added
+
+- **`scripts/probe_definitions.py`**, which asks live COM objects what they
+  offer because the type library will not. *(2026-09-07.)* Its real answer is
+  **`ITypeInfo`**: makepy generates a module per type library, so an object
+  whose class the library does not publish has no wrapper to read -- but the
+  object still answers `GetTypeInfo`, and that names its members, tells a
+  property read from a property write, and says how many arguments each takes.
+  That is the one thing `com_signatures.py` cannot do, because it reads the
+  library rather than the object. `dir()` is printed beside it, and again
+  through dynamic dispatch, because the two disagree in a way that matters.
+
+  It asks this of `MoveFaceFeatures`, `MoveFaceDefinition`, whatever
+  `MoveFaceType`/`MoveFaceTypeDefinition` return, `SketchDrivenPatternFeatures`
+  and its definition -- and prints `FileManager`'s template paths with a listing
+  of the `.idw` files actually installed, which is what the drawing failure
+  turned on. It builds one scratch plate and closes it; nothing is saved. Off
+  Windows it exits with `BackendUnavailableError` and touches nothing.
+
+- **`scripts/apartment.py`**, holding the two things a probe needs to get onto
+  the thread that owns Inventor's objects. *(2026-09-08.)* There were two
+  identical copies of them in sibling probes and a third was about to be
+  written.
+
+  The probe itself needed another pass after that, its own fault rather than
+  Inventor's: it read `desc.cParams` off a `PyFUNCDESC`, which carries `args`
+  and `cParamsOpt` and no `cParams`, and the `AttributeError` killed the run
+  after one line of output. Every member is now read through `getattr` so a
+  name and its kind print even when the argument count cannot be worked out,
+  and each of the three sections is wrapped so one failure does not throw away
+  what the others learned -- exactly the lesson `probe_sweep_and_pattern.py`
+  already records about itself.
+
+  It exists because a CAD seat is the scarce thing here -- `INVENTOR_SETUP.md`
+  counts six sessions and four defects for one work axis -- and two of the four
+  remaining unmeasured surfaces are blocked on the same unpublished shape.
+
 ### Changed
 - **The published Inventor 2027 API reference was read against the whole
   repository, and four unmeasured COM paths moved onto the calls it documents.**
@@ -14,7 +328,12 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   fifty-one in the fallback table agree exactly; the three render styles are not
   on the pages read), no both-directions hole extent, no `AffectedBodies` on a
   hole, sketch orientation unpublished and therefore measured -- and settled a
-  handful of things that had been guessed:
+  handful of things that had been guessed.
+
+  Three of those four have since **run** on Inventor 2027.1, and the live reads
+  under *Measured* above are the account that stands where the two differ: a
+  measurement outranks a published signature, and a published signature outranks
+  a guess. What the reference contributed, kept because a run does not supply it:
 
   - **Drawing dimension retrieval** no longer retrieves every model dimension
     and asks each *drawing* dimension for its parameter, a property nothing
@@ -26,14 +345,15 @@ Notable changes, newest first. Dates are when the work landed, not a release.
     known by the parameter that went in, and remembered so `read_drawing` names
     it from memory rather than from the sheet. The names the old code tried
     (`RetrieveDimensions`, `AddRetrievedDimensions`) do not exist in 2027; they
-    stay as the fallback for an older seat.
-  - **`thicken`** calls the published `ThickenFeatures.Add(Faces, Distance,
-    ExtentDirection, Operation, [AutomaticFaceChain], [CreateVerticalSurfaces],
-    [AutomaticBlending])`. The `CreateThickenDefinition` it tried first exists
-    on no release, and the sixth-argument `True` it fell back to was going into
-    `CreateVerticalSurfaces` -- side faces nothing here predicts -- rather than
-    the `VerifyResults` it believed in. The factor-of-four result guard stays
-    until a run agrees.
+    stay as the fallback for an older seat. Nothing here has run: the sheet the
+    live acceptance made is the run that would reach it.
+  - **`thicken`** is the one where the page arrived *after* the measurement and
+    agreed with it: `ThickenFeatures.Add(Faces, Distance, ExtentDirection,
+    Operation, [AutomaticFaceChain], [CreateVerticalSurfaces],
+    [AutomaticBlending])`, and a table saying Thicken has no definition object,
+    which is why the `CreateThickenDefinition` the backend once tried first
+    could never have existed. Three sources agree here -- the type library, the
+    reference and a built part -- and no other Phase 3 surface has all three.
   - **`thread`** calls the published `ThreadFeatures.Add(Face, StartEdge,
     ThreadInfo, [DirectionReversed], [FullDepth], ...)` instead of a
     `CreateThreadDefinition` that exists on no release, with a `ThreadInfo`
@@ -42,24 +362,24 @@ Notable changes, newest first. Dates are when the work landed, not a release.
     2027.1 makepy wrapper, like `WorkPoints.AddByPoint` was, so called late-bound
     -- and the measured `HoleFeatures.CreateTapInfo`, whose result the
     `HoleTapInfo` page says derives from `StandardThreadInfo`, second. The
-    class follows the table and the side (`2B`, `6g`). Still refused by the
-    builder: nothing has run.
-  - **`move_face`** calls the published setter,
-    `MoveFaceDefinition.SetDirectionAndDistanceMoveType(Distance, Direction,
-    [DirectionReversed])`, instead of three spellings that exist on no release
-    -- distance *first*, which a Variant slot would have accepted the wrong way
-    round without complaint; `flip` as the documented flag rather than a
-    negated expression; a sketch line refused as a direction, since the page
-    allows a work axis, a linear edge or a planar face. `MoveFaceType` is read
-    back before `Add` -- the page says a new definition starts at
-    `kFreeMoveType`, and a setter that was accepted without changing it would
-    build a move defined by nothing. The `MoveFaceTypeEnum` values are in the
-    fallback table.
-  - **`sketch_driven_pattern`** calls the published `CreateDefinition(
-    ParentFeatures, Sketch, [BasePoint], [ReferenceFaces])` and then
-    `Add(definition)`, setting `ComputeType` on the definition first. The
-    published page says `Add` takes a `SketchDrivenPatternDefinition`; the
-    three-argument `Add` the backend made before could never have worked.
+    class follows the table and the side (`2B`, `6g`). **Still the one Phase 3
+    surface with nothing measured about it**: the builder refuses it and no run
+    has reached the call.
+  - **`move_face`** got two guards from the page that the live read does not
+    give, either side of a signature the two agree on exactly
+    (`SetDirectionAndDistanceMoveType(Distance, Direction,
+    [DirectionReversed])`). A **sketch line is refused as a direction**, because
+    the page allows a work axis, a linear edge or a planar face and nothing
+    else. And `MoveFaceType` is **read back before `Add`** -- the page says a
+    new definition starts at `kFreeMoveType`, so a setter that was accepted
+    without changing the type would build a move defined by nothing. The
+    `MoveFaceTypeEnum` values are in the fallback table.
+  - **`sketch_driven_pattern`**'s published `CreateDefinition(ParentFeatures,
+    Sketch, [BasePoint], [ReferenceFaces])` and one-object `Add(definition)` are
+    the same call the live `ITypeInfo` read then named, arguments and optionality
+    included -- the two sources agreeing on a shape the type library does not
+    publish at all. The three-argument `Add` the backend made before could never
+    have worked.
   - **Edge convexity** gains Inventor's own answer, `SurfaceBody.ConvexEdges` /
     `ConcaveEdges`, read once per `select` and keyed by `Edge.TransientKey` --
     placed *behind* the measured boundary-loop method, so it decides only where
@@ -84,7 +404,9 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   surface's orientation and style names (`kBottomViewOrientation`,
   `kIsoTopLeftViewOrientation`, `kHiddenLineRemovedDrawingViewStyle`, ...) and
   the two missing `ConstraintStatusEnum` members are in the table from the same
-  pages, marked as published rather than measured.
+  pages, marked as published rather than measured. The 2026-09-08 live run then
+  checked all of them against the seat's own library: **78 of 78 values that
+  2027.1 publishes agree**, and the absences are the ones the table exists for.
 
 - **`_batch` calls `Document.Update2` and logs when Inventor says a compute
   failed.** `Update2([AcceptErrorsAndContinue]) As Boolean` is documented to

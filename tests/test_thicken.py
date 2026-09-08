@@ -60,14 +60,21 @@ class TestEachFaceGrowsAlongItsOwnNormal:
     """The property that makes this a different operation from `move_face`."""
 
     def test_four_walls_grow_outward_in_one_operation(self, session):
-        """14.4 cm^2 of wall by a 1 mm layer is 1.44 cm^3 -- the fixture's figure.
+        """14.4 cm^2 of wall by a 1 mm layer, plus the four corners it leaves.
 
         A single named direction cannot express this: the four walls point four
         ways, so moving them all along X would push two out and two in.
+
+        The corner term is measured rather than assumed. Inventor 2027.1 came
+        back at **1.4640 cm^3** on 2026-09-07 where the sum of the four layers
+        is 1.4400 -- it closes the 1 x 1 x 6 mm notch where two layers meet, and
+        4 x 6 mm^3 is the 0.024 difference exactly.
         """
         out = build(session, [layer(WALLS)])
-        assert volume(out) == pytest.approx(19.2 + 1.44, abs=5e-6)
+        assert volume(out) == pytest.approx(19.2 + 1.44 + 0.024, abs=5e-6)
         assert detail(out)["area_cm2"] == pytest.approx(14.4, abs=5e-6)
+        assert detail(out)["corner_edges"] == 4
+        assert detail(out)["corner_cm3"] == pytest.approx(0.024, abs=5e-9)
 
     def test_one_planar_face_agrees_with_move_face_to_the_digit(self, session):
         """Two independently written operations, one answer. A cross-check.
@@ -88,7 +95,10 @@ class TestTheDirectionAndOperationTable:
 
     #: (direction, operation, the volume change on the plate's 32 cm^2 top face
     #: with a 1 mm layer). Written out rather than computed from the table, so
-    #: that a change to the table has to be agreed with here.
+    #: that a change to the table has to be agreed with here. One face, so no
+    #: corner term: these figures are unaffected by it, which is also why
+    #: `thinned_wall` measured exactly against Inventor before the corners were
+    #: understood at all.
     CASES = [
         ("positive", "join", +3.2),
         ("positive", "cut", 0.0),
@@ -247,8 +257,12 @@ class TestTheThicknessIsAnExpression:
                      parameters=[{"name": "wall", "value": value}])
 
     def test_the_volume_follows_the_parameter(self, session):
-        assert volume(self.each(session, 1)) == pytest.approx(20.64, abs=5e-6)
-        assert volume(self.each(session, 2)) == pytest.approx(22.08, abs=5e-6)
+        """And the corner term follows it too, as the square that it is: the
+        layer doubles and the four corners quadruple, 0.024 to 0.096."""
+        assert volume(self.each(session, 1)) == pytest.approx(20.664, abs=5e-6)
+        assert volume(self.each(session, 2)) == pytest.approx(22.176, abs=5e-6)
+        assert detail(self.each(session, 2))["corner_cm3"] == pytest.approx(
+            0.096, abs=5e-9)
 
     def test_the_expression_reaches_the_report_and_not_just_its_value(self, session):
         assert detail(self.each(session, 1))["thickness"]["expression"] == "wall"

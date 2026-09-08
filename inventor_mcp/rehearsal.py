@@ -112,19 +112,41 @@ from .session import DocumentContext
 #: accurate in the same pass and their entries stayed put: one live datapoint
 #: each is not a basis for a tolerance, and tightening on a hunch is the mistake
 #: this table exists to catch.
-#: `move_face` is at 0.50, which is this file's own placeholder for an operation
-#: nothing has measured, and it is here rather than at `extrude`'s 0.02 for that
-#: reason alone. The arithmetic is exact in the same sense a prism's is -- a
-#: planar face of area A moved `d` along its own normal changes the solid by
-#: `A*d`, and a face slid along its own plane changes nothing, both straight out
-#: of the dot product. What is unmeasured is the whole live half: the COM call
-#: has never executed, so there is no run behind any number here. Tighten it
-#: when `--only move-face` has produced one, and not before: a tolerance set
-#: from arithmetic alone is the mistake the four entries above record fixing.
-#: What 0.50 still catches is what any tolerance under 1.0 catches -- a sign
-#: flip, and a change where none was predicted, which for this operation means
-#: Inventor moved the faces the other way or did not move them at all.
-#: `thicken` is at 0.50 for the same reason as `move_face` and one more of its
+#: `move_face` came down from the placeholder 0.50 to 0.02 on **2026-09-08**,
+#: when `--only move-face` finally produced a run. It sat at the placeholder
+#: while its arithmetic was exact and its live half had never executed, which is
+#: the distinction this table is for: `A*d` for a planar face moved along its
+#: own normal is straight out of the dot product, and a derivation is not a
+#: measurement.
+#:
+#: Inventor agreed to four decimals on both fixtures -- **+6.4000 cm^3** for the
+#: lifted cap and **+0.2400** for the widened wall -- so 0.02 is an extrude's
+#: tolerance for the same reason an extrude has it. And `lifted_face`'s second
+#: question came back too: doubling `lift` doubled the volume to **+12.8000**,
+#: so the distance expression reaches Inventor's own dimension and the feature
+#: is parametric in fact rather than in name. That is the defect 11 reading, and
+#: it is the one a volume alone cannot give.
+#: `thicken` came down from the placeholder 0.50 to 0.02 on 2026-09-07, when it
+#: was measured on Inventor 2027.1 -- and both of the things below that were
+#: unmeasured when this note was written are now answered, so read it as history:
+#:
+#: * **the side is confirmed.** `thinned_wall` removed **-0.2400 cm^3** against
+#:   -0.2400 derived, so a `negative` layer does lie behind the face and
+#:   `THICKEN_SHARE` has it right;
+#: * **the corners close.** `thickened_walls` came back **+1.4640** where the
+#:   sum of four layers is 1.4400: Inventor fills the notch where two layers
+#:   meet. The simulator does too now -- `_thicken_corners` derives `t^2 * h`
+#:   per shared edge -- and both fixtures agree to four decimals.
+#:
+#: So 0.02, the same as an extrude and a shell, because what is left is exact
+#: prism arithmetic. A curved face is still first-order and still marks the step
+#: `estimated`, which keeps it out of the comparison rather than needing a
+#: looser number here.
+#:
+#: The original note follows, because the reasoning it records is why the
+#: fixtures were shaped so the answers were distinguishable at all:
+#:
+#: `thicken` was at 0.50 for the same reason as `move_face` and one more of its
 #: own. The arithmetic is exact for a planar face -- its area times the layer --
 #: and it is first-order for a curved one, missing a term in the square of the
 #: thickness. But the number also rests on `THICKEN_SHARE`, which says which
@@ -163,8 +185,8 @@ PREDICTED = {
     "chamfer": 0.30,
     "loft": 0.35,
     "emboss": 0.40,
-    "move_face": 0.50,
-    "thicken": 0.50,
+    "move_face": 0.02,
+    "thicken": 0.02,
 }
 
 

@@ -1,32 +1,56 @@
-"""Getting at Inventor's live objects from a probe script.
+"""Getting onto the thread that owns Inventor's live objects, for a probe.
 
 The COM backend is pinned to one thread. ``_pinned`` in
 ``inventor_mcp/backend/__init__.py`` wraps it in the ``on_thread`` proxy from
 ``inventor_mcp/backend/com/marshal.py``, which routes every method onto one
 dedicated worker thread, because Inventor's API is apartment-threaded: an
-interface obtained on one thread may not be used from another.
+interface obtained on one thread may not be used from another. So a *tool*
+never has to think about this, because a tool only ever gets plain data back.
 
-So a live COM object handed back across that proxy is already dead. Touching it
-raises either "the application called an interface that was marshalled for a
-different thread" or -- worse, because it reads like a property this release
-does not have -- a bare ``AttributeError: <unknown>.SomeProperty``.
+A probe is the exception, and the reason this module exists. Its whole job is to
+hold a live COM object and ask what it offers, and the proxy hands that object
+back across the boundary where it is already dead. Two symptoms, both measured
+on 2026-09-08 and neither of them pointing at the cause:
 
-A probe therefore does all of its live-object work inside one callable handed
-to :func:`on_thread`, printing from in there or returning plain data. Only text
-and numbers cross back. ``describe_feature`` in ``inventor_mcp/backend/base.py``
-states the same rule for the backend's own callers.
+* ``document.ComponentDefinition`` raises *"the application called an interface
+  that was marshalled for a different thread"* -- the honest error;
+* ``app.FileManager`` raises a bare ``AttributeError: <unknown>.FileManager``,
+  which reads exactly like a property this release does not have. It has it.
+
+So a probe does all of its live-object work inside one callable handed to
+:func:`on_thread`, printing from in there or returning plain data. Only text and
+numbers cross back. ``describe_feature`` in ``inventor_mcp/backend/base.py``
+states the same rule for the backend's own callers: "reading the properties
+*there* and returning numbers is the only way to ask what Inventor actually
+built."
+
+Both helpers are here rather than copied into each probe because there were two
+copies already and a third was about to be written, and a probe that forgets one
+of them fails in a way that blames Inventor.
 """
 
 from __future__ import annotations
 
+from typing import Any, Callable, TypeVar
 
-def raw(backend):
-    """The backend itself, behind the marshalling proxy."""
+T = TypeVar("T")
+
+
+def raw(backend: Any) -> Any:
+    """The backend itself, behind the marshalling proxy.
+
+    ``getattr`` with a fallback rather than an attribute access, so a probe runs
+    unchanged against a backend that was never wrapped -- the mock, or a COM
+    backend built directly in a test.
+    """
     return getattr(backend, "unmarshalled", backend)
 
 
-def on_thread(backend, work):
+def on_thread(backend: Any, work: Callable[[], T]) -> T:
     """Run *work* on the apartment that owns Inventor's objects.
+
+    Everything *work* touches must be reached from inside it. Passing a live
+    object in is the same mistake as taking one out, and it fails identically.
 
     A backend with no proxy -- the simulator -- runs it here, which is the same
     thing: there is no other apartment to be on.

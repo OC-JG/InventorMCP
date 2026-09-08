@@ -20,12 +20,14 @@ SketchDrivenPattern. Work planes, work axes, work points and material are
 covered too and are not `Features`
 collections, so they sit outside the count. `boss` and
 `rib` exist as recipe operations but are built from primitives, because neither
-Inventor feature can be created through the API -- see below. **MoveFace,
-Thicken and SketchDrivenPattern are the three on that list whose COM calls have
-never executed** -- all added 2026-09-07, measured in the simulator, unmeasured
-live, and kept in the count rather than out of it because the schema offers them
-to a caller either way. Tier 1c below says what that means, and for Thicken it
-also says which half of Inventor's feature is reachable at all.
+Inventor feature can be created through the API -- see below. **MoveFace, Thicken
+and SketchDrivenPattern were the three on that list whose COM calls had never
+executed, and all three ran on Inventor 2027.1 over 2026-09-07 and -08** --
+added in the simulator first, then measured live, and each of them cost more
+runs in the call than in the arithmetic. Tier 1c below says what each run
+answered and what it left open, and for Thicken it also says which half of
+Inventor's feature is reachable at all. Thread is now the one operation in this
+server with nothing measured about it.
 
 Twenty of fifty-three flatters the gap in one direction and overstates it in
 the other: the covered ones are the high-frequency core of solid
@@ -126,10 +128,12 @@ also passes the simulator rehearsal.
     were already implemented and are confirmed here: 1.9792 cm^3 for a 6 circle
     swept 70 mm, and 13.6136 cm^3 for a 30-to-10 loft over 40 mm.
 
-### Tier 1c -- landed in the simulator, unmeasured against Inventor
+### Tier 1c -- landed in the simulator, then measured against Inventor
 
 7. **MoveFace.** *Added 2026-09-07 as `{"op":"move_face",...}`. Exact in the
-   simulator; its COM half has never executed.* Taken ahead of the other two
+   simulator, and **measured exact on Inventor 2027.1 on 2026-09-08** -- both
+   fixtures at 0.0%, and doubling each driving parameter doubled the change, so
+   the distance expression reaches Inventor's own dimension.* Taken ahead of the other two
    Tier 2 items because it is the only one that adds a kind of reach rather than
    a feature: it is the one route to changing imported geometry, and the server
    could read a STEP part for DFM analysis and then alter nothing about it,
@@ -158,15 +162,54 @@ also passes the simulator rehearsal.
 
    **What is unmeasured here is unusual, and worth naming exactly.** Every other
    COM call in this server was read off a type library before it was written.
-   This one was not: what is recorded above is that `MoveFaceFeatures` has `Add`
-   and `CreateDefinition`, and *not* what the definition's setter is called. So
-   the backend tries three spellings, each of which can only mean direction and
-   distance, and names every one it tried when none of them work -- rather than
-   one guess that comes back as a bare "Exception occurred". A free-drag or
+   This one was not: what was recorded above is that `MoveFaceFeatures` has
+   `Add` and `CreateDefinition`, and *not* what the definition's setter is
+   called. So the backend tries spellings, each of which can only mean direction
+   and distance, and names every one it tried when none work -- rather than one
+   guess that comes back as a bare "Exception occurred". A free-drag or
    point-to-point setter is deliberately not among them: one of those accepting
    a direction and a distance by accident is exactly the quietly wrong part this
-   file exists to catch. `docs/INVENTOR_SETUP.md` has what a live run must
-   confirm, and `scripts/com_signatures.py --search MoveFace` is where it starts.
+   file exists to catch.
+
+   **A live run on 2027.1 on 2026-09-07 said all three are absent**, and the
+   type library will not answer the follow-up. Asking the live
+   `MoveFaceFeatures` on 2026-09-08 confirmed it has exactly two methods --
+   `Add(Definition)` and `CreateDefinition(1 argument)` -- and that the one
+   argument is a **`FaceCollection`**: given a generic `ObjectCollection` it
+   answers "Type mismatch". The backend has always built the right kind, which
+   is why the acceptance run reached a definition and failed a step later.
+   `MoveFaceDefinition`'s own `ITypeInfo` then gave the interface the type
+   library will not: `Faces` (get/put), a **read-only** `MoveFaceType`, a
+   `MoveFaceTypeDefinition` that is **`None`** on a fresh definition, a settable
+   `AutomaticBlending`, `Copy`, and three setters --
+   **`SetDirectionAndDistanceMoveType`** with three arguments and none optional,
+   `SetPlanarMoveType` with three and one optional, and `SetFreeMoveType` with
+   one.
+
+   So the setter is a fourth spelling, and the type is *implied* rather than
+   assigned: calling one of those three is what makes a definition that kind.
+   Not setting the type on the way past -- decided when it looked like an
+   unmeasured semantic claim -- turned out to be right for a reason nobody had.
+
+   **And the parameter names came back on the second probe run**, from the same
+   `GetNames` call that gives the arity:
+   `SetDirectionAndDistanceMoveType(Distance, Direction, DirectionReversed)`.
+   The distance comes *first*, which is not the order any version of this code
+   assumed -- so it lives in `_MOVE_FACE_SETTER_ARGUMENTS` as data, a test pins
+   it, and `_check_move_face_arguments` compares it against the live object
+   before every call. `DirectionReversed` is what `flip` was waiting for: it
+   went in as `-(expression)` while no reversal property had been read, and the
+   distance now reaches Inventor as the caller wrote it. The two excluded
+   setters are measured to be point-to-point and a transformation matrix, so
+   the narrow candidate list was right provably rather than presumably.
+
+   **And then it built.** *(2026-09-08.)* `lifted_face` +6.4000 cm^3 and
+   `widened_wall` +0.2400, both 0.0% against figures derived beforehand, and
+   doubling each driving parameter doubled the change -- so the distance
+   expression reaches Inventor's own dimension and the feature is parametric in
+   fact rather than in name. `PREDICTED["move_face"]` came down 0.50 -> 0.02.
+   `docs/INVENTOR_SETUP.md` has the interface table and what each fixture was
+   shaped to catch.
 
    *Settled on paper 2026-09-08, when the `MoveFaceDefinition` page was read.*
    The setter is `SetDirectionAndDistanceMoveType`; none of the three
@@ -215,37 +258,55 @@ also passes the simulator rehearsal.
    direction is arbitrary relative to the face so the dot product has no answer,
    while here the direction *is* the face's own normal.
 
-   **What is genuinely unmeasured is a side and a corner, not a number.**
-   `THICKEN_SHARE` in `backend/base.py` says which side of a face a `negative`
-   layer lies on, and therefore that `positive` + `cut` and `negative` + `join`
-   do nothing at all -- the layer is where the material already is not, or
-   already is. That is sound set algebra about a boolean against a slab and it
-   is silent on whether Inventor agrees, so the two cancelling pairs are warned
-   about at rehearsal rather than refused: a refusal would prevent the run that
-   settles it. And four walls grown outward leave a 1 x 1 x 6 mm notch at each
-   corner belonging to no wall, so the answer is 1.4400 cm^3 if Inventor leaves
-   them and 1.4640 if it closes them. `examples/calibration/thickened_walls.json`
-   and `thinned_wall.json` isolate one question each; a tolerance cannot catch
-   being wrong about a side, which is what defect 5 was.
+   **The side and the corner were the unmeasured parts, and both were measured
+   on Inventor 2027.1 on 2026-09-07.** `THICKEN_SHARE` in `backend/base.py` says
+   which side of a face a `negative` layer lies on, and therefore that
+   `positive` + `cut` and `negative` + `join` do nothing at all -- the layer is
+   where the material already is not, or already is. That was sound set algebra
+   about a boolean against a slab and silent on whether Inventor agreed, so the
+   two cancelling pairs are warned about at rehearsal rather than refused: a
+   refusal would have prevented the run that settled it.
+   `examples/calibration/thinned_wall.json` isolated the side and removed
+   **-0.2400 cm^3** against -0.2400 derived, so the table has it right. A
+   tolerance could not have caught being wrong about a side, which is what
+   defect 5 was; three distinguishable numbers could.
 
-   The COM call has never executed. Its signature *has* been read since
-   2026-09-08 -- off Autodesk's published 2027 reference, not a type library:
+   The corner was the other one, and it went the other way. Four walls grown
+   outward leave a 1 x 1 x 6 mm notch at each corner belonging to no wall, so
+   the answer was 1.4400 cm^3 if Inventor left them and 1.4640 if it closed
+   them. `examples/calibration/thickened_walls.json` came back at **1.4640**:
+   Inventor closes them, and the simulator was 1.7% low on every multi-face
+   thicken until `_thicken_corners` added `(share x t)^2 x h` per shared edge.
+   Both fixtures now agree with Inventor to four decimals and
+   `PREDICTED["thicken"]` is 0.02, an extrude's tolerance.
+
+   **The COM call is measured too, and it was not what the code assumed.**
    `ThickenFeatures.Add(Faces, Distance, ExtentDirection, Operation,
-   [AutomaticFaceChain], [CreateVerticalSurfaces], [AutomaticBlending])`, the
-   three Booleans defaulting False, and **no definition object at all**. The
-   backend used to try a `CreateThickenDefinition` first and, failing that,
-   pass a `True` into a sixth slot it believed was a `VerifyResults` flag; that
-   slot is `CreateVerticalSurfaces`, which adds side faces nothing here
-   predicts. Both are gone, and the call is the published order with the
-   Booleans left to default and then passed explicitly as False. The
-   factor-of-four guard on the result stays until a run has confirmed it, because
-   a published order is a second source and not a measurement -- and because
-   the *side* a `negative` layer lies on was never an argument-order question.
+   [AutomaticFaceChain], [CreateVerticalSurfaces], [AutomaticBlending])`. There
+   is no `CreateThickenDefinition` on this release, so the definition route the
+   backend tried first was reaching for a method that has never existed; and
+   there is no `IsOffset` argument, so the `False` passed in slot 4 for the
+   offset mode's sake was landing on `AutomaticFaceChain` -- where `False` is
+   also correct, because chaining would extend the selection past the faces the
+   selector named. It worked for a reason that was not the reason given. The
+   factor-of-four result guard that existed because a variant and two enum
+   *integers* can be misordered without raising is gone with the attempt list:
+   `_call_named` puts the argument names at the call site, and a permutation is
+   not possible when the names are there.
+
+   Autodesk's published reference gives that same signature, arguments and
+   optionality included, and says in its own table that Thicken has no
+   definition object at all -- read 2026-09-08 off `ThickenFeatures_Add.htm`,
+   the day after the run. So the measurement has a second source behind it, and
+   this is the one Phase 3 surface where the type library, the reference and a
+   built part all agree.
 
 5. **SketchDrivenPattern.** *Added 2026-09-07 as
    `{"op":"sketch_driven_pattern",...}`. The simulator **places** its
-   occurrences, which no other pattern here does; the COM call has never
-   executed.*
+   occurrences, which no other pattern here does, and the COM call **built and
+   measured exactly on 2026-09-08** at -1.2000 cm^3. What the run did not
+   settle is the occurrence count, which is what the fixture was really for --
+   `feature.Occurrences.Count` is where that answer is.*
 
    **The gap was narrower than this entry used to claim.** It said anything
    irregular "has to be enumerated by hand", and that reads as a bigger absence
@@ -292,11 +353,33 @@ also passes the simulator rehearsal.
    shell's cavity, and a shell is not a thing anyone patterns.
 
    `PREDICTED["sketch_driven_pattern"]` is **0.02 rather than the placeholder**,
-   which looks inconsistent beside the other two unmeasured operations and is
-   not. Its arithmetic is the rule the other patterns use and is measured. What
-   is unmeasured is whether Inventor also places an occurrence on the reference
-   point -- an off-by-one *occurrence*, 33% on a three-point pattern -- and a
-   tight tolerance reports that where 0.5 would hide it.
+   which looks inconsistent beside `move_face` and is not. Its arithmetic is the
+   rule the other patterns use and is measured. What is unmeasured is whether
+   Inventor also places an occurrence on the reference point -- an off-by-one
+   *occurrence*, 33% on a three-point pattern -- and a tight tolerance reports
+   that where 0.5 would hide it.
+
+   **The COM call was run on 2027.1 on 2026-09-07 and rejected, on its shape --
+   and measured in full the next day.** `SketchDrivenPatternFeatures.Add` takes
+   **one Definition**, not the collection, sketch and point this passed through
+   `_patterned`, so the call could never have worked here.
+
+   Where the definition comes from is not in the type library at all --
+   `--search SketchDrivenPattern` publishes `Add` and nothing else -- but the
+   live object's own `ITypeInfo` lists a `CreateDefinition` taking 4 arguments,
+   2 of them optional, and `CreateDefinition(parents, sketch, point)` produces
+   a definition carrying `ParentFeatures`, `Sketch`, `BasePoint`, a settable
+   `ComputeType`, `Operation`, `ReferenceFaces`, `AffectedBodies`,
+   `AffectedOccurrences` and a read-only `PatternOfBody`. The backend makes
+   that one call, named, and sets the compute type on the definition before
+   `Add`. `scripts/probe_definitions.py` is what asked.
+
+   **It built on 2026-09-08 and measured -1.2000 cm^3 exactly**, which was
+   never the interesting part. The occurrence count still is, and that run did
+   not settle it: the finished part reads `Plate`, `Slot`, `Spread`, because a
+   sketch-driven pattern is *one* feature holding its occurrences -- so counting
+   features cannot count occurrences. `feature.Occurrences.Count` is what would,
+   and nothing here has read it.
 
 ### Tier 2 -- frequently wanted, no current workaround
 

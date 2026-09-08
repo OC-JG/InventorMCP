@@ -210,13 +210,24 @@ class TestThickenFollowsThePublishedCall:
     `VerifyResults`, which is `CreateVerticalSurfaces`."""
 
     def test_no_definition_route_and_no_true_in_an_optional_slot(self):
+        """The call is one `_call_named` with the published names in the
+        published order. The names are what make the earlier defect
+        impossible: `Distance` is a variant and the two enums are integers, so
+        a permutation would have built a part rather than raising."""
         import inspect
 
         source = inspect.getsource(com.ComBackend._add_thicken)
-        assert "CreateThickenDefinition" not in source
-        assert "(faces, thickness, direction, operation)" in source
-        assert "(faces, thickness, direction, operation, False, False, False)" in source
-        assert "operation, False, True)" not in source
+        body = source.split('"""')[-1]
+        assert "CreateThickenDefinition" not in body, \
+            "the definition route exists on no release"
+        names = [line.split('"')[1] for line in body.splitlines()
+                 if line.strip().startswith('("')]
+        assert names == ["Faces", "Distance", "ExtentDirection", "Operation",
+                         "AutomaticFaceChain", "CreateVerticalSurfaces",
+                         "AutomaticBlending"]
+        assert '("CreateVerticalSurfaces", True)' not in body, \
+            "True here adds side faces nothing predicts; it was believed to be VerifyResults"
+        assert '("AutomaticFaceChain", False)' in body
 
 
 class TestThreadFollowsThePublishedCall:
@@ -251,7 +262,10 @@ class TestMoveFaceFollowsThePublishedDefinition:
     read back, because the page says the definition starts at `kFreeMoveType`."""
 
     def test_one_setter_and_it_is_the_published_one(self):
-        assert com.ComBackend._MOVE_FACE_SETTERS == ("SetDirectionAndDistanceMoveType",)
+        """One name, not a list of candidates. The published page and the live
+        `ITypeInfo` read agree on it, which is two sources for a member the
+        type library does not publish at all."""
+        assert com.ComBackend._MOVE_FACE_SETTER == "SetDirectionAndDistanceMoveType"
 
     def test_the_move_face_type_enum_is_in_the_table(self):
         assert FALLBACK["kDirectionAndDistanceMoveType"] == 91393
@@ -262,7 +276,9 @@ class TestMoveFaceFollowsThePublishedDefinition:
         import inspect
 
         source = inspect.getsource(com.ComBackend.move_face)
-        assert "_require_direction_and_distance_type(definition)" in source
+        assert "_require_direction_and_distance_type(definition, was)" in source
+        assert "was = _move_face_type(definition)" in source, \
+            "the type before the setter is what makes the check meaningful"
         assert source.index("_require_direction_and_distance_type") < source.index("features.Add(definition)")
 
     def test_the_published_argument_order_distance_first_and_flip_as_the_flag(self):
@@ -272,8 +288,13 @@ class TestMoveFaceFollowsThePublishedDefinition:
         would not have been a type mismatch."""
         import inspect
 
+        assert com.ComBackend._MOVE_FACE_SETTER_ARGUMENTS == (
+            "Distance", "Direction", "DirectionReversed")
         source = inspect.getsource(com.ComBackend.move_face)
-        assert "setter(distance, direction, bool(request.flip))" in source
+        assert "(distance, direction, request.flip)" in source, \
+            "the values go in in the order the argument names are declared"
+        assert "self._MOVE_FACE_SETTER_ARGUMENTS,\n" in source, \
+            "named through _call_named, so the order is data rather than a call site"
         assert 'f"-({distance})"' not in source, "flip is the documented flag, not a negated expression"
         assert 'request.direction.kind not in ("work_axis", "edge")' in source
 
@@ -286,6 +307,17 @@ class TestSketchDrivenPatternIsDefinitionBased:
         import inspect
 
         source = inspect.getsource(com.ComBackend.sketch_driven_pattern)
-        assert "features.CreateDefinition(parents, sketch, reference)" in source
-        assert "_add_patterned_definition(features, definition)" in source
-        assert "_patterned(features.Add" not in source
+        assert "_sketch_driven_definition(" in source
+        assert "features.Add(definition)" in source
+        assert "_patterned(features.Add" not in source, \
+            "a three-argument Add could never have worked on this release"
+
+        factory = inspect.getsource(com.ComBackend._sketch_driven_definition)
+        body = factory.split('"""')[-1]
+        names = [line.split('"')[1] for line in body.splitlines()
+                 if line.strip().startswith('("')]
+        assert names[:3] == ["ParentFeatures", "Sketch", "BasePoint"], names
+        assert names[3] == "ReferenceFaces" and '("ReferenceFaces", DEFAULTED)' in body, \
+            "nothing in a recipe says reference faces, so Inventor's own default goes in"
+        assert "CreateSketchDrivenPatternDefinition" not in body, \
+            "measured absent, so it is gone rather than kept as a fallback"
