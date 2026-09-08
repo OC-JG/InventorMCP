@@ -998,6 +998,106 @@ class TestPromotingAPartWithoutParameters:
             {"feature": "Cavity", "property": "thickness", "name": "shell_wall"}])
         assert out["promoted"][0]["parameter"] == "shell_wall"
 
+    def test_identical_geometry_is_measured_and_not_claimed(self, server):
+        """It used to be a sentence: "each promotion holds the property's
+        current value, so the part is the same shape it was". Almost certainly
+        true, never checked, and this repository's rule is measure rather than
+        assume. Now it is two readings either side of a rebuild."""
+        self._undriven(server)
+        out = call(server, "promote_parameters")
+        check = out["identical_geometry"]
+        assert check["same"] is True
+        assert check["volume_before"] == check["volume_after"] > 0
+        assert check["volume_moved"] == 0.0
+        assert check["bounding_box_before"] == check["bounding_box_after"]
+        # A verdict with no numbers behind it is the thing this replaced.
+        assert not isinstance(check, str)
+
+    def test_geometry_that_moved_is_reported_loudly_and_not_refused(
+            self, server, session, monkeypatch):
+        """The volume drifting past the tolerance is a fault worth chasing, so
+        it is said plainly -- but the promotions still stand and are still
+        reported. Refusing halfway through would leave a part part-promoted,
+        which is worse than one whose change is stated."""
+        self._undriven(server)
+        readings = []
+        real = type(session.backend).mass_properties
+
+        def drifting(backend, doc_id):
+            properties = real(backend, doc_id)
+            readings.append(properties)
+            if len(readings) > 1:  # every reading after the baseline
+                properties.volume += 0.05
+            return properties
+
+        monkeypatch.setattr(type(session.backend), "mass_properties", drifting)
+        out = call(server, "promote_parameters")
+        check = out["identical_geometry"]
+        assert check["same"] is False
+        assert check["volume_moved"] == pytest.approx(0.05)
+        assert "NOT the shape it was" in check["note"]
+        assert [p["parameter"] for p in out["promoted"]]  # not refused
+
+    def test_a_drift_inside_inventors_own_rounding_is_still_the_same_part(
+            self, server, session, monkeypatch):
+        """The tolerance is there for rounding, not for hiding a change: a
+        tenth of it passes, and `scripts/live_acceptance.py` records why a
+        missing 9 mm hole (0.382 cm^3) cannot fit inside it."""
+        from inventor_mcp.tools.dfm import GEOMETRY_TOLERANCE
+
+        self._undriven(server)
+        readings = []
+        real = type(session.backend).mass_properties
+
+        def rounding(backend, doc_id):
+            properties = real(backend, doc_id)
+            readings.append(properties)
+            if len(readings) > 1:
+                properties.volume += GEOMETRY_TOLERANCE / 10
+            return properties
+
+        monkeypatch.setattr(type(session.backend), "mass_properties", rounding)
+        assert call(server, "promote_parameters")["identical_geometry"]["same"] is True
+
+    def test_a_backend_that_will_not_measure_says_unknown_not_identical(
+            self, server, session, monkeypatch):
+        """"I could not measure" and "it did not change" are different answers,
+        and reporting the second for the first is exactly the assumption this
+        replaced."""
+        self._undriven(server)
+        monkeypatch.setattr(type(session.backend), "mass_properties",
+                            lambda self, doc_id: (_ for _ in ()).throw(RuntimeError("no")))
+        check = call(server, "promote_parameters")["identical_geometry"]
+        assert check["same"] is None and check["measured"] is False
+        assert "unknown" in check["note"]
+
+    def test_the_comparison_happens_behind_a_rebuild(self, server, session,
+                                                     monkeypatch):
+        """Two rebuilds bracket the promotions: without the second the "after"
+        reading is of the part as it was and the check could only ever say
+        "same", and without the first the baseline is whatever state the caller
+        left the document in. Not one per promotion."""
+        self._undriven(server)
+        rebuilds = []
+        real = type(session.backend).rebuild
+        monkeypatch.setattr(type(session.backend), "rebuild",
+                            lambda backend, doc_id: (rebuilds.append(doc_id),
+                                                     real(backend, doc_id))[1])
+        out = call(server, "promote_parameters")
+        assert len(out["promoted"]) > 1
+        # One to make the baseline comparable, one to make the promotions real.
+        # Not one per promotion, which would say no more and cost per entry.
+        assert len(rebuilds) == 2
+
+    def test_a_rebuild_that_went_wrong_is_not_read_as_proof(self, server, session,
+                                                            monkeypatch):
+        self._undriven(server)
+        monkeypatch.setattr(type(session.backend), "rebuild",
+                            lambda backend, doc_id: {"ok": False, "errors": ["Cavity"]})
+        check = call(server, "promote_parameters")["identical_geometry"]
+        assert check["rebuild"]["ok"] is False
+        assert "read them as a symptom" in check["note"]
+
 
 class TestTheUnprotectableGuardLifecycle:
     """Protection standing in for a declaration nobody could read has different

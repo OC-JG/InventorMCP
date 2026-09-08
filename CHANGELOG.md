@@ -37,6 +37,58 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   version that tries `FullFileName`, `DisplayName`, `Name` and `Value` in turn,
   rather than `Name` or the bare type name.
 
+- **`promote_parameters` claimed the part was unchanged; it now measures it.**
+  The result carried a sentence — "each promotion holds the property's current
+  value, so the part is the same shape it was" — and nothing checked it. The
+  tool looped over the entries calling `promote_parameter`, synced parameters,
+  and never rebuilt or measured. Almost certainly true, and "almost certainly"
+  is what the chamfer estimate that was out by a factor of two also was.
+
+  It matters more than most claims here: promotion is offered as a safe thing to
+  do to a part nobody described, usually one imported from STEP, and it is what
+  makes the DFM loop able to drive an imported part at all. A promotion that
+  moved geometry by a rounding step would be invisible and would become the
+  baseline every later round is compared against.
+
+  `identical_geometry` is now the measurement:
+
+  ```json
+  "identical_geometry": {
+    "volume_before": 19.0625, "volume_after": 19.0625, "volume_moved": 0.0,
+    "tolerance": 0.0005, "same": true,
+    "bounding_box_before": [...], "bounding_box_after": [...]
+  }
+  ```
+
+  Four things it was worth being careful about:
+
+  - **Two rebuilds bracket the promotions, not one per entry.** Without the
+    second, the "after" reading is of the part as it was and the check could
+    only ever say "same" — a measurement that cannot fail. Without the first,
+    the baseline is whatever state the caller left the document in, which
+    `measure`'s own note says can be dirty, and a stale "before" against a fresh
+    "after" reports a difference the promotions did not cause. Per entry would
+    say no more and this tool promotes a dozen at a time. A rebuild that reports
+    trouble is attached to the result rather than quietly read as proof.
+  - **The tolerance is 5.0e-4** — cm^3 for the volume, cm (5 um) for the box —
+    which is `scripts/live_acceptance.py`'s existing figure, chosen so a missing
+    9 mm hole (0.382 cm^3) cannot hide in it, rather than a new number invented
+    here.
+  - **A drift is reported, not refused.** Refusing a promotion partway through
+    leaves a part part-promoted, which is worse than a promotion whose effect is
+    stated. `same: false` comes with both readings and says the difference is a
+    fault to chase, not a tolerance to widen.
+  - **`null` is a third answer.** A backend that will not report mass properties
+    gets `same: null, measured: false` — "I could not measure" is not "it did
+    not change".
+
+  The simulator can exercise the comparison and does, on both paths; it cannot
+  be evidence for the claim, since its `promote_parameter` edits a dictionary
+  and it reports no centre of mass. `live_acceptance.py --only promotion` takes
+  the centroid reading too — the one that catches material moving while the
+  volume holds still — and `docs/INVENTOR_SETUP.md` records what a live run has
+  to confirm.
+
 - **The server would not start from the shipped `.mcp.json`, and no client could
   say why.** Connecting to Inventor failed from Claude and from the DFM tools at
   once, with every client reporting the same four words — `Connection closed` —
@@ -799,7 +851,7 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   All 53 mutating calls on the COM backend were checked. Every public one that
   changes geometry runs inside `_batch`. Two findings recorded in `DFM.md`
   rather than changed on a guess: **`promote_parameters` reports
-  `identical_geometry` as a claim and not a measurement**, and
+  `identical_geometry` as a claim and not a measurement** (fixed above), and
   **`set_parameters(rebuild=False)` no longer skips all regeneration** — since
   defect 9 put `set_parameter` inside `_batch`, that flag now skips the explicit
   `Rebuild()` and its health report while an `Update()` happens regardless.

@@ -246,8 +246,10 @@ improve_for_manufacture()     # and now the loop can drive it
 `promote_parameters` re-authors nothing: it creates a user parameter holding the
 property's exact current expression (`wall_t = 2.5 mm`) and rewires the property
 to reference it, so the part is the identical shape afterwards — which is what
-makes this safe to do to a part somebody handed over. It promotes what discovery
-found by default, or exactly what you name:
+makes this safe to do to a part somebody handed over. That last clause is
+measured and not asserted: it reads the volume and bounding box before, rebuilds
+after, and hands back both readings under `identical_geometry` (see [below](#every-measurement-is-of-a-rebuilt-model)).
+It promotes what discovery found by default, or exactly what you name:
 
 ```
 promote_parameters(promotions=[{"feature": "Cavity", "property": "thickness", "name": "shell_wall"}])
@@ -445,7 +447,8 @@ the *file*.
 whatever state the caller left the document in, and a baseline taken on an
 un-rebuilt model makes every improvement afterwards a comparison against the
 wrong part. Three routes could deliver such a document: `promote_parameters`
-edits expressions and never rebuilds, `import_geometry` builds a part outside
+edited expressions and never rebuilt (it does now, for its own check below),
+`import_geometry` builds a part outside
 the `_batch` that supplies `document.Update()` for every feature call, and
 `set_parameters` accepts `rebuild=False`.
 
@@ -460,11 +463,37 @@ that changes geometry runs inside `_batch`, which is what calls
 nothing geometric -- `rename_feature`, `write_declaration`. Two are worth
 knowing about:
 
-- **`promote_parameters` reports `identical_geometry` as a claim, not a
-  measurement.** "Each promotion holds the property's current value, so the part
-  is the same shape it was" is almost certainly true and is not checked. In a
-  repository whose rule is measure rather than assume, that is a rebuild and a
-  volume comparison away from being real.
+- **`promote_parameters` now measures `identical_geometry` rather than
+  claiming it.** It used to be a sentence -- "each promotion holds the
+  property's current value, so the part is the same shape it was" -- almost
+  certainly true and never checked, which is the rule this repository broke
+  once already with a chamfer estimate that was out by a factor of two. Two
+  rebuilds now bracket the promotions -- one so the baseline is not whatever
+  state the caller left the document in, one so the "after" reading is of the
+  rewired part -- and it reports both readings with a `same` verdict:
+
+  ```json
+  "identical_geometry": {
+    "volume_before": 19.0625, "volume_after": 19.0625, "volume_moved": 0.0,
+    "tolerance": 0.0005, "same": true,
+    "bounding_box_before": [...], "bounding_box_after": [...]
+  }
+  ```
+
+  The tolerance is 5.0e-4 -- cm^3 for the volume, and cm (5 um) for the box --
+  which is the figure `scripts/live_acceptance.py` already uses and chose so
+  that a missing 9 mm hole (0.382 cm^3) cannot hide in it. A drift past it is
+  reported loudly and **not** refused: refusing halfway through would leave a
+  part part-promoted, which is worse than one whose change is stated. Three
+  answers are possible and they are different -- `true`, `false`, and `null`
+  for a backend that would not report mass properties at all, because "I could
+  not measure" is not "it did not change".
+
+  The simulator can only exercise the comparison, not the claim: its
+  `promote_parameter` edits a dictionary rather than an Inventor expression, and
+  it reports no centre of mass. `live_acceptance.py --only promotion` takes the
+  centroid reading too, which is what catches material moving while the volume
+  holds still.
 - **`set_parameters(rebuild=False)` no longer skips all regeneration.** Since
   defect 9 put `set_parameter` inside `_batch`, the flag skips the explicit
   `Rebuild()` and its health report, and an `Update()` happens regardless. That
