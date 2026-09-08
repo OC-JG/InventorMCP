@@ -98,6 +98,7 @@ from .constants import (
     BOOLEAN_OPERATIONS,
     DISPLAY_MODES,
     EXTENT_DIRECTIONS,
+    HEALTH_STATUS_NAMES,
     SHELL_DIRECTIONS,
     TEXT_ALIGNMENT,
     VIEW_ORIENTATIONS,
@@ -154,6 +155,13 @@ EXPORT_EXTENSIONS = {
 #: So the value is now asked of the type library by name, and when that cannot be
 #: done the statuses are reported as *uninterpreted* rather than as errors. A
 #: number nobody can translate is not evidence of anything.
+#:
+#: Since 2026-09-08 the name resolves on every release, because the published
+#: HealthStatusEnum page is in the fallback table: 2027.1's library has no such
+#: enum, so the table is the only source there will be on it, and it agrees
+#: with the measurement below -- 11778 is `kUpToDateHealth`. What that buys is
+#: that a sick feature is now reported *by name* (`kInErrorHealth`,
+#: `kCannotComputeHealth`) rather than as a bare number.
 _HEALTHY_STATUS_NAMES = ("kUpToDateHealth",)
 
 #: Status values seen on features that are demonstrably fine. This is a
@@ -398,6 +406,9 @@ class ComBackend(Backend):
         #: *name* that no code had ever assigned. See `_labelled_entity`.
         self._sketch_entities: dict[str, dict[str, dict[str, Any]]] = {}
         self._topology: dict[str, dict[str, Any]] = {}
+        #: Drawing dimensions this session retrieved, by document, each with
+        #: the model parameter it was retrieved for. See `_retrieve_by_parameter`.
+        self._retrieved: dict[str, list[tuple[Any, str]]] = {}
         self._transactions: dict[str, Any] = {}
         self._ids = count(1)
 
@@ -433,10 +444,7 @@ class ComBackend(Backend):
                     app.ScreenUpdating = previous
                 except Exception:
                     pass
-            try:
-                document.Update()
-            except Exception:
-                pass
+            _update(document)
 
     @contextmanager
     def _translate_errors(self, what: str, error_type: type[InventorMCPError] = FeatureError) -> Iterator[None]:
@@ -2826,27 +2834,33 @@ class ComBackend(Backend):
     #: a reason worth stating: the two arguments cannot be swapped silently. A
     #: direction is a COM object and a distance is an expression string, so a
     #: wrong order is a type mismatch rather than a part that builds wrongly.
-    #: Every candidate here therefore means *direction and distance* and nothing
-    #: else -- a free-drag or point-to-point setter takes different arguments
-    #: with different meanings, and one of those accepting these two by accident
-    #: is exactly the quietly wrong part this file refuses to risk.
-    #: What a list cannot rule out is a *third* argument whose default means
-    #: something, which is why `scripts/com_signatures.py --search MoveFace` is
-    #: named in the failure and in `docs/INVENTOR_SETUP.md`.
-    _MOVE_FACE_SETTERS = (
-        "SetDirectionAndDistance",
-        "SetDirectionMove",
-        "SetDirectionAndDistanceMoveData",
-    )
+    #: One name, since 2026-09-08: the published `MoveFaceDefinition` page lists
+    #: `SetDirectionAndDistanceMoveType` -- "the move is defined using a
+    #: direction and a distance along the direction" -- beside `SetFreeMoveType`
+    #: (a matrix) and `SetPlanarMoveType` (two points), neither of which takes
+    #: these two arguments. The three spellings tried before it were guesses and
+    #: none of them exists. What the page does not give is the argument list, so
+    #: a third argument with a meaningful default is still the thing to look for
+    #: in `python scripts/com_signatures.py MoveFaceDefinition`.
+    _MOVE_FACE_SETTERS = ("SetDirectionAndDistanceMoveType",)
 
     def move_face(self, doc_id: str, request: MoveFaceRequest) -> FeatureInfo:  # pragma: no cover
         """Translate faces of an existing solid along a direction.
 
         **Never executed against a real Inventor.** `docs/INVENTOR_SETUP.md`
-        keeps this with the other unmeasured COM, and the reason it is written
-        this way rather than as one call is there too: the definition object is
-        measured to exist and its setter is not, so the setter is discovered and
-        the failure names every spelling that was tried.
+        keeps this with the other unmeasured COM. The definition object is
+        measured to exist and, since 2026-09-08, its setter is published in
+        full: `SetDirectionAndDistanceMoveType(Distance As Variant, Direction
+        As Object, [DirectionReversed] As Boolean)` -- the distance *first*,
+        as a value in centimetres or a string for which "a parameter for this
+        value will be created", the direction a `WorkAxis`, a linear `Edge` or a
+        planar `Face`, and the sign a flag. So the expression goes in as
+        written, `flip` goes in as the flag rather than as a negated
+        expression, and a sketch line is refused as a direction before Inventor
+        is asked. The setter moves `MoveFaceType` from its initial
+        `kFreeMoveType` to `kDirectionAndDistanceMoveType`, and that property is
+        read back before `Add`, because a setter that was accepted and left the
+        type alone would build a feature that moves nothing along nothing.
 
         The volume before and after is read and reported, because a move-face
         that moved nothing is this operation's version of a cut that met no
@@ -2863,9 +2877,19 @@ class ComBackend(Backend):
                 hint="Run `select_topology` with the same selector to see what it matches.",
             )
         direction = self._resolve_axis(doc_id, request.direction)
+        if request.direction.kind not in ("work_axis", "edge"):
+            raise FeatureError(
+                f"A move-face direction has to be a work axis or an edge, not the "
+                f"sketch line {request.direction.value!r}.",
+                hint="The published SetDirectionAndDistanceMoveType takes a WorkAxis, "
+                "a linear Edge or a planar Face for its Direction. Use 'x', 'y', "
+                "'z', a named work_axis, or an `edge:` handle from select_topology.",
+            )
+        # The expression goes in as written and the sign goes in as the
+        # documented `DirectionReversed` flag: Inventor creates a parameter for
+        # the distance, and a parameter of `-(wall_t)` would be a negative length
+        # nobody asked for where `wall_t` reversed is what `flip` means.
         distance = request.distance.expression
-        if request.flip:
-            distance = f"-({distance})"
         before = _solid_volume(document)
         features = document.ComponentDefinition.Features.MoveFaceFeatures
         with self._batch(document), self._translate_errors("MoveFace"):
@@ -2877,7 +2901,11 @@ class ComBackend(Backend):
                     failures.append(f"{setter_name}: the definition has no such method")
                     continue
                 try:
-                    setter(direction, distance)
+                    # Published order: (Distance As Variant, Direction As Object,
+                    # [DirectionReversed] As Boolean). Distance first -- and a
+                    # Variant would take a COM object without complaint, which
+                    # is why this order came from the page and not from a try.
+                    setter(distance, direction, bool(request.flip))
                 except Exception as exc:
                     failures.append(f"{setter_name}: {_com_message(exc)}")
                     continue
@@ -2886,11 +2914,13 @@ class ComBackend(Backend):
                 raise FeatureError(
                     "Nothing on this release's MoveFaceDefinition would take a "
                     f"direction and a distance: {'; '.join(failures)}",
-                    hint="Read the real signature with `python scripts/com_signatures.py "
-                    "--search MoveFace` and follow it here. This is the one call in "
-                    "this backend that has never run against an Inventor -- "
-                    "docs/INVENTOR_SETUP.md says so and says what to confirm.",
+                    hint="The published call is SetDirectionAndDistanceMoveType("
+                    "Distance, Direction, [DirectionReversed]) -- `python "
+                    "scripts/com_signatures.py MoveFaceDefinition` reads the "
+                    "installed one. This call has never run against an Inventor; "
+                    "docs/INVENTOR_SETUP.md says what to confirm.",
                 )
+            self._require_direction_and_distance_type(definition)
             try:
                 feature = features.Add(definition)
             except Exception as exc:
@@ -2916,17 +2946,42 @@ class ComBackend(Backend):
             ),
         })
 
+    def _require_direction_and_distance_type(self, definition: Any) -> None:  # pragma: no cover
+        """Refuse a definition whose type the setter did not change.
+
+        The published page says `MoveFaceType` starts at `kFreeMoveType` and the
+        setter moves it to `kDirectionAndDistanceMoveType`. A definition still
+        at free-move after a setter that raised nothing is a move defined by no
+        matrix, and whatever `Add` made of it would not be the move asked for.
+        A release that will not report the type is let through: the fixtures
+        catch a wrong move by its volume, and refusing every move over a
+        missing property would be the shell-`both` mistake again.
+        """
+        try:
+            actual = int(definition.MoveFaceType)
+            wanted = self._k("kDirectionAndDistanceMoveType")
+        except Exception:
+            return
+        if actual != wanted:
+            raise FeatureError(
+                f"The move-face definition reports MoveFaceType {actual}, not "
+                f"kDirectionAndDistanceMoveType ({wanted}), after the setter "
+                "returned without complaint.",
+                hint="SetDirectionAndDistanceMoveType did not take, although the "
+                "published order (Distance, Direction, [DirectionReversed]) was "
+                "used. `python scripts/com_signatures.py MoveFaceDefinition` "
+                "reads the installed signature.",
+            )
+
     def _move_face_definition(self, features: Any, faces: Any) -> tuple[Any, str]:  # pragma: no cover
         """A `MoveFaceDefinition` for *faces*, and which call produced it.
 
-        Two spellings are tried for the same reason the setters are: what is
-        recorded about this collection is that it has a `CreateDefinition`, and
-        Inventor's other definition factories are named for their feature
-        (`CreateShellDefinition`, `CreateFaceDraftDefinition`), so the longer
-        name is as likely as the short one on any given release.
+        `MoveFaceFeatures.CreateDefinition` is the accessor the published
+        `MoveFaceDefinition` page names, so it is the only one tried; the
+        longer spelling this used to try as well exists on no release.
         """
         failures: list[str] = []
-        for name in ("CreateDefinition", "CreateMoveFaceDefinition"):
+        for name in ("CreateDefinition",):
             factory = getattr(features, name, None)
             if factory is None:
                 failures.append(f"{name}: MoveFaceFeatures has no such method")
@@ -2957,21 +3012,28 @@ class ComBackend(Backend):
     def thicken(self, doc_id: str, request: ThickenRequest) -> FeatureInfo:  # pragma: no cover
         """Add or remove a layer on faces, each along its own normal.
 
-        **Never executed against a real Inventor**, and its signature has never
-        been read either -- `docs/INVENTOR_SETUP.md` has the ordered list of
-        what a run must settle. What is recorded is that `ThickenFeatures.Add`
-        is public; the argument order is Inventor's documented one and is a
-        proposal.
+        **Never executed against a real Inventor.** The signature *has* been
+        read now -- off Autodesk's published 2027 reference on 2026-09-08
+        rather than off a type library, which is a second-best source and is
+        recorded as such in `docs/INVENTOR_SETUP.md`:
 
-        Two things make this riskier than `move_face` and are handled here
-        rather than left to the run. Its arguments are a variant and two enums,
-        so a wrong *order* need not raise -- it can be accepted and build
-        something enormous. And the direction-and-operation meaning is a claim
-        about Inventor: the simulator derives it from set algebra, which is
+            ThickenFeatures.Add(Faces, Distance, ExtentDirection, Operation,
+                                [AutomaticFaceChain], [CreateVerticalSurfaces],
+                                [AutomaticBlending]) As ThickenFeature
+
+        `Faces` is a `FaceCollection` or a `WorkSurface`; the three trailing
+        Booleans default False; and there is no definition object for this
+        feature at all, so the `CreateThickenDefinition` this used to try first
+        could never have existed.
+
+        What is still a claim about Inventor is the *side*: the simulator
+        derives which way a `negative` layer lies from set algebra, which is
         sound for a boolean against a slab and says nothing about whether
-        Inventor's "negative" means the same side. So the result is measured
-        against the prediction and a wild disagreement is refused, with the
-        feature deleted rather than left in the part.
+        Inventor's "negative" means the same side. So the result is still
+        measured against the area-times-thickness prediction and a wild
+        disagreement is refused, with the feature deleted rather than left in
+        the part -- a guard that a published argument order makes less
+        necessary and a live run makes unnecessary.
         """
         document = self._doc(doc_id)
         faces, matched = self._topology_selection(doc_id, request.faces)
@@ -2999,11 +3061,12 @@ class ComBackend(Backend):
                     f"{request.thickness.expression} layer, which is too far out "
                     "to be a disagreement about geometry.",
                     hint=f"The feature was built by {made_by} and has been deleted "
-                    "again. This call's argument order has never been read from a "
-                    "type library -- `python scripts/com_signatures.py "
-                    "ThickenFeatures` is how to settle it, and an order that puts "
-                    "the direction enum where the distance goes looks exactly like "
-                    "this.",
+                    "again. The argument order is the published one, so this is "
+                    "more likely a disagreement about the side a layer lies on "
+                    "than a misordered call -- `python scripts/com_signatures.py "
+                    "ThickenFeatures` reads the installed signature, and "
+                    "examples/calibration/thinned_wall.json is shaped to tell "
+                    "the sides apart.",
                 )
         return _feature_info(feature, "thicken", {
             "faces": int(faces.Count),
@@ -3017,39 +3080,32 @@ class ComBackend(Backend):
 
     def _add_thicken(self, features: Any, faces: Any,
                      request: ThickenRequest) -> tuple[Any, str]:  # pragma: no cover
-        """Build the thicken feature, by whichever route this release offers.
+        """Build the thicken feature with the published argument order.
 
-        The definition route is tried first where it exists, because a
-        definition's properties are named and so cannot be filled in the wrong
-        order -- which is the specific failure this whole method is careful
-        about. `Add`'s arguments are then Inventor's documented order and are
+        The four required arguments are Inventor's documented order and are
         never permuted: a permutation that Inventor accepts is a part built
         wrongly, and unlike `_profiles`'s two forms there is nothing here to
         tell the two apart at the call.
 
-        What *is* tried twice is the trailing `VerifyResults`, present and
-        absent. That is the same optional-with-a-default problem `AddForSolid`
-        had, where leaving it out sends a missing variant Inventor rejects as a
-        type mismatch, and appending an optional flag cannot change what the
-        earlier arguments mean.
+        Tried twice, with the three documented optional Booleans left to their
+        defaults and then passed explicitly as False. That is the same
+        optional-with-a-default problem `AddForSolid` had -- leaving one out
+        sends a missing variant some bindings reject as a type mismatch -- and
+        appending optional flags cannot change what the earlier arguments mean.
+        The values are the defaults on purpose: `CreateVerticalSurfaces` True
+        would add side faces this server has not predicted, and an earlier
+        version of this method passed a True into that slot believing it to be
+        a `VerifyResults` flag the call does not have.
         """
         direction = self._k(EXTENT_DIRECTIONS[request.direction])
         operation = self._k(BOOLEAN_OPERATIONS[request.operation])
         thickness = request.thickness.expression
         failures: list[str] = []
 
-        factory = getattr(features, "CreateThickenDefinition", None)
-        if factory is not None:
-            try:
-                definition = factory(faces, thickness, direction, operation)
-                return features.Add(definition), "CreateThickenDefinition + Add"
-            except Exception as exc:
-                failures.append(f"CreateThickenDefinition: {_com_message(exc)}")
-
-        # IsOffset is False throughout: the offset mode produces a surface body
-        # and nothing in this server can hold one. `schema.ThickenOp` says so.
-        for arguments in ((faces, thickness, direction, operation, False),
-                          (faces, thickness, direction, operation, False, True)):
+        # Faces, Distance, ExtentDirection, Operation -- then AutomaticFaceChain,
+        # CreateVerticalSurfaces, AutomaticBlending, all documented default False.
+        for arguments in ((faces, thickness, direction, operation),
+                          (faces, thickness, direction, operation, False, False, False)):
             try:
                 return features.Add(*arguments), f"Add with {len(arguments)} arguments"
             except Exception as exc:
@@ -3057,9 +3113,10 @@ class ComBackend(Backend):
 
         raise FeatureError(
             f"No route to a thicken feature on this release: {'; '.join(failures)}",
-            hint="Read what it really takes with `python scripts/com_signatures.py "
-            "ThickenFeatures`. This call has never run against an Inventor -- "
-            "docs/INVENTOR_SETUP.md says so and says what to confirm.",
+            hint="Read what the installed release takes with `python "
+            "scripts/com_signatures.py ThickenFeatures`. The order used here is "
+            "the one Autodesk publishes for 2027 and has never run against an "
+            "Inventor -- docs/INVENTOR_SETUP.md says so and says what to confirm.",
         )
 
     # -- drawings ----------------------------------------------------------
@@ -3191,7 +3248,7 @@ class ComBackend(Backend):
 
     def retrieve_dimensions(self, doc_id: str,
                             request: RetrieveRequest) -> list[DimensionInfo]:  # pragma: no cover
-        """Bring the part's own model dimensions onto a view, then keep the asked-for ones.
+        """Bring the asked-for model dimensions onto a view, and only those.
 
         **Retrieval rather than placement, and that is the design.** Every sketch
         dimension this server creates carries a parameter's expression and every
@@ -3200,18 +3257,42 @@ class ComBackend(Backend):
         a dimension by geometry would mean working out which two drawing curves
         a parameter drives, which is the guessing a recipe exists to avoid.
 
-        **The whole approach rests on one unmeasured fact**: that a retrieved
-        dimension can be asked which model parameter it came from. If it cannot,
-        there is no way to keep the asked-for dimensions and drop the rest, and
-        this method has to fail loudly rather than leave a sheet carrying every
-        dimension the model happens to hold. `_dimension_parameter` is where
-        that is asked, and the error names it.
+        **The filter runs before the retrieval, on the model side.** The first
+        version of this retrieved every model dimension onto the view and then
+        asked each *drawing* dimension which parameter it came from -- a
+        question nothing documents an answer to, and the one fact the whole
+        approach was said to rest on. The published 2027 reference (read
+        2026-09-08) offers a better route, new in 2026.1:
+
+            Sheet.GetRetrievableAnnotations2(View, [SketchAndFeatureDimensions],
+                                             [ModelObject], [DesignView])
+                As ObjectCollection
+            Sheet.RetrieveAnnotations2(ViewOrSketch, [AnnotationsToRetrieve])
+                As ObjectsEnumerator
+
+        The first returns the *model's* `DimensionConstraint` and
+        `FeatureDimension` objects (or their proxies) that could be retrieved
+        into the view -- and a `DimensionConstraint.Parameter` is documented.
+        So the asked-for ones are chosen there, by parameter name, and only
+        those are handed to the second call. Nothing is placed and deleted
+        again, and no drawing dimension is asked anything. Each is retrieved
+        on its own so the dimension that comes back is known by the parameter
+        that went in.
+
+        A release without the pair falls back to the old retrieve-then-filter
+        route, which keeps its original failure: if no retrieved dimension can
+        name its parameter, everything is removed again and the error says so.
         """
         document = self._doc(doc_id)
         view = self._drawing_view(document, request.view)
         wanted = {name: False for name in request.parameters}
         wanted.update({name: True for name in request.reference})
+        sheet = document.ActiveSheet
         with self._translate_errors("Retrieving dimensions"):
+            offered = self._retrievable_annotations(sheet, view)
+            if offered is not None:
+                return self._retrieve_by_parameter(doc_id, sheet, view, offered, wanted,
+                                                   request.view)
             retrieved = self._retrieve_onto(document, view)
             named = [(entry, self._dimension_parameter(entry)) for entry in retrieved]
             if retrieved and not any(name for _, name in named):
@@ -3236,6 +3317,71 @@ class ComBackend(Backend):
                     continue
                 kept.append(self._dimension_info(entry, request.view, name, wanted[name]))
         return kept
+
+    def _retrievable_annotations(self, sheet: Any, view: Any) -> list[Any] | None:  # pragma: no cover
+        """What Inventor offers to retrieve into *view*, or None on a release without the call.
+
+        `SketchAndFeatureDimensions` is left at its documented default of True:
+        that is the mode that returns dimension constraints and feature
+        dimensions, and False would return 3D annotations instead.
+        """
+        routine = getattr(sheet, "GetRetrievableAnnotations2", None)
+        if routine is None:
+            return None
+        return _as_list(routine(view))
+
+    def _retrieve_by_parameter(self, doc_id: str, sheet: Any, view: Any,
+                               offered: Sequence[Any], wanted: dict[str, bool],
+                               view_name: str) -> list[DimensionInfo]:  # pragma: no cover
+        """Retrieve the offered annotations whose parameter the recipe asked for.
+
+        One `RetrieveAnnotations2` call per annotation rather than one for the
+        lot, so that each drawing dimension that comes back is known by the
+        parameter that went in. That costs a COM round trip per dimension and
+        buys the thing the old design could not have: no property of a
+        `DrawingDimension` is relied on at all.
+
+        What came back is remembered against the document, so that
+        `read_drawing` can name a dimension by the parameter this session
+        retrieved it for rather than by asking the sheet -- which is the only
+        route left that rests on an undocumented property, and is now the
+        fallback for a dimension nobody here placed.
+        """
+        named = [(item, _model_parameter_name(item)) for item in offered]
+        chosen = _annotations_wanted(named, wanted)
+        if not chosen:
+            on_offer = sorted({name for _, name in named if name})
+            raise FeatureError(
+                f"Inventor offers {len(offered)} retrievable annotation(s) on view "
+                f"{view_name!r} and none of them is driven by a parameter this "
+                f"drawing asked for ({sorted(wanted)}).",
+                hint=(f"The parameters Inventor can retrieve here are {on_offer}. "
+                      if on_offer else
+                      "None of the offered annotations names a parameter at all, "
+                      "which means the model-side `Parameter` property did not "
+                      "answer -- `python scripts/com_signatures.py "
+                      "DimensionConstraint FeatureDimension` says what it is "
+                      "called on this release. ")
+                + "A parameter that drives nothing has no model dimension to "
+                "retrieve; the rehearsal warns about those before a sheet is made.",
+            )
+        app = self._require_app()
+        kept: list[DimensionInfo] = []
+        remembered = self._retrieved.setdefault(doc_id, [])
+        for item, name in chosen:
+            collection = app.TransientObjects.CreateObjectCollection()
+            collection.Add(item)
+            for entry in _as_list(sheet.RetrieveAnnotations2(view, collection)):
+                remembered.append((entry, name))
+                kept.append(self._dimension_info(entry, view_name, name, wanted[name]))
+        return kept
+
+    def _remembered_parameter(self, doc_id: str, entry: Any) -> str | None:  # pragma: no cover
+        """The parameter this session retrieved *entry* for, if it did."""
+        for placed, name in self._retrieved.get(doc_id, ()):
+            if _same_com_object(placed, entry):
+                return name
+        return None
 
     def read_drawing(self, doc_id: str) -> DrawingContents:  # pragma: no cover
         """The sheet as Inventor now has it, which is what closes the round trip.
@@ -3265,7 +3411,9 @@ class ComBackend(Backend):
         dimensions: list[DimensionInfo] = []
         for index in range(1, int(sheet.DrawingDimensions.Count) + 1):
             entry = sheet.DrawingDimensions.Item(index)
-            name = self._dimension_parameter(entry)
+            # Known by what went in, where this session retrieved it; asked of
+            # the sheet only for a dimension nobody here placed.
+            name = self._remembered_parameter(doc_id, entry) or self._dimension_parameter(entry)
             dimensions.append(self._dimension_info(
                 entry, _dimension_view_name(entry), name, _is_reference(entry)))
         return DrawingContents(
@@ -3310,15 +3458,17 @@ class ComBackend(Backend):
             reference=reference,
         )
 
-    #: How a release might offer "retrieve the model's dimensions onto this
-    #: view", tried in order. Every candidate takes the view and nothing else
-    #: that could be misread, so unlike `thicken` there is no argument-order
-    #: risk to guard against -- a wrong name raises and a wrong object is a type
+    #: How a release *before 2026.1* might offer "retrieve the model's dimensions
+    #: onto this view", tried in order. The published 2027 reference has neither
+    #: name -- `Sheet.GetRetrievableAnnotations2` / `RetrieveAnnotations2` is the
+    #: documented pair and is tried first -- so this is the fallback for an older
+    #: Inventor, kept because every candidate takes the view and nothing else
+    #: that could be misread: a wrong name raises and a wrong object is a type
     #: mismatch.
     _RETRIEVAL_ROUTES = ("RetrieveDimensions", "AddRetrievedDimensions")
 
     def _retrieve_onto(self, document: Any, view: Any) -> list[Any]:  # pragma: no cover
-        """Every dimension retrieval put on the sheet, by whichever route works.
+        """Every dimension retrieval put on the sheet, by whichever legacy route works.
 
         The returned collection is turned into a plain list immediately: the
         filter that follows deletes some of them, and deleting out of a live COM
@@ -3340,11 +3490,12 @@ class ComBackend(Backend):
             return _as_list(result)
         raise FeatureError(
             "No route to retrieving this part's model dimensions onto the view: "
-            + "; ".join(failures),
+            "this release has no Sheet.GetRetrievableAnnotations2 (2026.1 and "
+            "later), and the older names failed too: " + "; ".join(failures),
             hint="Read what this release offers with `python "
-            "scripts/com_signatures.py DrawingDimensions`. Retrieval is how this "
-            "server dimensions a drawing at all -- see the drawing section of "
-            "docs/INVENTOR_SETUP.md for why, and what to do if the answer is "
+            "scripts/com_signatures.py Sheet DrawingDimensions`. Retrieval is how "
+            "this server dimensions a drawing at all -- see the drawing section "
+            "of docs/INVENTOR_SETUP.md for why, and what to do if the answer is "
             "that no such method exists.",
         )
 
@@ -3533,42 +3684,52 @@ class ComBackend(Backend):
                               ) -> FeatureInfo:  # pragma: no cover
         """Copy features to a sketch's points.
 
-        **Never executed against a real Inventor**, and its signature has never
-        been read -- the third such call, after `move_face` and `thicken`.
-        `docs/INVENTOR_SETUP.md` has what a run must settle, and the question
-        that matters is not the signature: it is **whether Inventor puts an
-        occurrence on the reference point as well**, because that is an
-        off-by-one occurrence in the volume and a duplicate feature sitting
-        exactly on the seed.
+        **Never executed against a real Inventor.** The published pages (read
+        2026-09-08) give the whole shape: `Add(Definition As
+        SketchDrivenPatternDefinition)` -- a definition, not the three arguments
+        this passed to `Add` before, which could never have worked -- and
+        `CreateDefinition(ParentFeatures As ObjectCollection, Sketch As Object,
+        [BasePoint] As Variant, [ReferenceFaces] As Variant)`, where `BasePoint`
+        is a `SketchPoint`, `WorkPoint` or `GeometryIntent` and defaults to
+        null. The definition has `ComputeType`, `AffectedBodies` and
+        `Operation` (join or new body only). So the call below is the published
+        one, with the recipe's reference point as `BasePoint`.
 
-        `_patterned` does the work, which is why this is short. It carries the
-        argument names beside their values so the positions are documented at
-        the call, and it already handles the compute-type question a pattern of
-        a hole needs -- measured on 2027.1, where patterning a hole fails
-        outright until the compute type is `kAdjustToModelCompute`. There is no
-        reason to think a sketch-driven pattern of a hole differs.
+        The question that matters is still not the signature: it is **whether
+        Inventor puts an occurrence on the reference point as well**, because
+        that is an off-by-one occurrence in the volume and a duplicate feature
+        sitting exactly on the seed. `PREDICTED["sketch_driven_pattern"]` is
+        0.02 so that one occurrence too many on a three-point pattern, 33% out,
+        is reported rather than absorbed.
 
-        No result guard here, unlike `thicken`. The arguments are a collection,
-        a sketch and a point, so a wrong order is a type mismatch rather than a
-        part built wrongly -- and the occurrence-count question is caught by the
-        divergence check instead: `PREDICTED["sketch_driven_pattern"]` is 0.02,
-        and one occurrence too many on a three-point pattern is 33% out.
+        The compute type is set on the definition where it has one, recompute
+        first -- measured on 2027.1 for the other two patterns, where a pattern
+        of a hole fails outright until the compute type is
+        `kAdjustToModelCompute` -- and the default is the fallback.
         """
         document = self._doc(doc_id)
         parents = self._feature_collection(doc_id, request.features)
         sketch = self._sketch(doc_id, request.sketch)
+        # Inventor's own dialog offers the seed's centroid or a point you pick,
+        # and the recipe always names a point: a centroid is not something the
+        # simulator has, so a default that used one could not be rehearsed.
+        # See `_NO_CENTROID` in the mock.
         reference = self._sketch_point(sketch, request.reference_index)
         features = document.ComponentDefinition.Features.SketchDrivenPatternFeatures
         with self._batch(document), self._translate_errors("Sketch driven pattern"):
-            feature, compute = _patterned(features.Add, self._k, [
-                ("ParentFeatures", parents),
-                ("Sketch", sketch),
-                # Inventor's own dialog offers the seed's centroid or a point
-                # you pick, and the recipe always names a point: a centroid is
-                # not something the simulator has, so a default that used one
-                # could not be rehearsed. See `_NO_CENTROID` in the mock.
-                ("ReferencePoint", reference),
-            ])
+            try:
+                definition = features.CreateDefinition(parents, sketch, reference)
+            except Exception as exc:
+                raise FeatureError(
+                    f"SketchDrivenPatternFeatures.CreateDefinition refused "
+                    f"(ParentFeatures, Sketch, BasePoint): {self._explain(exc)}",
+                    hint="That is the published order. The sketch has to hold the "
+                    "points and the base point has to be one of them, a work "
+                    "point or a geometry intent -- `python "
+                    "scripts/com_signatures.py SketchDrivenPatternFeatures` reads "
+                    "the installed signature.",
+                ) from exc
+            feature, compute = self._add_patterned_definition(features, definition)
             if request.name:
                 feature.Name = request.name
         return _feature_info(feature, "sketch_driven_pattern", {
@@ -3578,6 +3739,32 @@ class ComBackend(Backend):
             "reference_index": request.reference_index,
             "compute": compute,
         })
+
+    def _add_patterned_definition(self, features: Any, definition: Any) -> tuple[Any, str]:  # pragma: no cover
+        """`features.Add(definition)`, recomputing each occurrence where the definition allows.
+
+        The definition-based shape of `_patterned`: the compute type is a
+        property on the definition rather than an argument, so it is set and
+        the same two routes are tried -- adjust to model first, the default
+        second -- reporting which one built the feature.
+        """
+        failures: list[str] = []
+        for label, enum in (("adjust to model", "kAdjustToModelCompute"), ("default", None)):
+            try:
+                if enum is not None:
+                    if not hasattr(definition, "ComputeType"):
+                        failures.append(f"{label}: the definition has no ComputeType")
+                        continue
+                    definition.ComputeType = self._k(enum)
+                return features.Add(definition), label
+            except Exception as exc:
+                failures.append(f"{label}: {_com_message(exc)}")
+        raise FeatureError(
+            "The pattern could not be created. Tried " + "; ".join(failures) + ".",
+            hint="A pattern of a hole or a cut needs each occurrence recomputed, and "
+            "each one needs material to act on. Check that every point lands on "
+            "the part.",
+        )
 
     def _sketch_point(self, sketch: Any, index: int) -> Any:  # pragma: no cover
         """The *index*-th hole-centre point of a sketch, counted as the plan counts.
@@ -3624,9 +3811,30 @@ class ComBackend(Backend):
                 feature.Name = request.name
         return _feature_info(feature, "mirror", {"plane": request.plane})
 
+    #: The work-plane kinds this backend can build. The schema accepts two more,
+    #: `angle` and `tangent`, and until 2026-09-08 a recipe asking for either
+    #: got an *offset* plane and an `ok` -- defect 12 in
+    #: docs/FEATURE_COVERAGE.md. The published calls exist
+    #: (`WorkPlanes.AddByLinePlaneAndAngle(WorkAxis, WorkPlane, Angle, Boolean)`
+    #: and `AddByPlaneAndTangent`), but an angled plane needs an axis to turn
+    #: about and the schema has no field for one, so refusing is the honest
+    #: answer until it does.
+    _WORK_PLANE_KINDS = ("offset", "midplane")
+
     def work_plane(self, doc_id: str, request: WorkPlaneRequest) -> FeatureInfo:  # pragma: no cover
         document = self._doc(doc_id)
         component = document.ComponentDefinition
+        if request.kind not in self._WORK_PLANE_KINDS:
+            raise FeatureError(
+                f"A {request.kind!r} work plane cannot be built on Inventor by this "
+                "server yet.",
+                hint="Only 'offset' and 'midplane' are implemented. Inventor's call "
+                "for an angled plane is WorkPlanes.AddByLinePlaneAndAngle(axis, "
+                "plane, angle), and the recipe schema has no field naming the axis "
+                "to turn about -- docs/FEATURE_COVERAGE.md defect 12. An offset "
+                "plane plus a sketch on it is the workaround for most angled "
+                "features.",
+            )
         base = self._resolve_plane(document, request.base, None)
         with self._batch(document), self._translate_errors("Work plane"):
             if request.kind == "midplane" and request.second:
@@ -3754,18 +3962,141 @@ class ComBackend(Backend):
                            detail={"kind": request.kind, "plane": request.plane,
                                    "measured_against_inventor": False})
 
+    #: Thread tables that `hole` + `tap` has been measured to accept on 2027.1,
+    #: in the order a designation is tried against them. A designation is
+    #: refused by a table it does not belong to, which is what makes trying the
+    #: next one safe -- the failure names the table, not the shape.
+    _THREAD_TABLES = ("ISO Metric profile", "ANSI Metric M Profile",
+                      "ANSI Unified Screw Threads")
+
     def thread(self, doc_id: str, request: ThreadRequest) -> FeatureInfo:  # pragma: no cover
+        """A cosmetic thread on a cylindrical face, by the published call.
+
+        **Refused before it gets here.** `rehearsal._KNOWN_BROKEN` still lists
+        `thread`, because nothing below has run against an Inventor; the recipe
+        route that works is a `hole` with `tap`. What changed on 2026-09-08 is
+        that the published reference names the call this used to guess at:
+
+            ThreadFeatures.Add(Face, StartEdge, ThreadInfo, [DirectionReversed],
+                               [FullDepth], [ThreadDepth], [ThreadOffset])
+
+        `Face` must be a cylinder or cone, `StartEdge` "must be an edge of the
+        input face", and `ThreadInfo` a `StandardThreadInfo` for a cylinder.
+        The `CreateThreadDefinition` this called before exists on no release.
+
+        Where the `ThreadInfo` comes from is published too, since the per-member
+        page was read on 2026-09-08:
+
+            ThreadFeatures.CreateStandardThreadInfo(Internal, RightHanded,
+                ThreadType, ThreadDesignation, Class) As StandardThreadInfo
+
+        The 2027.1 makepy wrapper does not list it -- the shape
+        `WorkPoints.AddByPoint` had, which executed regardless -- so it is called
+        late-bound in that order. `HoleFeatures.CreateTapInfo`, measured and
+        documented to make a `HoleTapInfo` that derives from
+        `StandardThreadInfo`, is the fallback, with `Internal` set on the
+        result. Every failure is named.
+        """
         document = self._doc(doc_id)
         faces = self._topology_collection(doc_id, request.faces)
-        features = document.ComponentDefinition.Features.ThreadFeatures
-        with self._batch(document), self._translate_errors("Thread"):
-            definition = features.CreateThreadDefinition(
-                faces.Item(1), request.internal, request.designation
+        if int(faces.Count) == 0:
+            raise FeatureError(
+                "No faces matched, so there is nothing to thread.",
+                hint="Run `select_topology` with the same selector; a thread wants "
+                "one cylindrical face.",
             )
-            feature = features.Add(definition)
+        face = faces.Item(1)
+        try:
+            start_edge = face.Edges.Item(1)
+        except Exception as exc:
+            raise FeatureError(
+                f"The face to thread has no edge to start from: {_com_message(exc)}",
+                hint="ThreadFeatures.Add wants an edge of the threaded face as its "
+                "StartEdge, and a face with no edges is not a cylinder.",
+            ) from exc
+        component = document.ComponentDefinition
+        features = component.Features.ThreadFeatures
+        full_depth = request.depth is None
+        with self._batch(document), self._translate_errors("Thread"):
+            info, info_from = self._thread_info(component.Features, request)
+            arguments = [face, start_edge, info, False, full_depth]
+            if request.depth is not None:
+                arguments.append(request.depth.expression)
+            try:
+                feature = features.Add(*arguments)
+            except Exception as exc:
+                raise FeatureError(
+                    f"Thread failed: {self._explain(exc)}",
+                    hint=f"ThreadInfo came from {info_from}. The published "
+                    "signature is Add(Face, StartEdge, ThreadInfo, "
+                    "[DirectionReversed], [FullDepth], [ThreadDepth], "
+                    "[ThreadOffset]); a refusal here most likely means the tap "
+                    "info is not accepted where a StandardThreadInfo is wanted, "
+                    "and `python scripts/com_signatures.py --search ThreadInfo` "
+                    "is where to look next. `hole` + `tap` is the measured route.",
+                ) from exc
             if request.name:
                 feature.Name = request.name
-        return _feature_info(feature, "thread", {"designation": request.designation})
+        return _feature_info(feature, "thread", {
+            "designation": request.designation,
+            "internal": request.internal,
+            "thread_info_from": info_from,
+        })
+
+    def _thread_info(self, features: Any, request: ThreadRequest) -> tuple[Any, str]:  # pragma: no cover
+        """A `StandardThreadInfo` for the designation, and which call made it.
+
+        The published `CreateStandardThreadInfo(Internal, RightHanded,
+        ThreadType, ThreadDesignation, Class)` first, in that order. The class
+        follows the table and the side, as the page's own examples do -- `2B`
+        for an internal inch thread, `6g` for an external metric one. The
+        measured `CreateTapInfo` is the fallback, its result documented to be a
+        `StandardThreadInfo`, with `Internal` set because a tap info is internal
+        by construction.
+        """
+        failures: list[str] = []
+        standard = getattr(features.ThreadFeatures, "CreateStandardThreadInfo", None)
+        if standard is None:
+            failures.append("ThreadFeatures.CreateStandardThreadInfo: no such method on "
+                            "this release")
+        else:
+            for table in self._THREAD_TABLES:
+                try:
+                    info = standard(bool(request.internal), True, table,
+                                    request.designation, _thread_class(table, request.internal))
+                except Exception as exc:
+                    failures.append(f"CreateStandardThreadInfo({table!r}): {_com_message(exc)}")
+                    continue
+                return info, f"ThreadFeatures.CreateStandardThreadInfo [{table}]"
+
+        tap = getattr(features.HoleFeatures, "CreateTapInfo", None)
+        if tap is None:
+            failures.append("HoleFeatures.CreateTapInfo: no such method on this release")
+        else:
+            for table in self._THREAD_TABLES:
+                try:
+                    info = tap(True, table, request.designation,
+                               _thread_class(table, request.internal), True)
+                except Exception as exc:
+                    failures.append(f"CreateTapInfo({table!r}): {_com_message(exc)}")
+                    continue
+                try:
+                    info.Internal = bool(request.internal)
+                except Exception as exc:
+                    failures.append(f"CreateTapInfo({table!r}): Internal is not settable "
+                                    f"({_com_message(exc)})")
+                    if not request.internal:
+                        continue
+                return info, f"HoleFeatures.CreateTapInfo [{table}]"
+        raise FeatureError(
+            f"Nothing on this release made a ThreadInfo for {request.designation!r}: "
+            + "; ".join(failures),
+            hint="A designation must carry its pitch (M8x1.25, not M8) and belong "
+            "to one of the tables tried. If every table refused, the shape of the "
+            "designation is the first thing to check; if the makers themselves are "
+            "missing, `python scripts/com_signatures.py --search ThreadInfo` says "
+            "what this release creates one with.",
+        )
 
     # -- model state -------------------------------------------------------
     def list_work_geometry(self, doc_id: str) -> dict[str, list[str]]:  # pragma: no cover
@@ -3863,6 +4194,11 @@ class ComBackend(Backend):
                 source_edges.extend(_iterate(body.Edges))
 
         candidates = source_faces if selector.kind == "face" else source_edges
+        convexity = None
+        if selector.kind == "edge":
+            convexity = _convexity_index(
+                component.SurfaceBodies.Item(index)
+                for index in range(1, int(component.SurfaceBodies.Count) + 1))
         results: list[TopoInfo] = []
         seen: set[int] = set()
         for entity in candidates:
@@ -3870,7 +4206,7 @@ class ComBackend(Backend):
             if key in seen:
                 continue
             seen.add(key)
-            info = self._describe(entity, selector.kind)
+            info = self._describe(entity, selector.kind, convexity)
             if info is not None:
                 results.append(info)
 
@@ -3898,7 +4234,8 @@ class ComBackend(Backend):
             results = results[: selector.limit]
         return results
 
-    def _describe(self, entity: Any, kind: str) -> TopoInfo | None:  # pragma: no cover
+    def _describe(self, entity: Any, kind: str,
+                  convexity_index: dict[str, set[int]] | None = None) -> TopoInfo | None:  # pragma: no cover
         handle = self._next("edge" if kind == "edge" else "face")
         try:
             evaluator = entity.Evaluator
@@ -3916,7 +4253,7 @@ class ComBackend(Backend):
             length = _edge_length(entity)
             geometry = _curve_type(entity)
             direction = _edge_direction(entity)
-            convexity, decided_by = _edge_convexity(entity)
+            convexity, decided_by = _edge_convexity(entity, convexity_index)
             info = TopoInfo(
                 id=handle,
                 kind="edge",
@@ -4047,14 +4384,16 @@ class ComBackend(Backend):
                 status = getattr(feature, "HealthStatus", None)
                 if status is None:
                     continue
-                entry = {
-                    "feature": str(feature.Name),
-                    "health_status": int(status),
-                    "suppressed": bool(getattr(feature, "Suppressed", False)),
-                }
+                entry = self._health_entry(feature, int(status))
                 if healthy is None:
                     uninterpreted.append(entry)
-                elif int(status) not in healthy:
+                elif int(status) in healthy:
+                    continue
+                elif entry["suppressed"] and entry["status"] == "kSuppressedHealth":
+                    # A suppressed feature reports itself suppressed. That is
+                    # the state asked for, not a fault in it.
+                    continue
+                else:
                     errors.append(entry)
         except Exception:
             pass
@@ -4067,6 +4406,22 @@ class ComBackend(Backend):
                 "a feature that really failed shows up in the volume."
             )
         return report
+
+    @staticmethod
+    def _health_entry(feature: Any, status: int) -> dict[str, Any]:
+        """One feature's health, with the status translated where the table can.
+
+        The name comes from the published HealthStatusEnum page rather than the
+        type library, which does not carry the enum on 2027.1 -- so it is
+        reported beside the number, not instead of it, and a value the page
+        does not list reads as ``unrecognised`` rather than being guessed at.
+        """
+        return {
+            "feature": str(feature.Name),
+            "health_status": int(status),
+            "status": HEALTH_STATUS_NAMES.get(int(status), "unrecognised"),
+            "suppressed": bool(getattr(feature, "Suppressed", False)),
+        }
 
     def _healthy_statuses(self) -> set[int] | None:  # pragma: no cover - Windows only
         """Status values meaning "fine", or None if Inventor will not say.
@@ -4255,6 +4610,18 @@ class ComBackend(Backend):
 # ---------------------------------------------------------------------------
 # Small COM helpers
 # ---------------------------------------------------------------------------
+
+
+def _thread_class(table: str, internal: bool) -> str:
+    """The thread class the published examples give for a table and a side.
+
+    `2B` and `2A` for the inch tables, `6H` and `6g` for the metric ones --
+    capital for internal, as the standards write them. A table this cannot
+    place is treated as metric, which the two metric tables tried here are.
+    """
+    if "unified" in table.lower():
+        return "2B" if internal else "2A"
+    return "6H" if internal else "6g"
 
 
 def _iterate(collection: Any) -> Iterator[Any]:  # pragma: no cover - Windows only
@@ -5183,10 +5550,62 @@ def _convexity_from_loops(edge: Any) -> str | None:  # pragma: no cover - Window
     return verdicts.pop()
 
 
-def _edge_convexity(edge: Any, _unused: Any = None) -> tuple[str | None, str]:  # pragma: no cover
+def _convexity_index(bodies: Any) -> dict[str, set[int]] | None:  # pragma: no cover
+    """Inventor's own classification of every edge on *bodies*, keyed by `TransientKey`.
+
+    `SurfaceBody.ConvexEdges` and `SurfaceBody.ConcaveEdges` are documented
+    read-only `EdgeCollection`s -- "all inside corners" in one property -- and
+    `Edge.TransientKey` is documented as an id "valid only while the document
+    state remains unchanged", which is exactly the lifetime of one `select`
+    call. Read once per selection rather than once per edge, because comparing
+    COM identities edge by edge is quadratic.
+
+    Returns None when either collection is unreadable, which is how a release
+    without them, or a fake in a test, says so. Never executed against an
+    Inventor: `docs/INVENTOR_SETUP.md` says what a run must confirm.
+    """
+    index: dict[str, set[int]] = {"convex": set(), "concave": set()}
+    try:
+        for body in bodies:
+            for verdict, attribute in (("convex", "ConvexEdges"), ("concave", "ConcaveEdges")):
+                collection = getattr(body, attribute)
+                for edge in _iterate(collection):
+                    index[verdict].add(int(edge.TransientKey))
+    except Exception:
+        return None
+    return index
+
+
+def _convexity_from_body(edge: Any, index: dict[str, set[int]] | None) -> str | None:  # pragma: no cover
+    """What the body's own convex/concave collections say about *edge*, or None."""
+    if not index:
+        return None
+    try:
+        key = int(edge.TransientKey)
+    except Exception:
+        return None
+    convex, concave = key in index["convex"], key in index["concave"]
+    if convex == concave:
+        return None  # in neither (tangent, or unclassified), or absurdly in both
+    return "convex" if convex else "concave"
+
+
+def _edge_convexity(edge: Any,
+                    index: dict[str, set[int]] | None = None) -> tuple[str | None, str]:  # pragma: no cover
     """Whether an edge is an outside corner or an inside one, and how we know.
 
-    The boundary loops give an exact answer, so they decide wherever they can.
+    The boundary loops give an exact answer and are measured, so they decide
+    wherever they can. Where they decline -- a full circle has no endpoints to
+    orient it by, which is why `flanged_shaft`'s chamfer could never ask for
+    ``convex`` -- the body's own ``ConvexEdges`` / ``ConcaveEdges`` collections
+    are asked, when the caller has read them. That is Inventor's own
+    classification and the documented one; it is placed *behind* the loops
+    rather than in front of them because the loops are measured on this
+    release and the collections have never run here, and defect 5 is what
+    happens when an unmeasured answer is trusted over a measured one. Where
+    both answer and disagree, the loops win and the disagreement is logged,
+    which is what a live run reads to decide whether the order should flip.
+
     Sampling -- taking the direction from the edge towards a point on each
     adjacent face and testing it against the other face's normal -- is only as
     good as the sample: ``Face.PointOnFace`` returns an arbitrary interior
@@ -5202,8 +5621,17 @@ def _edge_convexity(edge: Any, _unused: Any = None) -> tuple[str | None, str]:  
     which a quietly mis-filleted corner is not.
     """
     decided = _convexity_from_loops(edge)
+    body_says = _convexity_from_body(edge, index)
     if decided is not None:
+        if body_says is not None and body_says != decided:
+            logger.warning(
+                "Edge convexity: the boundary loops say %s and the body's own "
+                "collections say %s. Trusting the loops, which are measured; "
+                "this disagreement is what a live run should look at.",
+                decided, body_says)
         return (decided, "loops")
+    if body_says is not None:
+        return (body_says, "body")
     if _edge_uses(edge) is not None:
         return (None, "loops declined")
     return (_convexity_from_samples(edge), "sampled")
@@ -5298,6 +5726,46 @@ def _within_a_factor(measured: float, predicted: float, factor: float) -> bool:
 # back is evidence, and a reader that raises on the first property a release
 # spells differently produces no evidence at all. A missing answer is recorded
 # as missing and the caller can say so.
+
+
+def _model_parameter_name(annotation: Any) -> str | None:  # pragma: no cover - Windows only
+    """The parameter a retrievable model annotation is driven by, or None.
+
+    A `DimensionConstraint.Parameter` is documented; a proxy of one reaches the
+    same thing through `NativeObject`. A `FeatureDimension` is documented to
+    exist and its members are not published on the pages read here, so the same
+    two paths are tried and None is the honest answer when neither exists.
+    """
+    for path in (("Parameter", "Name"), ("NativeObject", "Parameter", "Name")):
+        current: Any = annotation
+        for step in path:
+            current = getattr(current, step, None)
+            if current is None:
+                break
+        if isinstance(current, str) and current:
+            return current
+    return None
+
+
+def _annotations_wanted(named: Sequence[tuple[Any, str | None]],
+                        wanted: dict[str, bool]) -> list[tuple[Any, str]]:
+    """The offered annotations a drawing asked for, one per parameter.
+
+    First-come per parameter: a parameter that drives both a sketch dimension
+    and a feature dimension would otherwise put two copies of one number on the
+    sheet, and a draughtsman writes each dimension once. Annotations that name
+    no parameter are skipped rather than kept -- keeping them would be the
+    "every dimension the model happens to hold" this whole route exists to
+    avoid.
+    """
+    chosen: list[tuple[Any, str]] = []
+    taken: set[str] = set()
+    for item, name in named:
+        if name is None or name not in wanted or name in taken:
+            continue
+        taken.add(name)
+        chosen.append((item, name))
+    return chosen
 
 
 def _as_list(result: Any) -> list[Any]:  # pragma: no cover - Windows only
@@ -5585,6 +6053,34 @@ def _drilling_side(requested: str, document: Any, sketch: Any,
         return True, "the plane runs through the middle of the part"
     return towards > 0, ("the part lies "
                          f"{'along' if towards > 0 else 'against'} the normal")
+
+
+def _update(document: Any) -> bool | None:  # pragma: no cover - Windows only
+    """Recompute what is out of date, and say whether Inventor reported an error.
+
+    `Document.Update2([AcceptErrorsAndContinue])` is documented to return False
+    when any entity failed to compute, where `Update` returns nothing at all --
+    so a feature that could not be built was, until now, only ever found by the
+    volume it failed to move. The result is logged rather than raised: every
+    caller of this already measures the geometry, and a warning that names the
+    document is the honest addition, not a second failure path nobody has seen
+    fire. A release without `Update2` gets `Update`, and `None` for an answer.
+    """
+    routine = getattr(document, "Update2", None)
+    try:
+        if routine is None:
+            document.Update()
+            return None
+        outcome = routine(True)
+    except Exception:
+        return None
+    if outcome is False:
+        logger.warning(
+            "Document.Update2 reported that something in %s failed to compute. "
+            "The geometry checks below are what say what; `rebuild` names the "
+            "feature and its health status.",
+            getattr(document, "DisplayName", "the document"))
+    return None if outcome is None else bool(outcome)
 
 
 def _recompute(document: Any) -> None:  # pragma: no cover - Windows only

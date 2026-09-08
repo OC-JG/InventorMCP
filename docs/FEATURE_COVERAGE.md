@@ -68,6 +68,14 @@ appears across all of Inventor.
    to try is recording the Inventor UI creating a rib and reading back what the
    resulting `RibDefinition` differs in.
 
+   *The published `RibFeatures_Add` page (read 2026-09-08) is
+   `Add(Definition As RibDefinition)` with no Remarks*, so the refusal is about
+   the definition's state and not the call. The `RibDefinition` page gives the
+   members nobody had tried: `ThicknessDirection`, `SetThicknessPlane` with
+   `kRibThicknessAtSketchPlane` / `kRibThicknessAtRoot`, `DraftAngle`, and the
+   meaning of `IsRib` -- True projects the profile *lateral* to the sketch
+   plane, False normal to it. The roadmap carries the retry.
+
    So `{"op":"rib",...}` is built by hand instead: the rib's silhouette -- its top
    edge from `start` to `end`, dropped to `root` -- as a closed profile, extruded
    symmetrically about its plane by `thickness`. Exact against Inventor: 20.88000
@@ -160,6 +168,23 @@ also passes the simulator rehearsal.
    file exists to catch. `docs/INVENTOR_SETUP.md` has what a live run must
    confirm, and `scripts/com_signatures.py --search MoveFace` is where it starts.
 
+   *Settled on paper 2026-09-08, when the `MoveFaceDefinition` page was read.*
+   The setter is `SetDirectionAndDistanceMoveType`; none of the three
+   spellings above exists, and they are gone. `MoveFaceType` starts at
+   `kFreeMoveType` (91395) and the setter moves it to
+   `kDirectionAndDistanceMoveType` (91393), so the backend reads the type back
+   before `Add` and refuses a definition the setter left alone. The setter's
+   own page gives the order -- `(Distance As Variant, Direction As Object,
+   [DirectionReversed] As Boolean)`, distance *first* -- and the code follows
+   it; the first version had the two swapped, and a Variant would have taken
+   the COM object without the type mismatch it was counting on. `flip` is the
+   documented flag now, and the direction must be a work axis, an edge or a
+   planar face, so a sketch line is refused.
+   The reference also lists `MoveFaceFeatures` among the collections read-only
+   *as properties* of `PartFeatures`; `FaceDraftFeatures` is on the same list
+   and is measured building, so that reading says nothing about whether `Add`
+   works.
+
 6. **Thicken.** *Added 2026-09-07 as `{"op":"thicken",...}`, and it closes half
    of what this item asked for.* The half it closes is the wall-thickness one: a
    layer of material added to or removed from faces, each along **its own**
@@ -203,13 +228,19 @@ also passes the simulator rehearsal.
    and `thinned_wall.json` isolate one question each; a tolerance cannot catch
    being wrong about a side, which is what defect 5 was.
 
-   The COM call has never executed and its signature has never been read, the
-   same as `move_face` -- with one difference that is handled in the code rather
-   than left to a run. Its arguments are a variant and two enum *integers*, so a
-   wrong order need not raise: it would be accepted and build something
-   enormous. So the backend measures the result against the area-times-thickness
-   prediction and refuses anything outside a factor of four, deleting the
-   feature rather than leaving it in the part.
+   The COM call has never executed. Its signature *has* been read since
+   2026-09-08 -- off Autodesk's published 2027 reference, not a type library:
+   `ThickenFeatures.Add(Faces, Distance, ExtentDirection, Operation,
+   [AutomaticFaceChain], [CreateVerticalSurfaces], [AutomaticBlending])`, the
+   three Booleans defaulting False, and **no definition object at all**. The
+   backend used to try a `CreateThickenDefinition` first and, failing that,
+   pass a `True` into a sixth slot it believed was a `VerifyResults` flag; that
+   slot is `CreateVerticalSurfaces`, which adds side faces nothing here
+   predicts. Both are gone, and the call is the published order with the
+   Booleans left to default and then passed explicitly as False. The
+   factor-of-four guard on the result stays until a run has confirmed it, because
+   a published order is a second source and not a measurement -- and because
+   the *side* a `negative` layer lies on was never an argument-order question.
 
 5. **SketchDrivenPattern.** *Added 2026-09-07 as
    `{"op":"sketch_driven_pattern",...}`. The simulator **places** its
@@ -298,9 +329,32 @@ Found by using the server rather than by reading its API surface:
   true is that no line on a face can be that face's pattern axis, which is
   defect 7 below.
 * **No sketch fillet or chamfer.** Corner rounding has to happen as a model
-  feature, which is often not where it belongs.
+  feature, which is often not where it belongs. *The call is published*
+  (2026-09-08): `SketchArcs.AddByFillet(EntityOne, EntityTwo, Radius,
+  PointOnEntityOne, PointOnEntityTwo)`, the two proximity points choosing which
+  corner. A `fillet` entry on a sketch entity's corner list is the recipe shape;
+  the roadmap's Phase 2 has it.
 * **No project geometry or sketch offset**, so a sketch cannot reference the edges
-  of the solid it sits on.
+  of the solid it sits on. *The calls are published* (2026-09-08):
+  `PlanarSketch.AddByProjectingEntity(Entity)` projects one edge, vertex, work
+  axis or work point at a time and returns reference geometry;
+  `PlanarSketches.Add(face, UseFaceEdges=True)` projects a whole face's outline
+  at creation; `PlanarSketch.ProjectedCuts.Add()` is Project Cut Edges; and
+  `OffsetSketchEntitiesUsingDistance` is the offset. A projected entity comes
+  back with `Reference = True` and bounds no material until that flag is
+  cleared, which is the detail a `project` entity has to get right. Also in the
+  roadmap's Phase 2.
+* **`work_plane` builds only `offset` and `midplane` on Inventor.** *Found
+  2026-09-08 by reading the COM backend against the schema.* `WorkPlaneOp`
+  accepts `kind: "angle"` and `"tangent"`, the simulator files both against
+  their base plane like any other, and the COM backend built an **offset**
+  plane for either and returned `ok: true` -- defect 12 below. It refuses both
+  now, and `rehearse` warns (`_KNOWN_BROKEN_FIELDS`, keyed by value through
+  `_KNOWN_BROKEN_VALUES`). The published call for the angled case is
+  `WorkPlanes.AddByLinePlaneAndAngle(WorkAxis, WorkPlane, Angle, Boolean)`,
+  which needs an axis the schema has no field for, so closing this is a schema
+  change and not a backend fix. The schema keeps both kinds so a recipe written
+  for the day it lands still validates.
 * **`hole` still only drills the primary body — on Inventor.** *Measured
   2026-09-07 and the answer is no.* The simulator honours `bodies` on a `hole`
   exactly as on an `extrude`, and it was written on 2026-09-03 expecting the COM
@@ -712,3 +766,25 @@ Each of these was hit while building real parts, and each passed
     positions means nothing was clipped at either. Three readings agreeing on
     one mechanism is what makes this a measurement rather than a number that
     came out close.
+
+12. **A `work_plane` with `kind: "angle"` or `"tangent"` built an offset plane
+    on Inventor and reported success.** *Found 2026-09-08, reading the COM
+    backend against the schema while checking the published `WorkPlanes`
+    overloads; not measured live, because the code path is unambiguous --
+    `kind` was never read.* `WorkPlaneOp` has offered four kinds since it was
+    written; `ComBackend.work_plane` handled `midplane` and fell through to
+    `AddByPlaneAndOffset` for everything else, so an angled plane came out
+    parallel to its base, every sketch on it was drawn in the wrong place, and
+    nothing raised. The simulator has the same blind spot for a different
+    reason -- `mock.work_plane` records every plane against its base whatever
+    the kind, which defect 7's note already records -- so the rehearsal agreed
+    with the build and the divergence check had nothing to compare.
+
+    Refused now, on the COM side, with the published call named in the hint
+    (`AddByLinePlaneAndAngle(WorkAxis, WorkPlane, Angle, Boolean)`) and the
+    reason it cannot simply be made: the schema has no field for the axis an
+    angled plane turns about. `rehearse` warns on the two kinds so a caller
+    learns before spending a seat. `tests/test_published_reference.py` holds
+    the three places -- schema, backend, rehearsal -- to the same two kinds.
+    The fix proper is a schema field and the simulator learning to tilt a
+    plane, which the roadmap carries as one Phase 2 item.

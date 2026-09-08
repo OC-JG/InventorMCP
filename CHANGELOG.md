@@ -4,7 +4,110 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
 ## Unreleased
 
+### Changed
+- **The published Inventor 2027 API reference was read against the whole
+  repository, and four unmeasured COM paths moved onto the calls it documents.**
+  A curated extraction of Autodesk's API User's Manual and Reference Manual
+  (`help.autodesk.com/cloudhelp/2027/ENU/Inventor-API/files/<Object>_<Member>.htm`,
+  read 2026-09-08) confirmed almost everything this repository had measured --
+  centimetres and radians, the measured enum values (forty-eight of the
+  fifty-one in the fallback table agree exactly; the three render styles are not
+  on the pages read), no both-directions hole extent, no `AffectedBodies` on a
+  hole, sketch orientation unpublished and therefore measured -- and settled a
+  handful of things that had been guessed:
+
+  - **Drawing dimension retrieval** no longer retrieves every model dimension
+    and asks each *drawing* dimension for its parameter, a property nothing
+    documents and the one fact the design was said to rest on. It follows the
+    published 2026.1 pair: `Sheet.GetRetrievableAnnotations2(view)` returns the
+    *model's* dimension constraints, whose `Parameter` is documented, so the
+    asked-for ones are chosen there and only those go to
+    `Sheet.RetrieveAnnotations2` -- one at a time, so each drawing dimension is
+    known by the parameter that went in, and remembered so `read_drawing` names
+    it from memory rather than from the sheet. The names the old code tried
+    (`RetrieveDimensions`, `AddRetrievedDimensions`) do not exist in 2027; they
+    stay as the fallback for an older seat.
+  - **`thicken`** calls the published `ThickenFeatures.Add(Faces, Distance,
+    ExtentDirection, Operation, [AutomaticFaceChain], [CreateVerticalSurfaces],
+    [AutomaticBlending])`. The `CreateThickenDefinition` it tried first exists
+    on no release, and the sixth-argument `True` it fell back to was going into
+    `CreateVerticalSurfaces` -- side faces nothing here predicts -- rather than
+    the `VerifyResults` it believed in. The factor-of-four result guard stays
+    until a run agrees.
+  - **`thread`** calls the published `ThreadFeatures.Add(Face, StartEdge,
+    ThreadInfo, [DirectionReversed], [FullDepth], ...)` instead of a
+    `CreateThreadDefinition` that exists on no release, with a `ThreadInfo`
+    from the published `ThreadFeatures.CreateStandardThreadInfo(Internal,
+    RightHanded, ThreadType, ThreadDesignation, Class)` first -- absent from the
+    2027.1 makepy wrapper, like `WorkPoints.AddByPoint` was, so called late-bound
+    -- and the measured `HoleFeatures.CreateTapInfo`, whose result the
+    `HoleTapInfo` page says derives from `StandardThreadInfo`, second. The
+    class follows the table and the side (`2B`, `6g`). Still refused by the
+    builder: nothing has run.
+  - **`move_face`** calls the published setter,
+    `MoveFaceDefinition.SetDirectionAndDistanceMoveType(Distance, Direction,
+    [DirectionReversed])`, instead of three spellings that exist on no release
+    -- distance *first*, which a Variant slot would have accepted the wrong way
+    round without complaint; `flip` as the documented flag rather than a
+    negated expression; a sketch line refused as a direction, since the page
+    allows a work axis, a linear edge or a planar face. `MoveFaceType` is read
+    back before `Add` -- the page says a new definition starts at
+    `kFreeMoveType`, and a setter that was accepted without changing it would
+    build a move defined by nothing. The `MoveFaceTypeEnum` values are in the
+    fallback table.
+  - **`sketch_driven_pattern`** calls the published `CreateDefinition(
+    ParentFeatures, Sketch, [BasePoint], [ReferenceFaces])` and then
+    `Add(definition)`, setting `ComputeType` on the definition first. The
+    published page says `Add` takes a `SketchDrivenPatternDefinition`; the
+    three-argument `Add` the backend made before could never have worked.
+  - **Edge convexity** gains Inventor's own answer, `SurfaceBody.ConvexEdges` /
+    `ConcaveEdges`, read once per `select` and keyed by `Edge.TransientKey` --
+    placed *behind* the measured boundary-loop method, so it decides only where
+    the loops decline (a circular edge, which could never ask for `convex`
+    before) and disagrees only in a log line. `convexity_from: "body"` says
+    when it did.
+
+  The rule the four follow is written down in `docs/DECISIONS.md`: a published
+  signature outranks a guess and not a measurement. `split` is the case it
+  ruled the other way -- the reference names `TrimSolid(SplitTool, Body,
+  [RemovePositiveSide])` as the documented call and the measured `SplitPart`
+  with its inverted side argument stays, because moving a measured path onto an
+  unmeasured one risks exactly the quiet side inversion defect 5 was.
+
+- **`rebuild` names a sick feature's health status.** `HealthStatusEnum` is not
+  in 2027.1's type library, so the fallback table now carries its fourteen
+  published members (`kUpToDateHealth` 11778 -- the value seven verified
+  features had reported, so the page agrees with the measurement --
+  `kInErrorHealth` 11781, `kCannotComputeHealth` 11783, ...) and each entry in
+  `rebuild`'s report carries `status` beside `health_status`. A suppressed
+  feature reporting `kSuppressedHealth` is no longer an error. The drawing
+  surface's orientation and style names (`kBottomViewOrientation`,
+  `kIsoTopLeftViewOrientation`, `kHiddenLineRemovedDrawingViewStyle`, ...) and
+  the two missing `ConstraintStatusEnum` members are in the table from the same
+  pages, marked as published rather than measured.
+
+- **`_batch` calls `Document.Update2` and logs when Inventor says a compute
+  failed.** `Update2([AcceptErrorsAndContinue]) As Boolean` is documented to
+  return False when any entity failed to compute; `Update` returns nothing,
+  which is why a feature that could not build was only ever found by the volume
+  it failed to move. Logged rather than raised -- every caller already measures
+  -- and `Update` is the fallback on a release without it.
+
 ### Fixed
+- **A `work_plane` with `kind: "angle"` or `"tangent"` built an offset plane on
+  Inventor and reported success.** `WorkPlaneOp` has offered four kinds since it
+  was written; the COM backend read `kind` only to spot `midplane` and fell
+  through to `AddByPlaneAndOffset` for the rest, so an angled plane came out
+  parallel to its base and every sketch on it was drawn in the wrong place. The
+  simulator files every plane against its base whatever the kind, so the
+  rehearsal agreed with the build. Defect 12 in `docs/FEATURE_COVERAGE.md`.
+  Refused now on the COM side with the published
+  `WorkPlanes.AddByLinePlaneAndAngle(WorkAxis, WorkPlane, Angle, Boolean)`
+  named in the hint, and warned about at rehearsal -- `_KNOWN_BROKEN_FIELDS`
+  gained a per-value form, `_KNOWN_BROKEN_VALUES`, because `kind` is set on
+  every work plane and broken for two of its four values. The fix proper needs
+  a schema field for the axis an angled plane turns about; the roadmap has it.
+
 - **Two probe scripts read live COM objects from the wrong thread, and would
   have failed only on a machine with Inventor.** `scripts/probe_hole.py` called
   `backend._doc`, `backend._require_app` and `backend._sketch` from `main()` and

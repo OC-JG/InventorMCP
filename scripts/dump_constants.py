@@ -157,6 +157,10 @@ def main(argv: list[str] | None = None) -> int:
               "unavailable on this version:")
         for name in missing:
             print(f"    {name}   (table says {FALLBACK[name]})")
+        if any(name.endswith("Health") for name in missing):
+            print("    (the *Health names are expected here on 2027.1: its library "
+                  "carries no HealthStatusEnum, and those entries come from "
+                  "Autodesk's published page instead)")
         print()
     print(f"{len(agree)} entr(ies) already correct, {len(differ)} wrong, "
           f"{len(missing)} not found.")

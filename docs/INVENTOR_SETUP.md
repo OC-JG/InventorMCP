@@ -175,7 +175,14 @@ afternoon:
   `Profiles.AddForSolid()` failed until `Combine` was supplied.
 * Inventor **infers coincident constraints** from coordinates as geometry is
   created, then rejects an explicit duplicate as invalid. Build the shared point
-  once and hand it to both entities. That covers standalone sketch points as
+  once and hand it to both entities. *The published `Sketch_Overview` says the
+  opposite* -- "The API provides no constraint inference", and that two `Add`
+  calls given the same `Point2d` make two separate points that `AddCoincident`
+  will not merge. What was measured here (the refusals above, and defect 11's
+  carrier point pinned to the projected origin) reads as inference; the two
+  accounts are recorded side by side rather than reconciled, because the code
+  does the one thing both agree on: pass the `SketchPoint` Inventor handed back
+  rather than its coordinates. That covers standalone sketch points as
   well as chained curve endpoints: a bolt circle's construction lines each end
   on a hole centre, and asking for those six coincidences explicitly was refused
   every time — while Inventor's own hole tool populated from that same sketch
@@ -277,6 +284,19 @@ occupants** and are a step worse than they were: those three had signatures read
 off a type library, and these do not. Each has its own subsection at the end,
 and the drawing one is much the largest -- it is four calls rather than one, and
 one fact it rests on has never been asked of Inventor at all.
+
+**A third kind of evidence arrived on 2026-09-08**, and it is worth placing
+between the two this file already distinguishes. Autodesk's published 2027
+reference (`help.autodesk.com/cloudhelp/2027/ENU/Inventor-API`, read as a
+curated extraction) gives argument lists for calls this file had only guessed
+at -- `ThickenFeatures.Add`, `ThreadFeatures.Add`, the drawing retrieval pair
+-- and values for an enum the type library does not carry. A published
+signature is better than a guess and worse than a measurement: it is what
+Autodesk says the call takes, on a page Autodesk edits in place, about a
+release that may not be the one installed. `docs/DECISIONS.md` records the rule
+that came out of it; the short form is that unmeasured code moved to the
+published call, measured code kept its route and gained the published one as a
+fallback, and every entry below says which it got.
 
 What a live run has to confirm, in this order:
 
@@ -471,39 +491,43 @@ for.
   relies on it.
 
 
-### `move_face`, where the signature itself is unknown
+### `move_face`, where the signature was unknown and is now published
 
-Added 2026-09-07, in another session with no Inventor to reach. The difference
-from the five above is worth being precise about, because it changes what a run
-should do first.
+Added 2026-09-07, in another session with no Inventor to reach, with a gap the
+five above did not have: the definition object was measured to exist and its
+setter was not, so the backend tried three spellings and named them all. **The
+`MoveFaceDefinition` page was read on 2026-09-08** and settles the name and
+the shape, though not the argument list:
 
-Each of those five was written against a signature somebody had read: the call
-existed in the type library, its arguments were known, and what a live run had
-to settle was behaviour. **Here even the call is uncertain.** What
-`FEATURE_COVERAGE.md` records is that `MoveFaceFeatures` has `Add` and
-`CreateDefinition` -- read off the type library -- and *not* what the definition
-object's setter is called. Nothing in this repository has ever seen a
-`MoveFaceDefinition`.
+* the setter is **`SetDirectionAndDistanceMoveType`** -- "the move is defined
+  using a direction and a distance along the direction" -- beside
+  `SetFreeMoveType` (a matrix) and `SetPlanarMoveType` (two points and an
+  optional plane). None of the three spellings tried before exists;
+* `MoveFaceType` is a property that **starts at `kFreeMoveType`** when the
+  definition is created and the setter moves it to
+  `kDirectionAndDistanceMoveType` (91393; the enum is in the fallback table).
+  So the backend reads it back before `Add` and refuses a definition the setter
+  left at free-move -- a move defined by no matrix, which is the part that
+  builds and is wrong;
+* `Faces` and `AutomaticBlending` are properties, and
+  `MoveFaceFeatures.CreateDefinition` is the accessor the page names, so the
+  longer factory spelling the backend also tried is gone.
 
-So the backend does not guess once. It tries, in order,
-`SetDirectionAndDistance`, `SetDirectionMove` and
-`SetDirectionAndDistanceMoveData`, and if none of them exist or take the
-arguments it names every attempt and its error. Two things about that list:
-
-* **Every candidate can only mean direction-and-distance.** A free-drag or
-  point-to-point setter takes different arguments with different meanings, and
-  one of those quietly accepting a direction and a distance is the failure mode
-  this whole file exists to prevent -- a part that builds and is wrong. They are
-  left out even though one of them might be the real method.
-* **A wrong argument order cannot pass silently.** The direction is a COM object
-  and the distance an expression string, so swapping them is a type mismatch.
-  What the list cannot rule out is a third argument whose default means
-  something, which is the first thing to look for in the real signature.
+The setter's own page was read next and settles the rest:
+`SetDirectionAndDistanceMoveType(Distance As Variant, Direction As Object,
+[DirectionReversed] As Boolean)`. **Distance first** -- and since it is a
+Variant, a COM object in that slot would not have been the type mismatch the
+first version of the call was counting on; the order came off the page, not
+off a try. A string distance creates a parameter, so the expression goes in as
+written. The direction is a `WorkAxis`, a linear `Edge` or a planar `Face`, so a
+sketch line is refused before Inventor is asked. And `flip` is the documented
+`DirectionReversed` flag rather than a negated expression, which answers item 3
+below before a run.
 
 **So start by reading it, not by running the check:**
 
-    python scripts/com_signatures.py --search MoveFace
-    python scripts/com_signatures.py MoveFaceFeatures
+    python scripts/com_signatures.py MoveFaceDefinition
+    python scripts/dump_constants.py --find MoveFaceType
 
 Then:
 
@@ -511,21 +535,18 @@ Then:
 
 What the run has to answer, in this order:
 
-1. **`MoveFaceFeatures.CreateDefinition(faces)`** -- that it exists under that
-   name, and takes a `FaceCollection` and nothing else. `_move_face_definition`
-   also tries `CreateMoveFaceDefinition`, because Inventor's other definition
-   factories are named for their feature (`CreateShellDefinition`,
-   `CreateFaceDraftDefinition`) and the longer name is as likely on any release.
-2. **Which setter the definition actually has**, and whether the distance goes
-   in as an expression string. Every length in this server reaches Inventor as
-   an expression so the dimension keeps its parameter; a setter that insists on
-   a number would take that away and is worth knowing about.
-3. **Whether a negative distance is accepted.** `flip` is passed as
-   `-(expression)` rather than through a reversal property, because no such
-   property has been read. If Inventor refuses it, the fix is that property, and
-   this is the cheapest thing in the run to get wrong without noticing -- a
-   refusal is loud, but a *silently ignored* sign is a face that moves the wrong
-   way, and the fixtures below are what catch it.
+1. **`MoveFaceFeatures.CreateDefinition(faces)`** -- that it takes a
+   `FaceCollection` and nothing else.
+2. **`SetDirectionAndDistanceMoveType`'s argument list**, and whether the
+   distance goes in as an expression string. Every length in this server reaches
+   Inventor as an expression so the dimension keeps its parameter; a setter that
+   insists on a number would take that away and is worth knowing about. The
+   `MoveFaceType` read-back says whether the setter took at all.
+3. ~~**Whether a negative distance is accepted.**~~ *Answered on paper*: the
+   published call has `[DirectionReversed] As Boolean`, so `flip` goes in as
+   that flag and the expression is never negated. What a run still has to show
+   is that the flag reverses the move -- a *silently ignored* flag is a face
+   that moves the wrong way, and the fixtures below are what catch it.
 
 And then the thing worth checking beyond "did it run", which for this operation
 is not one number but three. `check_move_face` builds
@@ -557,26 +578,34 @@ extrude's 0.02 once a run agrees, rather than to something in between.
 
 ### `thicken`, where the risk is a side and an argument order
 
-Added 2026-09-07, in the same session as `move_face` and with the same gap: the
-call is documented, its signature has not been read here, and nothing has run.
-Two things make it a sharper problem than `move_face` was, and both are handled
-in the code rather than left for a run to discover.
+Added 2026-09-07, in the same session as `move_face`. Nothing has run. **The
+signature has been read since**, on 2026-09-08 and off the published reference
+rather than a type library:
 
-**1. A wrong argument order need not raise.** `ThickenFeatures.Add` takes a face
-collection, a distance, a direction enum and an operation enum. The distance is
-a *variant* -- a number or an expression string -- and the enums are integers.
-So handing them over in the wrong order is not the type mismatch that makes
-`_profiles`'s two forms safe to try: Inventor would accept a thickness of 20,481
-(`kNewBodyOperation`) and build a part the size of a house, successfully.
+    ThickenFeatures.Add(Faces, Distance, ExtentDirection, Operation,
+                        [AutomaticFaceChain], [CreateVerticalSurfaces],
+                        [AutomaticBlending]) As ThickenFeature
 
-Two answers to that, both in the backend:
+`Faces` is a `FaceCollection` or a `WorkSurface`; the three trailing Booleans
+default False; and the reference's table of which features have a definition
+object says Thicken has **none** -- so the `CreateThickenDefinition` the
+backend used to try first could never have existed, and the sixth-argument
+`True` it fell back to was going into `CreateVerticalSurfaces`, which adds
+side faces nothing here predicts. Both are gone. What remains sharper than
+`move_face`, and is still handled in the code rather than left for a run:
 
-* `CreateThickenDefinition` is tried first where the release has it, because a
-  definition's properties are *named* and cannot be filled in the wrong order.
-* `Add`'s arguments are Inventor's documented order and are **never permuted**.
-  What is tried twice is only the trailing `VerifyResults`, present and absent
-  -- the same optional-with-a-default problem `AddForSolid` had, and appending an
-  optional flag cannot change what the earlier arguments mean.
+**1. A wrong argument order need not raise.** The distance is a *variant* -- a
+number or an expression string -- and the enums are integers. So an order that
+was wrong would not be the type mismatch that makes `_profiles`'s two forms
+safe to try: Inventor would accept a thickness of 20,481 (`kNewBodyOperation`)
+and build a part the size of a house, successfully. The order is the published
+one now, which makes this unlikely rather than impossible, and:
+
+* `Add`'s arguments are **never permuted**. What is tried twice is the three
+  optional Booleans, left to their documented defaults and then passed as
+  False -- the same optional-with-a-default problem `AddForSolid` had, and
+  appending flags at their default cannot change what the earlier arguments
+  mean.
 * And the result is measured. The backend predicts `area * thickness` from the
   faces it selected -- it reads `Face.Evaluator.Area` anyway for the selectors --
   and refuses anything outside a **factor of four** of that, deleting the feature
@@ -604,9 +633,10 @@ ever exercised the path.
 
 **What the run has to answer**, in this order:
 
-1. **Which route builds it at all** -- `CreateThickenDefinition` if this release
-   has one, or `Add` with five arguments or six. The feature detail reports
-   `built_by`, so a successful run says which.
+1. **Which form builds it** -- `Add` with the four published arguments, or
+   with the three optional Booleans passed explicitly. The feature detail
+   reports `built_by`, so a successful run says which; a failure on both names
+   Inventor's message for each.
 2. **The side**, via `examples/calibration/thinned_wall.json`. One wall thinned
    1 mm from behind should remove **0.2400 cm^3** and leave the plate 79 mm
    wide. Three outcomes are distinguishable: **-0.2400** confirms the table,
@@ -629,8 +659,10 @@ ever exercised the path.
     python scripts/com_signatures.py ThickenFeatures
     python scripts/live_acceptance.py --only thicken
 
-Read the signature first, as with `move_face`: it costs a second and makes the
-factor-of-four guard unnecessary.
+Read the installed signature first anyway, as with `move_face`: it costs a
+second, and a release whose `Add` differs from the published one is exactly
+what `com_signatures.py` exists to catch. The factor-of-four guard stays until a
+run agrees with the prediction.
 
 **One thing a run cannot answer, because it is not about Inventor.** The half of
 Inventor's Thicken that turns a *surface* into a wall is unreachable here, and
@@ -645,14 +677,19 @@ Tier 1c rather than as a gap in this file, since it is a fact about this server.
 The third and the lowest-risk of the three, and worth reading for what it is
 *not* worried about as much as for what it is.
 
-**Its arguments cannot be silently misordered.** A collection, a sketch and a
-point are three different COM types, so a wrong order is a type mismatch rather
-than a part built wrongly -- unlike `thicken`, whose variant-and-two-enums has
-its own factor-of-four guard for exactly that reason. And it goes through
-`_patterned`, which carries each argument's name beside its value at the call
-site and already handles the compute-type question a pattern of a hole needs
-(measured on 2027.1: patterning a hole fails outright until the compute type is
-`kAdjustToModelCompute`). So there is no attempt list and no result guard here.
+**It was calling the wrong shape, and the published page said so** (read
+2026-09-08): `SketchDrivenPatternFeatures.Add(Definition As
+SketchDrivenPatternDefinition)`. The backend had passed a collection, a sketch
+and a point straight to `Add`, which could never have worked. It now calls
+`CreateDefinition(parents, sketch, reference)`, which is the published
+`CreateDefinition(ParentFeatures As ObjectCollection, Sketch As Object,
+[BasePoint] As Variant, [ReferenceFaces] As Variant)` with the recipe's
+reference point as `BasePoint` -- then sets `ComputeType`, which the
+`SketchDrivenPatternDefinition` page lists, and calls `Add(definition)`. The
+compute-type question is the one the other two patterns settled on 2027.1: a
+pattern of a hole fails outright until each occurrence is recomputed. Nothing
+about this call is unread now; what is unmeasured is whether it runs, and the
+count.
 
 **Its arithmetic is not new either.** An occurrence does whatever its seed did,
 which is the rule `rectangular_pattern` and `circular_pattern` use and which the
@@ -709,9 +746,10 @@ name raises and a wrong number is not possible. That is a better position than
 the extrude extents were in before they were measured, where 32 of 51 fallback
 values turned out wrong.
 
-**And one fact underneath it has never been asked of Inventor.**
+**And one fact underneath it had never been asked of Inventor** -- until the
+published reference answered it from the other side.
 
-#### The fact the whole approach rests on
+#### The fact the whole approach rested on, and what replaced it
 
 Dimensions are **retrieved** from the model, not placed by geometry. The reason
 is the parts this server builds: every sketch dimension it creates carries a
@@ -721,25 +759,51 @@ parameters. Placing a dimension by geometry would mean working out which two
 drawing curves a parameter drives, which is exactly the guessing a recipe exists
 to avoid.
 
-Retrieval brings *every* model dimension onto the view, so the asked-for ones
-have to be kept and the rest removed. **That requires asking a retrieved
-dimension which model parameter it came from, and nothing here has ever held a
-`DrawingDimension`.** `_dimension_parameter` tries four documented property
-paths -- `ModelDimension.Parameter.Name` and three others -- and if none of them
-answers, `retrieve_dimensions` deletes what it retrieved and fails, rather than
-leaving a sheet carrying every dimension the model happens to hold.
+As written on 2026-09-07, retrieval brought *every* model dimension onto the
+view and the asked-for ones were kept by asking each *drawing* dimension which
+model parameter it came from -- a property of `DrawingDimension` that nothing
+documents, tried under four spellings. That was the one fact the design rested
+on, and the reference (read 2026-09-08) says the two names it tried the
+retrieval under, `RetrieveDimensions` and `AddRetrievedDimensions`, do not
+exist in 2027 at all. What exists instead, new in 2026.1, turns the question
+round:
 
-So the first thing a live run must settle, before anything else is worth
-reading:
+    Sheet.GetRetrievableAnnotations2(View, [SketchAndFeatureDimensions],
+                                     [ModelObject], [DesignView]) As ObjectCollection
+    Sheet.RetrieveAnnotations2(ViewOrSketch, [AnnotationsToRetrieve]) As ObjectsEnumerator
 
-    python scripts/com_signatures.py GeneralDimension
-    python scripts/com_signatures.py DrawingDimensions
+The first returns the **model's** `DimensionConstraint` and `FeatureDimension`
+objects (or their proxies) that could be retrieved into the view, before any
+retrieval happens. A `DimensionConstraint.Parameter` *is* documented. So the
+backend now chooses on the model side, by parameter name, and hands only the
+chosen ones to the second call -- one at a time, so the drawing dimension that
+comes back is known by the parameter that went in, is remembered against the
+document, and `read_drawing` names it from that memory. No property of a
+`DrawingDimension` is relied on for anything this session placed; the four
+property paths survive only for a dimension somebody else put on the sheet.
+Nothing is placed and deleted again. The old routes survive as a fallback for a
+release older than 2026.1, with their original failure mode.
 
-If a retrieved dimension cannot name its parameter, the retrieve-and-filter
-design does not work and the alternative is placing dimensions against
-`DrawingCurve` geometry -- a different and much larger piece of work. That is
-the one outcome that would send this back to the drawing board, and it is
-cheap to check.
+Two things are still unmeasured, and a run should read them in this order:
+
+    python scripts/com_signatures.py Sheet
+    python scripts/com_signatures.py DimensionConstraint FeatureDimension
+
+* whether `GetRetrievableAnnotations2` is in the installed release's wrapper at
+  all (it is a 2026.1 method, and 2027.1 is later, so it should be), and what
+  it returns for a part built here -- a `DimensionConstraintProxy` names its
+  parameter through `NativeObject`, and the backend tries that too;
+* ~~whether a `FeatureDimension` names a `Parameter` the same way~~ -- *settled
+  on paper the same day*: the `FeatureDimension` page lists `Parameter`
+  ("the parameter associated with the dimension") and `FeatureDimensionProxy.
+  NativeObject`, which are the two paths `_model_parameter_name` reads. What is
+  left for a seat is whether `GetRetrievableAnnotations2` hands feature
+  dimensions back at all for a part built here.
+
+The outcome that would have sent this back to the drawing board -- a retrieved
+dimension unable to name its parameter -- can no longer happen, because nothing
+asks it to. What replaces it as the worst case is the pair being absent, and
+that is a version fact rather than a design one.
 
 #### What the run has to answer, in order
 
@@ -772,9 +836,10 @@ cheap to check.
    view reaches Inventor through a similarly-named enum. `build_drawing` warns
    when a view reports facing a way it was not asked to, and that warning can
    only come from the sheet.
-4. **Retrieval**, per the section above: which route exists
-   (`RetrieveDimensions` or `AddRetrievedDimensions`), and whether the result
-   can be filtered.
+4. **Retrieval**, per the section above: that `GetRetrievableAnnotations2`
+   offers the part's dimension constraints, that they name their parameters,
+   and that `RetrieveAnnotations2` puts the chosen ones on the view. The
+   legacy names are the fallback and are not expected to exist on 2027.
 5. **`read_drawing`** -- that a sheet can be walked and its dimensions read
    with values. Everything the round trip concludes comes through here.
 
@@ -844,11 +909,22 @@ These are the parts of the COM backend most likely to need adjustment, and why:
   second axis land in `XDirectionStartPoint`. Named arguments are used now, so
   the optional slots between the two axes are left to the wrapper's defaults
   rather than filled with a guess. A single-axis pattern was never affected.
-- **`thread`** is broken on 2027.1 and known to be. `ThreadFeatures` has no
-  `CreateThreadDefinition` — the only method on it is
-  `Add(Face, StartEdge, ThreadInfo, ...)`, and nothing in the type library named
-  for threads creates a `ThreadInfo`. Until that is found, use a `hole` with
-  `tap` instead: that route is measured and works.
+- **`thread`** has never built on 2027.1 and is refused by the builder. The
+  backend used to call a `CreateThreadDefinition` that exists on no release;
+  since 2026-09-08 it follows the published `ThreadFeatures.Add(Face, StartEdge,
+  ThreadInfo, [DirectionReversed], [FullDepth], [ThreadDepth], [ThreadOffset])`,
+  with `StartEdge` an edge of the threaded face. Where the `ThreadInfo` comes
+  from is published as well, on a per-member page read the same day:
+  `ThreadFeatures.CreateStandardThreadInfo(Internal, RightHanded, ThreadType,
+  ThreadDesignation, Class) As StandardThreadInfo`, with `ThreadType` a sheet
+  name in `Thread.xls` and `Class` such as `2B` or `6g`. The 2027.1 makepy
+  wrapper does not list it -- the shape `WorkPoints.AddByPoint` had, which
+  executed regardless -- so it is called late-bound in that order, first; the
+  measured `HoleFeatures.CreateTapInfo`, whose `HoleTapInfo` the pages say
+  derives from `StandardThreadInfo`, is the fallback with `Internal` set.
+  Neither has run, so `thread` stays in `_KNOWN_BROKEN` and a `hole` with `tap`
+  is the route that works. `python scripts/live_acceptance.py --only threading`
+  is where this gets settled.
 - **A tapped hole is cut to the thread's minor diameter**, `D - 1.0825 x pitch`
   for ISO metric — 6.6469 mm for M8x1.25, measured from the removed volume to
   four decimal places. That is narrower than the 6.75 mm tapping drill, so a
@@ -860,9 +936,15 @@ These are the parts of the COM backend most likely to need adjustment, and why:
   `ANSI Unified Screw Threads` all work; `NPT` and `BSP` were refused with the
   designations tried, so their format is still unknown here.
 - **`HealthStatusEnum` is not in the type library at all** on this release, so a
-  feature's health cannot be translated by name. 11778 is what seven
-  just-built, individually verified features all reported, so it is treated as
-  healthy on that evidence and nothing else.
+  feature's health could not be translated by name from Inventor. 11778 is what
+  seven just-built, individually verified features all reported, so it was
+  treated as healthy on that evidence and nothing else. *The published page
+  agrees* (read 2026-09-08): 11778 is `kUpToDateHealth`, and the other
+  thirteen members -- `kInErrorHealth` 11781, `kCannotComputeHealth` 11783,
+  `kSuppressedHealth` 11784 and so on -- are in the fallback table from that
+  page, so `rebuild` now names a sick feature's status beside its number. On
+  this release the table is the only source for them and `dump_constants.py`
+  will report every one as "not in this type library", which is expected.
 - **Hole styles** go through Inventor's own hole methods, one per combination of
   style and extent (`AddCBoreByThroughAllExtent` and its seven siblings). Their
   argument order was taken from another project's field notes rather than
@@ -902,6 +984,20 @@ These are the parts of the COM backend most likely to need adjustment, and why:
   with `limit: 2` and got the shaft's free end *and* its flange junction, one
   convex and one concave, which removed and re-added the same 0.0884 cm³ for a
   net change of nothing. `near` says which end is meant; `convex` cannot, yet.
+
+  *A route to "yet" arrived 2026-09-08.* `SurfaceBody.ConvexEdges` and
+  `ConcaveEdges` are documented read-only `EdgeCollection`s -- Inventor's own
+  classification, in one property. The backend now reads both once per
+  `select` and keys them by `Edge.TransientKey` (documented valid while the
+  document is unchanged, which is the lifetime of one selection), and asks them
+  **only where the loops decline** -- so a circular edge can get an answer, and
+  a match reports `convexity_from: "body"` when it did. Where both the loops
+  and the body answer and disagree, the loops win and a warning is logged;
+  that log line is what a live run should look for, because it is the evidence
+  that would justify putting Inventor's own answer first. Unmeasured: whether
+  the collections classify circular edges at all, and whether they agree with
+  the loops on the 24-edge probe part. `scripts/probe_convexity.py` prints the
+  loop and sampled verdicts per edge and should gain the body's beside them.
 - **Face normals** are read via `GetNormalAtParam` with `IsParamReversed` applied.
   If `top`/`bottom` selectors pick the wrong faces, that is where to look.
 - **`FullyConstrained`** is not exposed under that name on 2027.1, so sketches

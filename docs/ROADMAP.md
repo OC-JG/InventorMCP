@@ -172,6 +172,77 @@ an ambiguous label and list the candidates):
 the finished part; a DFM loop that acts, rebuilds and re-measures rather than
 reporting and handing off; and a live build to measure against.
 
+## What the published reference changed, September 2026
+
+*Added 2026-09-08.* Autodesk's Inventor 2027 API User's Manual and Reference
+Manual were read against this repository as a curated extraction -- eleven
+files, every unpublished signature marked as such, and a verification pass that
+had already caught three of its own claims wrong. The pages themselves are at
+`help.autodesk.com/cloudhelp/2027/ENU/Inventor-API/files/`, one per object
+(`ExtrudeFeatures.htm`), one per enum, and one per member
+(`ExtrudeFeatures_Add.htm`) -- and the per-member page is the one with the
+argument list. The extraction is not in this tree; a signature that misbehaves
+is re-read from the page, not from the extraction, because Autodesk edits the
+pages in place.
+
+**Most of it confirmed what had been measured**, which is worth saying because
+the measurements cost CAD seats: centimetres and radians as database units, the
+kilogram as the mass unit, every measured enum value that the pages carry
+(forty-eight of the fallback table's fifty-one; the three render styles are not
+on the pages read), no both-directions hole extent, no `AffectedBodies` on a
+hole, `kBothSidesShellDirection` at 41219, sketch orientation unpublished for
+`PlanarSketches.Add` -- the pages recommend exactly the `SketchToModelSpace`
+probe the COM backend does -- and `Profiles.AddForSolid`'s `Combine` default.
+Where the reference and a measurement here disagree, the disagreement is
+recorded rather than resolved: the pages say the API infers no constraints,
+and this repository has measured refusals that read as inference.
+
+**Four unmeasured paths moved onto the documented call**, under a rule now in
+`DECISIONS.md` -- a published signature outranks a guess and not a measurement:
+
+- **drawing retrieval** chooses on the model side through
+  `Sheet.GetRetrievableAnnotations2`, where `DimensionConstraint.Parameter` is
+  documented, and retrieves only the chosen with `RetrieveAnnotations2`. The
+  fact the design was said to rest on -- a *drawing* dimension naming its
+  parameter, a property nothing documents -- is no longer asked. The two method
+  names the code tried do not exist in 2027;
+- **`thicken`** uses the published seven-argument `Add`; the definition object
+  it tried first exists on no release, and the `True` it fell back to was going
+  into `CreateVerticalSurfaces`;
+- **`thread`** uses the published `Add(Face, StartEdge, ThreadInfo, ...)`
+  with a `ThreadInfo` from the measured `CreateTapInfo`, which the published
+  type hierarchy says is a `StandardThreadInfo`. Still refused: unmeasured;
+- **edge convexity** asks `SurfaceBody.ConvexEdges` / `ConcaveEdges` where the
+  measured loop method declines, which is the circular edge that could never
+  ask for `convex`.
+
+`split` was ruled the other way. The documented 2027 call is `TrimSolid` with
+`RemovePositiveSide` stated plainly, and the measured `SplitPart` with its
+inverted keep-side argument stays, because moving a measured path onto an
+unmeasured one risks precisely the quiet inversion defect 5 was. It is a Phase
+2 item below, with the three calibration fixtures that already exist as its
+gate.
+
+**Two things it found rather than settled.** `HealthStatusEnum` is not in
+2027.1's type library and the published page is the only source there will be
+on that release: 11778 is `kUpToDateHealth`, which is the value seven verified
+features had reported, and `rebuild` now names the other thirteen. And reading
+the published `WorkPlanes` overloads against the COM backend showed that a
+`work_plane` with `kind: "angle"` had been building an *offset* plane and
+reporting success since the operation was written -- defect 12, refused now.
+
+**What it opens** is most of the new Phase 2 and Phase 3 items below and the
+whole of the rewritten Phase 4: the extrude extents `SetToExtent` /
+`SetFromToExtent`; a sketch fillet (`SketchArcs.AddByFillet`) and project
+geometry (`AddByProjectingEntity`, `UseFaceEdges`, `ProjectedCuts.Add`);
+durable topology through `ReferenceKeyManager` and `Face.CreatedByFeature`;
+`Edge.TangentiallyConnectedEdges` as a chain selector; hole and thread notes,
+centrelines, section and detail views and title-block prompts on a sheet; the
+translator add-ins by GUID with their option tables, which `SaveAs` cannot
+reach; and for assemblies the exact constraint signatures, in which an `Offset`
+given as a string *creates a parameter* -- this project's thesis, stated by
+Autodesk -- together with the proxy rule that is the assembly trap.
+
 ## The phases
 
 Ordered by dependency, not desire. Each phase's items are the acceptance
@@ -592,14 +663,21 @@ actually bitten.
       the area-times-thickness prediction and refused outside a factor of four,
       with the feature deleted rather than left in the part.
 - [ ] **Measure `sketch_driven_pattern` against a live Inventor** — `python
-      scripts/com_signatures.py SketchDrivenPatternFeatures`, then `--only
-      sketch-driven-pattern`. The lowest-risk of the three: its arguments are
-      three different COM types so a wrong order raises, it goes through
-      `_patterned`, and its arithmetic is the rule the other patterns already
-      confirm at 0.02. What needs a seat is one semantic question whose answer
-      is a *count* rather than a volume — whether Inventor also places an
+      scripts/com_signatures.py SketchDrivenPatternFeatures
+      SketchDrivenPatternDefinition`, then `--only sketch-driven-pattern`. The
+      lowest-risk of the three: its arguments are three different COM types so
+      a wrong order raises, and its arithmetic is the rule the other patterns
+      already confirm at 0.02. What needs a seat is one semantic question whose
+      answer is a *count* rather than a volume — whether Inventor also places an
       occurrence on the reference point — and two of its three readings are the
       same volume, so the check prints the feature list.
+
+      *Corrected 2026-09-08*: the published pages say `Add` takes a
+      `SketchDrivenPatternDefinition`, so the three-argument `Add` the backend
+      made could never have worked, and give the factory in full --
+      `CreateDefinition(ParentFeatures, Sketch, [BasePoint], [ReferenceFaces])`.
+      The backend follows both. Nothing about the call is unread now; the count
+      is what the run is for.
 - [ ] **Measure `thicken` against a live Inventor** — `python
       scripts/com_signatures.py ThickenFeatures`, then `--only thicken`. Two
       questions, one fixture each, and neither is the magnitude: on a single
@@ -608,6 +686,13 @@ actually bitten.
       does with the corner notches four grown walls leave behind.
       `INVENTOR_SETUP.md` has both, with the three readings that tell the side
       answers apart.
+
+      *The argument-order half of the risk shrank on 2026-09-08.* The published
+      signature is `Add(Faces, Distance, ExtentDirection, Operation,
+      [AutomaticFaceChain], [CreateVerticalSurfaces], [AutomaticBlending])` and
+      there is no definition object, so the code now uses that order and
+      nothing else. The factor-of-four guard stays until the run agrees; the
+      side question is untouched by any signature.
 - [ ] **Measure `move_face` against a live Inventor**, which for this one means
       reading the real signature first: `python scripts/com_signatures.py
       --search MoveFace`, then `--only move-face`. Split from the item above
@@ -618,6 +703,126 @@ actually bitten.
       selector reaching a different face, a direction read relative to the face
       rather than the model, and a distance expression that never reaches
       Inventor's dimension each show up as a different wrong number.
+
+      *Settled on paper 2026-09-08*: the `MoveFaceDefinition` page names the
+      setter, `SetDirectionAndDistanceMoveType`, and says `MoveFaceType` starts
+      at `kFreeMoveType`; the setter's own page gives `(Distance, Direction,
+      [DirectionReversed])`, distance first, which caught the call written the
+      day before with the two swapped. The backend follows the page, sends
+      `flip` as the flag, and reads the type back before `Add`. Nothing about
+      the call is unread now; the two fixtures are what the run is for.
+- [ ] **Measure `thread` by the published call, then take it out of
+      `_KNOWN_BROKEN`.** *(Opened 2026-09-08.)* The backend now calls
+      `ThreadFeatures.Add(Face, StartEdge, ThreadInfo, ...)` with a `ThreadInfo`
+      from the published `CreateStandardThreadInfo(Internal, RightHanded,
+      ThreadType, ThreadDesignation, Class)` -- its per-member page was read
+      the same day; the makepy wrapper does not list it -- and falls back to the
+      measured `CreateTapInfo`, whose result the `HoleTapInfo` page says is a
+      `StandardThreadInfo`. `--only threading` is the run. Two readings: whether `Add` accepts a tap info at
+      all, and whether the external thread it makes is cosmetic, as Inventor's
+      threads are -- so the volume must *not* change, and the check is the
+      feature's `ThreadInfo` read back rather than material moved. If it works,
+      `threaded_boss.json` stops being the one shipped example the builder
+      refuses.
+- [ ] **Measure the body's convexity collections against the loops.** *(Opened
+      2026-09-08.)* `select` now reads `SurfaceBody.ConvexEdges` and
+      `ConcaveEdges` once per call and uses them where the loops decline,
+      logging any disagreement. `scripts/probe_convexity.py` should print the
+      body's verdict beside the loop and sampled ones for every edge of its
+      24-edge part; if the two agree on all 24 and the body classifies the
+      circular edges too, the order flips and `flanged_shaft`'s chamfer can ask
+      for `convex` instead of `near`. If they disagree anywhere, the loops keep
+      deciding and the disagreement is the finding.
+- [ ] **`split` moves to `TrimSolid`, behind the three calibration fixtures.**
+      *(Opened 2026-09-08.)* `SplitFeatures.TrimSolid(SplitTool, Body,
+      [RemovePositiveSide])` is the documented 2027 call and states the side
+      plainly; the measured `SplitPart` keeps its inverted argument until
+      `origin_plane_split`, `stepped_split` and `stepped_split_negative` have
+      been built through `TrimSolid` on a seat and agree to four decimals, as
+      they do today. Then the inversion and its comment go. `SplitTypeEnum`
+      publishes `kSplitPart` and `kTrimSolid` at the same value, which says the
+      two are one feature under two names -- consistent with the older name
+      still working.
+- [ ] **Extrude `to` a face or plane, and `from_to`.** *(Opened 2026-09-08.)*
+      `ExtrudeDefinition.SetToExtent(ToEntity, [ExtendToFace])` takes a face,
+      a work plane, a vertex or a work point; `SetFromToExtent(FromFace,
+      ExtendFromFace, ToFace, ExtendToFace)` takes two. "Extrude up to the
+      underside of the lid" is how a boss is actually specified, and today it
+      has to be written as a distance expression that somebody derives. The
+      recipe shape is `extent: "to"` with `to: "<plane or face selector>"`;
+      the simulator's ledger can answer for a planar target parallel to the
+      sketch plane and must decline otherwise. `SetToNextExtent` also wants a
+      `Terminator` body the code does not pass, which is worth reading against
+      the installed release while there.
+- [ ] **A sketch fillet.** *(Opened 2026-09-08.)* `SketchArcs.AddByFillet(
+      EntityOne, EntityTwo, Radius, PointOnEntityOne, PointOnEntityTwo)`, the
+      two proximity points choosing the corner. Closes the oldest bullet in
+      `FEATURE_COVERAGE.md`'s gap list. The recipe shape is a `corners` list
+      on `rectangle` and `polyline` carrying a radius expression; the plan
+      gains an arc per corner with two tangencies, which `geometry.py` already
+      knows how to write for a slot.
+- [ ] **Project geometry.** *(Opened 2026-09-08.)* `PlanarSketch.
+      AddByProjectingEntity(Entity)` one edge, vertex, work axis or work point
+      at a time; `PlanarSketches.Add(face, UseFaceEdges=True)` for a whole
+      outline; `ProjectedCuts.Add()` for cut edges. A projected entity comes
+      back `Reference = True` and bounds no material until that flag is
+      cleared -- the one detail that decides whether an extrude from a
+      projected loop works. Closes the second gap bullet. The simulator half is
+      the harder one: it has to know where the solid's edges are, which the
+      ledger knows for prisms and not for revolves.
+- [ ] **An angled work plane, properly.** *(Opened 2026-09-08 by defect 12.)*
+      `WorkPlanes.AddByLinePlaneAndAngle(WorkAxis, WorkPlane, Angle, Boolean)`
+      needs an axis, so `WorkPlaneOp` gains an `axis` field (an origin axis,
+      a `work_axis`, or a sketch line, resolved like a pattern's) and the
+      refusal the backend gives today goes. The simulator has to learn to
+      tilt a plane -- which is also the fix for the note in defect 7 that
+      `mock.work_plane` files every plane against its base -- so this is
+      ledger-sized rather than five files.
+- [ ] **Durable topology handles and a `feature:` selector.** *(Opened
+      2026-09-08.)* Handles from `select_topology` expire on any rebuild and
+      the docs say to re-select. The published `ReferenceKeyManager` --
+      `CreateKeyContext`, `GetReferenceKey(key, ctx)`, `BindKeyToObject`, with
+      the rule that B-Rep keys need their context -- is the durable form, and
+      `Face.CreatedByFeature` plus `PartFeature.Faces` is the semantic one:
+      "the faces of the boss I just made" without an index. The DFM loop is
+      the customer: a finding points at faces, the loop changes a parameter and
+      rebuilds, and today the faces it pointed at are gone.
+      `Edge.TangentiallyConnectedEdges` and `Face.TangentiallyConnectedFaces`
+      give a `chain: true` on selectors for the same money.
+- [ ] **Export through the translator add-ins, with options.** *(Opened
+      2026-09-08.)* `Document.SaveAs` reaches no options. The reference
+      publishes stable ClassId GUIDs for STEP, IGES, SAT, DWG, DXF, PDF and DWF
+      and their `SaveCopyAs` option names -- `ApplicationProtocolType` 3 for
+      AP 214, `Sheet_Range` and `Vector_Resolution` for PDF -- and says the
+      GUID is the stable handle where the display name is localised, which is
+      the opposite of what `ARCHITECTURE.md` assumed when it chose `SaveAs`.
+      The DFM loop's STL has no published export options, so its facet
+      resolution stays whatever Inventor's default is; worth measuring what
+      that does to a wall-thickness reading before assuming it is fine.
+- [ ] **Rib, one more time, with the published definition.** *(Opened
+      2026-09-08.)* Fourteen `E_INVALIDARG`s were recorded against
+      `RibFeatures.Add(definition)` without the definition's member list. The
+      page gives it: `ThicknessDirection`, `DraftAngle`, `ExtendProfile`,
+      `SetThicknessPlane` with `RibThicknessPlaneEnum`
+      (`kRibThicknessAtSketchPlane`, `kRibThicknessAtRoot`), and the meaning of
+      `IsRib` -- True projects the profile *lateral* to the sketch plane, False
+      normal to it. A rib drawn on a plane perpendicular to the plate wants
+      `IsRib=True`; one drawn on the plate's own face wants False. Whether the
+      failures were the second case is the first thing to try. The composite
+      rib stays until then.
+- [ ] **`Update2`'s verdict, measured.** *(Opened 2026-09-08.)* `_batch` now
+      calls `Document.Update2(True)` and logs when it returns False. Whether a
+      cut that meets no material -- which the volume check catches -- also
+      makes `Update2` say so, or whether Inventor calls that a success, decides
+      whether the log line is worth promoting to a finding. One run of the
+      angle bracket with a deliberately missed cut answers it.
+- [ ] **Key parameters and Inventor's own dependency graph.** *(Opened
+      2026-09-08.)* `Parameter.IsKey` is a documented read-write flag; the
+      freeze list `apply_parameter` enforces could set it, so a frozen
+      parameter is visible as key in the parameters dialog. And
+      `Parameter.DrivenBy` / `Dependents` are Inventor's own graph, which the
+      freeze guard today reconstructs by parsing expressions -- a second
+      source to check the parser against, not a replacement for it.
 - [x] **`save_part` names the conflict** when the path is already open —
       defect 3. *(2026-09-07.)* The item said "names the conflict" and the fix
       turned out not to be a message at all: Inventor's refusal to overwrite a
@@ -712,6 +917,25 @@ The market's 2026 feature, and a gap in the whole open-source field.
       static check could know, because the parameter exists and resolves
       perfectly well. And it closed the round trip's shape — the sheet is read
       back and checked, rather than the request being trusted.
+
+      **The fact it rested on was replaced on 2026-09-08, and the paragraph
+      above is left standing so the change is visible.** The published
+      reference says neither `RetrieveDimensions` nor `AddRetrievedDimensions`
+      exists in 2027, and offers the pair new in 2026.1:
+      `Sheet.GetRetrievableAnnotations2(view)` returns the *model's* dimension
+      constraints -- whose `Parameter` is documented -- before anything is
+      retrieved, and `Sheet.RetrieveAnnotations2(view, chosen)` retrieves only
+      those. So the asked-for ones are chosen on the model side, retrieved one
+      at a time so each drawing dimension is known by the parameter that went
+      in, and remembered so `read_drawing` names it from memory. No
+      `DrawingDimension` is asked anything for a dimension this session
+      placed; the four property paths survive as the fallback for one placed by
+      hand. "If it cannot be asked, the design goes back to placing against
+      geometry" no longer applies -- and if it ever does, the reference gives
+      that route too: `DrawingCurve.ModelGeometry` is the documented bridge
+      from a curve on the sheet back to the model edge, and
+      `Sheet.CreateGeometryIntent` plus `GeneralDimensions.AddLinear` place a
+      dimension against it.
 - [x] **Projected views, so the projection angle means something.**
       *(2026-09-07.)* Until this, every view was a base view at a position the
       recipe gave, and `DrawingRecipe.projection` was recorded and applied to
@@ -730,7 +954,8 @@ The market's 2026 feature, and a gap in the whole open-source field.
       Also here: **PDF export**, which is the format a drawing is actually sent
       in — a sheet exportable only as DWG needs Inventor at the other end.
 - [ ] **Measure the drawing surface against a live Inventor** — `python
-      scripts/com_signatures.py GeneralDimension` first, then `--only drawing`.
+      scripts/com_signatures.py Sheet DimensionConstraint FeatureDimension`
+      first, then `--only drawing`.
       The ordered list is in `INVENTOR_SETUP.md`, and three of its checks are
       ones the simulator can never be evidence for: whether a view's *extent*
       agrees with the part (in the simulator the extent is computed from the
@@ -741,26 +966,124 @@ The market's 2026 feature, and a gap in the whole open-source field.
       view answers in a way a base view cannot, because nothing asserted its
       direction.
 
+      *What the run has to settle changed on 2026-09-08*: whether
+      `GetRetrievableAnnotations2` is in the installed wrapper and offers the
+      part's dimension constraints and feature dimensions. Whether a
+      `FeatureDimension` names its `Parameter` is settled on paper the same day
+      -- its page lists the property, and `FeatureDimensionProxy.NativeObject`
+      beside it -- so what is left is whether the call hands feature dimensions
+      back for a part built here.
+- [ ] **Measure a view's direction instead of reading its name.** *(Opened
+      2026-09-08.)* Defect 4 and its drawing cousin both rest on a name.
+      `DrawingView.ModelToSheetTransform` is a documented matrix: push the
+      model's +Z through it and see where it lands on the sheet, and the
+      direction is a number rather than a label. And `kArbitraryViewOrientation`
+      with an `ArbitraryCamera` pins a base view's direction instead of
+      trusting one -- the same move `AddWithOrientation` offers a sketch.
+- [ ] **Hole and thread notes, centrelines, and a title block that says
+      whose drawing it is.** *(Opened 2026-09-08.)* A hole on a drawing is
+      called out, not dimensioned twice: `HoleThreadNotes.Add(Position,
+      HoleOrThreadEdge, [LinearDiameterType], [DimensionStyle])` takes a
+      `DrawingCurve` of the hole and writes the callout Inventor knows from the
+      feature -- which is the drawing-side dividend of building holes as hole
+      features rather than cut circles. `ChamferNotes.Add` is its sibling.
+      `DrawingView.SetAutomatedCenterlineSettings` gives the centrelines a
+      draughtsman draws first. `Sheet.AddTitleBlock(definition,
+      [location], [PromptStrings])` and `TitleBlock.SetPromptResultText` fill
+      the block from the recipe's name and parameters. All are recipe fields
+      on `DrawingRecipe`; the simulator's ledger records them as statements the
+      sheet makes, which is all it needs to hold them against the part.
+- [ ] **Section and detail views.** *(Opened 2026-09-08.)* `AddSectionView(
+      ParentView, SectionLineSketch, Position, ViewStyle, ...)` wants a sketch
+      *on the parent view* holding the section line; `AddDetailView` wants a
+      fence. A `DrawingViewSpec` with `section_of: "FRONT"` and a line in the
+      parent's coordinates is the recipe shape, and the `cover_plate` reading
+      already names a `SECTION A-A` -- so the reading direction has been
+      waiting for the producing one here.
+- [ ] **PDF and DWG through the translator, with options.** *(Opened
+      2026-09-08.)* Shares the Phase 2 export item: the PDF translator's GUID
+      is published with `Sheet_Range`, `Vector_Resolution` and
+      `All_Color_AS_Black`, and `SaveAs` reaches none of them, so a
+      multi-sheet drawing exported today gets whatever the default is.
+
 ### Phase 4 — assemblies
 
 The dear one, for the reason `ARCHITECTURE.md` gives: an assembly is
 constraints between components, and a constraint here carries an expression.
+*Rewritten 2026-09-08 against the published assembly API*, which made three of
+its unknowns concrete and added one risk nobody had named.
 
+**What the reference settles.** `ComponentOccurrences.Add(FullDocumentName,
+Position As Matrix)` places a file; `AddByComponentDefinition` places a
+definition already in memory, which is how a second instance of a part this
+server just built avoids a file round trip. The five constraint calls are
+published with their argument lists -- `AddMateConstraint(EntityOne, EntityTwo,
+Offset, [inferred types], [bias points])`, `AddFlushConstraint` (planes only),
+`AddAngleConstraint`, `AddInsertConstraint` (two *circular edges*, the
+bolt-in-hole case) and `AddTangentConstraint` -- and every one says of its
+`Offset`: a string may carry units, and **"a parameter is created and the value
+assigned to it."** That is this project's thesis, stated by Autodesk: a mate
+offset of `plate_t + shim` reaches Inventor as a parameter the way a sketch
+dimension does. Joints go through `CreateAssemblyJointDefinition(type,
+originOne, originTwo)` with `GeometryIntent`s. Grounding is
+`ComponentOccurrence.Grounded = True`, and an assembly with nothing grounded
+drifts when the solver runs. The BOM is exportable per view with
+`BOMView.Export`, after `StructuredViewEnabled = True`.
+
+**The trap, and the risk it carries here.** Geometry taken from
+`occurrence.Definition` is in the *part's* space; a constraint wants a proxy in
+the assembly's, made by `CreateGeometryProxy(native, Result)` -- and `Result` is
+a COM **output argument** -- the per-member page, read 2026-09-08, confirms
+`CreateGeometryProxy(Geometry As Object, Result As Object)` with `Result`
+"output proxy object created", and its samples proxy *work planes* from parts
+for a mate. The reference's own caveat is that late-bound win32com may not
+supply an output argument. This server talks to Inventor late-bound for
+reasons `INVENTOR_SETUP.md` measures, so the first thing Phase 4 has to
+establish on a seat is whether the proxy comes back at all that way. Two
+documented ways round it if not: `occurrence.SurfaceBodies` (not
+`.Definition.SurfaceBodies`) already yields proxies, which covers faces and
+edges; and a top-level assembly work axis needs no proxy for a pattern. Work
+planes are the awkward case -- `occurrence.Definition.WorkPlanes` are native,
+and every `WorkPlanes.Add...` overload except `AddFixed` is documented as
+unsupported inside an assembly. And "the API can currently query assembly
+features, but cannot yet create them" closes one door before it is tried.
+
+- [ ] **Measure the proxy under late binding first**, before a line of schema:
+      place one part twice with `Add`, make a proxy of a face of each, mate
+      them with an offset written as a string, and read the parameter Inventor
+      created. If `CreateGeometryProxy`'s out-argument does not come back
+      late-bound, that call alone is made early-bound and the rest is not --
+      `INVENTOR_SETUP.md` already records that the two bindings disagree on
+      other calls.
 - [ ] An **`AssemblyRecipe`** whose components are part recipes or files and
       whose mates have offsets that are expressions — `plate_t + shim`, not
-      `8.5`.
+      `8.5`. The `Matrix` a component is placed with is in centimetres and is
+      seed position only; the constraints are what hold it.
 - [ ] `geometry.py`'s discipline one level up: a mate that no parameter drives
-      is refused, exactly as an undriven sketch dimension is now.
+      is refused, exactly as an undriven sketch dimension is now. An `Offset`
+      given as a bare number would still create a parameter in Inventor -- a
+      frozen one -- which is the part that builds once and is worthless after.
 - [ ] The session already holds many documents and the COM backend already
       names an `AssemblyDocument`; the plumbing is in place, the schema and
       the constraint solver's error reporting are the work.
+- [ ] **The simulator's assembly ledger** is transforms and mates, not
+      geometry: it can check that every component is constrained and that no
+      mate refers to a component that does not exist, and it can place rigid
+      bodies for a mate whose entities are planes or axes it knows about. It
+      declines interference and clearance; `AnalyzeInterference` is documented
+      on the live side for that.
 
 ### Phase 5 — sheet metal
 
 A parallel feature set with its own document subtype, its own rules, and a
 simulator that has to learn what a bend is. The same five-file shape, forty
 times. Not started until Phases 1–3 are done, because every one of those forty
-will land in the split `builder.py`, not the current one.
+will land in the split `builder.py`, not the current one. *Two facts from the
+published reference for whoever starts it (2026-09-08)*: the flat pattern
+exports on its own through `TranslatorAddIn.SaveCopyAs` with a `FlatPattern`
+as the source object -- the documented route to a cut file that is not the
+folded part -- and `ViewOrientationTypeEnum` carries seven flat-pattern
+orientations for putting it on a sheet.
 
 ### Throughout
 
@@ -769,7 +1092,12 @@ will land in the split `builder.py`, not the current one.
 - Every live run regenerates `examples/expected/` where the arithmetic has been
   checked, and only there.
 - `scripts/dump_constants.py` runs against every new Inventor release before
-  anything else does.
+  anything else does. The `*Health` names will always come back "not in this
+  type library" and that is expected -- they come from the published page.
+- A COM call that misbehaves is checked against its published page,
+  `<Object>_<Member>.htm` under the URL at the top of the reference section,
+  before it is checked against a guess. The page outranks the guess; the
+  measurement outranks the page.
 
 ## Keeping this file true
 

@@ -28,7 +28,6 @@ INTERESTING = [
     "RectangularPatternFeatures.Add",
     "CircularPatternFeatures.Add",
     "Profiles.AddForSolid",
-    "ThreadFeatures.CreateThreadDefinition",
     "RevolveFeatures.AddByAngle",
     "RevolveFeatures.AddFull",
     "SweepFeatures.AddUsingPath",
@@ -44,6 +43,11 @@ INTERESTING = [
     "HoleFeatures.CreateSketchPlacementDefinition",
     "PartFeatures.CreatePath",
     "ThreadFeatures.Add",
+    # Published on the ThreadFeatures page and absent from the 2027.1 wrapper --
+    # the shape WorkPoints.AddByPoint had, which executed regardless. The
+    # backend's `thread` tries it after HoleFeatures.CreateTapInfo, whose result
+    # the published type hierarchy says is a StandardThreadInfo.
+    "ThreadFeatures.CreateStandardThreadInfo",
     "LoftFeatures.CreateLoftDefinition",
     "LoftFeatures.Add",
     "SweepFeatures.Add",
@@ -67,33 +71,48 @@ INTERESTING = [
     # MoveFaceFeatures` -- since the definition's own class is what is missing.
     "MoveFaceFeatures.CreateDefinition",
     "MoveFaceFeatures.Add",
+    "MoveFaceDefinition.SetDirectionAndDistanceMoveType",
     # `thicken`, added the same day and riskier than move_face for one
     # reason: its arguments are a variant and two enum integers, so an order
     # that is wrong would not be a type mismatch -- it would hand Inventor a
     # thickness of 20,481 cm. The backend refuses a result that is not within a
-    # factor of its own prediction, which catches that; reading the signature
-    # makes the guard unnecessary. `CreateThickenDefinition` is tried first
-    # where it exists, because a definition's properties are named.
+    # factor of its own prediction, which catches that. The order it uses is
+    # the published one (Faces, Distance, ExtentDirection, Operation, three
+    # Booleans); there is no definition object for this feature, so what a read
+    # settles is whether the installed release agrees with the page.
     "ThickenFeatures.Add",
-    "ThickenFeatures.CreateThickenDefinition",
+    # `move_face`'s definition object, which the published catalogue confirms
+    # exists, alongside a MoveFaceTypeEnum that suggests the direction mode is
+    # an enum rather than a choice of setter -- `dump_constants.py --find
+    # MoveFaceType` is the other half of that read.
+    "MoveFaceDefinition",
     # `sketch_driven_pattern`, the third unread call. Lower risk than the two
     # above -- its arguments are a collection, a sketch and a point, so a wrong
     # order is a type mismatch rather than a part built wrongly -- and what a
     # signature would settle is whether there is a reference-point argument at
     # all, and whether an occurrence lands on it.
     "SketchDrivenPatternFeatures.Add",
-    # Drawings, added 2026-09-07 and the largest unmeasured surface here. The
-    # first two are calls the backend makes; the third is the one that decides
-    # whether the whole retrieve-and-filter design works -- a retrieved
-    # dimension has to be able to name the model parameter it came from, and
-    # nothing here has ever held a DrawingDimension. Read the classes whole:
-    # `python scripts/com_signatures.py GeneralDimension` and
-    # `... DrawingDimensions`, since the properties are what matter and a
-    # property has no signature to print.
+    "SketchDrivenPatternFeatures.CreateDefinition",
+    "SketchDrivenPatternDefinition",
+    # Drawings, added 2026-09-07 and the largest unmeasured surface here.
+    # Retrieval follows the published 2026.1 pair since 2026-09-08: the
+    # annotations are chosen on the *model* side, where DimensionConstraint's
+    # Parameter is documented, so what a read has to settle is that the pair is
+    # in the installed wrapper and that a FeatureDimension names its parameter
+    # the same way. Read the classes whole -- `python scripts/com_signatures.py
+    # Sheet DimensionConstraint FeatureDimension` -- since the properties are
+    # what matter and a property has no signature to print. The legacy
+    # RetrieveDimensions name stays listed as the fallback for an older seat.
     "DrawingViews.AddBaseView",
+    "DrawingViews.AddProjectedView",
+    "Sheet.GetRetrievableAnnotations2",
+    "Sheet.RetrieveAnnotations2",
     "DrawingDimensions.RetrieveDimensions",
-    "GeneralDimension",
-    "DrawingDimensions",
+    "DimensionConstraint",
+    "FeatureDimension",
+    # Convexity: the body's own classification, asked where the boundary loops
+    # decline. Properties rather than calls; read the class whole.
+    "SurfaceBody",
     # Not a call this server makes, but the object behind defect 4: `capture_view`
     # orientation names do not describe what you get, and `check_views` says there
     # is nothing to assert until somebody measures what each one produces. Reading
@@ -204,8 +223,10 @@ def search(root, needle: str) -> None:
     """Every generated class whose name mentions *needle*, with its methods.
 
     For when the method you expected does not exist and you need to know what
-    does. `ThreadFeatures.CreateThreadDefinition` is not on 2027.1, and no amount
-    of asking about it says where a ThreadInfo comes from instead.
+    does. `ThreadFeatures.CreateThreadDefinition` is on no release, and no amount
+    of asking about it says where a ThreadInfo comes from instead -- the
+    published page says `ThreadFeatures.CreateStandardThreadInfo`, which the
+    wrapper does not list either.
     """
     lowered = needle.lower()
     hits = sorted(path for path in root.glob("*.py") if lowered in path.stem.lower())

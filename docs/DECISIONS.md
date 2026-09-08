@@ -363,3 +363,45 @@ origin whose symmetry produced exactly the reading the message described. A
 check's message says what it concluded, not what it measured. The numbers it
 prints alongside are the evidence, and the one that broke the deadlock was
 noticing that the volume moved while the centre of mass did not.
+
+## A published signature outranks a guess and not a measurement
+
+*Added 2026-09-08, from reading Autodesk's 2027 API reference against this
+repository.*
+
+Until then this repository knew two kinds of fact about Inventor's API: what a
+live run had measured, and what a type library had been read to say. The
+reference -- the User's Manual and Reference Manual, extracted page by page with
+every unpublished signature marked as such -- is a third kind, and it had to be
+placed. It is what Autodesk says a call takes, on pages Autodesk edits in place,
+about a release that need not be the one installed. Its own verification pass
+found three of its thirty-seven spot-checked claims wrong before it was read
+here, and it lists members "read-only" that this repository has measured
+building.
+
+So the rule, applied to every change the reading produced: **a path that has
+never run against an Inventor moves to the published call outright; a path that
+has been measured keeps its measured route first and gains the published one
+behind it.** `thicken` and the drawing retrieval had never run, and each was
+guessing at a signature the reference gives -- one of them at a method
+(`CreateThickenDefinition`) the reference says does not exist and another at a
+property of `DrawingDimension` nothing documents -- so both were rewritten to
+the documented call, and stay unmeasured. Edge convexity is measured through the
+boundary loops, so `SurfaceBody.ConvexEdges` -- Inventor's own answer, and the
+better one on paper -- was placed *behind* the loops, where it can decide only
+what they decline and can disagree only in a log line. `split` uses a
+`SplitPart` whose keep-side argument was inverted on evidence from three runs;
+the reference names `TrimSolid(SplitTool, Body, [RemovePositiveSide])` as the
+documented 2027 call with the side stated plainly, and the code was **not**
+changed, because the risk of moving a measured path onto an unmeasured one is
+precisely a quiet side inversion, and defect 5 is what that costs.
+
+The corollary is about what a published number is worth in the enum table.
+Forty-eight of the table's fifty-one measured values agree with the published
+pages, which makes the pages a second source and the table better evidenced
+than it was. The fourteen `HealthStatusEnum` values and the drawing-view names
+added from the pages are marked as coming from them, `describe()` reports them
+as "fallback" like any other unmeasured entry, and `dump_constants.py` will say
+they are not in 2027.1's type library -- which is true, and is the reason they
+had to come from somewhere else.
+

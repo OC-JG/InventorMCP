@@ -938,16 +938,15 @@ MOVE_FACE_FIXTURES = {
 
 
 def check_move_face(session: Session, report: Report) -> None:
-    """`move_face`, whose COM half has never executed -- nor been read.
+    """`move_face`, whose COM half has never executed.
 
-    ``docs/INVENTOR_SETUP.md`` has the ordered list of what this has to settle
-    and why this one is worse off than the five work-geometry behaviours were:
-    they had signatures somebody had read off a type library, and here the
-    definition object's setter is unknown, so the backend tries three spellings
-    and names them all when none works.
+    ``docs/INVENTOR_SETUP.md`` has the ordered list of what this has to settle.
+    The definition's setter is published since 2026-09-08 --
+    `SetDirectionAndDistanceMoveType` -- and the backend reads `MoveFaceType`
+    back before `Add`, so what is left unread is that setter's argument list.
 
     **Read the signature before running this.** ``python
-    scripts/com_signatures.py --search MoveFace`` costs nothing and answers in
+    scripts/com_signatures.py MoveFaceDefinition`` costs nothing and answers in
     one go what this check can only narrow down.
 
     Three readings per fixture, for the reason defect 11 cost four runs: a
@@ -1226,9 +1225,12 @@ def check_drawing(session: Session, report: Report) -> None:
     ordered list; the short version is that `new_drawing` is `new_part` with a
     different enum and carries no risk, no enum value is guessed anywhere
     (`_k` reads them from the type library and raises when it cannot), and the
-    thing that decides whether the design works at all is whether **a retrieved
-    dimension can name the model parameter it came from**. Nothing in this
-    repository has ever held a `DrawingDimension`.
+    thing that decides whether the design works at all is whether **Inventor
+    offers the part's dimension constraints for retrieval and they name their
+    parameters** -- `Sheet.GetRetrievableAnnotations2`, the published 2026.1
+    route the backend follows since 2026-09-08, which chooses on the model side
+    where `DimensionConstraint.Parameter` is documented. Nothing in this
+    repository has ever held one.
 
     Two of the readings here cannot be got from the simulator at all, and they
     are the reason this check exists rather than a test:
@@ -1279,14 +1281,16 @@ def check_drawing(session: Session, report: Report) -> None:
     named = [entry for entry in dimensions if entry.get("parameter")]
     report.check(
         bool(dimensions) and bool(named),
-        f"drawing: a retrieved dimension names its model parameter "
-        f"({len(named)} of {len(dimensions)} do)",
-        "This is what the retrieve-and-filter design rests on: without it there "
-        "is no way to keep the dimensions the recipe asked for and drop the "
-        "rest. If it fails, the alternative is placing dimensions against "
-        "DrawingCurve geometry, which is a much larger piece of work. Read what "
-        "a dimension really offers with `python scripts/com_signatures.py "
-        "GeneralDimension` before changing anything.")
+        f"drawing: the sheet's dimensions are known by their model parameters "
+        f"({len(named)} of {len(dimensions)} are)",
+        "This is what the choose-then-retrieve design rests on: Inventor's "
+        "GetRetrievableAnnotations2 has to offer the part's dimension "
+        "constraints, and each has to name its Parameter, or nothing can be "
+        "chosen. A retrieved dimension is then remembered by the parameter that "
+        "went in, so a sheet read back with none named means either the pair is "
+        "absent on this release (the legacy routes ran instead) or the offered "
+        "annotations named no parameter. `python scripts/com_signatures.py "
+        "Sheet DimensionConstraint FeatureDimension` says which.")
 
     # 2. Every parameter the recipe asked for, on the sheet.
     asked = sorted({name for view in drawing.views

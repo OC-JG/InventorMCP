@@ -139,8 +139,13 @@ in radians, each driving value carrying its expression.
   reports which source each value came from, so a mismatch is diagnosable instead
   of mysterious.
 - *Export.* `Document.SaveAs` is used rather than hunting translator add-in GUIDs,
-  which vary between releases; the result is verified on disk and a missing file is
-  reported as a probable disabled translator rather than as success.
+  and the result is verified on disk: a missing file is reported as a probable
+  disabled translator rather than as success. The reason given for the choice --
+  that the GUIDs vary between releases -- turned out to be wrong when Autodesk's
+  published reference was read on 2026-09-08: the ClassId GUID is documented as
+  the *stable* handle, the display name being the localised one, and the
+  translator route is the only one that reaches export options (STEP AP 214, a
+  PDF's sheet range). `docs/ROADMAP.md` carries the move as a Phase 2 item.
 
 **`mock/`** keeps an in-memory model. It is honest about being an approximation:
 volumes are analytic estimates, topology is synthesised from the sketch loops that
@@ -327,7 +332,13 @@ verified — when it was finally measured, 32 of its 51 entries were wrong, one 
 them silently turning a through-all extrude into a to-next. Where a value is
 disputed the server now refuses rather than guessing, but every new Inventor
 release is a fresh chance for the fallback to be consulted and be wrong.
-`scripts/dump_constants.py` is the answer and has to actually be run.
+`scripts/dump_constants.py` is the answer and has to actually be run. Since
+2026-09-08 the table has a second source beside the measurement: Autodesk's
+published 2027 enum pages agree with forty-eight of the fifty-one measured
+values (the three render styles are not on the pages read), and the entries
+added from those pages -- `HealthStatusEnum`, which 2027.1's library does not
+carry at all, and the drawing-view names -- are marked as published rather than
+measured, in the table and in `describe()`.
 
 **The simulator against the real thing.** Every estimate in `mock/` is
 calibrated against a number somebody measured in Inventor, and `PREDICTED` in
