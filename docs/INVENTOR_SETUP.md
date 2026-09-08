@@ -849,12 +849,26 @@ the feature list, which distinguishes nothing between the first two rows.
 That is this check's limitation rather than a finding about Inventor, and the
 note it prints says where the answer is instead: open the pattern in Inventor's
 browser and count, or read the count off the pattern -- which
-`describe_feature` does now, trying `Occurrences` and then `PatternElements`
-and reporting which answered, so the next run of
-`--only sketch-driven-pattern` either asserts three occurrences or says the
-count could not be read. Neither property name is measured; that is the whole
-reason two are tried and a failure to read is reported rather than counted as
-zero. If it turns out to be the middle row, two things change together: this
+`describe_feature` does, trying `Occurrences` and then `PatternElements` and
+reporting which answered under `pattern_elements`.
+
+**Answered on 2026-09-08, and the reading needed calibrating before it meant
+anything.** `PatternElements` came back **4** on a pattern of four points,
+which is both possible answers at once: the seed plus three copies, or four
+copies with one landing on the reference. So `_seed_is_counted` reads the same
+collection on a *rectangular* pattern of three instances, where the total is
+not in doubt -- it answered **3**, so the collection counts the seed. Four is
+therefore seed-plus-three, **Inventor does not pattern the reference point onto
+itself**, the recipe's assumption holds and the mock's `elsewhere` filter is
+right.
+
+Two things worth keeping from how that went. A number read off an API is not a
+measurement until you know what it counts, and the thing that told us was a
+*different* operation whose answer was already certain. And `occurrences` was
+the wrong name to report it under: that word already means the total including
+the seed on a rectangular pattern's detail and the copies alone on a
+sketch-driven one's, so a third meaning would have shared a key with two
+others. If it turns out to be the middle row, two things change together: this
 section, and the `elsewhere` filter in the mock's `sketch_driven_pattern` that
 excludes the reference.
 

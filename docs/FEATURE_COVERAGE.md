@@ -381,11 +381,13 @@ also passes the simulator rehearsal.
    not settle it: the finished part reads `Plate`, `Slot`, `Spread`, because a
    sketch-driven pattern is *one* feature holding its occurrences -- so counting
    features cannot count occurrences. The count on the pattern itself is what
-   would, and `describe_feature` reads it now: it asks a pattern feature for
-   `Occurrences` and then `PatternElements` and reports the number with the
-   name that answered. Neither name is measured, so a release keeping them
-   elsewhere reports nothing rather than zero and the acceptance check says the
-   question is still open. What is left is a run.
+   would, and `describe_feature` reads it: it asks a pattern feature for
+   `Occurrences` and then `PatternElements` and reports the number under
+   `pattern_elements` with the name that answered. **Answered on 2026-09-08**:
+   `PatternElements` counts the seed -- calibrated against a rectangular
+   pattern of three instances that reads 3 -- and the sketch-driven pattern
+   reads 4, which is the seed plus three copies. So Inventor does *not* pattern
+   the reference point onto itself and the recipe's assumption was right.
 
 ### Tier 2 -- frequently wanted, no current workaround
 
@@ -946,6 +948,16 @@ Each of these was hit while building real parts, and each passed
     other way does not read as a defect and an uncalibrated one concludes
     nothing.
 
+    **And with the calibration in place the run answered the question.**
+    *(2026-09-08: "PatternElements counts the seed: a 3-instance rectangular
+    pattern reads 3", and the sketch-driven pattern reads 4.)* Four is the seed
+    plus three copies, so **Inventor does not put an occurrence on the
+    reference point** -- the recipe's assumption holds, four points describe
+    four pockets, and the `elsewhere` filter in the mock's
+    `sketch_driven_pattern` that excludes the reference is right. The last
+    unmeasured thing about that operation is measured, and it took a
+    calibration and not another fixture.
+
 15. **Not one drawing view could be placed, and the reason was never in the
     drawing.** *(Measured 2026-09-08: three views, three refusals, each
     "Placing the view failed: Exception occurred." and nothing else.)* A
@@ -970,3 +982,48 @@ Each of these was hit while building real parts, and each passed
     The dimension-retrieval design is still unmeasured, and this is why: with
     no views on the sheet, `GetRetrievableAnnotations2` was never reached. The
     four failures after the first were all the same failure.
+
+    **The run after the fix placed all three**, with Inventor's own extents on
+    them, so the drawing surface now reaches its second question -- and found
+    two more things, below.
+
+16. **A drawing view's `front` is the plan, not the elevation.** *(Measured
+    2026-09-08 on 2027.1: a 120 x 80 x 8 mm plate, `front` came back spanning
+    12 x 8 cm and `top` 12 x 0.8. They are each other's.)* Inventor's view
+    names are **Y-up**: its front view looks down Z and shows the XY plane.
+    This project is **Z-up** -- every recipe sketches on XY and extrudes
+    upward, and `_VIEW_AXES` in `drafting.py` says front and rear show XZ, top
+    and bottom XY, left and right YZ. So the two vocabularies disagree by a
+    quarter turn, and `_VIEW_ORIENTATIONS` in the COM backend passes each name
+    straight through to the enum that spells it the same way.
+
+    This is **defect 4 on a second API**. `capture_view`'s orientations have
+    the same mismatch and have had it recorded, unfixed, since they were
+    measured -- and a screenshot in the wrong orientation is a nuisance where a
+    *drawing* in the wrong orientation is a wrong drawing that looks like a
+    right one, so this is the half that has to be fixed.
+
+    **Two readings cannot rewrite a table of seven**, which is why it is not
+    fixed here. A partly-remapped table puts some views right and leaves the
+    rest wrong with nothing to say which. `live_acceptance.py --only
+    view-directions` places one base view per direction on one sheet, of a
+    block whose three dimensions all differ, and reports what each shows: the
+    whole table from a single run. And there is a second question an extent
+    cannot answer at all -- **which way is up inside the plane**, since a view
+    rotated or mirrored has the same extent. A retrieved dimension's position
+    or a curve's coordinates is what would settle that, and no sheet should be
+    trusted the right way up until it is.
+
+17. **Retrieval reported "0 of 0 dimensions" three times and the reason was
+    already in the result.** *(2026-09-08.)* `build_drawing` catches each
+    view's retrieval failure into `findings`, the COM backend goes to real
+    trouble over those messages -- which route ran, how many annotations were
+    offered, which parameters they named -- and the acceptance check printed
+    none of them. A check that hides the answer it was given is worse than one
+    that never asked.
+
+    It prints every finding before it asserts anything now. And the one path
+    that could return an empty list with no reason at all -- a legacy retrieval
+    route that ran, raised nothing and put no dimension on the sheet -- raises
+    instead, naming the route and what it was asked for. `0 of 0` was never a
+    measurement of anything.

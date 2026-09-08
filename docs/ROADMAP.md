@@ -736,7 +736,7 @@ actually bitten.
       happens to be right. A value passed for a wrong reason that happens to be
       right is not a measurement, and only the signature told the two apart. The
       attempt list and the factor-of-four result guard are both gone with it.
-- [ ] **Count a sketch-driven pattern's occurrences** — the one semantic
+- [x] **Count a sketch-driven pattern's occurrences** — the one semantic
       question `spread_pockets` was built to ask, and the only thing about that
       operation still unknown: does Inventor place an occurrence on the
       reference point as well? Two of the three possible answers are the same
@@ -751,9 +751,11 @@ actually bitten.
       seed plus three copies, or four copies with one on the reference -- so
       the number needed calibrating before it could mean anything.
       `_seed_is_counted` does that on a rectangular pattern of three
-      instances, where the total is not in doubt, and the sketch-driven
-      expectation follows from it. **So this needs one more run, and the run
-      answers it.** Four occurrences means the reference was patterned onto
+      instances, where the total is not in doubt. **It answered 3, so the
+      collection counts the seed, so 4 is the seed plus three copies:
+      Inventor does not pattern the reference point onto itself.** The
+      recipe's assumption holds, the mock's `elsewhere` filter is right, and
+      the last unmeasured thing about `sketch_driven_pattern` is measured. Four occurrences means the reference was patterned onto
       itself, and then two things change together: `INVENTOR_SETUP.md`, and the
       `elsewhere` filter in the mock's `sketch_driven_pattern` that excludes
       the reference.
@@ -1080,6 +1082,26 @@ The market's 2026 feature, and a gap in the whole open-source field.
       level down under `Metric\` — so the shipped recipe's `"ISO.idw"` does
       resolve, from the subfolder search. **Still unverified end to end**: no
       drawing has been built, and it is the first thing the next run reaches.
+
+- [ ] **Translate the view-direction names, once the whole table is
+      measured.** *(Opened 2026-09-08 by defect 16.)* Inventor's view names
+      are Y-up -- its `front` looks down Z and shows the XY plane -- and every
+      recipe here is Z-up, sketching on XY and extruding upward. Measured: a
+      120 x 80 x 8 mm plate's `front` view came back 12 x 8 cm and its `top`
+      12 x 0.8, each other's. `_VIEW_ORIENTATIONS` passes each name through to
+      the enum that spells it the same way, so a sheet's front view is its
+      plan: a wrong drawing that looks like a right one, which is worse than
+      defect 4's wrong screenshot.
+
+      Two readings cannot rewrite a table of seven, so `--only
+      view-directions` places one base view per direction on one sheet and
+      reports what each shows. One run gives the plane for all seven. **What
+      it cannot give is which way is up inside the plane** -- a view rotated or
+      mirrored has the same extent -- so the remap also wants a retrieved
+      dimension's position or a curve's coordinates before any sheet is
+      trusted the right way up. `capture_view`'s orientations have the same
+      mismatch and should be done in the same pass, since they are the same
+      quarter turn.
 
       `GeneralDimension` and `DrawingDimensions` have no generated module to
       read, which is not the same as their being absent — makepy generates what

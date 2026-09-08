@@ -438,7 +438,49 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   `definition.Extent` is searched too, since an extrude's taper is on its
   definition and its distance is not.
 
+### Measured
+
+- **Inventor does not put an occurrence of a sketch-driven pattern on the
+  reference point.** *(2026-09-08, Inventor 2027.1.)* The last unmeasured
+  thing about that operation, and it took a calibration rather than another
+  fixture. `PatternElements` read **4** on a pattern of four points -- which is
+  both answers at once: the seed plus three copies, or four copies with one
+  landing on the reference. So the same collection was read on a *rectangular*
+  pattern of three instances, where the total is not in doubt: it answered
+  **3**, so the collection counts the seed, so four is seed-plus-three. The
+  recipe's assumption holds, four points describe four pockets, and the
+  `elsewhere` filter in the mock's `sketch_driven_pattern` is right.
+
+  A number read off an API is not a measurement until you know what it counts,
+  and what told us was a different operation whose answer was already certain.
+
+- **A drawing view's `front` is the plan, not the elevation** -- defect 16, and
+  defect 4 on a second API. *(2026-09-08: a 120 x 80 x 8 mm plate's `front`
+  view spans 12 x 8 cm and its `top` spans 12 x 0.8.)* Inventor's view names
+  are Y-up: its front view looks down Z and shows the XY plane. Every recipe
+  here is Z-up. So `_VIEW_ORIENTATIONS` hands each name to the enum that spells
+  it the same way and the sheet comes out a quarter turn wrong -- which for a
+  *drawing* is a wrong drawing that looks like a right one.
+
+  Not remapped yet, deliberately: two readings cannot rewrite a table of seven,
+  and a partly-remapped table leaves some views wrong with nothing to say
+  which. `live_acceptance.py --only view-directions` places one base view per
+  direction on one sheet, of a block whose three dimensions all differ, and
+  reports what each shows -- the whole table in one run. And an extent cannot
+  settle which way is *up* inside the plane, since a rotated or mirrored view
+  has the same one.
+
 ### Fixed
+
+- **The drawing check hid the diagnosis it had been given.** *(2026-09-08.)*
+  Retrieval reported "0 of 0 dimensions" three times, and `build_drawing` had
+  caught each view's reason into `findings` -- which route ran, how many
+  annotations were offered, which parameters they named -- while the acceptance
+  check printed none of them. It prints every finding before it asserts
+  anything now. And the one retrieval path that could return an empty list with
+  no reason at all -- a legacy route that ran, raised nothing and put no
+  dimension on the sheet -- raises instead, naming the route and what was asked
+  for. `0 of 0` was never a measurement of anything.
 
 - **A promoted angle went into a millimetre parameter.** *(Measured 2026-09-08
   on 2027.1, the run after the property-name fix: "Inventor refused the

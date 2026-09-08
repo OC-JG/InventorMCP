@@ -35,8 +35,21 @@ The 2026-09-08 run gave the volume (−1.2000, exactly) and **left the semantic
 question open**, exactly as the fixture's design predicted it would: the
 finished part is `Plate`, `Slot`, `Spread` -- one pattern feature holding its
 occurrences -- so a fifth occurrence sitting on top of the seed would remove
-nothing extra and show up nowhere in the volume. Counting the occurrences inside
-that feature in Inventor's browser is the reading that settles it.
+nothing extra and show up nowhere in the volume.
+
+**Settled later the same day, and not by another fixture.** `describe_feature`
+learned to read the count off the pattern, and `PatternElements` answered **4**
+on a pattern of four points -- which is both answers at once: the seed plus
+three copies, or four copies with one landing on the reference. What told them
+apart was a *rectangular* pattern of three instances, where the total is not in
+doubt: the same collection reads 3 there, so it counts the seed, so four is
+seed-plus-three. **Inventor does not place an occurrence on the reference
+point.** The recipe's assumption holds and the mock's `elsewhere` filter is
+right.
+
+The lesson is worth more than the answer: a number read off an API is not a
+measurement until you know what it counts, and the instrument that calibrated
+it was an operation whose answer was already certain.
 
 Run them with:
 

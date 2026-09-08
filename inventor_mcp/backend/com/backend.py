@@ -3833,6 +3833,24 @@ class ComBackend(Backend):
                 return self._retrieve_by_parameter(doc_id, sheet, view, offered, wanted,
                                                    request.view)
             retrieved = self._retrieve_onto(document, view)
+            if not retrieved:
+                # The one path that used to return an empty list and no reason:
+                # a legacy route that ran, raised nothing, and put no dimension
+                # on the sheet. "0 of 0" is what the caller then reports, which
+                # names neither the route nor the cause.
+                raise FeatureError(
+                    f"The legacy retrieval route put no dimension at all onto "
+                    f"view {request.view!r}, so none of {sorted(wanted)} could "
+                    "be kept.",
+                    hint="This release has no Sheet.GetRetrievableAnnotations2 "
+                    "(2026.1 and later), so the older DrawingDimensions route "
+                    "ran and found nothing to retrieve. Either the model holds "
+                    "no dimension the view can show -- a parameter that drives "
+                    "nothing has none, which the rehearsal warns about -- or "
+                    "this release wants the call made differently. `python "
+                    "scripts/com_signatures.py Sheet DrawingDimensions` says "
+                    "what it offers.",
+                )
             named = [(entry, self._dimension_parameter(entry)) for entry in retrieved]
             if retrieved and not any(name for _, name in named):
                 for entry, _ in named:

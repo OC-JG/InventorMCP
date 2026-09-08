@@ -1411,6 +1411,18 @@ def check_drawing(session: Session, report: Report) -> None:
     if not made:
         return
 
+    # Every finding the build recorded, printed before anything is asserted.
+    # The 2026-09-08 run reported "0 of 0 dimensions" three times and the
+    # reason was *already in the outcome* -- `build_drawing` catches each
+    # view's retrieval failure into `findings` and this check was not printing
+    # them, so a diagnosis the backend had gone to some trouble to produce
+    # reached nobody. A check that hides the answer it was given is worse than
+    # one that never asked.
+    for finding in outcome.get("findings") or []:
+        report.note(f"finding at {finding.get('where')}: {finding.get('error')}")
+        if finding.get("hint"):
+            report.note(f"    hint: {finding['hint']}")
+
     # 1. The fact everything rests on. Reported first because a failure here
     #    means the design needs changing rather than the code fixing.
     read_back = outcome.get("read_back") or {}
@@ -1451,10 +1463,39 @@ def check_drawing(session: Session, report: Report) -> None:
             f"{placed['name']}: reports facing {placed.get('direction')}, spans "
             f"{placed.get('extent')} cm at scale {placed.get('scale')}, at "
             f"{placed.get('at')}")
-    report.note(
-        "The plate is 120 x 80 x 8 mm. A front view should span 12 x 0.8 cm and a "
-        "top view 12 x 8 -- and a view reporting a direction it was not asked "
-        "for is defect 4 again, on a different API.")
+    # And the reading that made it worth printing them. The plate is
+    # 120 x 80 x 8 mm, so each direction has one extent it can honestly have,
+    # and the three are far enough apart that no tolerance argument is needed:
+    # a front view spans 12 x 0.8 cm, a top view 12 x 8, a side view 8 x 0.8.
+    #
+    # Measured on 2026-09-08: FRONT came back 12 x 8 and TOP came back
+    # 12 x 0.8. They are each other's. Inventor's own view names are Y-up --
+    # its front view looks down Z and shows the XY plane -- and this project
+    # builds Z-up, sketching on XY and extruding upward, so the two vocabularies
+    # disagree by a quarter turn. That is defect 4 exactly, on a second API, and
+    # it is asserted here rather than noted: a sheet whose front view is the plan
+    # is a wrong drawing that looks like a right one.
+    spans = {"front": (12.0, 0.8), "top": (12.0, 8.0),
+             "left": (8.0, 0.8), "right": (8.0, 0.8),
+             "rear": (12.0, 0.8), "bottom": (12.0, 8.0)}
+    for view in outcome.get("views") or []:
+        placed = view["view"]
+        wanted = spans.get(placed.get("direction") or "")
+        extent = placed.get("extent")
+        if wanted is None or not extent:
+            continue
+        report.check(
+            all(abs(float(was) - should) < 5e-3
+                for was, should in zip(extent, wanted)),
+            f"drawing: the {placed['direction']} view shows the "
+            f"{placed['direction']} of the part ({wanted[0]:g} x {wanted[1]:g} cm)",
+            f"it spans {[round(float(value), 4) for value in extent]} cm. "
+            "Inventor's view names are Y-up and this project is Z-up, so its "
+            "'front' shows the XY plane -- the plan -- where this asked for the "
+            "elevation. `_VIEW_ORIENTATIONS` in the COM backend is the table "
+            "that has to translate, and defect 16 in docs/FEATURE_COVERAGE.md "
+            "is why it cannot be rewritten from one reading: the plane is "
+            "measured and which way is up in it is not.")
 
     # 3b. And the projection angle, which only a projected view can answer.
     #     This sheet is first angle and TOP is projected from FRONT, so Inventor
@@ -2143,6 +2184,92 @@ def check_promotion(session: Session, report: Report) -> None:
         session.forget(context.doc_id)
 
 
+def check_view_directions(session: Session, report: Report) -> None:
+    """What each drawing-view direction actually shows, all seven in one run.
+
+    The measurement `_VIEW_ORIENTATIONS` needs and does not have. On
+    2026-09-08 a three-view sheet showed that `front` returns the plan and
+    `top` returns the elevation -- Inventor's view names are Y-up, this project
+    builds Z-up -- but two readings cannot rewrite a table of seven, and a
+    partly-remapped table would put some views right and leave others wrong
+    with nothing to say which.
+
+    So this places **one base view per direction** on one sheet, of a block
+    whose three dimensions are all different (120 x 80 x 8 mm), and reports the
+    extent of each. Every direction's honest answer is one of three sizes, they
+    are nowhere near each other, and the whole table falls out of a single run.
+
+    **What it still does not answer is which way is up inside that plane.** An
+    extent is a size: a view rotated 180 degrees or mirrored has the same one.
+    So this settles which plane each name shows and not the orientation within
+    it, and a table rewritten from it wants a second reading -- a retrieved
+    dimension's position, or a curve's coordinates -- before a sheet is trusted
+    to be the right way up.
+    """
+    print("\n--- drawing view directions: which plane each name actually shows")
+    if session.backend.name == "mock":
+        report.skip("view-directions: not run",
+                    "the simulator honours the direction it is given by "
+                    "construction, so it can only confirm its own table. Use "
+                    "--backend inventor.")
+        return
+
+    from inventor_mcp.backend.base import ViewRequest
+
+    recipe = PartRecipe.model_validate({
+        "name": "ViewDirectionBlock", "units": "mm", "operations": [
+            {"op": "sketch", "name": "S", "plane": "xy", "entities": [
+                {"type": "rectangle", "center": [0, 0], "width": 120, "height": 80}]},
+            {"op": "extrude", "name": "Block", "sketch": "S", "distance": 8},
+        ]})
+    context, broken = build(session, recipe)
+    if not report.check(not broken and context is not None,
+                        "view-directions: the block builds",
+                        broken[0][:300] if broken else "no document"):
+        return
+
+    into = ROOT / ".acceptance"
+    into.mkdir(exist_ok=True)
+    part_file = into / "view_directions.ipt"
+    drawing = None
+    try:
+        session.backend.save_document(context.doc_id, str(part_file))
+        drawing = session.backend.new_drawing("ViewDirections", sheet="a2", units="mm")
+        # Spread across the sheet so no two views overlap: an A2 is 59.4 x 42.0
+        # cm and these are 12 cm wide at most.
+        places = {"front": (10.0, 34.0), "rear": (30.0, 34.0), "top": (48.0, 34.0),
+                  "bottom": (10.0, 20.0), "left": (30.0, 20.0), "right": (48.0, 20.0),
+                  "iso": (30.0, 8.0)}
+        # The plane each size names, so the report reads as an answer rather
+        # than as three numbers to hold against the part in your head.
+        planes = {(12.0, 0.8): "XZ, the elevation", (12.0, 8.0): "XY, the plan",
+                  (8.0, 0.8): "YZ, the side"}
+        for direction, at in places.items():
+            try:
+                placed = session.backend.place_view(drawing.id, ViewRequest(
+                    part_doc_id=context.doc_id, name=direction.upper(),
+                    direction=direction, at=at, scale=1.0))
+            except Exception as exc:
+                report.note(f"{direction}: refused -- {type(exc).__name__}: {exc}")
+                continue
+            extent = [round(float(value), 4) for value in (placed.extent or ())]
+            rounded = tuple(round(float(value), 1) for value in extent[:2])
+            report.note(f"{direction}: spans {extent} cm -- "
+                        f"{planes.get(rounded, 'no plane of this block')}"
+                        f", reported as {placed.direction!r}")
+        report.note(
+            "This project's own meaning, from `_VIEW_AXES` in drafting.py: "
+            "front and rear show XZ, top and bottom show XY, left and right "
+            "show YZ. Anything above that disagrees is a line of "
+            "`_VIEW_ORIENTATIONS` to translate -- and see defect 16: the plane "
+            "is what an extent settles, and which way is up in it is not.")
+    finally:
+        if drawing is not None:
+            session.backend.close_document(drawing.id, save=False)
+        session.backend.close_document(context.doc_id, save=False)
+        session.forget(context.doc_id)
+
+
 def check_views(session: Session, report: Report) -> None:
     """Every display mode and orientation `capture_view` offers, actually applied.
 
@@ -2237,6 +2364,7 @@ CHECKS = {
     "thicken": check_thicken,
     "sketch-driven-pattern": check_sketch_driven_pattern,
     "drawing": check_drawing,
+    "view-directions": check_view_directions,
     "views": check_views,
 }
 
