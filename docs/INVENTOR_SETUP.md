@@ -672,17 +672,30 @@ The third and the lowest-risk of the three, and worth reading for what it is
 positional arguments but 5 were given"*. The measured signature is
 **`SketchDrivenPatternFeatures.Add(Definition)`** -- one object, the same shape
 `move_face` turned out to have -- so the three-argument call through `_patterned`
-could never have worked here, and `_patterned` is not what builds it. The
-backend now creates a definition, sets the compute type on it, and calls
-`Add(definition)`.
+could never have worked here, and `_patterned` is not what builds it.
 
-Where the definition comes from is the part the type library will not say:
-`--search SketchDrivenPattern` publishes `Add` and nothing else -- no factory,
-no definition class. Two spellings are tried (`CreateDefinition`,
-`CreateSketchDrivenPatternDefinition`), and the refusal prints what the live
-collection offered, so a run that still fails is itself the probe.
-`python scripts/probe_definitions.py` asks the same question deliberately, and
-asks it of `move_face`'s objects in the same pass.
+**Where the definition comes from was measured the next day, by asking the live
+object rather than the library.** `--search SketchDrivenPattern` publishes `Add`
+and nothing else -- no factory, no definition class -- but the object's own
+`ITypeInfo` lists:
+
+    CreateDefinition(...)   4 arguments, 2 of them optional
+    Add(Definition)         1 argument
+
+and `CreateDefinition(parents, sketch, point)` then produced a definition. So
+two arguments are required, the point is one of the optional pair, and the
+fourth is left to Inventor -- the definition offers `ReferenceFaces`,
+`AffectedBodies`, `AffectedOccurrences` and a read-only `PatternOfBody`, so it
+is one of those and none of them is something a recipe says. It also carries a
+settable **`ComputeType`** (default 47361), which is where the
+`kAdjustToModelCompute` measurement now goes.
+
+That call is what the backend makes, positionally and in the measured order --
+type information gives arity, not parameter names, so `_call_named`'s keyword
+attempt would only fall back to this, and relying on a fallback for a call that
+has been measured is a worse record of what is known. **The COM half of this
+operation is no longer the unmeasured part**; what is left is what the part
+comes out as, below.
 
 **Its arguments cannot be silently misordered**, which is why trying a factory's
 arguments is safe where guessing `thicken`'s were not. A feature collection, a

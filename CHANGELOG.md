@@ -119,6 +119,13 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   Inventor install -- and a **.dwg** rather than an .idw. A project can put its
   templates anywhere, so the folder has to be asked for rather than assumed.
 
+  **The listing then settled the shipped recipe.** The active project's
+  templates folder holds `Standard.idw`, `Standard.dwg` and a house
+  `OCB_Standard.idw`, and one level down under `Metric\` are `ISO.idw`,
+  `DIN.idw`, `BSI.idw`, `JIS.idw`, `GB`, `GOST` and `ANSI (mm)` -- so
+  `"ISO.idw"` resolves here, from the subfolder search rather than the folder
+  itself. Had this walked only the top level it would still be failing.
+
   Still unverified end to end: no drawing has been built since. The lesson is
   not about templates -- two calls in that sentence were measured, the argument
   between them was not, and "carries no risk at all" was a claim about a call
@@ -133,11 +140,27 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   compute type on it (`kAdjustToModelCompute`, the same measurement that made
   patterning a hole work at all) and calls `Add(definition)`.
 
-  The type library publishes no factory and no definition class for it, so two
-  spellings are tried and the refusal prints what the live collection offered.
+  **And on 2026-09-08 the definition was found, by asking the live object's own
+  `ITypeInfo` rather than the type library.** The library publishes no factory
+  and no definition class; the object lists `CreateDefinition` with 4 arguments,
+  2 of them optional, and `CreateDefinition(parents, sketch, point)` produces a
+  definition carrying `ParentFeatures`, `Sketch`, `BasePoint`, `ComputeType`
+  (default 47361, settable -- which is where the `kAdjustToModelCompute`
+  measurement goes), `Operation`, `ReferenceFaces`, `AffectedBodies`,
+  `AffectedOccurrences` and a read-only `PatternOfBody`.
+
+  So the attempt list is gone: the backend makes that one call, positionally and
+  in the measured order. Type information gives arity rather than parameter
+  names, so `_call_named`'s keyword attempt would only fall back to exactly this
+  call, and relying on a fallback for a call that has been measured is a worse
+  record of what is known. `CreateSketchDrivenPatternDefinition` is measured
+  absent and is gone rather than kept as a fallback. **The COM half of this
+  operation is measured now**; what is unmeasured is what the part comes out as
+  -- the occurrence count on the reference point.
+
   A wrong argument order still cannot pass silently -- a feature collection, a
   sketch and a sketch point are three different COM types -- which is why trying
-  a factory's arguments is safe where guessing `thicken`'s were not.
+  the factory's arguments was safe where guessing `thicken`'s were not.
 
 - **`move_face`'s candidate setters are all absent, and the type library will
   not say what replaces them.** *(2026-09-07.)* The run answered "Nothing on

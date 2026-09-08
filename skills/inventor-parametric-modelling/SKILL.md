@@ -566,9 +566,11 @@ fastener rather than deriving one.
   and `columns` accept an expression, so `"count": "bolts_per_side * 2"` works
   and a count is revisable like a length. A fractional result is refused rather
   than rounded, since 4.5 holes is a mistake.
-- **`sketch_driven_pattern` has never built anything in a live Inventor**, and
-  the first attempt was refused on the call's shape rather than its arguments —
-  so treat it as unavailable there until a run says otherwise.
+- **`sketch_driven_pattern` has never built anything in a live Inventor**,
+  though its COM call is measured now — the first attempt was refused on the
+  call's shape, and the definition it really wants has since been read off the
+  live object. So a live build is expected to work and has not been seen to;
+  check the `measured` block rather than assuming either way.
   Reach for it only when the feature is not already position-shaped: `hole`
   takes a list of points and `boss` a list of positions, so irregular holes and
   bosses need no pattern. The seed sits on `reference` and the occurrences go on

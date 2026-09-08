@@ -7,24 +7,32 @@ makepy generates no module for what that definition holds.** So
 not proof of anything -- late binding asks the object rather than the wrapper,
 and this asks the object.
 
-What the type library did say, and what it left open:
+**The 2026-09-08 run settled two of the three.** What is left is the one this
+file is named for:
 
-* **`MoveFaceFeatures.Add(Definition)`**, and `MoveFaceDefinition` has
-  properties `Faces`, `MoveFaceType` and **`MoveFaceTypeDefinition`** -- and one
-  method, `Copy`. So the direction and the distance live on that third object,
-  whose class is not generated. The backend's three guessed setters
-  (`SetDirectionAndDistance` and friends) are not on the definition and never
-  were; `--search MoveFaceType` returns nothing at all.
-* **`SketchDrivenPatternFeatures.Add(Definition)`** -- one argument, where the
-  backend passed five. No `CreateDefinition` appears in the wrapper, which
-  again is not proof: `MoveFaceFeatures` shows no such method either and the
-  live one produced a definition perfectly well, which is how that failure got
-  as far as the setter.
-* **The drawing document.** `Documents.Add` was handed the recipe's
-  `"ISO.idw"` verbatim -- a bare name is not a path -- and answered "Exception
-  occurred". That is fixed by resolving a name against Inventor's own templates
-  folder, and this prints what that folder holds, so the fix can be checked
-  rather than hoped for.
+* **`sketch_driven_pattern`: done.** `SketchDrivenPatternFeatures` really does
+  have a `CreateDefinition` -- 4 arguments, 2 optional -- that the type library
+  does not publish, and `CreateDefinition(parents, sketch, point)` produces a
+  definition carrying `ParentFeatures`, `Sketch`, `BasePoint`, `ComputeType`,
+  `Operation`, `ReferenceFaces`, `AffectedBodies`, `AffectedOccurrences` and a
+  read-only `PatternOfBody`. `Add(Definition)` takes it from there. The backend
+  now makes that exact call, so this section only confirms it.
+* **The drawing template: done, and it was never `FileManager`.** That object
+  has `GetTemplateFile` and none of `TemplatesPath`, `DesignDataPath` or
+  `WorkspacePath` -- those are the *project's*, on
+  `DesignProjectManager.ActiveDesignProject`. The active project's templates
+  folder holds `Standard.idw` and a house `OCB_Standard.idw`, with `ISO.idw`,
+  `DIN.idw`, `BSI.idw` and the rest one level down under `Metric\`, so a bare
+  `"ISO.idw"` does resolve -- from the subfolder search rather than the folder
+  itself.
+* **`move_face`: still open, and the last run was wasted on this probe's own
+  mistake.** `MoveFaceFeatures` has exactly `Add(Definition)` and
+  `CreateDefinition(1 argument)`, and that argument is a **`FaceCollection`**:
+  handed a generic `ObjectCollection` it answers "Type mismatch", which is
+  where the run stopped. The backend has always built the right kind, which is
+  why the live acceptance run got a definition and failed one step later, on the
+  setter. So `MoveFaceDefinition` and whatever `MoveFaceTypeDefinition` hands
+  back have still never been read, and they are what this run is for.
 
 **The answer it goes after is `GetTypeInfo`.** makepy generates a module per
 type library, so an object whose class the library does not publish has no
@@ -284,29 +292,43 @@ def probe_move_face(component: Any, transients: Any, dynamic: Any) -> None:
     does not matter: what is being asked is what the definition object offers,
     not what moving that face would do, and one shot at a CAD seat is worth
     spending on the question rather than on a selector this probe never uses.
+
+    **What the collection is, though, matters a great deal**, and the 2026-09-08
+    run was wasted on getting it wrong: `CreateObjectCollection` gave
+    `CreateDefinition` a generic `ObjectCollection` and Inventor answered "Type
+    mismatch", so the definition was never reached. `CreateFaceCollection` is
+    the one it wants. The backend has always used it -- `_new_collection` picks
+    `CreateFaceCollection` for a face selector -- which is why the live
+    acceptance run got a definition and *then* failed on the setter, while this
+    probe failed a step earlier. A probe that does not do what the code does is
+    measuring the probe.
     """
     print("\n" + "=" * 70)
     print("MOVE FACE")
     print("=" * 70)
     features = component.Features.MoveFaceFeatures
     members(features, "MoveFaceFeatures (live)", dynamic)
-    offers(features, "MoveFaceFeatures", "CreateDefinition",
-           "CreateMoveFaceDefinition", "Add", "AddByDirection", "AddByFreeDrag",
-           "AddByPlanarMove")
+    offers(features, "MoveFaceFeatures", "CreateDefinition", "Add")
 
-    faces = transients.CreateObjectCollection()
+    faces = transients.CreateFaceCollection()
     faces.Add(component.SurfaceBodies.Item(1).Faces.Item(1))
+    # `CreateMoveFaceDefinition` is measured absent (2026-09-08), so only the
+    # real name is tried. Two collection types are, though: a face collection
+    # is what the type mismatch above says it wants, and an object collection
+    # is what failed -- kept as the second attempt so a release that changed its
+    # mind would say so rather than looking like a different fault.
     definition = None
-    for name in ("CreateDefinition", "CreateMoveFaceDefinition"):
-        factory = getattr(features, name, None)
-        if factory is None:
-            continue
+    for label, collection in (("a FaceCollection", faces),
+                              ("an ObjectCollection", None)):
+        if collection is None:
+            collection = transients.CreateObjectCollection()
+            collection.Add(component.SurfaceBodies.Item(1).Faces.Item(1))
         try:
-            definition = factory(faces)
-            print(f"\n    {name}(faces) -> a definition")
+            definition = features.CreateDefinition(collection)
+            print(f"\n    CreateDefinition({label}) -> a definition")
             break
         except Exception as exc:
-            print(f"\n    {name}(faces) raises: {exc}")
+            print(f"\n    CreateDefinition({label}) raises: {exc}")
     members(definition, "MoveFaceDefinition (live)", dynamic)
     if definition is None:
         return
@@ -336,30 +358,18 @@ def probe_sketch_driven(component: Any, transients: Any, dynamic: Any) -> None:
     print("=" * 70)
     patterns = component.Features.SketchDrivenPatternFeatures
     members(patterns, "SketchDrivenPatternFeatures (live)", dynamic)
-    offers(patterns, "SketchDrivenPatternFeatures", "CreateDefinition",
-           "CreateSketchDrivenPatternDefinition", "Add")
+    offers(patterns, "SketchDrivenPatternFeatures", "CreateDefinition", "Add")
 
     parents = transients.CreateObjectCollection()
     parents.Add(component.Features.Item(int(component.Features.Count)))
     sketch = component.Sketches.Item("Spots")
     reference = sketch.SketchPoints.Item(1)
     made = None
-    for name in ("CreateDefinition", "CreateSketchDrivenPatternDefinition"):
-        factory = getattr(patterns, name, None)
-        if factory is None:
-            continue
-        for label, arguments in (
-                ("(parents, sketch, point)", (parents, sketch, reference)),
-                ("(parents, sketch)", (parents, sketch)),
-                ("(parents)", (parents,))):
-            try:
-                made = factory(*arguments)
-                print(f"\n    {name}{label} -> a definition")
-                break
-            except Exception as exc:
-                print(f"\n    {name}{label} raises: {exc}")
-        if made is not None:
-            break
+    try:
+        made = patterns.CreateDefinition(parents, sketch, reference)
+        print("\n    CreateDefinition(parents, sketch, point) -> a definition")
+    except Exception as exc:
+        print(f"\n    CreateDefinition(parents, sketch, point) raises: {exc}")
     members(made, "SketchDrivenPatternDefinition (live)", dynamic)
 
 

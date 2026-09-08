@@ -160,10 +160,15 @@ also passes the simulator rehearsal.
    file exists to catch.
 
    **A live run on 2027.1 on 2026-09-07 said all three are absent**, and the
-   type library will not answer the follow-up. `MoveFaceFeatures.Add` takes one
-   Definition, `CreateDefinition` produces one, and `MoveFaceDefinition` carries
-   a `MoveFaceType` and a `MoveFaceTypeDefinition` whose classes are published
-   nowhere -- `--search MoveFaceType` finds nothing at all. The likely shape is
+   type library will not answer the follow-up. Asking the live
+   `MoveFaceFeatures` on 2026-09-08 confirmed it has exactly two methods --
+   `Add(Definition)` and `CreateDefinition(1 argument)` -- and that the one
+   argument is a **`FaceCollection`**: given a generic `ObjectCollection` it
+   answers "Type mismatch". The backend has always built the right kind, which
+   is why the acceptance run reached a definition and failed a step later.
+   `MoveFaceDefinition` carries a `MoveFaceType` and a `MoveFaceTypeDefinition`
+   whose classes are published nowhere -- `--search MoveFaceType` finds nothing
+   at all -- and neither has been read yet. The likely shape is
    Inventor's usual one, a definition holding a type and the type holding its own
    parameters, so the same narrow setter list is now tried on the child object
    as well; the type is deliberately *not* set on the way past, because which
@@ -295,16 +300,21 @@ also passes the simulator rehearsal.
    *occurrence*, 33% on a three-point pattern -- and a tight tolerance reports
    that where 0.5 would hide it.
 
-   **The COM call was run on 2027.1 on 2026-09-07 and rejected, on its shape.**
-   `SketchDrivenPatternFeatures.Add` takes **one Definition**, not the
-   collection, sketch and point this passed through `_patterned`, so the call
-   could never have worked here. The backend now builds a definition, sets the
-   compute type on it and calls `Add(definition)`. Where the definition comes
-   from is not in the type library at all -- `--search SketchDrivenPattern`
-   publishes `Add` and nothing else -- so two factory spellings are tried and
-   the refusal prints what the live collection offered.
-   `scripts/probe_definitions.py` asks it directly, together with `move_face`'s
-   unpublished definition objects.
+   **The COM call was run on 2027.1 on 2026-09-07 and rejected, on its shape --
+   and measured in full the next day.** `SketchDrivenPatternFeatures.Add` takes
+   **one Definition**, not the collection, sketch and point this passed through
+   `_patterned`, so the call could never have worked here.
+
+   Where the definition comes from is not in the type library at all --
+   `--search SketchDrivenPattern` publishes `Add` and nothing else -- but the
+   live object's own `ITypeInfo` lists a `CreateDefinition` taking 4 arguments,
+   2 of them optional, and `CreateDefinition(parents, sketch, point)` produces
+   a definition carrying `ParentFeatures`, `Sketch`, `BasePoint`, a settable
+   `ComputeType`, `Operation`, `ReferenceFaces`, `AffectedBodies`,
+   `AffectedOccurrences` and a read-only `PatternOfBody`. The backend makes
+   that one call, positionally and in the measured order, and sets the compute
+   type on the definition before `Add`. `scripts/probe_definitions.py` is what
+   asked.
 
 ### Tier 2 -- frequently wanted, no current workaround
 

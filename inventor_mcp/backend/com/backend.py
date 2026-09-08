@@ -3174,7 +3174,7 @@ class ComBackend(Backend):
 
     def _drawing_template(self, app: Any, drawing_type: int,
                           template: str | None) -> tuple[str, str]:  # pragma: no cover
-        """The template file to make the drawing from, and where it was found.
+        r"""The template file to make the drawing from, and where it was found.
 
         **Measured on 2026-09-07: this is what the first live run failed on.**
         `Documents.Add` was handed the recipe's `template` verbatim, the shipped
@@ -3202,9 +3202,18 @@ class ComBackend(Backend):
         established, and the first is the strongest: **the folder Inventor's own
         default template is in**, which is `GetTemplateFile` measured working on
         2027.1 and needs no property nobody has read. On the machine this serves
-        that is a Shared-drive project folder, not the Inventor install --
-        `G:\...\oc-berlioz\Templates\Standard.dwg` -- which is the other
-        reason not to guess a path: a project can put its templates anywhere.
+        that is a Shared-drive *project* folder rather than the Inventor
+        install, and its default is a `.dwg` rather than an `.idw` -- which is
+        the other reason not to guess a path: a project can put its templates
+        anywhere, and does.
+
+        **Measured 2026-09-08, and this is what settles the shipped recipe.**
+        The active project's `TemplatesPath` holds `Standard.idw`,
+        `Standard.dwg` and a house `OCB_Standard.idw`, and one level down under
+        `Metric\` are `ISO.idw`, `DIN.idw`, `BSI.idw`, `JIS.idw` and the rest --
+        so `"ISO.idw"` does resolve here, from the subfolder search rather than
+        the folder itself. Two folders deep would have been needed if this had
+        walked only the top level, which is why it does not.
 
         The failure names every place it looked rather than just the last one.
         """
@@ -3702,23 +3711,25 @@ class ComBackend(Backend):
         object, like `move_face` -- so the three-argument call could never have
         worked on this release, and `_patterned` cannot be what makes it.
 
-        What the type library will *not* say is where the definition comes
-        from: `--search SketchDrivenPattern` publishes `Add` and nothing else,
-        no factory and no definition class. So the factory is discovered here,
-        the same way `move_face`'s setter is, and the refusal carries what the
-        live object offered -- `python scripts/probe_definitions.py` asks the
-        same question deliberately.
+        The type library would not say where the definition comes from --
+        `--search SketchDrivenPattern` publishes `Add` and nothing else, no
+        factory and no definition class -- and the live object's own `ITypeInfo`
+        did, the next day: `CreateDefinition` with 4 arguments, 2 of them
+        optional, and `CreateDefinition(parents, sketch, point)` confirmed to
+        produce one. `_sketch_driven_definition` has the detail. **So the whole
+        call is measured now**, and what is still unmeasured is only what the
+        part comes out as.
 
         Two things carried over from before the run, because they are still
         true. **A wrong argument order cannot pass silently**: the three are a
         feature collection, a sketch and a sketch point, which are three
         different COM types, so a misorder is a type mismatch rather than a part
-        built wrongly -- that is why trying a factory's arguments is safe when
+        built wrongly -- that is why trying a factory's arguments was safe when
         guessing `thicken`'s were not. And **the compute type still matters**:
         measured on 2027.1, patterning a hole fails outright until the compute
         type is `kAdjustToModelCompute`, and there is no reason a sketch-driven
-        pattern of a hole differs. It is set on the definition when the
-        definition has somewhere to put it.
+        pattern of a hole differs. The definition has a settable `ComputeType`
+        -- also measured -- so that is where it goes.
 
         The question a *successful* run still has to settle is unchanged and is
         not about the signature: **whether Inventor puts an occurrence on the
@@ -3747,51 +3758,62 @@ class ComBackend(Backend):
             "compute": compute,
         })
 
-    #: The spellings tried for the factory that makes a sketch-driven pattern
-    #: definition. Inventor names some definition factories for their feature
-    #: (`CreateShellDefinition`) and some not (`CreateDefinition`), and this
-    #: release publishes neither for this collection, so both are tried.
-    _SKETCH_DRIVEN_FACTORIES = ("CreateDefinition",
-                                "CreateSketchDrivenPatternDefinition")
-
     def _sketch_driven_definition(self, features: Any, parents: Any, sketch: Any,
                                   reference: Any) -> tuple[Any, str]:  # pragma: no cover
         """A definition for the pattern, and which call produced it.
 
-        The three arguments are given by name first and positionally second,
-        which is `_call_named`'s job, and neither can be silently wrong: a
-        feature collection, a sketch and a sketch point are three different COM
-        types. `ReferencePoint` is always supplied because Inventor's own dialog
-        offers the seed's centroid *or* a point you pick, the recipe always
-        names a point, and a centroid is not something the simulator has -- so a
-        default that used one could not be rehearsed. See `_NO_CENTROID` in the
-        mock.
+        **Measured on Inventor 2027.1, 2026-09-08**, by asking the live object's
+        own `ITypeInfo` -- which is the only thing that would say, since the
+        type library publishes `SketchDrivenPatternFeatures` with `Add` and
+        nothing else:
+
+            CreateDefinition(...)   4 arguments, 2 of them optional
+            Add(Definition)         1 argument
+
+        and `CreateDefinition(parents, sketch, point)` was then confirmed to
+        produce a definition. So two arguments are required, the third is one of
+        the optional pair, and the fourth is left to Inventor -- the definition
+        that came back offers `ReferenceFaces`, `AffectedBodies`,
+        `AffectedOccurrences` and `PatternOfBody`, so it is one of those and
+        none of them is something a recipe says.
+
+        Positional and in the measured order, deliberately, where most calls in
+        this backend go through `_call_named`. The names of these parameters are
+        *not* published -- type information gives arity, not names -- and
+        `_call_named`'s keyword attempt would fail with a `TypeError` and fall
+        back to exactly this call. Relying on a fallback for a call that has
+        been measured is a worse record of what is known.
+
+        Nothing can be silently misordered here: a feature collection, a sketch
+        and a sketch point are three different COM types, so a wrong order is a
+        type mismatch rather than a part built wrongly. `ReferencePoint` is
+        always supplied because Inventor's own dialog offers the seed's centroid
+        *or* a point you pick, the recipe always names a point, and a centroid
+        is not something the simulator has -- so a default that used one could
+        not be rehearsed. See `_NO_CENTROID` in the mock.
+
+        `CreateSketchDrivenPatternDefinition` was also tried, before this was
+        read, on the grounds that Inventor names some definition factories for
+        their feature. It is measured absent, so it is gone rather than kept as
+        a fallback: an attempt list for a call whose signature is known is
+        noise, and it hides which spelling is the real one.
         """
-        arguments = [("ParentFeatures", parents), ("Sketch", sketch),
-                     ("ReferencePoint", reference)]
-        failures: list[str] = []
-        for name in self._SKETCH_DRIVEN_FACTORIES:
-            factory = getattr(features, name, None)
-            if factory is None:
-                failures.append(f"{name}: the collection has no such method")
-                continue
+        factory = getattr(features, "CreateDefinition", None)
+        if factory is None:
             try:
-                return _call_named(factory, arguments), name
-            except Exception as exc:
-                failures.append(f"{name}: {_com_message(exc)}")
-        try:
-            offered = ", ".join(sorted(n for n in dir(features)
-                                       if not n.startswith("_"))[:40])
-        except Exception:  # pragma: no cover - hostile COM object
-            offered = "nothing dir() could read"
-        raise FeatureError(
-            "No route to a sketch-driven pattern definition on this release: "
-            + "; ".join(failures),
-            hint="Measured on 2027.1: `Add` takes one Definition and the type "
-            "library publishes no factory for it. Ask the live object with "
-            "`python scripts/probe_definitions.py`. SketchDrivenPatternFeatures "
-            f"offers {offered}.",
-        )
+                offered = ", ".join(sorted(name for name in dir(features)
+                                           if not name.startswith("_"))[:40])
+            except Exception:  # pragma: no cover - hostile COM object
+                offered = "nothing dir() could read"
+            raise FeatureError(
+                "This release's SketchDrivenPatternFeatures has no "
+                "CreateDefinition, and `Add` takes only a definition.",
+                hint="Measured on 2027.1: CreateDefinition takes 4 arguments, 2 "
+                "optional, and (features, sketch, point) makes a definition. Ask "
+                "this release with `python scripts/probe_definitions.py`. The "
+                f"collection offers {offered}.",
+            )
+        return factory(parents, sketch, reference), "CreateDefinition"
 
     def _pattern_compute(self, definition: Any) -> str:  # pragma: no cover
         """Ask for recomputed occurrences, and report whether it took.
@@ -3802,9 +3824,11 @@ class ComBackend(Backend):
         and a blind hole's second occurrence has nothing to remove until the
         boss beneath it exists. Recompute is therefore what to ask for.
 
-        A release without the property is not an error -- it gets its own
-        default, and the detail says so rather than the code pretending it was
-        set.
+        2027.1's definition has a settable `ComputeType` -- measured
+        2026-09-08, along with a default of 47361 for it -- so this is expected
+        to take. A release without the property is still not an error: it gets
+        its own default, and the detail says so rather than the code pretending
+        it was set.
         """
         try:
             definition.ComputeType = self._k("kAdjustToModelCompute")

@@ -605,11 +605,16 @@ actually bitten.
       builds a definition, sets the compute type on it, and calls
       `Add(definition)`.
 
-      Where the definition comes from is not published — `--search
-      SketchDrivenPattern` gives `Add` and nothing else, no factory and no
-      definition class — so two spellings are tried and the refusal prints what
-      the live collection offered. `python scripts/probe_definitions.py` asks it
-      directly, in the same pass as `move_face`'s.
+      **Where the definition comes from was measured on 2026-09-08**, by asking
+      the live object's own `ITypeInfo` rather than the type library — which
+      publishes no factory and no definition class. `CreateDefinition` takes 4
+      arguments, 2 of them optional, and `CreateDefinition(parents, sketch,
+      point)` produces a definition carrying `ParentFeatures`, `Sketch`,
+      `BasePoint`, a settable `ComputeType`, `Operation`, `ReferenceFaces`,
+      `AffectedBodies`, `AffectedOccurrences` and a read-only `PatternOfBody`.
+      The backend makes that one call now and the attempt list is gone. **The
+      COM half is measured; this tick stays open for what the part comes out
+      as.**
 
       Two things from before the run still hold. Its arguments are three
       different COM types so a wrong order raises, which is why trying a
@@ -666,10 +671,18 @@ actually bitten.
 
       **So the next reading is a live probe, not another signature**: `python
       scripts/probe_definitions.py` asks the objects themselves what they offer,
-      because `dir()` on a live COM object answers what the type library will
-      not. The same narrow setter list is now tried on the child object too, and
-      the refusal prints what both objects offered — so one run answers it even
-      if the widening misses.
+      through their own `ITypeInfo`, because that answers what the type library
+      will not. The same narrow setter list is now tried on the child object
+      too, and the refusal prints what both objects offered — so one run answers
+      it even if the widening misses.
+
+      The 2026-09-08 probe did not get there, for a mistake of its own worth
+      recording: it handed `CreateDefinition` a generic `ObjectCollection` and
+      Inventor answered "Type mismatch". The one argument is a
+      **`FaceCollection`** — which the backend has always built, which is why
+      the acceptance run reached a definition and failed a step later, on the
+      setter. A probe that does not do what the code does is measuring the
+      probe.
 
       What the run then has to answer is in `INVENTOR_SETUP.md`, and the short
       version is unchanged: "it built" proves nothing — the two fixtures are
@@ -795,13 +808,23 @@ The market's 2026 feature, and a gap in the whole open-source field.
       the constants table for months. Both true, and the run answered "Creating
       the drawing document failed: Exception occurred." `Documents.Add` takes a
       *path*; the shipped recipe says `"ISO.idw"`; a bare filename is not a
-      path. `_drawing_template` now resolves a bare name against
-      `FileManager.TemplatesPath` and its immediate subfolders -- an ISO install
-      keeps `ISO.idw` one level down, under a locale or a `Metric` -- and
-      failing that refuses with every path it tried — **unverified**, and the first thing the next run reaches. The
-      lesson is not about templates: two calls were measured, the argument
-      between them was not, and "carries no risk" was a claim about a call
-      rather than about a call and its arguments.
+      path. `_drawing_template` now resolves a bare name against the folders
+      Inventor itself uses and their immediate subfolders, and failing that
+      refuses with every path it tried. The lesson is not about templates: two
+      calls were measured, the argument between them was not, and "carries no
+      risk" was a claim about a call rather than about a call and its arguments.
+
+      **Which folders was itself wrong, and 2026-09-08 measured it.**
+      `FileManager` has `GetTemplateFile` and *not* `TemplatesPath` — that is
+      the project's, on `DesignProjectManager.ActiveDesignProject` — so the
+      first fix would have found no folder and refused exactly as before. The
+      strongest source needs no unread property at all: the folder
+      `GetTemplateFile` returns its answer from, which follows the active
+      project. On the machine this serves that is a Shared-drive project folder
+      holding `Standard.idw` and a house `OCB_Standard.idw`, with `ISO.idw` one
+      level down under `Metric\` — so the shipped recipe's `"ISO.idw"` does
+      resolve, from the subfolder search. **Still unverified end to end**: no
+      drawing has been built, and it is the first thing the next run reaches.
 
       `GeneralDimension` and `DrawingDimensions` have no generated module to
       read, which is not the same as their being absent — makepy generates what
