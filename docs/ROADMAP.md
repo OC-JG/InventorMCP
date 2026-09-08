@@ -672,11 +672,12 @@ actually bitten.
       occurrence on the reference point — and two of its three readings are the
       same volume, so the check prints the feature list.
 
-      *Corrected 2026-09-08*: the published page says `Add` takes a
+      *Corrected 2026-09-08*: the published pages say `Add` takes a
       `SketchDrivenPatternDefinition`, so the three-argument `Add` the backend
-      made could never have worked. It calls `CreateDefinition(parents, sketch,
-      reference)` and `Add(definition)` now; the factory's argument list is not
-      on the pages read and is the first thing the run settles.
+      made could never have worked, and give the factory in full --
+      `CreateDefinition(ParentFeatures, Sketch, [BasePoint], [ReferenceFaces])`.
+      The backend follows both. Nothing about the call is unread now; the count
+      is what the run is for.
 - [ ] **Measure `thicken` against a live Inventor** — `python
       scripts/com_signatures.py ThickenFeatures`, then `--only thicken`. Two
       questions, one fixture each, and neither is the magnitude: on a single
@@ -705,10 +706,11 @@ actually bitten.
 
       *Settled on paper 2026-09-08*: the `MoveFaceDefinition` page names the
       setter, `SetDirectionAndDistanceMoveType`, and says `MoveFaceType` starts
-      at `kFreeMoveType`. The backend calls that one name and reads the type
-      back before `Add`. Still unread: the setter's argument list, which is the
-      per-member page `MoveFaceDefinition_SetDirectionAndDistanceMoveType.htm`
-      or `com_signatures.py MoveFaceDefinition` on a seat.
+      at `kFreeMoveType`; the setter's own page gives `(Distance, Direction,
+      [DirectionReversed])`, distance first, which caught the call written the
+      day before with the two swapped. The backend follows the page, sends
+      `flip` as the flag, and reads the type back before `Add`. Nothing about
+      the call is unread now; the two fixtures are what the run is for.
 - [ ] **Measure `thread` by the published call, then take it out of
       `_KNOWN_BROKEN`.** *(Opened 2026-09-08.)* The backend now calls
       `ThreadFeatures.Add(Face, StartEdge, ThreadInfo, ...)` with a `ThreadInfo`

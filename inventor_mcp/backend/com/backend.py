@@ -2849,13 +2849,18 @@ class ComBackend(Backend):
 
         **Never executed against a real Inventor.** `docs/INVENTOR_SETUP.md`
         keeps this with the other unmeasured COM. The definition object is
-        measured to exist and, since 2026-09-08, its setter is published:
-        `MoveFaceDefinition.SetDirectionAndDistanceMoveType`, which sets
-        `MoveFaceType` to `kDirectionAndDistanceMoveType` from its initial
-        `kFreeMoveType`. That property is read back before `Add`, because a
-        setter that was accepted and left the type at free-move would build a
-        feature that moves nothing along nothing -- and the published enum
-        values make the read cheap.
+        measured to exist and, since 2026-09-08, its setter is published in
+        full: `SetDirectionAndDistanceMoveType(Distance As Variant, Direction
+        As Object, [DirectionReversed] As Boolean)` -- the distance *first*,
+        as a value in centimetres or a string for which "a parameter for this
+        value will be created", the direction a `WorkAxis`, a linear `Edge` or a
+        planar `Face`, and the sign a flag. So the expression goes in as
+        written, `flip` goes in as the flag rather than as a negated
+        expression, and a sketch line is refused as a direction before Inventor
+        is asked. The setter moves `MoveFaceType` from its initial
+        `kFreeMoveType` to `kDirectionAndDistanceMoveType`, and that property is
+        read back before `Add`, because a setter that was accepted and left the
+        type alone would build a feature that moves nothing along nothing.
 
         The volume before and after is read and reported, because a move-face
         that moved nothing is this operation's version of a cut that met no
@@ -2872,9 +2877,19 @@ class ComBackend(Backend):
                 hint="Run `select_topology` with the same selector to see what it matches.",
             )
         direction = self._resolve_axis(doc_id, request.direction)
+        if request.direction.kind not in ("work_axis", "edge"):
+            raise FeatureError(
+                f"A move-face direction has to be a work axis or an edge, not the "
+                f"sketch line {request.direction.value!r}.",
+                hint="The published SetDirectionAndDistanceMoveType takes a WorkAxis, "
+                "a linear Edge or a planar Face for its Direction. Use 'x', 'y', "
+                "'z', a named work_axis, or an `edge:` handle from select_topology.",
+            )
+        # The expression goes in as written and the sign goes in as the
+        # documented `DirectionReversed` flag: Inventor creates a parameter for
+        # the distance, and a parameter of `-(wall_t)` would be a negative length
+        # nobody asked for where `wall_t` reversed is what `flip` means.
         distance = request.distance.expression
-        if request.flip:
-            distance = f"-({distance})"
         before = _solid_volume(document)
         features = document.ComponentDefinition.Features.MoveFaceFeatures
         with self._batch(document), self._translate_errors("MoveFace"):
@@ -2886,7 +2901,11 @@ class ComBackend(Backend):
                     failures.append(f"{setter_name}: the definition has no such method")
                     continue
                 try:
-                    setter(direction, distance)
+                    # Published order: (Distance As Variant, Direction As Object,
+                    # [DirectionReversed] As Boolean). Distance first -- and a
+                    # Variant would take a COM object without complaint, which
+                    # is why this order came from the page and not from a try.
+                    setter(distance, direction, bool(request.flip))
                 except Exception as exc:
                     failures.append(f"{setter_name}: {_com_message(exc)}")
                     continue
@@ -2895,8 +2914,8 @@ class ComBackend(Backend):
                 raise FeatureError(
                     "Nothing on this release's MoveFaceDefinition would take a "
                     f"direction and a distance: {'; '.join(failures)}",
-                    hint="The published setter is SetDirectionAndDistanceMoveType "
-                    "and its argument list is not on the object page -- `python "
+                    hint="The published call is SetDirectionAndDistanceMoveType("
+                    "Distance, Direction, [DirectionReversed]) -- `python "
                     "scripts/com_signatures.py MoveFaceDefinition` reads the "
                     "installed one. This call has never run against an Inventor; "
                     "docs/INVENTOR_SETUP.md says what to confirm.",
@@ -2948,10 +2967,10 @@ class ComBackend(Backend):
                 f"The move-face definition reports MoveFaceType {actual}, not "
                 f"kDirectionAndDistanceMoveType ({wanted}), after the setter "
                 "returned without complaint.",
-                hint="SetDirectionAndDistanceMoveType did not take. Read its "
-                "argument list with `python scripts/com_signatures.py "
-                "MoveFaceDefinition`; a third argument with a default is the "
-                "likeliest reason.",
+                hint="SetDirectionAndDistanceMoveType did not take, although the "
+                "published order (Distance, Direction, [DirectionReversed]) was "
+                "used. `python scripts/com_signatures.py MoveFaceDefinition` "
+                "reads the installed signature.",
             )
 
     def _move_face_definition(self, features: Any, faces: Any) -> tuple[Any, str]:  # pragma: no cover
@@ -3665,18 +3684,16 @@ class ComBackend(Backend):
                               ) -> FeatureInfo:  # pragma: no cover
         """Copy features to a sketch's points.
 
-        **Never executed against a real Inventor.** The published
-        `SketchDrivenPatternFeatures_Add` page (read 2026-09-08) says the call
-        is `Add(Definition As SketchDrivenPatternDefinition)` -- a definition,
-        not the three arguments this passed to `Add` before, which could never
-        have worked. The definition comes from
-        `SketchDrivenPatternFeatures.CreateDefinition`, whose argument list is
-        *not* on the pages read; it is called with the three things a
-        sketch-driven pattern is made of, a collection, a sketch and a point,
-        and a wrong count or order is a type mismatch rather than a part built
-        wrongly. `python scripts/com_signatures.py
-        SketchDrivenPatternFeatures SketchDrivenPatternDefinition` is what
-        settles it.
+        **Never executed against a real Inventor.** The published pages (read
+        2026-09-08) give the whole shape: `Add(Definition As
+        SketchDrivenPatternDefinition)` -- a definition, not the three arguments
+        this passed to `Add` before, which could never have worked -- and
+        `CreateDefinition(ParentFeatures As ObjectCollection, Sketch As Object,
+        [BasePoint] As Variant, [ReferenceFaces] As Variant)`, where `BasePoint`
+        is a `SketchPoint`, `WorkPoint` or `GeometryIntent` and defaults to
+        null. The definition has `ComputeType`, `AffectedBodies` and
+        `Operation` (join or new body only). So the call below is the published
+        one, with the recipe's reference point as `BasePoint`.
 
         The question that matters is still not the signature: it is **whether
         Inventor puts an occurrence on the reference point as well**, because
@@ -3705,11 +3722,12 @@ class ComBackend(Backend):
             except Exception as exc:
                 raise FeatureError(
                     f"SketchDrivenPatternFeatures.CreateDefinition refused "
-                    f"(ParentFeatures, Sketch, ReferencePoint): {self._explain(exc)}",
-                    hint="The published Add takes a SketchDrivenPatternDefinition and "
-                    "the CreateDefinition argument list is not on the pages read "
-                    "here -- `python scripts/com_signatures.py "
-                    "SketchDrivenPatternFeatures` says what it really takes.",
+                    f"(ParentFeatures, Sketch, BasePoint): {self._explain(exc)}",
+                    hint="That is the published order. The sketch has to hold the "
+                    "points and the base point has to be one of them, a work "
+                    "point or a geometry intent -- `python "
+                    "scripts/com_signatures.py SketchDrivenPatternFeatures` reads "
+                    "the installed signature.",
                 ) from exc
             feature, compute = self._add_patterned_definition(features, definition)
             if request.name:

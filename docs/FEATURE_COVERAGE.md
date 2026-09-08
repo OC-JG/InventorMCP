@@ -173,9 +173,13 @@ also passes the simulator rehearsal.
    spellings above exists, and they are gone. `MoveFaceType` starts at
    `kFreeMoveType` (91395) and the setter moves it to
    `kDirectionAndDistanceMoveType` (91393), so the backend reads the type back
-   before `Add` and refuses a definition the setter left alone. What the page
-   does not give is the setter's argument list, so `(direction, distance)` is
-   still the assumption and `com_signatures.py MoveFaceDefinition` the read.
+   before `Add` and refuses a definition the setter left alone. The setter's
+   own page gives the order -- `(Distance As Variant, Direction As Object,
+   [DirectionReversed] As Boolean)`, distance *first* -- and the code follows
+   it; the first version had the two swapped, and a Variant would have taken
+   the COM object without the type mismatch it was counting on. `flip` is the
+   documented flag now, and the direction must be a work axis, an edge or a
+   planar face, so a sketch line is refused.
    The reference also lists `MoveFaceFeatures` among the collections read-only
    *as properties* of `PartFeatures`; `FaceDraftFeatures` is on the same list
    and is measured building, so that reading says nothing about whether `Add`

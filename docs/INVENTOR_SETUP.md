@@ -513,10 +513,16 @@ the shape, though not the argument list:
   `MoveFaceFeatures.CreateDefinition` is the accessor the page names, so the
   longer factory spelling the backend also tried is gone.
 
-What the page does not give is the setter's argument list, so the call is
-`SetDirectionAndDistanceMoveType(direction, distance)` -- a COM object and an
-expression string, so a swap is a type mismatch -- and a third argument with a
-meaningful default is still the first thing to look for.
+The setter's own page was read next and settles the rest:
+`SetDirectionAndDistanceMoveType(Distance As Variant, Direction As Object,
+[DirectionReversed] As Boolean)`. **Distance first** -- and since it is a
+Variant, a COM object in that slot would not have been the type mismatch the
+first version of the call was counting on; the order came off the page, not
+off a try. A string distance creates a parameter, so the expression goes in as
+written. The direction is a `WorkAxis`, a linear `Edge` or a planar `Face`, so a
+sketch line is refused before Inventor is asked. And `flip` is the documented
+`DirectionReversed` flag rather than a negated expression, which answers item 3
+below before a run.
 
 **So start by reading it, not by running the check:**
 
@@ -536,12 +542,11 @@ What the run has to answer, in this order:
    Inventor as an expression so the dimension keeps its parameter; a setter that
    insists on a number would take that away and is worth knowing about. The
    `MoveFaceType` read-back says whether the setter took at all.
-3. **Whether a negative distance is accepted.** `flip` is passed as
-   `-(expression)` rather than through a reversal property, because no such
-   property has been read. If Inventor refuses it, the fix is that property, and
-   this is the cheapest thing in the run to get wrong without noticing -- a
-   refusal is loud, but a *silently ignored* sign is a face that moves the wrong
-   way, and the fixtures below are what catch it.
+3. ~~**Whether a negative distance is accepted.**~~ *Answered on paper*: the
+   published call has `[DirectionReversed] As Boolean`, so `flip` goes in as
+   that flag and the expression is never negated. What a run still has to show
+   is that the flag reverses the move -- a *silently ignored* flag is a face
+   that moves the wrong way, and the fixtures below are what catch it.
 
 And then the thing worth checking beyond "did it run", which for this operation
 is not one number but three. `check_move_face` builds
@@ -676,15 +681,15 @@ The third and the lowest-risk of the three, and worth reading for what it is
 2026-09-08): `SketchDrivenPatternFeatures.Add(Definition As
 SketchDrivenPatternDefinition)`. The backend had passed a collection, a sketch
 and a point straight to `Add`, which could never have worked. It now calls
-`CreateDefinition(parents, sketch, reference)` -- whose argument list is *not*
-on the pages read, so those three are the assumption and a wrong count or order
-is a type mismatch rather than a part built wrongly -- then sets `ComputeType`
-on the definition and calls `Add(definition)`. The compute-type question is the
-one the other two patterns settled on 2027.1: a pattern of a hole fails outright
-until each occurrence is recomputed. `python scripts/com_signatures.py
-SketchDrivenPatternFeatures SketchDrivenPatternDefinition` is the read that
-settles the factory's arguments and whether the definition carries a
-`ComputeType` at all.
+`CreateDefinition(parents, sketch, reference)`, which is the published
+`CreateDefinition(ParentFeatures As ObjectCollection, Sketch As Object,
+[BasePoint] As Variant, [ReferenceFaces] As Variant)` with the recipe's
+reference point as `BasePoint` -- then sets `ComputeType`, which the
+`SketchDrivenPatternDefinition` page lists, and calls `Add(definition)`. The
+compute-type question is the one the other two patterns settled on 2027.1: a
+pattern of a hole fails outright until each occurrence is recomputed. Nothing
+about this call is unread now; what is unmeasured is whether it runs, and the
+count.
 
 **Its arithmetic is not new either.** An occurrence does whatever its seed did,
 which is the rule `rectangular_pattern` and `circular_pattern` use and which the

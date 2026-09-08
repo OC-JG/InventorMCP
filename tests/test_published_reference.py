@@ -265,6 +265,18 @@ class TestMoveFaceFollowsThePublishedDefinition:
         assert "_require_direction_and_distance_type(definition)" in source
         assert source.index("_require_direction_and_distance_type") < source.index("features.Add(definition)")
 
+    def test_the_published_argument_order_distance_first_and_flip_as_the_flag(self):
+        """`SetDirectionAndDistanceMoveType(Distance, Direction,
+        [DirectionReversed])`. The first version of this call had the two the
+        other way round, and Distance is a Variant, so a COM object in that slot
+        would not have been a type mismatch."""
+        import inspect
+
+        source = inspect.getsource(com.ComBackend.move_face)
+        assert "setter(distance, direction, bool(request.flip))" in source
+        assert 'f"-({distance})"' not in source, "flip is the documented flag, not a negated expression"
+        assert 'request.direction.kind not in ("work_axis", "edge")' in source
+
 
 class TestSketchDrivenPatternIsDefinitionBased:
     """`SketchDrivenPatternFeatures.Add(Definition)` per the published page;

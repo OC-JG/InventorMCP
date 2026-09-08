@@ -45,16 +45,21 @@ Notable changes, newest first. Dates are when the work landed, not a release.
     class follows the table and the side (`2B`, `6g`). Still refused by the
     builder: nothing has run.
   - **`move_face`** calls the published setter,
-    `MoveFaceDefinition.SetDirectionAndDistanceMoveType`, instead of three
-    spellings that exist on no release, and reads `MoveFaceType` back before
-    `Add` -- the page says a new definition starts at `kFreeMoveType`, and a
-    setter that was accepted without changing it would build a move defined by
-    nothing. The `MoveFaceTypeEnum` values are in the fallback table.
-  - **`sketch_driven_pattern`** calls `CreateDefinition(parents, sketch,
-    reference)` and then `Add(definition)`. The published page says `Add` takes
-    a `SketchDrivenPatternDefinition`; the three-argument `Add` the backend made
-    before could never have worked. The factory's argument list is not
-    published and is the first thing a run settles.
+    `MoveFaceDefinition.SetDirectionAndDistanceMoveType(Distance, Direction,
+    [DirectionReversed])`, instead of three spellings that exist on no release
+    -- distance *first*, which a Variant slot would have accepted the wrong way
+    round without complaint; `flip` as the documented flag rather than a
+    negated expression; a sketch line refused as a direction, since the page
+    allows a work axis, a linear edge or a planar face. `MoveFaceType` is read
+    back before `Add` -- the page says a new definition starts at
+    `kFreeMoveType`, and a setter that was accepted without changing it would
+    build a move defined by nothing. The `MoveFaceTypeEnum` values are in the
+    fallback table.
+  - **`sketch_driven_pattern`** calls the published `CreateDefinition(
+    ParentFeatures, Sketch, [BasePoint], [ReferenceFaces])` and then
+    `Add(definition)`, setting `ComputeType` on the definition first. The
+    published page says `Add` takes a `SketchDrivenPatternDefinition`; the
+    three-argument `Add` the backend made before could never have worked.
   - **Edge convexity** gains Inventor's own answer, `SurfaceBody.ConvexEdges` /
     `ConcaveEdges`, read once per `select` and keyed by `Edge.TransientKey` --
     placed *behind* the measured boundary-loop method, so it decides only where
