@@ -20,6 +20,12 @@ its position, and scores each candidate against the truth.
 
     python scripts/probe_convexity.py
     python scripts/probe_convexity.py --keep-open
+
+Every live object this reads is read inside ``probe()``, which is handed whole to
+``apartment.on_thread``: the backend is pinned to one COM apartment and a live
+COM object that leaves it is dead, so nothing but text and numbers crosses back.
+The edges here come out of ``backend._topology``, which holds live objects, so
+they are exactly the case the rule is about. See ``scripts/apartment.py``.
 """
 
 from __future__ import annotations
@@ -31,6 +37,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from apartment import on_thread, raw  # noqa: E402
 from inventor_mcp.backend.base import ResolvedSelector  # noqa: E402
 from inventor_mcp.backend.com import backend as com  # noqa: E402
 from inventor_mcp.builder import apply_operation  # noqa: E402
@@ -106,109 +113,118 @@ def main(argv=None) -> int:
         apply_operation(session, context, op)
     print("Built a 60x40x10 plate with a 20x10x4 pocket in its underside.\n")
 
-    matches = backend.select(context.doc_id, ResolvedSelector(kind="edge"))
-    entries = [(m, backend._topology[m.id]["object"]) for m in matches
-               if m.midpoint is not None]
-    if not entries:
-        print("No edges came back with a position; nothing to score.")
-        return 1
+    def probe() -> int:
+        """Everything that touches a live edge, on the apartment that owns it."""
+        inner = raw(backend)
+        matches = inner.select(context.doc_id, ResolvedSelector(kind="edge"))
+        entries = [(m, inner._topology[m.id]["object"]) for m in matches
+                   if m.midpoint is not None]
+        if not entries:
+            print("No edges came back with a position; nothing to score.")
+            return 1
 
-    # What the API actually offers, asked of a real edge rather than of makepy.
-    print("=" * 72)
-    print("What a live Edge answers to")
-    print("=" * 72)
-    sample = next((raw for info_, raw in entries if info_.geometry == "linear"),
-                  entries[0][1])
-    for name, result in attributes(sample, ["EdgeUses", "Faces", "Geometry",
-                                            "Evaluator", "StartVertex", "TangentiallyConnectedEdges"]).items():
-        print(f"  Edge.{name:28} {result}")
-    uses = com._edge_uses(sample)
-    print(f"\n  Edge.EdgeUses -> {'unavailable' if uses is None else f'{len(uses)} use(s)'}")
-    if uses:
-        for name, result in attributes(uses[0], ["IsParamReversed", "Face", "EdgeUseLoop",
-                                                 "Edge", "Parent", "Next", "Previous"]).items():
-            print(f"  EdgeUse.{name:25} {result}")
-        faces = sample.Faces
-        candidates = [faces.Item(i) for i in range(1, int(faces.Count) + 1)]
-        ends = com._edge_ends(sample)
-        print(f"\n  endpoints              {ends}")
-        # IsParamReversed reading the same on both uses is what broke the first
-        # attempt at this, so print both rather than just one.
-        flags = []
-        for use in uses:
-            try:
-                flags.append(bool(use.IsParamReversed))
-            except Exception:
-                flags.append(None)
-        print(f"  IsParamReversed        {flags}"
-              + ("   <- identical, so it cannot mean 'against the loop'"
-                 if len(set(flags)) == 1 else ""))
-        resolved = [com._use_face_and_tangent(use, ends, candidates) for use in uses]
-        named = sum(1 for item in resolved if item is not None)
-        print(f"  resolved by the loop   {named} of {len(uses)} uses")
-        for item in resolved:
-            if item is not None:
-                print(f"    face area {item[0].Evaluator.Area * 100:8.1f} mm2  "
-                      f"loop runs {tuple(round(c, 3) for c in item[1])}")
-        if named == len(uses):
-            distinct = len({com._face_key(item[0]) for item in resolved})
-            print(f"  and they name {distinct} distinct face(s) "
-                  f"{'-- correct' if distinct == 2 else '-- WRONG, they should differ'}")
-        loop = getattr(uses[0], "EdgeUseLoop", None)
-        if loop is not None:
-            for name, result in attributes(loop, ["Face", "IsOuterEdgeLoop", "EdgeUses"]).items():
-                print(f"  EdgeUseLoop.{name:21} {result}")
+        # What the API actually offers, asked of a real edge rather than of makepy.
+        print("=" * 72)
+        print("What a live Edge answers to")
+        print("=" * 72)
+        sample = next((edge for info_, edge in entries if info_.geometry == "linear"),
+                      entries[0][1])
+        for name, result in attributes(sample, ["EdgeUses", "Faces", "Geometry",
+                                                "Evaluator", "StartVertex", "TangentiallyConnectedEdges"]).items():
+            print(f"  Edge.{name:28} {result}")
+        uses = com._edge_uses(sample)
+        print(f"\n  Edge.EdgeUses -> "
+              f"{'unavailable' if uses is None else f'{len(uses)} use(s)'}")
+        if uses:
+            for name, result in attributes(uses[0], ["IsParamReversed", "Face", "EdgeUseLoop",
+                                                     "Edge", "Parent", "Next", "Previous"]).items():
+                print(f"  EdgeUse.{name:25} {result}")
+            faces = sample.Faces
+            candidates = [faces.Item(i) for i in range(1, int(faces.Count) + 1)]
+            ends = com._edge_ends(sample)
+            print(f"\n  endpoints              {ends}")
+            # IsParamReversed reading the same on both uses is what broke the first
+            # attempt at this, so print both rather than just one.
+            flags = []
+            for use in uses:
+                try:
+                    flags.append(bool(use.IsParamReversed))
+                except Exception:
+                    flags.append(None)
+            print(f"  IsParamReversed        {flags}"
+                  + ("   <- identical, so it cannot mean 'against the loop'"
+                     if len(set(flags)) == 1 else ""))
+            resolved = [com._use_face_and_tangent(use, ends, candidates) for use in uses]
+            named = sum(1 for item in resolved if item is not None)
+            print(f"  resolved by the loop   {named} of {len(uses)} uses")
+            for item in resolved:
+                if item is not None:
+                    print(f"    face area {item[0].Evaluator.Area * 100:8.1f} mm2  "
+                          f"loop runs {tuple(round(c, 3) for c in item[1])}")
+            if named == len(uses):
+                distinct = len({com._face_key(item[0]) for item in resolved})
+                print(f"  and they name {distinct} distinct face(s) "
+                      f"{'-- correct' if distinct == 2 else '-- WRONG, they should differ'}")
+            loop = getattr(uses[0], "EdgeUseLoop", None)
+            if loop is not None:
+                for name, result in attributes(
+                        loop, ["Face", "IsOuterEdgeLoop", "EdgeUses"]).items():
+                    print(f"  EdgeUseLoop.{name:21} {result}")
 
-    # And whether either candidate can be trusted.
-    print("\n" + "=" * 72)
-    print("Every edge, against the answer its position demands")
-    print("=" * 72)
-    print(f"  {'edge':>8}  {'midpoint (mm)':>26}  {'truth':<8} {'sampled':<9} {'by loop':<9}")
-    score = {"sampled": 0, "loop": 0}
-    unknown = {"sampled": 0, "loop": 0}
-    notes: dict[str, int] = {}
-    for info_, raw in sorted(entries, key=lambda entry: entry[0].midpoint):
-        expected = truth(info_.midpoint)
-        sampled = com._convexity_from_samples(raw)
-        loop = com._convexity_from_loops(raw)
-        if loop is None:
-            uses = com._edge_uses(raw)
-            if uses is None:
-                reason = "no edge uses on this edge"
-            elif com._edge_direction(raw) is None:
-                reason = "not a straight edge, so it has no single tangent"
-            elif com._edge_ends(raw) is None:
-                reason = "its endpoints could not be read"
-            elif any(com._use_face_and_tangent(
-                        use, com._edge_ends(raw),
-                        [raw.Faces.Item(i) for i in range(1, int(raw.Faces.Count) + 1)]
-                     ) is None for use in uses):
-                reason = "no route from an edge use back to its face"
-            else:
-                reason = "the uses disagreed, or the faces meet smoothly"
-            notes[reason] = notes.get(reason, 0) + 1
-        for key, answer in (("sampled", sampled), ("loop", loop)):
-            if answer == expected:
-                score[key] += 1
-            elif answer is None:
-                unknown[key] += 1
-        position = "(" + ", ".join(f"{c * 10:7.2f}" for c in info_.midpoint) + ")"
-        flag = "" if sampled == expected else "   <-- sampled is wrong"
-        if loop is not None and loop != expected:
-            flag += "   <-- loop is wrong"
-        print(f"  {info_.id:>8}  {position:>26}  {expected:<8} "
-              f"{str(sampled):<9} {str(loop):<9}{flag}")
+        # And whether either candidate can be trusted.
+        print("\n" + "=" * 72)
+        print("Every edge, against the answer its position demands")
+        print("=" * 72)
+        print(f"  {'edge':>8}  {'midpoint (mm)':>26}  "
+              f"{'truth':<8} {'sampled':<9} {'by loop':<9}")
+        score = {"sampled": 0, "loop": 0}
+        unknown = {"sampled": 0, "loop": 0}
+        notes: dict[str, int] = {}
+        for info_, edge in sorted(entries, key=lambda entry: entry[0].midpoint):
+            expected = truth(info_.midpoint)
+            sampled = com._convexity_from_samples(edge)
+            loop = com._convexity_from_loops(edge)
+            if loop is None:
+                uses = com._edge_uses(edge)
+                if uses is None:
+                    reason = "no edge uses on this edge"
+                elif com._edge_direction(edge) is None:
+                    reason = "not a straight edge, so it has no single tangent"
+                elif com._edge_ends(edge) is None:
+                    reason = "its endpoints could not be read"
+                elif any(com._use_face_and_tangent(
+                            use, com._edge_ends(edge),
+                            [edge.Faces.Item(i)
+                             for i in range(1, int(edge.Faces.Count) + 1)]
+                         ) is None for use in uses):
+                    reason = "no route from an edge use back to its face"
+                else:
+                    reason = "the uses disagreed, or the faces meet smoothly"
+                notes[reason] = notes.get(reason, 0) + 1
+            for key, answer in (("sampled", sampled), ("loop", loop)):
+                if answer == expected:
+                    score[key] += 1
+                elif answer is None:
+                    unknown[key] += 1
+            position = "(" + ", ".join(f"{c * 10:7.2f}" for c in info_.midpoint) + ")"
+            flag = "" if sampled == expected else "   <-- sampled is wrong"
+            if loop is not None and loop != expected:
+                flag += "   <-- loop is wrong"
+            print(f"  {info_.id:>8}  {position:>26}  {expected:<8} "
+                  f"{str(sampled):<9} {str(loop):<9}{flag}")
 
-    total = len(entries)
-    print(f"\n  of {total} edges: sampled got {score['sampled']} right "
-          f"({unknown['sampled']} unknown), loop got {score['loop']} right "
-          f"({unknown['loop']} unknown)")
-    for note, count in sorted(notes.items(), key=lambda kv: -kv[1]):
-        print(f"    {count:>3} x {note}")
+        total = len(entries)
+        print(f"\n  of {total} edges: sampled got {score['sampled']} right "
+              f"({unknown['sampled']} unknown), loop got {score['loop']} right "
+              f"({unknown['loop']} unknown)")
+        for note, count in sorted(notes.items(), key=lambda kv: -kv[1]):
+            print(f"    {count:>3} x {note}")
+        return 0
 
+    code = on_thread(backend, probe)
     if not args.keep_open:
         backend.close_document(context.doc_id, save=False)
-    return 0
+    return code
 
 
 if __name__ == "__main__":

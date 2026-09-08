@@ -5,6 +5,38 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 ## Unreleased
 
 ### Fixed
+- **Two probe scripts read live COM objects from the wrong thread, and would
+  have failed only on a machine with Inventor.** `scripts/probe_hole.py` called
+  `backend._doc`, `backend._require_app` and `backend._sketch` from `main()` and
+  then poked what came back; `scripts/probe_convexity.py` took its edges out of
+  `backend._topology` and did the same. The backend is pinned to one COM
+  apartment — `_pinned` in `inventor_mcp/backend/__init__.py` routes every method
+  onto one worker thread — so a live object handed back across that boundary is
+  already dead. Touching it raises "the application called an interface that was
+  marshalled for a different thread", or a bare
+  `AttributeError: <unknown>.SomeProperty`, which reads exactly like a property
+  the release does not have. Neither shows up off Windows: both scripts exit with
+  `BackendUnavailableError` before reaching the fault.
+
+  Both now do all of their live-object reading inside one `probe()` handed to
+  `on_thread`, printing from in there and returning only text and numbers. What
+  they measure is unchanged.
+
+  The two helpers this needs — `raw(backend)` to get past the proxy and
+  `on_thread(backend, work)` to run a closure on the apartment — existed in three
+  places: copied into `probe_sweep_and_pattern.py` and
+  `probe_import_and_properties.py`, and inlined again inside
+  `probe_hole_styles.py`. They now live once, in **`scripts/apartment.py`**,
+  whose docstring is the explanation and whose `__main__` self-check proves both
+  against the real proxy with no Inventor involved.
+
+  `Attempts` — the try-it-and-print-it helper both of those probes use — was
+  duplicated the same way, and both copies kept a dict of outcomes that nothing
+  ever read. It now lives once in **`scripts/attempts.py`**, without the dead
+  dict, and both probes describe an outcome the better of the two ways: the
+  version that tries `FullFileName`, `DisplayName`, `Name` and `Value` in turn,
+  rather than `Name` or the bare type name.
+
 - **`promote_parameters` claimed the part was unchanged; it now measures it.**
   The result carried a sentence — "each promotion holds the property's current
   value, so the part is the same shape it was" — and nothing checked it. The
@@ -56,6 +88,7 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   the centroid reading too — the one that catches material moving while the
   volume holds still — and `docs/INVENTOR_SETUP.md` records what a live run has
   to confirm.
+
 - **The server would not start from the shipped `.mcp.json`, and no client could
   say why.** Connecting to Inventor failed from Claude and from the DFM tools at
   once, with every client reporting the same four words — `Connection closed` —
