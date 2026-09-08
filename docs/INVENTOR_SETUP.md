@@ -966,6 +966,19 @@ things that can only be answered by a real Inventor:
   never been checked.
 - **Inventor from a pool of threads** — sixteen calls from eight threads, which
   is what an MCP client does and what nothing had ever done here.
+- **a promotion leaves the part the shape it was** (`--only promotion`) —
+  `promote_parameters` measures this for itself now rather than asserting it,
+  and the simulator cannot be evidence for it. There, `promote_parameter` edits
+  a dictionary rather than an Inventor expression, so nothing could move; and it
+  reports no centre of mass at all, so the reading that catches material moving
+  *without* the volume changing has never been taken. A live run is what
+  confirms two things: that Inventor re-evaluates the expression a promotion
+  wrote back to the same volume and box, within the 5.0e-4 cm^3 the rest of this
+  script uses; and that the centroid does not shift — a tapered face that came
+  back at a different angle would show up there and nowhere else. It matters
+  more than its size suggests, because promotion is offered as a safe thing to
+  do to a part nobody described, and a drift of a rounding step would silently
+  become the baseline every later DFM round is compared against.
 - **the enum fallback table** — compares every entry against Inventor's own type
   library and prints a corrected block to paste in.
 
