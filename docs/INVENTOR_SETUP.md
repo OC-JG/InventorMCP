@@ -496,16 +496,54 @@ take a direction and a distance."* All three candidates --
 -- are absent. The backend named every attempt and its error rather than
 guessing again, which is what that list was for.
 
-**And the type library will not answer the follow-up.**
+**The type library would not answer the follow-up, and the live object did.**
 `--search MoveFaceType` comes back *"Nothing in the type library mentions
-'MoveFaceType'"*: the properties are named on `MoveFaceDefinition`, and the
-classes they return are not published as classes the search can reach. That is
-the wall. A direction and a distance almost certainly go onto the object
-`MoveFaceTypeDefinition` hands back -- Inventor's shape is a definition holding a
-*type*, and the type holding its own parameters -- but "almost certainly" is the
-word this file exists to eliminate.
+'MoveFaceType'"* -- the properties are named on `MoveFaceDefinition`, and the
+classes they return are not published as classes the search can reach. So
+`scripts/probe_definitions.py` asked the object instead, on 2026-09-08, and
+`ITypeInfo` gave the whole interface:
 
-**So the next step is a live probe, not another guess:**
+| member | kind | arguments |
+|---|---|---|
+| `Faces` | get/put | a `FaceCollection` |
+| `MoveFaceType` | **get only** | 91395 on a fresh definition |
+| `MoveFaceTypeDefinition` | get only | **`None`** on a fresh definition |
+| `SetDirectionAndDistanceMoveType` | method | **3, none optional** |
+| `SetPlanarMoveType` | method | 3, one optional |
+| `SetFreeMoveType` | method | 1 |
+| `AutomaticBlending` | get/put | `True` by default |
+| `Copy` | method | 0 |
+
+Three things fall out of that table.
+
+**The setter is a fourth spelling.** `SetDirectionAndDistanceMoveType`, which
+none of the three guesses came near. They were reasonable, narrow, and
+unanimously wrong -- which is what one live read cost nothing to settle, and is
+the whole argument of this file in one line.
+
+**The type is not assigned, it is implied.** `MoveFaceType` is read-only and
+`MoveFaceTypeDefinition` is `None` until a setter has been called, so calling
+one of the three *makes* the definition that kind. The earlier design -- set a
+`MoveFaceType`, then fill in the child object -- was reaching for a shape this
+API does not have, and deliberately not setting the type turned out to be right
+for a reason nobody had.
+
+**And its third argument is the last unread thing in the call.** Two of the
+three can only be the direction and the distance the name promises; the third
+has no default and no published meaning. `_move_face_third` resolves it **by
+name and never by position**: `ITypeInfo`'s `GetNames` returns a member's name
+followed by its parameters' names, the third parameter's real name is looked up
+in `_MOVE_FACE_THIRD_BY_NAME`, and a name that is not in that table is refused
+with the name printed. That is `_k()`'s discipline applied to a parameter
+instead of an enum -- resolve the name the library gives, never invent the
+value. The table holds only reversal-shaped names, where `False` is right
+because `flip` is already expressed as a negative distance.
+
+A guess there would not be a loud failure, which is why there is no default: a
+boolean accepted in a slot that means something else is a part built wrongly,
+and no tolerance catches that.
+
+**So the next step is one more probe run, which now prints parameter names:**
 
     python scripts/probe_definitions.py
 

@@ -166,17 +166,26 @@ also passes the simulator rehearsal.
    argument is a **`FaceCollection`**: given a generic `ObjectCollection` it
    answers "Type mismatch". The backend has always built the right kind, which
    is why the acceptance run reached a definition and failed a step later.
-   `MoveFaceDefinition` carries a `MoveFaceType` and a `MoveFaceTypeDefinition`
-   whose classes are published nowhere -- `--search MoveFaceType` finds nothing
-   at all -- and neither has been read yet. The likely shape is
-   Inventor's usual one, a definition holding a type and the type holding its own
-   parameters, so the same narrow setter list is now tried on the child object
-   as well; the type is deliberately *not* set on the way past, because which
-   `MoveFaceType` value means direction-and-distance is a semantic claim nothing
-   has read and a wrong one could be accepted. The refusal prints what both
-   objects offered, so one run answers the question.
-   `scripts/probe_definitions.py` asks it directly, and
-   `docs/INVENTOR_SETUP.md` has the rest.
+   `MoveFaceDefinition`'s own `ITypeInfo` then gave the interface the type
+   library will not: `Faces` (get/put), a **read-only** `MoveFaceType`, a
+   `MoveFaceTypeDefinition` that is **`None`** on a fresh definition, a settable
+   `AutomaticBlending`, `Copy`, and three setters --
+   **`SetDirectionAndDistanceMoveType`** with three arguments and none optional,
+   `SetPlanarMoveType` with three and one optional, and `SetFreeMoveType` with
+   one.
+
+   So the setter is a fourth spelling, and the type is *implied* rather than
+   assigned: calling one of those three is what makes a definition that kind.
+   Not setting the type on the way past -- decided when it looked like an
+   unmeasured semantic claim -- turned out to be right for a reason nobody had.
+
+   **The third argument is the only unread thing left**, and it is resolved by
+   name rather than position: `_MOVE_FACE_THIRD_BY_NAME` maps a parameter's real
+   name, read off the live object, to the value to pass, and refuses a name it
+   does not know with the name printed. No default, because a value accepted in
+   a slot whose meaning is unknown is a part built wrongly and no tolerance
+   catches that. `scripts/probe_definitions.py` prints those names, and
+   `docs/INVENTOR_SETUP.md` has the table.
 
 6. **Thicken.** *Added 2026-09-07 as `{"op":"thicken",...}`, and it closes half
    of what this item asked for.* The half it closes is the wall-thickness one: a

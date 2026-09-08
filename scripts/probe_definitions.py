@@ -1,4 +1,4 @@
-"""Ask live objects what they offer, because the type library will not say.
+r"""Ask live objects what they offer, because the type library will not say.
 
 The 2026-09-07 pass measured `thicken` and left three things failing, and two of
 them failed for the same reason: **the feature takes a *definition* object, and
@@ -25,14 +25,27 @@ file is named for:
   `DIN.idw`, `BSI.idw` and the rest one level down under `Metric\`, so a bare
   `"ISO.idw"` does resolve -- from the subfolder search rather than the folder
   itself.
-* **`move_face`: still open, and the last run was wasted on this probe's own
-  mistake.** `MoveFaceFeatures` has exactly `Add(Definition)` and
-  `CreateDefinition(1 argument)`, and that argument is a **`FaceCollection`**:
-  handed a generic `ObjectCollection` it answers "Type mismatch", which is
-  where the run stopped. The backend has always built the right kind, which is
-  why the live acceptance run got a definition and failed one step later, on the
-  setter. So `MoveFaceDefinition` and whatever `MoveFaceTypeDefinition` hands
-  back have still never been read, and they are what this run is for.
+* **`move_face`: the setter is found, and one argument of it is still unread.**
+  `MoveFaceFeatures` has exactly `Add(Definition)` and `CreateDefinition(1
+  argument)`, and that argument is a **`FaceCollection`** -- handed a generic
+  `ObjectCollection` it answers "Type mismatch". `MoveFaceDefinition` then
+  offers `Faces`, a **read-only** `MoveFaceType` (91395), a
+  `MoveFaceTypeDefinition` that is `None` until a type is set, a settable
+  `AutomaticBlending` (default True), and three setters:
+
+      SetDirectionAndDistanceMoveType   3 arguments
+      SetPlanarMoveType                 3 arguments, 1 optional
+      SetFreeMoveType                   1 argument
+
+  So the type is not assigned and then filled in; calling one of those *makes*
+  it the type. None of the three names guessed before this was read
+  (`SetDirectionAndDistance`, `SetDirectionMove`,
+  `SetDirectionAndDistanceMoveData`) was the real one, which is the argument for
+  reading rather than guessing in one line.
+
+  **What is left is the third argument**, and that is what this run is for: the
+  first version of `typeinfo` read only `GetNames(memid)[0]`, throwing away the
+  parameter names that come back in the same tuple. It prints them now.
 
 **The answer it goes after is `GetTypeInfo`.** makepy generates a module per
 type library, so an object whose class the library does not publish has no
@@ -120,7 +133,8 @@ def typeinfo(obj: Any) -> None:
         # wastes the seat it was spending.
         try:
             desc = info.GetFuncDesc(index)
-            name = info.GetNames(desc.memid)[0]
+            named = info.GetNames(desc.memid)
+            name = named[0]
         except Exception as exc:
             print(f"      function {index} unreadable: {type(exc).__name__}: {exc}")
             continue
@@ -139,7 +153,14 @@ def typeinfo(obj: Any) -> None:
             counted = f"{len(args)} arg(s)"
             if optional:
                 counted += f", {optional} optional"
-        print(f"      {name:34s} {kind:6s} {counted}")
+        # `GetNames` returns the member's name *and its parameters' names*, and
+        # the first version of this read only `[0]`. That threw away the answer
+        # to the question the probe existed for: 2026-09-08 found
+        # `SetDirectionAndDistanceMoveType` and reported "3 arg(s)" without
+        # saying what the third one is, which is a whole round trip for a slice.
+        parameters = ", ".join(named[1:]) if len(named) > 1 else ""
+        signature = f"({parameters})" if parameters else ""
+        print(f"      {name:34s} {kind:6s} {counted:26s} {signature}")
     for index in range(attr.cVars):
         try:
             print(f"      {info.GetNames(info.GetVarDesc(index).memid)[0]:34s} field")

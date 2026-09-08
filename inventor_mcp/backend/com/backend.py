@@ -311,6 +311,43 @@ def _specialise(document: Any) -> Any:  # pragma: no cover - Windows only
         return document
 
 
+def _parameter_names(obj: Any, member: str) -> list[str]:
+    """What a live COM object calls *member*'s parameters, or an empty list.
+
+    Inventor's type *library* does not publish every class -- `move_face`'s and
+    `sketch_driven_pattern`'s definitions are both absent from it, so
+    `scripts/com_signatures.py` can say nothing about either -- but the object
+    in hand still answers `ITypeInfo`, and `GetNames(memid)` returns a member's
+    name followed by its parameters' names. That is the only source there is for
+    what an argument *means*, as opposed to how many there are.
+
+    **The member's own name is dropped**, so index 0 is the first parameter.
+    `GetNames` puts the method name at the front and the first version of this
+    returned the tuple whole, which made `names[2]` the *second* argument while
+    reading as the third -- an off-by-one that would have passed a value into a
+    slot nobody had identified. The whole point of resolving by name is to make
+    that impossible, so the shape that invited it is gone.
+
+    Empty on any failure rather than raising: a caller asking what a parameter
+    is called is about to refuse politely, and a second exception on the way to
+    a good error message would replace it with a worse one.
+    """
+    try:
+        info = obj._oleobj_.GetTypeInfo()
+        attr = info.GetTypeAttr()
+    except Exception:
+        return []
+    for index in range(attr.cFuncs):
+        try:
+            desc = info.GetFuncDesc(index)
+            names = info.GetNames(desc.memid)
+        except Exception:
+            continue
+        if names and str(names[0]) == member:
+            return [str(name) for name in names[1:]]
+    return []
+
+
 def _dynamic(value: Any) -> Any:  # pragma: no cover - Windows only
     """*value* through dynamic dispatch, so every member resolves by name.
 
@@ -2833,11 +2870,20 @@ class ComBackend(Backend):
     #: What a list cannot rule out is a *third* argument whose default means
     #: something, which is why `scripts/com_signatures.py --search MoveFace` is
     #: named in the failure and in `docs/INVENTOR_SETUP.md`.
-    _MOVE_FACE_SETTERS = (
-        "SetDirectionAndDistance",
-        "SetDirectionMove",
-        "SetDirectionAndDistanceMoveData",
-    )
+    #: The setter, measured on Inventor 2027.1 on 2026-09-08 by reading the live
+    #: `MoveFaceDefinition`'s own type information. Not a candidate list any
+    #: more: the definition offers exactly three move-type setters --
+    #: `SetDirectionAndDistanceMoveType` (3 arguments),
+    #: `SetPlanarMoveType` (3, one optional) and `SetFreeMoveType` (1) -- and
+    #: this is the one that means a direction and a distance.
+    #:
+    #: None of the three names guessed before it was read
+    #: (`SetDirectionAndDistance`, `SetDirectionMove`,
+    #: `SetDirectionAndDistanceMoveData`) was right, and the real one is a
+    #: fourth spelling. Worth recording: the guesses were reasonable, narrow,
+    #: and unanimous in being wrong, which is what one live read cost nothing to
+    #: settle.
+    _MOVE_FACE_SETTER = "SetDirectionAndDistanceMoveType"
 
     def move_face(self, doc_id: str, request: MoveFaceRequest) -> FeatureInfo:  # pragma: no cover
         """Translate faces of an existing solid along a direction.
@@ -2870,34 +2916,27 @@ class ComBackend(Backend):
         features = document.ComponentDefinition.Features.MoveFaceFeatures
         with self._batch(document), self._translate_errors("MoveFace"):
             definition, made_by = self._move_face_definition(features, faces)
-            failures: list[str] = []
-            for where, holder in self._move_face_holders(definition):
-                for setter_name in self._MOVE_FACE_SETTERS:
-                    setter = getattr(holder, setter_name, None)
-                    if setter is None:
-                        failures.append(f"{where}.{setter_name}: no such method")
-                        continue
-                    try:
-                        setter(direction, distance)
-                    except Exception as exc:
-                        failures.append(f"{where}.{setter_name}: {_com_message(exc)}")
-                        continue
-                    break
-                else:
-                    continue
-                break
-            else:
+            setter = getattr(definition, self._MOVE_FACE_SETTER, None)
+            if setter is None:
                 raise FeatureError(
-                    "Nothing on this release's MoveFaceDefinition would take a "
-                    f"direction and a distance: {'; '.join(failures)}",
-                    hint="This is the measured state, not a guess: 2027.1 has "
-                    "`MoveFaceFeatures.Add(Definition)` and a `MoveFaceDefinition` "
-                    "with `MoveFaceType` and `MoveFaceTypeDefinition`, and the type "
-                    "library publishes no class for either -- `--search MoveFaceType` "
-                    "finds nothing. Ask the live objects instead: `python "
-                    "scripts/probe_definitions.py`. What they offered this time: "
-                    + self._move_face_offered(definition),
+                    "This release's MoveFaceDefinition has no "
+                    f"{self._MOVE_FACE_SETTER}.",
+                    hint="Measured on 2027.1: that is the setter, taking three "
+                    "arguments. Ask this release what it has instead with "
+                    "`python scripts/probe_definitions.py`. What it offered "
+                    "this time: " + self._move_face_offered(definition),
                 )
+            third = self._move_face_third(definition)
+            try:
+                setter(direction, distance, third)
+            except Exception as exc:
+                raise FeatureError(
+                    f"{self._MOVE_FACE_SETTER} refused: {_com_message(exc)}",
+                    hint=f"Called with the direction, {distance!r} and "
+                    f"{third!r} for its third argument. `python "
+                    "scripts/probe_definitions.py` prints that argument's real "
+                    "name and what the definition offers.",
+                ) from exc
             try:
                 feature = features.Add(definition)
             except Exception as exc:
@@ -2923,60 +2962,99 @@ class ComBackend(Backend):
             ),
         })
 
-    def _move_face_holders(self, definition: Any) -> list[tuple[str, Any]]:  # pragma: no cover
-        """The objects a direction-and-distance setter could be on, in order.
+    #: What to pass for `SetDirectionAndDistanceMoveType`'s **third** argument,
+    #: keyed by the name Inventor's own type information gives that parameter.
+    #:
+    #: Measured 2026-09-08: the method takes three arguments, none optional, and
+    #: the first two can only be the direction and the distance the name
+    #: promises. The third is the last unread thing in this call, so it is
+    #: resolved **by name and never by position**: the parameter's real name is
+    #: read off the live object and looked up here, and a name that is not in
+    #: this table is refused with the name printed rather than guessed at.
+    #:
+    #: That is `_k()`'s discipline applied to a parameter instead of an enum --
+    #: resolve the name the library gives, never invent the value. A guess here
+    #: is not a loud failure: a boolean in a slot that means something else is a
+    #: part built wrongly, which is what this whole file exists to prevent.
+    #:
+    #: Only reversal-shaped names are known, and `False` is right for all of
+    #: them because `flip` is already expressed as a negative distance. When the
+    #: real name turns out to be something else, this table gains a row and the
+    #: reason for its value -- it does not gain a default.
+    _MOVE_FACE_THIRD_BY_NAME = {
+        "Reverse": False,
+        "Reversed": False,
+        "ReverseDirection": False,
+        "DirectionReversed": False,
+        "Flip": False,
+        "FlipDirection": False,
+    }
 
-        **Measured on 2027.1**: `MoveFaceDefinition` exists and none of the
-        three setters is on it. What the type library does say is that the
-        definition carries a `MoveFaceType` and a `MoveFaceTypeDefinition`,
-        which is Inventor's usual shape -- a definition holding a *type*, the
-        type holding that type's own parameters -- so the child object is where
-        a direction and a distance would go. It is tried second rather than
-        assumed, and the candidate setters stay the same narrow three, so this
-        widens where to look without widening what may be called.
+    def _move_face_third(self, definition: Any) -> Any:  # pragma: no cover
+        """The third argument, resolved from the parameter's own name.
 
-        The type is not set on the way past. Which `MoveFaceType` value means
-        direction-and-distance is a semantic claim nothing here has read, and a
-        wrong one could be accepted -- the failure this file exists to prevent.
-        Whatever the child offers by default is what gets asked.
+        `ITypeInfo.GetNames(memid)` returns a member's name *and* its
+        parameters' names, which is how this can be a lookup rather than a
+        guess. A release that will not answer, or answers with a name not in
+        `_MOVE_FACE_THIRD_BY_NAME`, is refused with what it said -- and
+        `python scripts/probe_definitions.py` prints the same thing
+        deliberately.
         """
-        holders = [("MoveFaceDefinition", definition)]
-        try:
-            child = definition.MoveFaceTypeDefinition
-        except Exception:  # pragma: no cover - absent or version-specific
-            child = None
-        if child is not None:
-            holders.append(("MoveFaceDefinition.MoveFaceTypeDefinition", child))
-        return holders
+        parameters = _parameter_names(definition, self._MOVE_FACE_SETTER)
+        if len(parameters) < 3:
+            raise FeatureError(
+                "Could not read what "
+                f"{self._MOVE_FACE_SETTER}'s third argument is called"
+                + (f" -- this release named {parameters!r}." if parameters else "."),
+                hint="Measured on 2027.1: three arguments, none optional, and "
+                "the third is the one thing about this call still unread. "
+                "`python scripts/probe_definitions.py` prints the parameter "
+                "names; add the name to `_MOVE_FACE_THIRD_BY_NAME` with the "
+                "reason for its value.",
+            )
+        third = parameters[2]
+        if third not in self._MOVE_FACE_THIRD_BY_NAME:
+            raise FeatureError(
+                f"{self._MOVE_FACE_SETTER}'s third argument is called "
+                f"{third!r}, and nothing here knows what to pass for it.",
+                hint=f"The three are {', '.join(parameters[:3])}. Refusing "
+                "rather than guessing: a value accepted in a slot whose "
+                "meaning is unknown is a part built wrongly, which a tolerance "
+                "cannot catch. Add a row to `_MOVE_FACE_THIRD_BY_NAME` once "
+                "the argument's meaning is known.",
+            )
+        return self._MOVE_FACE_THIRD_BY_NAME[third]
 
     def _move_face_offered(self, definition: Any) -> str:  # pragma: no cover
-        """What the definition and its type-definition actually offer, as text.
+        """What the live definition offers, as text, for a refusal to carry.
 
         The failure carries this so that **one live run is the probe**. The
         alternative is what happened on 2026-09-07: a run says "nothing would
-        take a direction and a distance", the type library says nothing further,
-        and a second session on the CAD machine goes and asks `dir()`. A CAD
+        take a direction and a distance", the type library says nothing
+        further, and another session on the CAD machine goes and asks. A CAD
         seat is the scarce thing in this project -- `docs/INVENTOR_SETUP.md`
         counts the round trips -- so the answer travels with the refusal.
         """
-        parts: list[str] = []
-        for where, holder in self._move_face_holders(definition):
-            try:
-                names = sorted(n for n in dir(holder) if not n.startswith("_"))
-            except Exception:  # pragma: no cover - hostile COM object
-                names = []
-            shown = ", ".join(names[:40]) or "nothing dir() could read"
-            parts.append(f"{where} offers {shown}")
-        return "; ".join(parts)
+        try:
+            names = sorted(n for n in dir(definition) if not n.startswith("_"))
+        except Exception:  # pragma: no cover - hostile COM object
+            names = []
+        return ", ".join(names[:40]) or "nothing dir() could read"
 
     def _move_face_definition(self, features: Any, faces: Any) -> tuple[Any, str]:  # pragma: no cover
         """A `MoveFaceDefinition` for *faces*, and which call produced it.
 
-        Two spellings are tried for the same reason the setters are: what is
-        recorded about this collection is that it has a `CreateDefinition`, and
-        Inventor's other definition factories are named for their feature
-        (`CreateShellDefinition`, `CreateFaceDraftDefinition`), so the longer
-        name is as likely as the short one on any given release.
+        **Measured on 2027.1, 2026-09-08**: `MoveFaceFeatures` has exactly
+        `Add(Definition)` and `CreateDefinition(1 argument)`, and that argument
+        is a **`FaceCollection`** -- handed a generic `ObjectCollection` it
+        answers "Type mismatch". `_new_collection` builds the right kind for a
+        face selector, which is why this has always got a definition.
+
+        `CreateMoveFaceDefinition` is still tried, and is measured absent. It
+        stays only because it costs a `getattr` and Inventor does name some
+        definition factories for their feature (`CreateShellDefinition`,
+        `CreateFaceDraftDefinition`), so a release that renamed this one would
+        keep working rather than refusing.
         """
         failures: list[str] = []
         for name in ("CreateDefinition", "CreateMoveFaceDefinition"):

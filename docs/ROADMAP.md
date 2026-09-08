@@ -661,13 +661,24 @@ actually bitten.
       Split from the item above for the reason the work axis was: a tick
       covering unmeasured COM is the claim this file exists not to make.
 
-      **What the run eliminated.** `MoveFaceFeatures.Add` takes one Definition,
-      `CreateDefinition` produces one, and none of the three candidate setters —
+      **What the run eliminated, and what the next one found.**
+      `MoveFaceFeatures.Add` takes one Definition, `CreateDefinition` produces
+      one from a `FaceCollection`, and none of the three candidate setters —
       `SetDirectionAndDistance`, `SetDirectionMove`,
-      `SetDirectionAndDistanceMoveData` — is on it. The type library will not
-      answer the follow-up either: `MoveFaceDefinition` carries a `MoveFaceType`
-      and a `MoveFaceTypeDefinition` whose classes are published nowhere, and
-      `--search MoveFaceType` finds nothing at all.
+      `SetDirectionAndDistanceMoveData` — is on it. The type library would not
+      answer the follow-up: `--search MoveFaceType` finds nothing at all. The
+      live object's `ITypeInfo` did, on 2026-09-08: the setter is
+      **`SetDirectionAndDistanceMoveType`**, a fourth spelling, taking **three
+      arguments with none optional**. `MoveFaceType` is read-only and
+      `MoveFaceTypeDefinition` is `None` until a setter has been called, so
+      calling one *makes* the definition that kind — the shape the earlier
+      design assumed does not exist.
+
+      **What is left is that third argument**, resolved by name rather than
+      position: `_MOVE_FACE_THIRD_BY_NAME` maps a parameter's real name to what
+      to pass, holds only reversal-shaped names, and has no default, because a
+      value accepted in a slot whose meaning is unknown is a part built wrongly.
+      The probe prints parameter names now.
 
       **So the next reading is a live probe, not another signature**: `python
       scripts/probe_definitions.py` asks the objects themselves what they offer,

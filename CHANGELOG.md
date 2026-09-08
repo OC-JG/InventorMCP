@@ -162,22 +162,46 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   sketch and a sketch point are three different COM types -- which is why trying
   the factory's arguments was safe where guessing `thicken`'s were not.
 
-- **`move_face`'s candidate setters are all absent, and the type library will
-  not say what replaces them.** *(2026-09-07.)* The run answered "Nothing on
-  this release's MoveFaceDefinition would take a direction and a distance", and
-  the follow-up came back empty: `--search MoveFaceType` finds nothing at all,
-  even though `MoveFaceDefinition` carries a `MoveFaceType` and a
-  `MoveFaceTypeDefinition`. The classes those return are not published.
+- **`move_face`'s setter is a fourth spelling, found by asking the object.**
+  *(2026-09-07, then 2026-09-08.)* The first run answered "Nothing on this
+  release's MoveFaceDefinition would take a direction and a distance" --
+  `SetDirectionAndDistance`, `SetDirectionMove` and
+  `SetDirectionAndDistanceMoveData` are all absent -- and `--search
+  MoveFaceType` found nothing at all, because the classes those properties
+  return are not published in the type library.
 
-  Two changes, neither of them a guess about semantics. The same narrow setter
-  list is now tried on `MoveFaceTypeDefinition` as well as on the definition --
-  Inventor's usual shape is a definition holding a type and the type holding its
-  own parameters -- and the `MoveFaceType` is deliberately *not* set on the way
-  past, because which value means direction-and-distance is a claim nothing has
-  read and a wrong one could be accepted. And the refusal now prints what both
-  objects offered, so **one live run is the probe**: the alternative is what
-  happened here, where a run says "nothing would work", the type library says
-  nothing more, and a second session on the CAD machine goes and asks `dir()`.
+  `ITypeInfo` on the live definition gave the whole interface:
+  `Faces` (get/put), a **read-only** `MoveFaceType`, a `MoveFaceTypeDefinition`
+  that is **`None`** on a fresh definition, a settable `AutomaticBlending`,
+  `Copy`, and three setters -- **`SetDirectionAndDistanceMoveType` (3
+  arguments, none optional)**, `SetPlanarMoveType` (3, one optional) and
+  `SetFreeMoveType` (1).
+
+  Three consequences. The candidate list is gone, replaced by the measured
+  name: three reasonable, narrow guesses were unanimously wrong, and one live
+  read settled it. **The type is implied rather than assigned** -- calling a
+  setter is what makes a definition that kind, so the earlier plan of setting a
+  `MoveFaceType` and then filling in its child object was reaching for a shape
+  this API does not have; deliberately *not* setting the type turned out right
+  for a reason nobody had. And **the third argument is now the only unread
+  thing in the call.**
+
+  `_move_face_third` resolves that argument **by name, never by position**:
+  `GetNames` returns a member's name followed by its parameters' names, the
+  third parameter's real name is looked up in `_MOVE_FACE_THIRD_BY_NAME`, and a
+  name not in that table is refused with the name printed. `_k()`'s discipline
+  applied to a parameter instead of an enum -- resolve the name the library
+  gives, never invent the value. The table holds only reversal-shaped names,
+  where `False` is right because `flip` already goes in as a negative distance,
+  and it has **no default**: a boolean accepted in a slot that means something
+  else is a part built wrongly, and no tolerance catches that.
+
+  `_parameter_names` had an off-by-one on the way in -- `GetNames` puts the
+  member's own name first, so returning the tuple whole made `[2]` read as the
+  third argument while being the second. It drops the member name now, and
+  `tests/test_move_face.py` pins which end of the tuple is which against fake
+  type information, because the fix is tuple arithmetic and the arithmetic was
+  wrong.
 
 ### Added
 
