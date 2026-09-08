@@ -101,6 +101,59 @@ class TestRetrievalFiltersBeforeItRetrieves:
         assert com._model_parameter_name(proxy) == "plate_w"
         assert com._model_parameter_name(object()) is None
 
+    def test_the_expression_is_read_beside_the_name(self):
+        """Measured on 2027.1, 2026-09-08: the names Inventor offered were
+        `d0, d1, d4, d5, d6, d7, d8, d9`. A sketch dimension is driven by a
+        *model* parameter, and the user parameter a recipe asks for is what
+        that model parameter's expression is -- so a match on the name alone
+        found nothing on a real part and the whole design read as
+        unmeasurable."""
+        parameter = type("P", (), {"Name": "d4", "Expression": "plate_w"})()
+        constraint = type("D", (), {"Parameter": parameter})()
+        assert com._model_parameter(constraint) == ("d4", "plate_w")
+        proxy = type("Px", (), {"NativeObject": constraint})()
+        assert com._model_parameter(proxy) == ("d4", "plate_w")
+        assert com._model_parameter(object()) == (None, None)
+
+    def test_a_parameter_a_dimension_merely_mentions_is_not_stated(self):
+        """The distinction the whole match rests on. `plate_w` states 120;
+        `plate_w - 2 * edge_margin` states 96, which is neither of the numbers
+        the names in it are worth -- and the shipped drawing recipe records
+        exactly that about `edge_margin`."""
+        wanted = ["plate_w", "edge_margin", "thk"]
+        assert com._states_parameter("plate_w", wanted) == "plate_w"
+        assert com._states_parameter("plate_w * 1 mm", wanted) == "plate_w"
+        assert com._states_parameter("(thk)", wanted) == "thk"
+        assert com._states_parameter("plate_w - 2 * edge_margin", wanted) is None
+        assert com._states_parameter("2 * plate_w", wanted) is None
+        assert com._states_parameter("plate_w + 0", wanted) is None
+        assert com._states_parameter("120 mm", wanted) is None
+        assert com._states_parameter(None, wanted) is None
+
+    def test_a_model_parameter_is_matched_through_its_expression(self):
+        """The name is `d4` and the recipe said `plate_w`, so the name match
+        fails and the expression match is what finds it."""
+        named = [("a", "d4"), ("b", "d5"), ("c", "d6")]
+        expressions = ["plate_w", "plate_w - 2 * edge_margin", "thk"]
+        chosen = com._annotations_wanted(
+            named, {"plate_w": False, "thk": True}, expressions)
+        assert chosen == [("a", "plate_w"), ("c", "thk")]
+
+    def test_a_direct_name_match_still_wins(self):
+        """A recipe may name a parameter that drives a dimension itself, and
+        the expression route must not have displaced that."""
+        named = [("a", "plate_w")]
+        assert com._annotations_wanted(named, {"plate_w": False}, [None]) == \
+            [("a", "plate_w")]
+
+    def test_one_dimension_per_parameter_through_the_expression_too(self):
+        """Two model parameters both being `plate_w` is two dimensions of the
+        same number, and a draughtsman writes each one once."""
+        named = [("a", "d4"), ("b", "d8")]
+        chosen = com._annotations_wanted(named, {"plate_w": False},
+                                         ["plate_w", "plate_w"])
+        assert chosen == [("a", "plate_w")]
+
     def test_the_legacy_routes_are_still_there_for_an_older_release(self):
         """2026.1 introduced the pair; the fallback is what a 2025 seat gets."""
         assert com.ComBackend._RETRIEVAL_ROUTES == ("RetrieveDimensions", "AddRetrievedDimensions")

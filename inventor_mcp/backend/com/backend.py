@@ -16,11 +16,12 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import math
 import os
 from contextlib import contextmanager
 from itertools import count
-from typing import Any, Callable, Iterator, Sequence
+from typing import Any, Callable, Iterable, Iterator, Sequence
 
 from ...errors import (
     BackendUnavailableError,
@@ -3749,6 +3750,19 @@ class ComBackend(Backend):
                 view.Name = request.name
             except Exception:  # pragma: no cover - version-specific
                 logger.info("Could not name the drawing view %r.", request.name)
+        # `direction` stays the *request*, because the caller lays out the
+        # sheet by it and a projected view's position was worked out from it.
+        # What Inventor says about the view it made goes in the detail beside
+        # it: the orientation it reports, and the camera, which is the only
+        # reading that settles which way is up inside the plane an extent
+        # measures. See defect 16.
+        detail: dict[str, Any] = {
+            "orientation_reported": _view_orientation_name(
+                view, self._VIEW_ORIENTATIONS, self._k),
+        }
+        camera = _view_camera(view)
+        if camera:
+            detail["camera"] = camera
         return ViewInfo(
             id=request.name,
             name=str(getattr(view, "Name", request.name)),
@@ -3757,6 +3771,7 @@ class ComBackend(Backend):
             scale=float(getattr(view, "Scale", request.scale)),
             style=request.style,
             extent=_view_extent(view),
+            detail=detail,
         )
 
     def _view_call_detail(self, sheet: Any, model: Any,
@@ -3904,15 +3919,22 @@ class ComBackend(Backend):
         route left that rests on an undocumented property, and is now the
         fallback for a dimension nobody here placed.
         """
-        named = [(item, _model_parameter_name(item)) for item in offered]
-        chosen = _annotations_wanted(named, wanted)
+        read = [_model_parameter(item) for item in offered]
+        named = [(item, name) for item, (name, _) in zip(offered, read)]
+        chosen = _annotations_wanted(named, wanted, [held for _, held in read])
         if not chosen:
-            on_offer = sorted({name for _, name in named if name})
+            on_offer = sorted(f"{name} = {held}" if held else str(name)
+                              for name, held in read if name)
             raise FeatureError(
                 f"Inventor offers {len(offered)} retrievable annotation(s) on view "
                 f"{view_name!r} and none of them is driven by a parameter this "
                 f"drawing asked for ({sorted(wanted)}).",
-                hint=(f"The parameters Inventor can retrieve here are {on_offer}. "
+                hint=(f"What Inventor can retrieve here, as model parameter = "
+                      f"expression: {on_offer}. A model dimension states an "
+                      "asked-for parameter only when its expression IS that "
+                      "parameter: `plate_w` states 120 and "
+                      "`plate_w - 2 * edge_margin` states 96, which is neither "
+                      "of the names in it. "
                       if on_offer else
                       "None of the offered annotations names a parameter at all, "
                       "which means the model-side `Parameter` property did not "
@@ -6378,28 +6400,88 @@ def _volume_change(document: Any, before: float) -> float | None:  # pragma: no 
 # as missing and the caller can say so.
 
 
-def _model_parameter_name(annotation: Any) -> str | None:  # pragma: no cover - Windows only
-    """The parameter a retrievable model annotation is driven by, or None.
+def _model_parameter(annotation: Any) -> tuple[str | None, str | None]:  # pragma: no cover - Windows only
+    """The name and expression of the parameter a model annotation is driven by.
 
     A `DimensionConstraint.Parameter` is documented; a proxy of one reaches the
     same thing through `NativeObject`. A `FeatureDimension` is documented to
     exist and its members are not published on the pages read here, so the same
-    two paths are tried and None is the honest answer when neither exists.
+    two paths are tried and (None, None) is the honest answer when neither
+    exists.
+
+    **The expression matters as much as the name, and that took a run to
+    learn.** The parameter a sketch dimension is driven by is a *model*
+    parameter -- `d0`, `d4`, `d7` -- and the user parameter a recipe names is
+    what that model parameter's expression *references*. Measured on 2027.1,
+    2026-09-08: Inventor offered eight retrievable annotations on a view and
+    the names were `d0, d1, d4, d5, d6, d7, d8, d9`, so a match on the name
+    alone found nothing and the whole design read as unmeasurable.
     """
-    for path in (("Parameter", "Name"), ("NativeObject", "Parameter", "Name")):
+    for path in (("Parameter",), ("NativeObject", "Parameter")):
         current: Any = annotation
         for step in path:
             current = getattr(current, step, None)
             if current is None:
                 break
-        if isinstance(current, str) and current:
-            return current
+        if current is None:
+            continue
+        name = getattr(current, "Name", None)
+        expression = getattr(current, "Expression", None)
+        if isinstance(name, str) and name:
+            return name, (expression if isinstance(expression, str) else None)
+    return None, None
+
+
+def _model_parameter_name(annotation: Any) -> str | None:  # pragma: no cover - Windows only
+    """Just the name, for a caller that has no use for the expression."""
+    return _model_parameter(annotation)[0]
+
+
+def _states_parameter(expression: str | None, wanted: Iterable[str]) -> str | None:
+    """Which asked-for parameter a model dimension actually *states*, if any.
+
+    A dimension states a parameter's number only when its expression **is**
+    that parameter. `plate_w` states 120; `plate_w - 2 * edge_margin` states 96
+    and is not a statement of either name in it -- which is the finding the
+    shipped drawing recipe records about `edge_margin`, and the reason this is
+    a bare-reference test rather than "references it somewhere".
+
+    The unit suffix is accepted because this project writes it: `Resolver`
+    turns a bare number or reference into `<source> * 1 mm` so Inventor keeps
+    the dimension, so `plate_w * 1 mm` is the same statement as `plate_w`.
+    """
+    if not expression:
+        return None
+    text = expression.strip()
+    for name in wanted:
+        if _is_bare_reference(text, name):
+            return name
     return None
 
 
+#: `name`, or `name * 1 <unit>` -- what `Resolver` writes for a reference.
+_BARE_REFERENCE = re.compile(
+    r"""(?xi) \A \(? \s* (?P<name>[A-Za-z_][A-Za-z_0-9]*) \s* \)?
+        (?: \s* \* \s* 1 \s* [A-Za-z_]+ )? \s* \Z""")
+
+
+def _is_bare_reference(expression: str, name: str) -> bool:
+    """Whether *expression* is nothing but a reference to *name*."""
+    match = _BARE_REFERENCE.match(expression)
+    return match is not None and match.group("name").lower() == name.lower()
+
+
 def _annotations_wanted(named: Sequence[tuple[Any, str | None]],
-                        wanted: dict[str, bool]) -> list[tuple[Any, str]]:
+                        wanted: dict[str, bool],
+                        expressions: Sequence[str | None] | None = None
+                        ) -> list[tuple[Any, str]]:
     """The offered annotations a drawing asked for, one per parameter.
+
+    Matched on the parameter's **name first and its expression second**. The
+    name is a model parameter on a real part -- `d4` -- and the user parameter
+    the recipe asked for is what that model parameter's expression is: see
+    `_model_parameter`. A name match is still tried first, because a recipe may
+    name a parameter that drives a dimension directly.
 
     First-come per parameter: a parameter that drives both a sketch dimension
     and a feature dimension would otherwise put two copies of one number on the
@@ -6410,11 +6492,16 @@ def _annotations_wanted(named: Sequence[tuple[Any, str | None]],
     """
     chosen: list[tuple[Any, str]] = []
     taken: set[str] = set()
-    for item, name in named:
-        if name is None or name not in wanted or name in taken:
+    held = list(expressions or [None] * len(named))
+    for index, (item, name) in enumerate(named):
+        if name is None:
             continue
-        taken.add(name)
-        chosen.append((item, name))
+        matched = name if name in wanted else _states_parameter(
+            held[index] if index < len(held) else None, wanted)
+        if matched is None or matched in taken:
+            continue
+        taken.add(matched)
+        chosen.append((item, matched))
     return chosen
 
 
@@ -6454,6 +6541,34 @@ def _view_position(view: Any) -> tuple[float, float]:  # pragma: no cover
         return (float(centre.X), float(centre.Y))
     except Exception:
         return (0.0, 0.0)
+
+
+def _view_camera(view: Any) -> dict[str, Any]:  # pragma: no cover - Windows only
+    """A view's camera as plain numbers: where it looks from, at, and which way is up.
+
+    The reading the orientation table needs and an extent cannot give. An
+    extent settles which *plane* a view shows -- measured 2026-09-08: Inventor's
+    `front` shows XY and this project's `front` means XZ -- and says nothing
+    about which way is up inside it, because a view rotated or mirrored spans
+    the same. Eye, target and up vector settle it completely.
+
+    Empty where the view will not say, which is not a failure: it is one more
+    reason the remap is not written from a guess.
+    """
+    out: dict[str, Any] = {}
+    try:
+        camera = view.Camera
+    except Exception:
+        return out
+    for label, attribute in (("eye", "Eye"), ("target", "Target"),
+                             ("up", "UpVector")):
+        try:
+            point = getattr(camera, attribute)
+            out[label] = [round(float(point.X), 6), round(float(point.Y), 6),
+                          round(float(point.Z), 6)]
+        except Exception:
+            continue
+    return out
 
 
 def _view_orientation_name(view: Any, orientations: dict[str, str],

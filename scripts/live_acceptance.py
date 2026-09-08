@@ -1501,13 +1501,21 @@ def check_drawing(session: Session, report: Report) -> None:
     #     This sheet is first angle and TOP is projected from FRONT, so Inventor
     #     was told a position below the front view and nothing about the
     #     direction. What it calls that view is its own answer.
+    # Off the *sheet*, not off the request. `place_view` echoes the direction it
+    # was given -- the caller lays the sheet out by it -- so asserting that
+    # would assert our own input, and this check's whole point is that Inventor
+    # infers a projected view's direction from where it sits. `read_drawing`
+    # asks the view (`ViewOrientationType`), which is the answer.
     placed = {view["view"]["name"]: view["view"] for view in outcome.get("views") or []}
-    if "TOP" in placed and "FRONT" in placed:
-        below = placed["TOP"]["at"][1] < placed["FRONT"]["at"][1]
+    asked = {name: view.get("at") for name, view in placed.items()}
+    inventors = {view.get("name"): view for view in (read_back.get("views") or [])}
+    if "TOP" in asked and "FRONT" in asked:
+        below = asked["TOP"][1] < asked["FRONT"][1]
+        reported = (inventors.get("TOP") or {}).get("direction")
         report.check(
-            below and placed["TOP"].get("direction") in ("top", "unknown"),
+            below and reported in ("top", "unknown"),
             "drawing: a first-angle top view sits below the front view and "
-            f"Inventor calls it {placed['TOP'].get('direction')!r}",
+            f"Inventor calls it {reported!r}",
             "The sheet is first angle, so this project put TOP below FRONT and "
             "told Inventor nothing about which way it faces -- a projected view "
             "takes no orientation. If Inventor calls it 'bottom', the two "
@@ -2242,8 +2250,18 @@ def check_view_directions(session: Session, report: Report) -> None:
                   "iso": (30.0, 8.0)}
         # The plane each size names, so the report reads as an answer rather
         # than as three numbers to hold against the part in your head.
-        planes = {(12.0, 0.8): "XZ, the elevation", (12.0, 8.0): "XY, the plan",
-                  (8.0, 0.8): "YZ, the side"}
+            # Both orders per plane, because which axis is across is exactly what
+        # is in question: measured 2026-09-08, Inventor's `left` came back
+        # (0.8, 8.0) -- Z across, Y up -- where this project's `left` means Y
+        # across and Z up. Printing "no plane of this block" for that was the
+        # table's own expectation showing through, so the report says which
+        # way round it is instead.
+        planes = {(12.0, 0.8): "XZ, the elevation (X across, Z up)",
+                  (0.8, 12.0): "XZ, the elevation, turned (Z across, X up)",
+                  (12.0, 8.0): "XY, the plan (X across, Y up)",
+                  (8.0, 12.0): "XY, the plan, turned (Y across, X up)",
+                  (8.0, 0.8): "YZ, the side (Y across, Z up)",
+                  (0.8, 8.0): "YZ, the side, turned (Z across, Y up)"}
         for direction, at in places.items():
             try:
                 placed = session.backend.place_view(drawing.id, ViewRequest(
@@ -2254,9 +2272,14 @@ def check_view_directions(session: Session, report: Report) -> None:
                 continue
             extent = [round(float(value), 4) for value in (placed.extent or ())]
             rounded = tuple(round(float(value), 1) for value in extent[:2])
-            report.note(f"{direction}: spans {extent} cm -- "
-                        f"{planes.get(rounded, 'no plane of this block')}"
-                        f", reported as {placed.direction!r}")
+            detail = placed.detail or {}
+            camera = detail.get("camera") or {}
+            report.note(
+                f"{direction}: spans {extent} cm -- "
+                f"{planes.get(rounded, 'no plane of this block')}"
+                f", Inventor reports {detail.get('orientation_reported')!r}"
+                + (f", camera eye {camera['eye']} up {camera.get('up')}"
+                   if camera.get("eye") else ", camera unreadable"))
         report.note(
             "This project's own meaning, from `_VIEW_AXES` in drafting.py: "
             "front and rear show XZ, top and bottom show XY, left and right "
