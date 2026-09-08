@@ -34,7 +34,9 @@ from typing import Annotated, Any, Literal
 from pydantic import Field
 
 from ..dfm.declaration import Declaration, given
-from ..dfm.loop import current_parameters, guard_for, improve, measure, run_moment
+from ..dfm.loop import (
+    _rebuild_unhappy, current_parameters, guard_for, improve, measure, run_moment,
+)
 from ..dfm.remedy import ROLES, propose
 from ..dfm.report import read_report
 from ..dfm.runner import (
@@ -48,6 +50,76 @@ from ._common import MESH_EXTENSIONS, guard, open_source
 
 def _roles_table() -> dict[str, str]:
     return {role: what for role, (_, what) in sorted(ROLES.items())}
+
+
+#: How far geometry may drift before a promotion counts as having moved it.
+#: Inventor's internal unit is cm, so this is cm^3 of volume, and the figure is
+#: the one `scripts/live_acceptance.py` already uses for the same judgement:
+#: loose enough for Inventor's own rounding, tight enough that a missing 9 mm
+#: hole (0.382 cm^3) or a fillet on the wrong edge (0.687) cannot hide in it.
+#: Read as a length for the bounding box it is 5 um -- far above the ~1e-12 cm
+#: a re-evaluated expression rounds by, far below any change a promotion could
+#: make -- so the same number does both jobs and no second one is invented.
+GEOMETRY_TOLERANCE = 5.0e-4
+
+
+def _mass_properties_or_none(session: Session, context: Any) -> Any:
+    """The part's mass properties, or ``None`` if this backend will not say."""
+    try:
+        return session.backend.mass_properties(context.doc_id)
+    except Exception:
+        return None
+
+
+def compare_geometry(before: Any, after: Any) -> dict[str, Any]:
+    """Whether two mass-property readings describe the same shape.
+
+    `promote_parameters` used to answer this with a sentence -- "each promotion
+    holds the property's current value, so the part is the same shape it was".
+    Almost certainly true, and this repository's rule is measure rather than
+    assume: the chamfer estimate that was out by a factor of two was a claim
+    exactly that plausible. So the tool measures, reports the numbers, and says
+    plainly when they do not agree rather than asserting that they do.
+
+    Volume is what decides it, because volume is what every backend reports --
+    the simulator has no centre of mass to give (see
+    :meth:`MockBackend.mass_properties`) and would have to invent one. The
+    bounding box corroborates it where a backend gives one, and catches the
+    case volume alone cannot: a part that moved without changing size.
+    """
+    if before is None or after is None:
+        return {"same": None, "measured": False,
+                "note": "This backend would not report mass properties, so "
+                        "whether the promotions changed the part is unknown -- "
+                        "which is not the same as knowing they did not."}
+
+    drift = after.volume - before.volume
+    out: dict[str, Any] = {
+        "volume_before": before.volume,
+        "volume_after": after.volume,
+        "volume_moved": drift,
+        "tolerance": GEOMETRY_TOLERANCE,
+        "units": "cm^3, and cm for the box",
+        "same": abs(drift) <= GEOMETRY_TOLERANCE,
+    }
+    if before.bounding_box and after.bounding_box:
+        moved = max(abs(a - b)
+                    for a, b in zip(after.bounding_box, before.bounding_box))
+        out["bounding_box_before"] = list(before.bounding_box)
+        out["bounding_box_after"] = list(after.bounding_box)
+        out["bounding_box_moved"] = moved
+        if moved > GEOMETRY_TOLERANCE:
+            out["same"] = False
+    if not out["same"]:
+        out["note"] = (
+            f"The part is NOT the shape it was. Volume moved {drift:+.6f} cm^3 "
+            f"and the box by {out.get('bounding_box_moved', 0.0):.6f} cm, "
+            f"against a tolerance of {GEOMETRY_TOLERANCE}. A promotion is only "
+            "meant to name a value the part already held, so this is a fault "
+            "worth chasing, not a tolerance worth widening -- and the baseline "
+            "every later DFM round is compared against is now the moved part."
+        )
+    return out
 
 
 def _fold_session_freeze(context: Any, declaration: Any) -> None:
@@ -527,9 +599,12 @@ def register(server: Any, session: Session) -> None:
         "place. An .ipt built without parameters is not parameterless -- every dimension "
         "is a model parameter with a value; what is missing is names. Each promotion "
         "creates a user parameter at the property's current value and rewires the property "
-        "to reference it: no geometry is re-authored, the part is identical afterwards, "
-        "and the DFM loop can then drive it. Run `discover_dfm_roles` first -- its "
-        "`to_promote` block is exactly this tool's input.",
+        "to reference it, so no geometry is re-authored and the DFM loop can then "
+        "drive it. That the part is unchanged is measured rather than claimed: the "
+        "volume and bounding box are read before, the part is rebuilt after, and "
+        "`identical_geometry` carries both readings and whether they agree. Run "
+        "`discover_dfm_roles` first -- its `to_promote` block is exactly this "
+        "tool's input.",
     )
     @guard
     def promote_parameters(
@@ -573,6 +648,14 @@ def register(server: Any, session: Session) -> None:
                     **({"file": opened} if opened else {}),
                 }
 
+        # Both readings behind a rebuild, or they are not comparable. The
+        # baseline is the one easy to forget: this tool is handed whatever state
+        # the caller left the document in -- including, per `measure`'s own
+        # note, a document `import_geometry` or `set_parameters(rebuild=False)`
+        # left dirty -- and a stale "before" against a fresh "after" reports a
+        # difference the promotions did not cause.
+        session.backend.rebuild(context.doc_id)
+        before = _mass_properties_or_none(session, context)
         promoted: list[dict[str, Any]] = []
         failed: list[dict[str, Any]] = []
         for entry in wanted:
@@ -588,11 +671,28 @@ def register(server: Any, session: Session) -> None:
                 failed.append({**entry, "error": str(exc)[:200]})
         session.sync_parameters(context.doc_id)
 
+        # Once, after the loop, not once per entry: promotion rewires
+        # expressions and nothing here calls `document.Update()` for it, so
+        # without this the "after" reading is of the part as it was and the
+        # comparison below could only ever say "same". A rebuild per promotion
+        # would say no more, and this tool can promote a dozen at a time.
+        rebuild = session.backend.rebuild(context.doc_id)
+        check = compare_geometry(before, _mass_properties_or_none(session, context))
+        if _rebuild_unhappy(rebuild):
+            # A comparison taken behind a rebuild that went wrong is not a
+            # measurement of anything. Say so instead of letting it read as
+            # proof the part is untouched.
+            check["rebuild"] = rebuild
+            check["note"] = (
+                "The rebuild after the promotions reported trouble, so these "
+                "numbers describe a part Inventor is unhappy with -- read them "
+                "as a symptom, not as a verdict. " + check.get("note", "")
+            ).strip()
+
         out: dict[str, Any] = {
             "document": context.doc_id,
             "promoted": promoted,
-            "identical_geometry": ("each promotion holds the property's current "
-                                   "value, so the part is the same shape it was"),
+            "identical_geometry": check,
         }
         if failed:
             out["failed"] = failed

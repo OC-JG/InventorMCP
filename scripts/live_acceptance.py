@@ -1891,6 +1891,110 @@ def _centre_shift_mm(before, after) -> float | None:
     return 10.0 * sum((a - b) ** 2 for a, b in zip(first, second)) ** 0.5
 
 
+def check_promotion(session: Session, report: Report) -> None:
+    """Promotion leaves the part the shape it was -- measured on real Inventor.
+
+    `promote_parameters` used to assert this in a sentence, and it now measures
+    it: volume and bounding box either side of a rebuild. That comparison runs
+    offline against the simulator too, but the simulator cannot answer the half
+    that matters most here. Its `promote_parameter` edits a dictionary rather
+    than an Inventor expression, so of course nothing moves; and it reports no
+    centre of mass at all (see `tests/test_no_fake_centroid.py`), so the one
+    reading that would catch material moving *without* the volume changing has
+    never been taken. Only Inventor re-evaluates the expression the promotion
+    wrote, and only Inventor has a centroid to compare.
+
+    A failure here is not a tolerance to widen. Promotion is offered as a safe
+    thing to do to a part nobody described, and it is what makes an imported
+    part drivable at all -- so a promotion that moved geometry by a rounding
+    step would be invisible and would corrupt the baseline every later DFM round
+    is compared against.
+    """
+    from inventor_mcp.tools.dfm import GEOMETRY_TOLERANCE, compare_geometry
+
+    if session.backend.name == "mock":
+        report.skip("promotion: geometry survives a promotion",
+                    "the simulator promotes by editing a dictionary and reports "
+                    "no centre of mass, so it cannot answer this. The offline "
+                    "tests cover the comparison itself. Use --backend inventor.")
+        return
+
+    # Two undriven properties, both of which a promotion has to leave alone: a
+    # shell thickness (removes material) and an extrude taper (moves a face
+    # without changing the box height). The taper is the one a volume check
+    # alone might miss on a symmetric part.
+    recipe = PartRecipe.model_validate({
+        "name": "PromotionCheck", "units": "mm", "operations": [
+            {"op": "sketch", "name": "S", "plane": "xy", "entities": [
+                {"type": "rectangle", "center": [0, 0], "width": 60, "height": 40}]},
+            {"op": "extrude", "name": "Block", "sketch": "S", "distance": 30,
+             "taper": "1.5 deg"},
+            {"op": "shell", "name": "Cavity",
+             "faces": {"kind": "face", "filter": "top"},
+             "thickness": 2.5, "direction": "inside"},
+        ]})
+    context, broken = build(session, recipe)
+    if not report.check(not broken, "promotion: the undriven part builds",
+                        broken[0][:400] if broken else ""):
+        return
+
+    try:
+        session.backend.rebuild(context.doc_id)
+        before = session.backend.mass_properties(context.doc_id)
+        promoted = []
+        for feature, prop, name in (("Cavity", "thickness", "wall_t"),
+                                    ("Block", "taper", "draft_a")):
+            try:
+                promoted.append(session.backend.promote_parameter(
+                    context.doc_id, feature, prop, name))
+            except Exception as exc:
+                report.check(False, f"promotion: {feature}.{prop} promotes",
+                             f"{type(exc).__name__}: {exc}")
+        if not report.check(bool(promoted), "promotion: something was promoted"):
+            return
+        session.backend.rebuild(context.doc_id)
+        after = session.backend.mass_properties(context.doc_id)
+
+        check = compare_geometry(before, after)
+        report.check(
+            check.get("same") is True,
+            f"promotion: the part is the shape it was "
+            f"({check.get('volume_after', 0.0):.4f} cm^3)",
+            f"volume moved {check.get('volume_moved')} cm^3 and the box by "
+            f"{check.get('bounding_box_moved')} cm, against {GEOMETRY_TOLERANCE}. "
+            "A promotion only names a value the part already held, so a "
+            "difference here is a real fault: Inventor re-evaluated the "
+            "expression the promotion wrote and got a different answer.")
+
+        # The half no simulator can take. A centroid moves when material moves,
+        # and a promotion that shifted a tapered face without changing the total
+        # volume would show up here and nowhere else.
+        moved = _centre_shift_mm(before, after)
+        if moved is None:
+            report.check(False, "promotion: the centre of mass did not move",
+                         "Inventor reported no centre of mass, which it should "
+                         "-- its MassProperties has one. Nothing was compared.")
+        else:
+            report.check(moved < 1e-4,
+                         f"promotion: the centre of mass did not move "
+                         f"({moved:.6f} mm)",
+                         f"it moved {moved:.6f} mm. The volume can hold still "
+                         "while material moves, and this is the reading that "
+                         "catches that -- a tapered face re-evaluated to a "
+                         "different angle would look like this.")
+
+        # And the point of the whole thing: the promoted names now drive.
+        readback = {p.name: p.value for p in
+                    session.backend.list_parameters(context.doc_id)}
+        for entry in promoted:
+            report.check(entry["parameter"] in readback,
+                         f"promotion: {entry['parameter']} is a real parameter "
+                         f"afterwards", f"parameters are {sorted(readback)}")
+    finally:
+        session.backend.close_document(context.doc_id, save=False)
+        session.forget(context.doc_id)
+
+
 def check_views(session: Session, report: Report) -> None:
     """Every display mode and orientation `capture_view` offers, actually applied.
 
@@ -1980,6 +2084,7 @@ CHECKS = {
     "constants": check_constants,
     "calibration": check_calibration,
     "work-geometry": check_work_geometry,
+    "promotion": check_promotion,
     "move-face": check_move_face,
     "thicken": check_thicken,
     "sketch-driven-pattern": check_sketch_driven_pattern,
