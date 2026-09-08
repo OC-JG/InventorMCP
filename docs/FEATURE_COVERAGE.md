@@ -179,13 +179,21 @@ also passes the simulator rehearsal.
    Not setting the type on the way past -- decided when it looked like an
    unmeasured semantic claim -- turned out to be right for a reason nobody had.
 
-   **The third argument is the only unread thing left**, and it is resolved by
-   name rather than position: `_MOVE_FACE_THIRD_BY_NAME` maps a parameter's real
-   name, read off the live object, to the value to pass, and refuses a name it
-   does not know with the name printed. No default, because a value accepted in
-   a slot whose meaning is unknown is a part built wrongly and no tolerance
-   catches that. `scripts/probe_definitions.py` prints those names, and
-   `docs/INVENTOR_SETUP.md` has the table.
+   **And the parameter names came back on the second probe run**, from the same
+   `GetNames` call that gives the arity:
+   `SetDirectionAndDistanceMoveType(Distance, Direction, DirectionReversed)`.
+   The distance comes *first*, which is not the order any version of this code
+   assumed -- so it lives in `_MOVE_FACE_SETTER_ARGUMENTS` as data, a test pins
+   it, and `_check_move_face_arguments` compares it against the live object
+   before every call. `DirectionReversed` is what `flip` was waiting for: it
+   went in as `-(expression)` while no reversal property had been read, and the
+   distance now reaches Inventor as the caller wrote it. The two excluded
+   setters are measured to be point-to-point and a transformation matrix, so
+   the narrow candidate list was right provably rather than presumably.
+
+   **So every argument of every call here is measured and no part has been
+   built.** `docs/INVENTOR_SETUP.md` has the interface table and the fixtures
+   the run has to satisfy.
 
 6. **Thicken.** *Added 2026-09-07 as `{"op":"thicken",...}`, and it closes half
    of what this item asked for.* The half it closes is the wall-thickness one: a

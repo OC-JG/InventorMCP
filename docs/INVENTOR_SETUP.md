@@ -475,11 +475,14 @@ for.
   relies on it.
 
 
-### `move_face`, where the call is measured-absent and a probe is next
+### `move_face`, measured argument by argument, and never yet run
 
-Added 2026-09-07 in a session with no Inventor to reach, and **run against
-Inventor 2027.1 the same day, where it failed.** The failure is the useful kind:
-it eliminated everything the code had guessed and named what to ask next.
+Added 2026-09-07 in a session with no Inventor to reach, **run against Inventor
+2027.1 the same day, where it failed**, and taken apart over two probe runs the
+day after. The failure was the useful kind: it eliminated everything the code
+had guessed and named what to ask next. Every argument of every call is now
+measured -- and no part has been built, which is the distinction this section
+keeps.
 
 **What the type library says** (`python scripts/com_signatures.py --search
 MoveFace`):
@@ -508,13 +511,13 @@ classes they return are not published as classes the search can reach. So
 | `Faces` | get/put | a `FaceCollection` |
 | `MoveFaceType` | **get only** | 91395 on a fresh definition |
 | `MoveFaceTypeDefinition` | get only | **`None`** on a fresh definition |
-| `SetDirectionAndDistanceMoveType` | method | **3, none optional** |
-| `SetPlanarMoveType` | method | 3, one optional |
-| `SetFreeMoveType` | method | 1 |
+| `SetDirectionAndDistanceMoveType` | method | **`(Distance, Direction, DirectionReversed)`** |
+| `SetPlanarMoveType` | method | `(PointOne, PointTwo, Plane)`, the last optional |
+| `SetFreeMoveType` | method | `(Transformation)` |
 | `AutomaticBlending` | get/put | `True` by default |
 | `Copy` | method | 0 |
 
-Three things fall out of that table.
+Four things fall out of that table.
 
 **The setter is a fourth spelling.** `SetDirectionAndDistanceMoveType`, which
 none of the three guesses came near. They were reasonable, narrow, and
@@ -528,22 +531,32 @@ one of the three *makes* the definition that kind. The earlier design -- set a
 API does not have, and deliberately not setting the type turned out to be right
 for a reason nobody had.
 
-**And its third argument is the last unread thing in the call.** Two of the
-three can only be the direction and the distance the name promises; the third
-has no default and no published meaning. `_move_face_third` resolves it **by
-name and never by position**: `ITypeInfo`'s `GetNames` returns a member's name
-followed by its parameters' names, the third parameter's real name is looked up
-in `_MOVE_FACE_THIRD_BY_NAME`, and a name that is not in that table is refused
-with the name printed. That is `_k()`'s discipline applied to a parameter
-instead of an enum -- resolve the name the library gives, never invent the
-value. The table holds only reversal-shaped names, where `False` is right
-because `flip` is already expressed as a negative distance.
+**The distance comes first.** `(Distance, Direction, DirectionReversed)`, not
+the direction-then-distance every version of this code assumed. A swap raises
+rather than building something wrong -- the distance is an expression string
+and the direction is a COM object -- but "it would have raised" is a poor
+substitute for knowing, so the order lives in
+`_MOVE_FACE_SETTER_ARGUMENTS` as data, `tests/test_move_face.py` pins it, and
+`_check_move_face_arguments` compares it against what the live object reports
+before every call. A measurement stated in code and never checked against the
+thing measured is the drift this repository writes tests about; here the thing
+measured can simply be asked.
 
-A guess there would not be a loud failure, which is why there is no default: a
-boolean accepted in a slot that means something else is a part built wrongly,
-and no tolerance catches that.
+**And `DirectionReversed` is what `flip` was waiting for.** It used to go in as
+`-(expression)`, because no reversal property had been read. Now it goes in as
+the boolean the API provides and the distance reaches Inventor exactly as the
+caller wrote it -- which is the whole point of carrying expressions rather than
+numbers. The feature detail reports `flip_via` so a part built either way says
+which mechanism carried it.
 
-**So the next step is one more probe run, which now prints parameter names:**
+The two setters that were excluded are measured to be what the exclusion
+assumed: `SetPlanarMoveType(PointOne, PointTwo, Plane)` is point-to-point and
+`SetFreeMoveType(Transformation)` takes a matrix. Neither could have taken a
+direction and a distance by accident, so keeping the candidate list narrow was
+right -- and now provably rather than presumably.
+
+**What is left is a run.** Every argument of every call in this operation is
+measured; nothing about it has built a part.
 
     python scripts/probe_definitions.py
 
@@ -573,25 +586,14 @@ symptoms for the obvious reason. `scripts/apartment.py` holds the two helpers
 for doing it properly; `describe_feature` in `backend/base.py` is the same
 lesson on the server side, and it was written down before this happened.
 
-Two things to keep from the earlier design once the real setter is known, because
-they are about correctness rather than about the name:
+One thing from the earlier design is still open, because no run has tested it:
+**the distance has to go in as an expression string.** Every length in this
+server reaches Inventor as an expression so the dimension keeps its parameter,
+and a setter that insisted on a number would take that away silently. The
+signature says `Distance` and says nothing about what it accepts, so the
+fixture that changes `lift` is what settles it.
 
-* **Only direction-and-distance candidates were ever tried.** A free-drag or
-  point-to-point setter takes different arguments with different meanings, and
-  one of those quietly accepting a direction and a distance is the failure mode
-  this whole file exists to prevent -- a part that builds and is wrong. The list
-  stayed narrow on purpose even though the real method might have been outside
-  it, which is why the run's answer is "absent" and not "built something".
-* **The distance has to go in as an expression string.** Every length in this
-  server reaches Inventor as an expression so the dimension keeps its parameter;
-  a setter that insists on a number would take that away, and that is worth
-  knowing at the moment the setter is found rather than after.
-* **Whether a negative distance is accepted.** `flip` is passed as
-  `-(expression)` rather than through a reversal property, because no such
-  property has been read. A refusal is loud; a *silently ignored* sign is a face
-  that moves the wrong way, and the fixtures below are what catch it.
-
-Those fixtures are unchanged and still waiting. `check_move_face` builds
+The fixtures are unchanged and still waiting. `check_move_face` builds
 `examples/calibration/lifted_face.json` and `widened_wall.json`, whose true
 answers are exact rather than estimated -- a prism's face keeps its area as it
 translates, so the solid changes by exactly area times distance:

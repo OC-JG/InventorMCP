@@ -375,19 +375,35 @@ class TestReadingWhatAnArgumentIsCalled:
 
         assert _parameter_names(Mute(), "Anything") == []
 
-    def test_the_third_argument_is_looked_up_and_not_defaulted(self):
-        """`_MOVE_FACE_THIRD_BY_NAME` has no fallback, deliberately.
+    def test_the_setters_measured_arguments_are_recorded_in_order(self):
+        """The measurement itself, pinned where a reader will see it.
 
-        Every name in it is a reversal, and `False` is right for all of them
-        because `flip` is already expressed as a negative distance. A name that
-        is not in the table has to refuse -- a value accepted in a slot whose
-        meaning is unknown is a part built wrongly, and no tolerance catches
-        that.
+        `SetDirectionAndDistanceMoveType(Distance, Direction, DirectionReversed)`
+        was read off the live definition on 2027.1. Two things about it were
+        guessed wrong beforehand -- the method's name, and that the direction
+        came first -- so the order is data rather than a literal at the call,
+        and this is the test that says what was measured.
+
+        `_check_move_face_arguments` compares this tuple against what the live
+        object reports and refuses on a disagreement, which is the other half:
+        a measurement stated in code and never checked against the thing
+        measured is exactly the drift this repository writes tests about.
         """
         from inventor_mcp.backend.com.backend import ComBackend
 
-        table = ComBackend._MOVE_FACE_THIRD_BY_NAME
-        assert table, "the table cannot be empty: nothing would ever resolve"
-        assert set(table.values()) == {False}
-        assert all("rever" in name.lower() or "flip" in name.lower()
-                   for name in table)
+        assert ComBackend._MOVE_FACE_SETTER == "SetDirectionAndDistanceMoveType"
+        assert ComBackend._MOVE_FACE_SETTER_ARGUMENTS == (
+            "Distance", "Direction", "DirectionReversed")
+
+    def test_the_reversal_flag_is_the_third_argument_not_a_negated_distance(self):
+        """Why `move_face` stopped negating the expression.
+
+        `flip` went in as `-(expression)` for as long as no reversal property
+        had been read. `DirectionReversed` is the API's own way of saying it, so
+        the distance now reaches Inventor as the caller wrote it -- which is the
+        whole point of carrying expressions rather than numbers.
+        """
+        from inventor_mcp.backend.com.backend import ComBackend
+
+        assert ComBackend._MOVE_FACE_SETTER_ARGUMENTS[2] == "DirectionReversed"
+        assert ComBackend._MOVE_FACE_SETTER_ARGUMENTS.index("Distance") == 0

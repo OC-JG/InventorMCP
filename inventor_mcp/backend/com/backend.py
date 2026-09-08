@@ -2870,20 +2870,32 @@ class ComBackend(Backend):
     #: What a list cannot rule out is a *third* argument whose default means
     #: something, which is why `scripts/com_signatures.py --search MoveFace` is
     #: named in the failure and in `docs/INVENTOR_SETUP.md`.
-    #: The setter, measured on Inventor 2027.1 on 2026-09-08 by reading the live
-    #: `MoveFaceDefinition`'s own type information. Not a candidate list any
-    #: more: the definition offers exactly three move-type setters --
-    #: `SetDirectionAndDistanceMoveType` (3 arguments),
-    #: `SetPlanarMoveType` (3, one optional) and `SetFreeMoveType` (1) -- and
-    #: this is the one that means a direction and a distance.
+    #: The setter and its arguments **in Inventor's order**, measured on 2027.1
+    #: on 2026-09-08 by reading the live `MoveFaceDefinition`'s own type
+    #: information -- name, arity and parameter names all from `ITypeInfo`,
+    #: since the type library publishes no class for this object at all:
     #:
-    #: None of the three names guessed before it was read
-    #: (`SetDirectionAndDistance`, `SetDirectionMove`,
-    #: `SetDirectionAndDistanceMoveData`) was right, and the real one is a
-    #: fourth spelling. Worth recording: the guesses were reasonable, narrow,
-    #: and unanimous in being wrong, which is what one live read cost nothing to
-    #: settle.
+    #:     SetDirectionAndDistanceMoveType(Distance, Direction, DirectionReversed)
+    #:
+    #: Not a candidate list any more. The definition offers exactly three
+    #: move-type setters and the other two are measured to be something else --
+    #: `SetPlanarMoveType(PointOne, PointTwo, Plane)` is point-to-point and
+    #: `SetFreeMoveType(Transformation)` takes a matrix -- so excluding them was
+    #: right, and now provably rather than presumably.
+    #:
+    #: Two things here were guessed wrong before the read, and both would have
+    #: cost a run. **The name**: none of `SetDirectionAndDistance`,
+    #: `SetDirectionMove` or `SetDirectionAndDistanceMoveData` was it. **The
+    #: order**: the distance comes *first*. A swap raises rather than building
+    #: something wrong -- the distance is an expression string and the direction
+    #: is a COM object -- but "it would have raised" is a poor substitute for
+    #: knowing, which is why the order lives here as data and
+    #: `tests/test_move_face.py` pins it.
     _MOVE_FACE_SETTER = "SetDirectionAndDistanceMoveType"
+
+    #: In the measured order. `DirectionReversed` is what `flip` goes into --
+    #: see `move_face`, which no longer negates the distance expression.
+    _MOVE_FACE_SETTER_ARGUMENTS = ("Distance", "Direction", "DirectionReversed")
 
     def move_face(self, doc_id: str, request: MoveFaceRequest) -> FeatureInfo:  # pragma: no cover
         """Translate faces of an existing solid along a direction.
@@ -2909,9 +2921,11 @@ class ComBackend(Backend):
                 hint="Run `select_topology` with the same selector to see what it matches.",
             )
         direction = self._resolve_axis(doc_id, request.direction)
+        # The expression, unnegated. `flip` used to be `-(expression)` because
+        # no reversal property had been read; the measured signature's third
+        # argument is `DirectionReversed`, which is the API's own way of saying
+        # it and leaves the dimension's expression as the caller wrote it.
         distance = request.distance.expression
-        if request.flip:
-            distance = f"-({distance})"
         before = _solid_volume(document)
         features = document.ComponentDefinition.Features.MoveFaceFeatures
         with self._batch(document), self._translate_errors("MoveFace"):
@@ -2926,16 +2940,18 @@ class ComBackend(Backend):
                     "`python scripts/probe_definitions.py`. What it offered "
                     "this time: " + self._move_face_offered(definition),
                 )
-            third = self._move_face_third(definition)
+            self._check_move_face_arguments(definition)
             try:
-                setter(direction, distance, third)
+                _call_named(setter, list(zip(
+                    self._MOVE_FACE_SETTER_ARGUMENTS,
+                    (distance, direction, request.flip))))
             except Exception as exc:
                 raise FeatureError(
                     f"{self._MOVE_FACE_SETTER} refused: {_com_message(exc)}",
-                    hint=f"Called with the direction, {distance!r} and "
-                    f"{third!r} for its third argument. `python "
-                    "scripts/probe_definitions.py` prints that argument's real "
-                    "name and what the definition offers.",
+                    hint=f"Called as ({distance!r}, the direction, "
+                    f"{request.flip!r}) -- Inventor's own order, distance "
+                    "first. `python scripts/probe_definitions.py` prints the "
+                    "parameter names this release gives.",
                 ) from exc
             try:
                 feature = features.Add(definition)
@@ -2943,8 +2959,10 @@ class ComBackend(Backend):
                 raise FeatureError(
                     f"Move face failed: {self._explain(exc)}",
                     hint=f"{int(faces.Count)} face(s) {distance!r} along "
-                    f"{request.direction.value!r}, with a definition from "
-                    f"{made_by}. A move that would make the solid "
+                    f"{request.direction.value!r}"
+                    + (" reversed" if request.flip else "")
+                    + f", with a definition from {made_by}. A move that would "
+                    "make the solid "
                     "self-intersecting, or that carries a face away from the "
                     "neighbours it has to stretch, will refuse.",
                 ) from exc
@@ -2956,74 +2974,55 @@ class ComBackend(Backend):
             "direction": request.direction.value,
             "distance": request.distance.as_dict(),
             "flip": request.flip,
+            # Which mechanism carried the flip, because it changed: the
+            # expression used to be negated and now `DirectionReversed` does
+            # it, so a part built before this reads the same and got there
+            # differently.
+            "flip_via": "DirectionReversed",
             "definition_from": made_by,
             "volume_change_cm3": (
                 None if before is None or after is None else round(after - before, 6)
             ),
         })
 
-    #: What to pass for `SetDirectionAndDistanceMoveType`'s **third** argument,
-    #: keyed by the name Inventor's own type information gives that parameter.
-    #:
-    #: Measured 2026-09-08: the method takes three arguments, none optional, and
-    #: the first two can only be the direction and the distance the name
-    #: promises. The third is the last unread thing in this call, so it is
-    #: resolved **by name and never by position**: the parameter's real name is
-    #: read off the live object and looked up here, and a name that is not in
-    #: this table is refused with the name printed rather than guessed at.
-    #:
-    #: That is `_k()`'s discipline applied to a parameter instead of an enum --
-    #: resolve the name the library gives, never invent the value. A guess here
-    #: is not a loud failure: a boolean in a slot that means something else is a
-    #: part built wrongly, which is what this whole file exists to prevent.
-    #:
-    #: Only reversal-shaped names are known, and `False` is right for all of
-    #: them because `flip` is already expressed as a negative distance. When the
-    #: real name turns out to be something else, this table gains a row and the
-    #: reason for its value -- it does not gain a default.
-    _MOVE_FACE_THIRD_BY_NAME = {
-        "Reverse": False,
-        "Reversed": False,
-        "ReverseDirection": False,
-        "DirectionReversed": False,
-        "Flip": False,
-        "FlipDirection": False,
-    }
+    def _check_move_face_arguments(self, definition: Any) -> None:  # pragma: no cover
+        """Refuse if this release's setter does not take the measured arguments.
 
-    def _move_face_third(self, definition: Any) -> Any:  # pragma: no cover
-        """The third argument, resolved from the parameter's own name.
+        `_MOVE_FACE_SETTER_ARGUMENTS` is a measurement, and a measurement stated
+        in code and never checked against the thing measured is the drift this
+        repository writes tests about. Here the thing measured can be asked
+        directly: `ITypeInfo`'s `GetNames` returns a member's name followed by
+        its parameters' names, so the recorded order and the live one are
+        comparable at the moment of use.
 
-        `ITypeInfo.GetNames(memid)` returns a member's name *and* its
-        parameters' names, which is how this can be a lookup rather than a
-        guess. A release that will not answer, or answers with a name not in
-        `_MOVE_FACE_THIRD_BY_NAME`, is refused with what it said -- and
-        `python scripts/probe_definitions.py` prints the same thing
-        deliberately.
+        Belt and braces rather than the only guard -- the distance is an
+        expression string and the direction is a COM object, so a swapped pair
+        raises a type mismatch instead of building something wrong. What this
+        catches is the case that would *not* raise: a release that reordered or
+        renamed the reversal flag, where a boolean lands in a slot that means
+        something else. That is a part built wrongly, and no tolerance catches
+        it.
+
+        A release that will not answer at all is allowed through. The refusal
+        that matters is a *disagreement*; silence is what `_parameter_names`
+        returns for a hostile object and for one whose type information is
+        simply unavailable, and refusing on silence would break a release for
+        being reticent.
         """
         parameters = _parameter_names(definition, self._MOVE_FACE_SETTER)
-        if len(parameters) < 3:
+        if not parameters:
+            return
+        if tuple(parameters) != self._MOVE_FACE_SETTER_ARGUMENTS:
             raise FeatureError(
-                "Could not read what "
-                f"{self._MOVE_FACE_SETTER}'s third argument is called"
-                + (f" -- this release named {parameters!r}." if parameters else "."),
-                hint="Measured on 2027.1: three arguments, none optional, and "
-                "the third is the one thing about this call still unread. "
-                "`python scripts/probe_definitions.py` prints the parameter "
-                "names; add the name to `_MOVE_FACE_THIRD_BY_NAME` with the "
-                "reason for its value.",
+                f"This release's {self._MOVE_FACE_SETTER} takes "
+                f"({', '.join(parameters)}), and this code was written against "
+                f"({', '.join(self._MOVE_FACE_SETTER_ARGUMENTS)}).",
+                hint="Refusing rather than calling it anyway: the third "
+                "argument is a reversal flag, and a boolean accepted in a slot "
+                "that means something else is a part built wrongly. Read what "
+                "this release wants with `python scripts/probe_definitions.py` "
+                "and update `_MOVE_FACE_SETTER_ARGUMENTS`.",
             )
-        third = parameters[2]
-        if third not in self._MOVE_FACE_THIRD_BY_NAME:
-            raise FeatureError(
-                f"{self._MOVE_FACE_SETTER}'s third argument is called "
-                f"{third!r}, and nothing here knows what to pass for it.",
-                hint=f"The three are {', '.join(parameters[:3])}. Refusing "
-                "rather than guessing: a value accepted in a slot whose "
-                "meaning is unknown is a part built wrongly, which a tolerance "
-                "cannot catch. Add a row to `_MOVE_FACE_THIRD_BY_NAME` once "
-                "the argument's meaning is known.",
-            )
-        return self._MOVE_FACE_THIRD_BY_NAME[third]
 
     def _move_face_offered(self, definition: Any) -> str:  # pragma: no cover
         """What the live definition offers, as text, for a refusal to carry.
@@ -3841,34 +3840,29 @@ class ComBackend(Backend):
         """A definition for the pattern, and which call produced it.
 
         **Measured on Inventor 2027.1, 2026-09-08**, by asking the live object's
-        own `ITypeInfo` -- which is the only thing that would say, since the
-        type library publishes `SketchDrivenPatternFeatures` with `Add` and
-        nothing else:
+        own `ITypeInfo` -- the only thing that would say, since the type library
+        publishes `SketchDrivenPatternFeatures` with `Add` and nothing else:
 
-            CreateDefinition(...)   4 arguments, 2 of them optional
-            Add(Definition)         1 argument
+            CreateDefinition(ParentFeatures, Sketch, BasePoint, ReferenceFaces)
+            Add(Definition)
 
-        and `CreateDefinition(parents, sketch, point)` was then confirmed to
-        produce a definition. So two arguments are required, the third is one of
-        the optional pair, and the fourth is left to Inventor -- the definition
-        that came back offers `ReferenceFaces`, `AffectedBodies`,
-        `AffectedOccurrences` and `PatternOfBody`, so it is one of those and
-        none of them is something a recipe says.
+        with the last two optional. `BasePoint` is supplied and
+        `ReferenceFaces` is not: Inventor's own dialog offers the seed's
+        centroid *or* a point you pick, the recipe always names a point, and a
+        centroid is not something the simulator has -- so a default that used
+        one could not be rehearsed (see `_NO_CENTROID` in the mock). Reference
+        faces are the other way round: nothing in a recipe says them, so
+        Inventor's own default is the honest value.
 
-        Positional and in the measured order, deliberately, where most calls in
-        this backend go through `_call_named`. The names of these parameters are
-        *not* published -- type information gives arity, not names -- and
-        `_call_named`'s keyword attempt would fail with a `TypeError` and fall
-        back to exactly this call. Relying on a fallback for a call that has
-        been measured is a worse record of what is known.
+        Named through `_call_named` because the names are measured now, from
+        the same `GetNames` call that gives the arity -- an earlier version was
+        positional on the belief that type information gives arity alone, which
+        was a fact about how much of the answer had been read rather than about
+        the API.
 
-        Nothing can be silently misordered here: a feature collection, a sketch
-        and a sketch point are three different COM types, so a wrong order is a
-        type mismatch rather than a part built wrongly. `ReferencePoint` is
-        always supplied because Inventor's own dialog offers the seed's centroid
-        *or* a point you pick, the recipe always names a point, and a centroid
-        is not something the simulator has -- so a default that used one could
-        not be rehearsed. See `_NO_CENTROID` in the mock.
+        Nothing can be silently misordered here in any case: a feature
+        collection, a sketch and a sketch point are three different COM types,
+        so a wrong order is a type mismatch rather than a part built wrongly.
 
         `CreateSketchDrivenPatternDefinition` was also tried, before this was
         read, on the grounds that Inventor names some definition factories for
@@ -3886,12 +3880,19 @@ class ComBackend(Backend):
             raise FeatureError(
                 "This release's SketchDrivenPatternFeatures has no "
                 "CreateDefinition, and `Add` takes only a definition.",
-                hint="Measured on 2027.1: CreateDefinition takes 4 arguments, 2 "
-                "optional, and (features, sketch, point) makes a definition. Ask "
+                hint="Measured on 2027.1: CreateDefinition(ParentFeatures, "
+                "Sketch, BasePoint, ReferenceFaces), the last two optional. Ask "
                 "this release with `python scripts/probe_definitions.py`. The "
                 f"collection offers {offered}.",
             )
-        return factory(parents, sketch, reference), "CreateDefinition"
+        return _call_named(factory, [
+            ("ParentFeatures", parents),
+            ("Sketch", sketch),
+            ("BasePoint", reference),
+            # Inventor's own default. A recipe never says which faces a pattern
+            # is measured against, and a guess would be a guess either way.
+            ("ReferenceFaces", DEFAULTED),
+        ]), "CreateDefinition"
 
     def _pattern_compute(self, definition: Any) -> str:  # pragma: no cover
         """Ask for recomputed occurrences, and report whether it took.

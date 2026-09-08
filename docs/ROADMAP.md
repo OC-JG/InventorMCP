@@ -674,11 +674,24 @@ actually bitten.
       calling one *makes* the definition that kind — the shape the earlier
       design assumed does not exist.
 
-      **What is left is that third argument**, resolved by name rather than
-      position: `_MOVE_FACE_THIRD_BY_NAME` maps a parameter's real name to what
-      to pass, holds only reversal-shaped names, and has no default, because a
-      value accepted in a slot whose meaning is unknown is a part built wrongly.
-      The probe prints parameter names now.
+      **The parameter names came back on the second probe run**, from the same
+      `GetNames` call that gives the arity:
+      `SetDirectionAndDistanceMoveType(Distance, Direction, DirectionReversed)`.
+      The distance comes *first* — not the order any version of this code
+      assumed — so it lives in `_MOVE_FACE_SETTER_ARGUMENTS` as data, a test
+      pins it, and `_check_move_face_arguments` compares it against the live
+      object before every call. And `DirectionReversed` is what `flip` was
+      waiting for: it used to go in as `-(expression)` because no reversal
+      property had been read, and the distance now reaches Inventor exactly as
+      the caller wrote it.
+
+      The two excluded setters are measured to be what the exclusion assumed —
+      `SetPlanarMoveType(PointOne, PointTwo, Plane)` and
+      `SetFreeMoveType(Transformation)` — so keeping the candidate list narrow
+      was right, provably rather than presumably.
+
+      **So every argument is measured and nothing has been built.** What is
+      left is the run, and the fixtures below are what it has to satisfy.
 
       **So the next reading is a live probe, not another signature**: `python
       scripts/probe_definitions.py` asks the objects themselves what they offer,

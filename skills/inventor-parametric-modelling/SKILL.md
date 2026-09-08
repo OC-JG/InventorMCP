@@ -589,11 +589,10 @@ fastener rather than deriving one.
   which `move_face` cannot express with a single direction. Turning a *surface*
   into a wall — Inventor's other use for this feature — is not reachable here at
   all, because nothing in this server creates a surface.
-- **`move_face` has never built anything in a live Inventor**, and unlike the
-  operations above it the COM call itself is the problem rather than the
-  behaviour: the definition object exists and nothing measured on it takes a
-  direction and a distance, so a live attempt refuses rather than building
-  something wrong. It is exact in the simulator -- a planar face moved along its
+- **`move_face` has never built anything in a live Inventor**, though every
+  argument of its COM call has now been read off the live API — the setter, its
+  order and its reversal flag. So a live build is expected to work and has not
+  been seen to. It is exact in the simulator -- a planar face moved along its
   own normal changes the part by area times distance -- so a rehearsal of it
   means something; a live success does not, yet. It is the only way to alter
   imported geometry, which is why it exists. Check the `measured` block against

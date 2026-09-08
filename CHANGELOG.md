@@ -142,21 +142,21 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
   **And on 2026-09-08 the definition was found, by asking the live object's own
   `ITypeInfo` rather than the type library.** The library publishes no factory
-  and no definition class; the object lists `CreateDefinition` with 4 arguments,
-  2 of them optional, and `CreateDefinition(parents, sketch, point)` produces a
-  definition carrying `ParentFeatures`, `Sketch`, `BasePoint`, `ComputeType`
+  and no definition class; the object lists
+  **`CreateDefinition(ParentFeatures, Sketch, BasePoint, ReferenceFaces)`** with
+  the last two optional, and it produces a definition carrying `ParentFeatures`, `Sketch`, `BasePoint`, `ComputeType`
   (default 47361, settable -- which is where the `kAdjustToModelCompute`
   measurement goes), `Operation`, `ReferenceFaces`, `AffectedBodies`,
   `AffectedOccurrences` and a read-only `PatternOfBody`.
 
-  So the attempt list is gone: the backend makes that one call, positionally and
-  in the measured order. Type information gives arity rather than parameter
-  names, so `_call_named`'s keyword attempt would only fall back to exactly this
-  call, and relying on a fallback for a call that has been measured is a worse
-  record of what is known. `CreateSketchDrivenPatternDefinition` is measured
-  absent and is gone rather than kept as a fallback. **The COM half of this
-  operation is measured now**; what is unmeasured is what the part comes out as
-  -- the occurrence count on the reference point.
+  So the attempt list is gone: the backend makes that one call, named through
+  `_call_named` -- `BasePoint` supplied because a recipe always names a point
+  and a centroid is not something the simulator has, `ReferenceFaces` left to
+  Inventor because nothing in a recipe says it.
+  `CreateSketchDrivenPatternDefinition` is measured absent and is gone rather
+  than kept as a fallback. **The COM half of this operation is measured now**;
+  what is unmeasured is what the part comes out as -- the occurrence count on
+  the reference point.
 
   A wrong argument order still cannot pass silently -- a feature collection, a
   sketch and a sketch point are three different COM types -- which is why trying
@@ -186,15 +186,35 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   for a reason nobody had. And **the third argument is now the only unread
   thing in the call.**
 
-  `_move_face_third` resolves that argument **by name, never by position**:
-  `GetNames` returns a member's name followed by its parameters' names, the
-  third parameter's real name is looked up in `_MOVE_FACE_THIRD_BY_NAME`, and a
-  name not in that table is refused with the name printed. `_k()`'s discipline
-  applied to a parameter instead of an enum -- resolve the name the library
-  gives, never invent the value. The table holds only reversal-shaped names,
-  where `False` is right because `flip` already goes in as a negative distance,
-  and it has **no default**: a boolean accepted in a slot that means something
-  else is a part built wrongly, and no tolerance catches that.
+  **A second probe run then named every parameter**, from the same `GetNames`
+  call that gives the arity -- which the probe had been discarding by reading
+  only `[0]`:
+
+      SetDirectionAndDistanceMoveType(Distance, Direction, DirectionReversed)
+      SetPlanarMoveType(PointOne, PointTwo, Plane)
+      SetFreeMoveType(Transformation)
+
+  **The distance comes first.** Not the direction-then-distance every version of
+  this code assumed. A swap raises rather than building something wrong -- the
+  distance is an expression string and the direction is a COM object -- but "it
+  would have raised" is a poor substitute for knowing, so the order lives in
+  `_MOVE_FACE_SETTER_ARGUMENTS` as data, a test pins it, and
+  `_check_move_face_arguments` compares it against what the live object reports
+  before every call. A measurement stated in code and never checked against the
+  thing measured is the drift this repository writes tests about; here the thing
+  measured can simply be asked.
+
+  **And `DirectionReversed` is what `flip` was waiting for.** It went in as
+  `-(expression)` for as long as no reversal property had been read; now it is
+  the boolean the API provides, and the distance reaches Inventor exactly as the
+  caller wrote it -- which is the whole point of carrying expressions rather
+  than numbers. The feature detail reports `flip_via` so a part built either way
+  says which mechanism carried it.
+
+  The two excluded setters are measured to be what the exclusion assumed:
+  point-to-point and a transformation matrix. Neither could have accepted a
+  direction and a distance by accident, so keeping the candidate list narrow was
+  right -- provably rather than presumably.
 
   `_parameter_names` had an off-by-one on the way in -- `GetNames` puts the
   member's own name first, so returning the tuple whole made `[2]` read as the
@@ -202,6 +222,10 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   `tests/test_move_face.py` pins which end of the tuple is which against fake
   type information, because the fix is tuple arithmetic and the arithmetic was
   wrong.
+
+  **So every argument of every call in this operation is measured, and nothing
+  about it has built a part.** That distinction is the point of the section in
+  `INVENTOR_SETUP.md` this still sits in.
 
 ### Added
 
