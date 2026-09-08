@@ -437,6 +437,26 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   it: the unhelpful refusal is what turned a wrong word into a spent seat.
   `definition.Extent` is searched too, since an extrude's taper is on its
   definition and its distance is not.
+
+### Added
+
+- **`describe_feature` counts a pattern's occurrences**, which is the reading
+  `examples/calibration/spread_pockets.json` was built to get and the one its
+  successful run could not give. A sketch-driven pattern is *one* feature
+  holding its occurrences, so the finished part reads `Plate`, `Slot`,
+  `Spread` whether Inventor placed three of them or four, and two of the three
+  possible answers are the same volume.
+
+  The property name is unmeasured, so `Occurrences` is asked first and
+  `PatternElements` second and the answer carries which one replied. A release
+  keeping them somewhere else reports *nothing* rather than zero -- a feature
+  with no occurrences and one whose occurrences could not be read are different
+  facts, and reporting the second as the first is how a check passes by
+  measuring nothing. Only pattern features are asked, so a number does not
+  appear under that name on a feature where it would mean something else.
+  `scripts/live_acceptance.py --only sketch-driven-pattern` asserts three and
+  explains what four would mean, or says the question is still open. What is
+  left there is a run.
 - **A `work_plane` with `kind: "angle"` or `"tangent"` built an offset plane on
   Inventor and reported success.** `WorkPlaneOp` has offered four kinds since it
   was written; the COM backend read `kind` only to spot `midplane` and fell

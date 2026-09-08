@@ -743,14 +743,17 @@ actually bitten.
       volume and the third would read −1.6000 cm³. The 2026-09-08 run gave
       −1.2000, which rules out the third and separates neither of the others.
 
-      What settles it is `feature.Occurrences.Count` on the pattern, which
-      nothing here has read — the check counts *features*, and a pattern is one
-      feature holding its occurrences. Four occurrences means the reference was
-      patterned onto itself, and then two things change together:
-      `INVENTOR_SETUP.md`, and the `elsewhere` filter in the mock's
-      `sketch_driven_pattern` that excludes the reference. Cheap either way:
-      open the pattern in Inventor's browser, or add the property read to
-      `check_sketch_driven_pattern`.
+      What settles it is the occurrence count on the pattern, and the read is
+      in place now: `describe_feature` asks a pattern feature for
+      `Occurrences` and then `PatternElements`, reports the count with the name
+      that answered, and `check_sketch_driven_pattern` asserts three and
+      explains four. Neither name is measured, so a release keeping them
+      somewhere else reports nothing rather than zero, and the check says the
+      question is still open instead of passing. **So this needs a run, not
+      more code.** Four occurrences means the reference was patterned onto
+      itself, and then two things change together: `INVENTOR_SETUP.md`, and the
+      `elsewhere` filter in the mock's `sketch_driven_pattern` that excludes
+      the reference.
 
 - [x] **Measure `move_face` against a live Inventor** — *(2026-09-08, after
       three failures that were all about the call and none about the

@@ -306,7 +306,9 @@ also passes the simulator rehearsal.
    occurrences, which no other pattern here does, and the COM call **built and
    measured exactly on 2026-09-08** at -1.2000 cm^3. What the run did not
    settle is the occurrence count, which is what the fixture was really for --
-   `feature.Occurrences.Count` is where that answer is.*
+   the count off the pattern is where that answer is, which
+   `describe_feature` reads now -- so the question needs a run rather than more
+   code.*
 
    **The gap was narrower than this entry used to claim.** It said anything
    irregular "has to be enumerated by hand", and that reads as a bigger absence
@@ -378,8 +380,12 @@ also passes the simulator rehearsal.
    never the interesting part. The occurrence count still is, and that run did
    not settle it: the finished part reads `Plate`, `Slot`, `Spread`, because a
    sketch-driven pattern is *one* feature holding its occurrences -- so counting
-   features cannot count occurrences. `feature.Occurrences.Count` is what would,
-   and nothing here has read it.
+   features cannot count occurrences. The count on the pattern itself is what
+   would, and `describe_feature` reads it now: it asks a pattern feature for
+   `Occurrences` and then `PatternElements` and reports the number with the
+   name that answered. Neither name is measured, so a release keeping them
+   elsewhere reports nothing rather than zero and the acceptance check says the
+   question is still open. What is left is a run.
 
 ### Tier 2 -- frequently wanted, no current workaround
 

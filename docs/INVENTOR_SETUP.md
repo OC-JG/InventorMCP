@@ -848,8 +848,13 @@ the feature list, which distinguishes nothing between the first two rows.
 
 That is this check's limitation rather than a finding about Inventor, and the
 note it prints says where the answer is instead: open the pattern in Inventor's
-browser and count, or read `feature.Occurrences.Count`, which nothing here has
-read. If it turns out to be the middle row, two things change together: this
+browser and count, or read the count off the pattern -- which
+`describe_feature` does now, trying `Occurrences` and then `PatternElements`
+and reporting which answered, so the next run of
+`--only sketch-driven-pattern` either asserts three occurrences or says the
+count could not be read. Neither property name is measured; that is the whole
+reason two are tried and a failure to read is reported rather than counted as
+zero. If it turns out to be the middle row, two things change together: this
 section, and the `elsewhere` filter in the mock's `sketch_driven_pattern` that
 excludes the reference.
 

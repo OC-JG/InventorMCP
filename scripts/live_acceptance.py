@@ -1220,13 +1220,35 @@ def check_sketch_driven_pattern(session: Session, report: Report) -> None:
         # And the count, which is the reading the volume cannot give.
         features = [info.name for info in session.backend.list_features(context.doc_id)]
         report.note(f"features on the finished part: {features}")
-        report.note(
-            "Four pockets is Plate, Slot and Spread -- the pattern is one feature "
-            "holding three occurrences. If Inventor also patterned the reference "
-            "point, the volume is unchanged and only Inventor's browser shows it: "
-            "open the pattern and count its occurrences. Four means the reference "
-            "was included and docs/INVENTOR_SETUP.md needs correcting, along with "
-            "the mock's `elsewhere` filter.")
+
+        # Asked of the pattern itself, because counting features cannot count
+        # occurrences: a sketch-driven pattern is one feature holding them. The
+        # property name is unmeasured -- `describe_feature` tries `Occurrences`
+        # and then `PatternElements` and reports which answered -- so a run that
+        # cannot read it says so rather than the check quietly passing.
+        pattern = next((name for name in features
+                        if name.lower().startswith("spread")), None)
+        described = (session.backend.describe_feature(context.doc_id, pattern)
+                     if pattern else {})
+        count = described.get("occurrences")
+        if count is None:
+            report.note(
+                "The pattern's occurrence count could not be read: neither "
+                f"Occurrences nor PatternElements answered on {pattern!r}. The "
+                "question stays open, and Inventor's browser is the fallback -- "
+                "open the pattern and count. `python "
+                "scripts/probe_definitions.py` would name the collection this "
+                "release keeps them in.")
+        else:
+            report.check(
+                count == 3,
+                f"sketch-driven-pattern: the pattern holds 3 occurrences "
+                f"(read {count} from {described.get('occurrences_from')})",
+                f"{count} occurrences means Inventor also patterned the "
+                "reference point, which the volume cannot show because the "
+                "duplicate lands on the seed. Then two things change together: "
+                "docs/INVENTOR_SETUP.md, and the `elsewhere` filter in the "
+                "mock's sketch_driven_pattern that excludes the reference.")
     finally:
         session.backend.close_document(context.doc_id, save=False)
         session.forget(context.doc_id)

@@ -320,6 +320,37 @@ def _specialise(document: Any) -> Any:  # pragma: no cover - Windows only
         return document
 
 
+#: Where a pattern feature might keep its occurrences, strongest first.
+#:
+#: Unmeasured, and named rather than guessed at the call site so a run that
+#: answers with the second one says so. `Occurrences` is what the roadmap and
+#: `INVENTOR_SETUP.md` both name as the property that would settle the one open
+#: question about `sketch_driven_pattern` -- whether Inventor places an
+#: occurrence on the reference point as well -- and `PatternElements` is what
+#: some of Inventor's pattern features call the same thing.
+_OCCURRENCE_COLLECTIONS = ("Occurrences", "PatternElements")
+
+
+def _occurrence_count(feature: Any) -> tuple[int | None, str | None]:  # pragma: no cover - Windows only
+    """How many occurrences a pattern feature holds, and what said so.
+
+    None when nothing answered, because a pattern is *one* feature holding its
+    occurrences: counting the features on a part cannot count them, which is
+    why the calibration check could measure `spread_pockets` exactly and still
+    not answer what it was built to ask. A feature that is not a pattern
+    answers nothing here, which is correct rather than an error.
+    """
+    for name in _OCCURRENCE_COLLECTIONS:
+        try:
+            collection = getattr(feature, name)
+            if collection is None:
+                continue
+            return int(collection.Count), name
+        except Exception:
+            continue
+    return None, None
+
+
 def _promotion_candidates(prop: str, offered: Sequence[str]
                           ) -> tuple[list[str], list[str]]:
     """Which of Inventor's property names a requested *prop* could mean.
@@ -4994,6 +5025,16 @@ class ComBackend(Backend):
                 value = _plain(raw)
                 if value is not None:
                     described.setdefault(prefix + attribute, value)
+        if "pattern" in str(described.get("kind", "")).lower():
+            # Only for a pattern, and only because the count is a real open
+            # question there: `spread_pockets` measured exactly and still could
+            # not say whether Inventor puts an occurrence on the reference
+            # point. Asking every feature would put a number under a name that
+            # meant something else on whichever release has one.
+            count, from_where = _occurrence_count(feature)
+            if count is not None:
+                described["occurrences"] = count
+                described["occurrences_from"] = from_where
         return described
 
     # -- escape hatch ------------------------------------------------------
