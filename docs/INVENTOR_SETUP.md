@@ -509,14 +509,31 @@ word this file exists to eliminate.
 
     python scripts/probe_definitions.py
 
-It asks three live objects what they offer -- `dir()` plus a probed attribute
-list for `MoveFaceFeatures`, `MoveFaceDefinition` and whatever
-`MoveFaceType`/`MoveFaceTypeDefinition` return -- because the type library will
-not say and a `dir()` on a live COM object will. It does the same for
-`SketchDrivenPatternFeatures` (below, the same shape of failure) and prints
-`FileManager`'s template paths while it is there. It needs the Windows machine;
-on any other platform it exits with `BackendUnavailableError` and touches
-nothing.
+It asks the objects themselves what they offer, because the type library will
+not say. The reading that matters is **`ITypeInfo`**: makepy generates a module
+per type library, so an object whose class the library does not publish has no
+wrapper to read -- but the object still answers `GetTypeInfo`, and that names
+its members, separates a property read from a property write, and says how many
+arguments each takes. `dir()` is printed beside it, and again through dynamic
+dispatch, because a makepy wrapper's `dir()` reflects a declaration rather than
+the object -- which is how a live shell once came back describing nothing but
+`HealthStatus`. It does the same for `SketchDrivenPatternFeatures` (below, the
+same shape of failure) and lists the `.idw` templates actually installed while
+it is there. It needs the Windows machine; on any other platform it exits with
+`BackendUnavailableError` and touches nothing.
+
+**A probe has to run *on* the apartment, and getting that wrong costs a
+session.** The first version of this one reached into the backend for `app` and
+the document and poked them from the calling thread. Inventor's API is
+apartment-threaded, the backend is pinned to one apartment by
+`backend/com/marshal.py`, and a live COM object cannot leave the thread that
+made it: `document.ComponentDefinition` answered "the application called an
+interface that was marshalled for a different thread", and `app.FileManager`
+answered `AttributeError: <unknown>.FileManager` -- which reads exactly like a
+property 2027.1 does not have. It has it, and that is the worse of the two
+symptoms for the obvious reason. `scripts/apartment.py` holds the two helpers
+for doing it properly; `describe_feature` in `backend/base.py` is the same
+lesson on the server side, and it was written down before this happened.
 
 Two things to keep from the earlier design once the real setter is known, because
 they are about correctness rather than about the name:
@@ -882,12 +899,14 @@ what a document has needed, and no drawing document had been opened.
 
     python scripts/probe_definitions.py
 
-It asks the objects themselves -- `dir()` and a probed attribute list for
-`MoveFaceFeatures`, `MoveFaceDefinition`, whatever `MoveFaceTypeDefinition`
-returns, and `SketchDrivenPatternFeatures` and its definition -- and prints
-`FileManager`'s template paths while it is there, which is what the drawing
-failure turned on. Both backends' refusals now carry the same listing, so a run
-that fails answers the question too.
+It asks the objects themselves, through their own `ITypeInfo` -- which names the
+members of a class the type library does not publish, and is the reading
+`com_signatures.py` cannot make. `MoveFaceFeatures`, `MoveFaceDefinition`,
+whatever `MoveFaceTypeDefinition` returns, and `SketchDrivenPatternFeatures`
+and its definition; plus `FileManager`'s template paths and the `.idw` files
+actually installed, which is what the drawing failure turned on. Both backends'
+refusals now carry a `dir()` listing of their own, so a run that fails answers
+the question too.
 
 **Then one run:**
 

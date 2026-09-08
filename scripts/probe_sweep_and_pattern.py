@@ -22,21 +22,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "scripts"))
 
+from apartment import on_thread, raw  # noqa: E402
 from inventor_mcp.builder import apply_operation  # noqa: E402
 from inventor_mcp.schema import ExtrudeOp, HoleOp, SketchOp  # noqa: E402
 from inventor_mcp.session import Session  # noqa: E402
-
-
-def raw(backend):
-    """The backend itself, behind the marshalling proxy."""
-    return getattr(backend, "unmarshalled", backend)
-
-
-def on_thread(backend, work):
-    """Run *work* on the apartment that owns Inventor's objects."""
-    worker = getattr(backend, "marshalling_thread", None)
-    return worker.call(work) if worker is not None else work()
 
 
 class Attempts:

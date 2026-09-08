@@ -60,6 +60,28 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
 ### Fixed
 
+- **The first probe could not read anything, and the error blamed Inventor.**
+  *(2026-09-08.)* `python scripts/probe_definitions.py` on the CAD machine
+  answered `app.FileManager` -> `AttributeError: <unknown>.FileManager`, and
+  then died on `document.ComponentDefinition` with *"the application called an
+  interface that was marshalled for a different thread"*.
+
+  One cause for both. Inventor's API is apartment-threaded and the connection
+  fix pins the backend to a single COM apartment (`backend/com/marshal.py`),
+  routing every public method onto it -- so a *tool* never has to think about
+  this, because a tool only gets plain data back. **A probe is the exception**:
+  its whole job is to hold a live object and ask what it offers, and the proxy
+  hands that object back across the thread boundary where it is already dead.
+  The `AttributeError` is the worse of the two symptoms, because it reads
+  exactly like a property this release does not have. It has it.
+
+  The repository already said so -- `describe_feature` in `backend/base.py`:
+  "reading the properties *there* and returning numbers is the only way to ask
+  what Inventor actually built" -- and two sibling probes already carried the
+  helpers for it. The probe now runs entirely on the apartment and only text
+  comes back, and the helpers live in `scripts/apartment.py` instead of being
+  copied a third time.
+
 - **The drawing surface stopped at its first call, on the argument nobody
   checked.** *(2026-09-07.)* `new_drawing` was the one call in the drawing
   surface described as carrying no risk at all: `Documents.Add` is measured and
@@ -123,14 +145,26 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 ### Added
 
 - **`scripts/probe_definitions.py`**, which asks live COM objects what they
-  offer because the type library will not. *(2026-09-07.)* `dir()` plus a probed
-  attribute list for `MoveFaceFeatures`, `MoveFaceDefinition`, whatever
+  offer because the type library will not. *(2026-09-07.)* Its real answer is
+  **`ITypeInfo`**: makepy generates a module per type library, so an object
+  whose class the library does not publish has no wrapper to read -- but the
+  object still answers `GetTypeInfo`, and that names its members, tells a
+  property read from a property write, and says how many arguments each takes.
+  That is the one thing `com_signatures.py` cannot do, because it reads the
+  library rather than the object. `dir()` is printed beside it, and again
+  through dynamic dispatch, because the two disagree in a way that matters.
+
+  It asks this of `MoveFaceFeatures`, `MoveFaceDefinition`, whatever
   `MoveFaceType`/`MoveFaceTypeDefinition` return, `SketchDrivenPatternFeatures`
-  and its definition; and `FileManager`'s `GetTemplateFile`, `TemplatesPath`,
-  `DesignDataPath` and `WorkspacePath`, which is what the drawing failure turned
-  on. It builds nothing and saves nothing. Off Windows it exits with
-  `BackendUnavailableError` and touches nothing, which is what it does in this
-  repository's own CI.
+  and its definition -- and prints `FileManager`'s template paths with a listing
+  of the `.idw` files actually installed, which is what the drawing failure
+  turned on. It builds one scratch plate and closes it; nothing is saved. Off
+  Windows it exits with `BackendUnavailableError` and touches nothing.
+
+- **`scripts/apartment.py`**, holding the two things a probe needs to get onto
+  the thread that owns Inventor's objects. *(2026-09-08.)* There were two
+  identical copies of them in sibling probes and a third was about to be
+  written.
 
   It exists because a CAD seat is the scarce thing here -- `INVENTOR_SETUP.md`
   counts six sessions and four defects for one work axis -- and two of the four
