@@ -416,6 +416,27 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   -- and `Update` is the fallback on a release without it.
 
 ### Fixed
+
+- **A promotion the simulator performed happily failed on Inventor, on the
+  word.** *(Measured 2026-09-08 on 2027.1: "The feature 'Block' has no drivable
+  property 'taper'.")* The recipe field is `taper` and Inventor's
+  `ExtrudeDefinition` calls that property `TaperAngle`. The simulator matches a
+  promotion against its own feature detail, keyed by the recipe's field names,
+  so `taper` was right there; the COM backend matched Inventor's property names
+  by normalised equality, so it was nowhere. Two self-consistent halves
+  accepting different words, which is defect 5's shape and now defect 13.
+
+  `PROMOTION_ALIASES` in `backend/base.py` holds the words that differ and
+  **both** backends resolve through it, so either vocabulary works on either
+  side -- above the two rather than copied into each, for the reason
+  `THICKEN_SHARE` is. A name that merely *starts with* the request is tried
+  second and only when exactly one of them is there, so `counterbore` asks
+  which rather than choosing between a diameter and a depth, and a pattern's
+  `count` is not read as a counterbore. The refusal lists what the feature does
+  carry, and `promote_parameters` reports an error's hint instead of dropping
+  it: the unhelpful refusal is what turned a wrong word into a spent seat.
+  `definition.Extent` is searched too, since an extrude's taper is on its
+  definition and its distance is not.
 - **A `work_plane` with `kind: "angle"` or `"tangent"` built an offset plane on
   Inventor and reported success.** `WorkPlaneOp` has offered four kinds since it
   was written; the COM backend read `kind` only to spot `midplane` and fell

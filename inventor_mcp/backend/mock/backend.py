@@ -73,6 +73,7 @@ from ..base import (
     ViewInfo,
     ViewRequest,
     THICKEN_SHARE,
+    promotion_synonyms,
     EmbossRequest,
     ShellRequest,
     SplitRequest,
@@ -631,12 +632,23 @@ class MockBackend(Backend):
 
     def promote_parameter(self, doc_id: str, feature: str, prop: str,
                           name: str) -> dict[str, Any]:
+        """Give a value this feature already held a name.
+
+        The detail dictionary is keyed by the *recipe's* field names, and a
+        caller may just as well ask in Inventor's -- `discover_dfm_roles`
+        reports whatever it read off the feature, which live is `TaperAngle`
+        and here is `taper`. So the request is matched through
+        `promotion_synonyms`, the same shared vocabulary the COM backend uses,
+        because the two halves accepting different words is what made a
+        promotion pass here and fail on the seat.
+        """
         document = self._doc(doc_id)
         found = document.find_feature(feature)
         held = None
         key = None
+        words = promotion_synonyms(prop)
         for candidate, value in (found.detail or {}).items():
-            if candidate.lower().replace("_", "") != prop.lower().replace("_", ""):
+            if candidate.strip().lower().replace("_", "") not in words:
                 continue
             key = candidate
             held = value

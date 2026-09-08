@@ -76,6 +76,7 @@ from ..base import (
     MoveFaceRequest,
     ThickenRequest,
     THICKEN_SHARE,
+    promotion_synonyms,
     SketchDrivenPatternRequest,
     DimensionInfo,
     DrawingContents,
@@ -317,6 +318,38 @@ def _specialise(document: Any) -> Any:  # pragma: no cover - Windows only
         return win32com.client.dynamic.Dispatch(document._oleobj_)
     except Exception:
         return document
+
+
+def _promotion_candidates(prop: str, offered: Sequence[str]
+                          ) -> tuple[list[str], list[str]]:
+    """Which of Inventor's property names a requested *prop* could mean.
+
+    Two lists, because the caller treats them differently. The first holds the
+    names that *are* the request -- Inventor's own spelling of it, and the
+    alias in `PROMOTION_ALIASES` where a recipe uses a different word -- and
+    the first of those the object carries is the answer. The second holds
+    names that merely start with the request, which is an inference: it is
+    acted on only when exactly one of them is there, so `counterbore` is a
+    question rather than a silent choice between a diameter and a depth.
+
+    The stages have to stay in that order. `count` is a pattern's own property
+    and also the start of `CounterboreDepth`, and a pattern's count is not a
+    counterbore.
+
+    Case and underscores are ignored throughout, because `taper_angle` and
+    `TaperAngle` are the same request written twice.
+    """
+    def flatten(text: str) -> str:
+        return text.strip().lower().replace("_", "")
+
+    words = promotion_synonyms(prop)
+    if not words:
+        return [], []
+    named = [name for name in offered if flatten(name) in words]
+    inferred = [name for name in offered
+                if name not in named
+                and any(flatten(name).startswith(word) for word in words)]
+    return named, inferred
 
 
 def _move_face_type(definition: Any) -> int | None:  # pragma: no cover - Windows only
@@ -969,32 +1002,63 @@ class ComBackend(Backend):
 
     def promote_parameter(self, doc_id: str, feature: str, prop: str,
                           name: str) -> dict[str, Any]:  # pragma: no cover - Windows only
+        """Give a value the feature already held a name, so it can be driven.
+
+        **The property name a caller asks for is a recipe's name, not
+        Inventor's**, and the two are not always the same word. A recipe says
+        `taper`; Inventor's `ExtrudeDefinition` calls it `TaperAngle`. The
+        simulator matches against its own detail dictionary, which is keyed by
+        the recipe's field names, so `promote_parameter(..., "taper", ...)`
+        worked there and failed here -- measured on 2027.1, 2026-09-08: *"The
+        feature 'Block' has no drivable property 'taper'."* Two
+        self-consistent halves disagreeing is how defect 5 survived three runs,
+        so the resolution is `_promotion_candidates` and a test pins the words
+        a recipe can use against the names Inventor answers to.
+
+        The extent is the third place to look. An extrude's taper is on its
+        definition and its *distance* is not: that is on
+        `definition.Extent.Distance`, because the extent is its own object and
+        a through-all extent has no distance at all.
+        """
         document = self._doc(doc_id)
         held = _dynamic(_find_feature(document.ComponentDefinition.Features, feature))
-        target = None
-        read_from = None
-        for holder in (held, getattr(held, "Definition", None)):
-            if holder is None:
-                continue
-            holder = _dynamic(holder)
-            for candidate in self._DRIVING:
-                if candidate.lower().replace("_", "") != prop.lower().replace("_", ""):
-                    continue
-                try:
-                    value = getattr(holder, candidate)
-                except Exception:
-                    continue
-                if value is not None and hasattr(value, "Expression"):
-                    target = value
-                    read_from = candidate
-                    break
-            if target is not None:
-                break
-        if target is None:
+        definition = getattr(held, "Definition", None)
+        definition = None if definition is None else _dynamic(definition)
+        extent = None if definition is None else getattr(definition, "Extent", None)
+        holders = [holder for holder in
+                   (held, definition, None if extent is None else _dynamic(extent))
+                   if holder is not None]
+        named, inferred = _promotion_candidates(prop, self._DRIVING)
+        found = self._offered_parameters(holders, named)
+        if len(found) > 1:
+            # `taper` reaches both `Taper` and `TaperAngle`; they are one
+            # request under two spellings, so the first one the object carries
+            # is the answer rather than an ambiguity.
+            found = dict([next(iter(found.items()))])
+        if not found:
+            # The inferred spelling, and only where it is unambiguous. Never a
+            # silent pick: `counterbore` reaches both a diameter and a depth,
+            # and promoting the wrong one names a value that drives something
+            # else -- which then reads as the part changing by itself the next
+            # time that parameter is set.
+            found = self._offered_parameters(holders, inferred)
+            if len(found) > 1:
+                raise FeatureError(
+                    f"{prop!r} could mean {' or '.join(sorted(found))} on "
+                    f"{feature!r}, and promoting the wrong one names the wrong "
+                    "value.",
+                    hint="Ask for the property by Inventor's own name -- "
+                    "`describe_feature` lists what this feature carries.",
+                )
+        if not found:
             raise FeatureError(
                 f"The feature {feature!r} has no drivable property {prop!r}.",
-                hint="describe_feature lists what it carries.",
+                hint="It carries " + (
+                    ", ".join(self._driving_properties(holders))
+                    or "no drivable property this release could read")
+                + ". `describe_feature` reads them with their values.",
             )
+        read_from, target = next(iter(found.items()))
         currently = str(target.Expression)
         # The new parameter holds exactly what the property held -- a literal
         # keeps its unit, a model-parameter reference keeps its reference -- so
@@ -1008,6 +1072,36 @@ class ComBackend(Backend):
             "was": currently,
             "now_drives": f"{feature}.{read_from}",
         }
+
+    def _offered_parameters(self, holders: list[Any],
+                            names: Sequence[str]) -> dict[str, Any]:  # pragma: no cover - Windows only
+        """Which of *names* these objects carry a settable parameter for.
+
+        A property that is there but holds no `Expression` is not one of them:
+        that is the difference between a dimension and a plain number, and only
+        a dimension can be given a name to be driven by.
+        """
+        found: dict[str, Any] = {}
+        for holder in holders:
+            for candidate in names:
+                if candidate in found:
+                    continue
+                try:
+                    value = getattr(holder, candidate)
+                except Exception:
+                    continue
+                if value is not None and hasattr(value, "Expression"):
+                    found[candidate] = value
+        return found
+
+    def _driving_properties(self, holders: list[Any]) -> list[str]:  # pragma: no cover - Windows only
+        """Every drivable property these objects carry, for a refusal's hint.
+
+        A list of what is there beats "describe_feature lists what it carries"
+        by exactly the round trip it saves, and the wrong-word case is the one
+        that refusal exists for.
+        """
+        return list(self._offered_parameters(holders, self._DRIVING))
 
     def feature_dependencies(self, doc_id: str, name: str) -> dict[str, Any] | None:  # pragma: no cover - Windows only
         document = self._doc(doc_id)

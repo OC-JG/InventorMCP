@@ -668,7 +668,16 @@ def register(server: Any, session: Session) -> None:
                     outcome["role"] = entry["role"]
                 promoted.append(outcome)
             except Exception as exc:
-                failed.append({**entry, "error": str(exc)[:200]})
+                # The hint too, not just the message. A promotion fails most
+                # often on the *word* -- the property is there under a name the
+                # caller did not use -- and the hint is what lists the names
+                # that are there. Dropping it sends the caller back to guess,
+                # which is what cost a live run on 2026-09-08.
+                hint = getattr(exc, "hint", None)
+                failed.append({
+                    **entry,
+                    "error": str(exc)[:200] + (f" {hint}"[:300] if hint else ""),
+                })
         session.sync_parameters(context.doc_id)
 
         # Once, after the loop, not once per entry: promotion rewires

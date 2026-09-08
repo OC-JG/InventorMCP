@@ -402,6 +402,57 @@ THICKEN_SHARE: dict[tuple[str, str], float] = {
 }
 
 
+#: What a recipe calls a dimensioned feature property, against what Inventor
+#: calls it. Keyed by the recipe's word.
+#:
+#: This lives here for the same reason `THICKEN_SHARE` does: the two backends
+#: disagreeing about a word is defect 5's shape again. A promotion is asked for
+#: in a caller's words, the simulator matches them against its own feature
+#: detail -- which is keyed by the recipe's field names, so `taper` works --
+#: and Inventor's `ExtrudeDefinition` calls that property `TaperAngle`. So the
+#: promotion the simulator performed happily failed on the seat, measured on
+#: 2027.1 on 2026-09-08: *"The feature 'Block' has no drivable property
+#: 'taper'."* One table cannot disagree with itself.
+#:
+#: Only the words that differ. `thickness`, `radius`, `distance`, `depth`,
+#: `angle`, `count` and the pattern's `x_count` family already match Inventor's
+#: own spelling once case and underscores are ignored, and both backends ignore
+#: both.
+PROMOTION_ALIASES: dict[str, str] = {
+    "taper": "TaperAngle",
+    "diameter": "HoleDiameter",
+    "cbore_diameter": "CounterboreDiameter",
+    "cbore_depth": "CounterboreDepth",
+    "csink_diameter": "CountersinkDiameter",
+    "csink_angle": "CountersinkAngle",
+    "bottom_angle": "BottomTipAngle",
+}
+
+
+def promotion_synonyms(prop: str) -> list[str]:
+    """Every word *prop* may be spelled as, flattened, for matching either way.
+
+    Both backends match a requested property name against names they hold, and
+    the two hold different vocabularies: Inventor's property names on one side
+    and the recipe's field names on the other. So each side flattens what it
+    holds and asks whether it is one of these -- which makes `taper` and
+    `TaperAngle` the same request in both directions, rather than in whichever
+    direction somebody remembered.
+    """
+    def flatten(text: str) -> str:
+        return text.strip().lower().replace("_", "")
+
+    wanted = flatten(prop)
+    if not wanted:
+        return []
+    words = [wanted]
+    for word, spelling in PROMOTION_ALIASES.items():
+        pair = (flatten(word), flatten(spelling))
+        if wanted in pair:
+            words.extend(name for name in pair if name not in words)
+    return words
+
+
 @dataclass
 class ThickenRequest:
     """Faces, a layer thickness, and which side of them it goes on.

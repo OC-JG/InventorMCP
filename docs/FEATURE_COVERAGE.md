@@ -871,3 +871,35 @@ Each of these was hit while building real parts, and each passed
     the three places -- schema, backend, rehearsal -- to the same two kinds.
     The fix proper is a schema field and the simulator learning to tilt a
     plane, which the roadmap carries as one Phase 2 item.
+
+13. **A promotion the simulator performed happily failed on Inventor, on the
+    word.** *Measured on Inventor 2027.1, 2026-09-08, by
+    `scripts/live_acceptance.py --only promotion`: "The feature 'Block' has no
+    drivable property 'taper'."* The recipe field is `taper`; Inventor's
+    `ExtrudeDefinition` calls that property `TaperAngle`. The simulator matches
+    a promotion against its own feature detail, which is keyed by the recipe's
+    field names, so `taper` was right there -- and the COM backend matched the
+    request against Inventor's property names by normalised equality alone, so
+    it was nowhere. Each half was self-consistent and the two accepted
+    different words, which is defect 5's shape exactly.
+
+    Nothing was silently wrong here, which is the one good thing about it: the
+    promotion refused rather than naming the wrong value. The refusal was the
+    unhelpful kind, though -- "no drivable property" with nothing about what
+    the feature does carry -- and that is what turned a wrong word into a spent
+    seat.
+
+    `PROMOTION_ALIASES` in `backend/base.py` now holds the words that differ
+    (`taper`, `diameter`, the counterbore and countersink sizes, the drill's
+    bottom angle) and **both** backends resolve through it, so either
+    vocabulary works on either side: the shared table lives above them for the
+    same reason `THICKEN_SHARE` does. A name that merely *starts with* the
+    request is tried second and only when exactly one of them is there, so
+    `counterbore` asks which rather than choosing between a diameter and a
+    depth. The refusal now lists the properties the feature actually carries,
+    `promote_parameters` reports the hint beside the error rather than
+    dropping it, and `tests/test_promotion_names.py` pins each word against the
+    name Inventor answers to. The extent is also searched now: an extrude's
+    taper is on its definition and its distance is not, so
+    `definition.Extent.Distance` was unreachable before and would have failed
+    the same way.

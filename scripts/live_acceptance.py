@@ -1960,6 +1960,13 @@ def check_promotion(session: Session, report: Report) -> None:
         session.backend.rebuild(context.doc_id)
         before = session.backend.mass_properties(context.doc_id)
         promoted = []
+        # Asked for in the *recipe's* words on purpose. `taper` is what a
+        # recipe says and `TaperAngle` is what Inventor's ExtrudeDefinition
+        # calls it, and on 2026-09-08 this line is what found that the two
+        # backends accepted different words: the simulator promoted `taper`
+        # happily and Inventor answered "no drivable property 'taper'".
+        # `PROMOTION_ALIASES` in backend/base.py is the shared vocabulary now,
+        # so this asks the harder way round of both.
         for feature, prop, name in (("Cavity", "thickness", "wall_t"),
                                     ("Block", "taper", "draft_a")):
             try:
