@@ -6,6 +6,43 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
 ### Measured
 
+- **`move_face` and `sketch_driven_pattern` both build in Inventor, and every
+  fixture in `examples/calibration/` now has a real number beside it.**
+  *(2026-09-08, Inventor 2027.1.)*
+
+  | fixture | derived | Inventor | |
+  |---|---|---|---|
+  | `lifted_face` | +6.4000 cm³ | **+6.4000** | 0.0% |
+  | `lifted_face`, `lift` doubled | +12.8000 cm³ | **+12.8000** | 0.0% |
+  | `widened_wall` | +0.2400 cm³ | **+0.2400** | 0.0% |
+  | `widened_wall`, `grow` doubled | +0.4800 cm³ | **+0.4800** | 0.0% |
+  | `spread_pockets` | −1.2000 cm³ | **−1.2000** | 0.0% |
+
+  **The doubling rows are the reading a volume alone cannot give.** The distance
+  in each `move_face` fixture is a driving parameter, and doubling it doubled the
+  change -- so the expression reaches Inventor's own dimension and the feature is
+  parametric in fact rather than in name. That is defect 11's lesson, which cost
+  four runs to learn the first time and one fixture to check here.
+  `PREDICTED["move_face"]` came down 0.50 → 0.02, the fifth and last operation
+  to come off this file's placeholder.
+
+  **What `spread_pockets` did not answer, by its own design.** The occurrence
+  count is the only thing about that operation still unknown -- whether Inventor
+  places an occurrence on the reference point as well -- and two of its three
+  possible answers are the same volume. The run ruled out the third (−1.6000)
+  and separated neither of the others: the finished part reads `Plate`, `Slot`,
+  `Spread`, because a sketch-driven pattern is **one feature holding its
+  occurrences**, so the check's feature count cannot count occurrences.
+  `feature.Occurrences.Count` is what would, and nothing here has read it. A
+  limitation of the check rather than a finding, and the note it prints now says
+  where the answer is.
+
+  Three failed runs came before this, none of them about arithmetic: a wrong
+  call shape, a setter name that was a fourth spelling, and an argument order
+  that put the distance second. Every one was settled by reading the live
+  object's `ITypeInfo` rather than by another attempt, which is the whole
+  argument of `docs/INVENTOR_SETUP.md` in one operation.
+
 - **`thicken` ran against Inventor 2027.1 and came out working — the other
   three Phase 3 surfaces did not.** *(2026-09-07.)* One live run, four
   operations, and the value of it was not in the one that passed.
@@ -126,10 +163,27 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   `"ISO.idw"` resolves here, from the subfolder search rather than the folder
   itself. Had this walked only the top level it would still be failing.
 
-  Still unverified end to end: no drawing has been built since. The lesson is
-  not about templates -- two calls in that sentence were measured, the argument
-  between them was not, and "carries no risk at all" was a claim about a call
-  rather than about a call *and its arguments*.
+  **And with a real path to a real `ISO.idw` it still failed** -- the same bare
+  "Exception occurred", on the third run. *(Fixed 2026-09-08, still unverified.)*
+  The template dates from an older Inventor and wants **migrating**:
+  interactively that is a dialog, and through the API it is silence. Migrating a
+  file is opening it and saving it, so `_drawing_from` does that on a failure and
+  retries the `Add` once.
+
+  Three things about the shape of that, because it writes to a file this project
+  does not own -- here a company template on a shared drive. It happens **on
+  failure rather than on the way past**, so a working template is never
+  rewritten as a side effect of making a drawing. It saves **only if Inventor
+  marks the document dirty**, so a template that was already current is left
+  exactly as it was. And `template_migrated` in the result detail says which
+  happened, so a run that modified a shared file says so rather than being
+  silently helpful. The retry is once: if a migrated template still will not
+  make a drawing then migration was not the reason, and a loop would turn one
+  bare "Exception occurred" into several.
+
+  The lesson is not about templates. Both causes were in what the call was
+  *given*; the enum and the method were fine all three times. "Carries no risk
+  at all" was a claim about a call, and a call is its arguments too.
 
 - **`sketch_driven_pattern` was calling a signature this release does not
   have.** *(2026-09-07.)* Inventor's wrapper answered "Add() takes from 1 to 2

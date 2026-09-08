@@ -566,11 +566,12 @@ fastener rather than deriving one.
   and `columns` accept an expression, so `"count": "bolts_per_side * 2"` works
   and a count is revisable like a length. A fractional result is refused rather
   than rounded, since 4.5 holes is a mistake.
-- **`sketch_driven_pattern` has never built anything in a live Inventor**,
-  though its COM call is measured now — the first attempt was refused on the
-  call's shape, and the definition it really wants has since been read off the
-  live object. So a live build is expected to work and has not been seen to;
-  check the `measured` block rather than assuming either way.
+- **`sketch_driven_pattern` is measured** — Inventor 2027.1, 2026-09-08, at
+  −1.2000 cm³ exactly. One thing about it is still unconfirmed and it is a
+  *count* rather than a volume: whether Inventor also places an occurrence on
+  the reference point. A duplicate would land on the seed and remove nothing, so
+  it would not show in any number — if a part's browser shows one occurrence more
+  than the recipe's points, that is why.
   Reach for it only when the feature is not already position-shaped: `hole`
   takes a list of points and `boss` a list of positions, so irregular holes and
   bosses need no pattern. The seed sits on `reference` and the occurrences go on
@@ -589,12 +590,11 @@ fastener rather than deriving one.
   which `move_face` cannot express with a single direction. Turning a *surface*
   into a wall — Inventor's other use for this feature — is not reachable here at
   all, because nothing in this server creates a surface.
-- **`move_face` has never built anything in a live Inventor**, though every
-  argument of its COM call has now been read off the live API — the setter, its
-  order and its reversal flag. So a live build is expected to work and has not
-  been seen to. It is exact in the simulator -- a planar face moved along its
-  own normal changes the part by area times distance -- so a rehearsal of it
-  means something; a live success does not, yet. It is the only way to alter
-  imported geometry, which is why it exists. Check the `measured` block against
-  the arithmetic by hand before reporting such a part finished.
+- **`move_face` is measured** — Inventor 2027.1, 2026-09-08, both fixtures at
+  0.0%, and doubling the driving parameter doubled the volume, so the distance
+  expression really does reach Inventor's dimension. It is exact for a planar
+  face moved along its own normal: area times distance, straight out of the dot
+  product, and Inventor agrees. It is the only way to alter imported geometry,
+  which is why it exists. What is *not* covered is a curved face — a rehearsal
+  marks that step estimated, and the arithmetic is first-order there.
 - Assemblies, drawings and sheet metal are not supported at all.

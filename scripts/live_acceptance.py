@@ -938,21 +938,20 @@ MOVE_FACE_FIXTURES = {
 
 
 def check_move_face(session: Session, report: Report) -> None:
-    """`move_face`, whose COM half has never executed -- nor been read.
+    """`move_face`, measured on Inventor 2027.1 on 2026-09-08.
 
-    ``docs/INVENTOR_SETUP.md`` has the ordered list of what this has to settle
-    and why this one is worse off than the five work-geometry behaviours were:
-    they had signatures somebody had read off a type library, and here the
-    definition object's setter is unknown, so the backend tries three spellings
-    and names them all when none works.
-
-    **Read the signature before running this.** ``python
-    scripts/com_signatures.py --search MoveFace`` costs nothing and answers in
-    one go what this check can only narrow down.
+    It took three attempts to get here and none of them was about arithmetic.
+    The signature was not in the type library at all, so the setter's name, its
+    argument order and its reversal flag all had to be read off the live
+    definition -- ``docs/INVENTOR_SETUP.md`` has that interface table. Then it
+    built on the first run that reached it and agreed to four decimals on both
+    fixtures, so ``PREDICTED["move_face"]`` came down 0.50 -> 0.02.
 
     Three readings per fixture, for the reason defect 11 cost four runs: a
     feature that builds, and even one that measures right, can still be
-    parametric in name only.
+    parametric in name only. All three came back on the first run, and they are
+    assertions now rather than readings -- the point of writing a measurement
+    down is that the next release which disagrees fails a check.
 
     * **The magnitude**, against a figure derived beforehand rather than
       recorded afterwards. Both fixtures are prisms, so the true answer is exact
@@ -964,7 +963,7 @@ def check_move_face(session: Session, report: Report) -> None:
       changing it has to change the volume -- and by its own derived amount,
       since the geometry is the same face moving further.
     """
-    print("\n--- move_face: the COM half, which has never run")
+    print("\n--- move_face: measured 2026-09-08, and asserted since")
     if session.backend.name == "mock":
         # The simulator is the half that is already measured and tested. Running
         # it here would print six passes about arithmetic `tests/test_move_face.py`
@@ -1154,11 +1153,11 @@ def _thicken_fixture(session: Session, report: Report, stem: str) -> float | Non
 def check_sketch_driven_pattern(session: Session, report: Report) -> None:
     """`sketch_driven_pattern`, and the question a volume cannot answer.
 
-    The third COM call in this project that has never executed, after
-    `move_face` and `thicken`. Unlike those two its *arithmetic* is not new: an
-    occurrence does whatever its seed did, which is the rule the other two
-    patterns use and which the pulley and the threaded boss already confirm at
-    0.02. So this check is not calibrating anything.
+    Built and measured on Inventor 2027.1 on 2026-09-08, at -1.2000 cm^3
+    exactly -- and that is the *less* interesting half. Its arithmetic was never
+    new: an occurrence does whatever its seed did, which is the rule the other
+    two patterns use and which the pulley and the threaded boss already confirm
+    at 0.02. So this check is not calibrating anything, and never was.
 
     What it is for is a semantic question: **does Inventor put an occurrence on
     the reference point as well?** `examples/calibration/spread_pockets.json`
@@ -1174,8 +1173,16 @@ def check_sketch_driven_pattern(session: Session, report: Report) -> None:
     So this counts the features on the finished part as well as measuring it.
     A duplicate sitting exactly on its seed is invisible to a volume, and it
     would ship as a part with a redundant feature in its browser.
+
+    **The 2026-09-08 run answered the volume and not the question**, exactly as
+    the shape of the fixture predicted: the finished part is `Plate`, `Slot`,
+    `Spread`. A sketch-driven pattern is *one* feature holding its occurrences,
+    so counting features cannot count occurrences -- which is a limitation of
+    this check rather than a finding, and the note it prints says where the
+    answer actually is. Reading `feature.Occurrences.Count` off the pattern is
+    what would settle it, and that property has not been read here.
     """
-    print("\n--- sketch_driven_pattern: the COM half, which has never run")
+    print("\n--- sketch_driven_pattern: it builds; the occurrence count is the open part")
     if session.backend.name == "mock":
         report.skip("sketch-driven-pattern: not run",
                     "the simulator places the occurrences itself and would only "
@@ -1248,7 +1255,7 @@ def check_drawing(session: Session, report: Report) -> None:
       similarly-named enum. The simulator honours the direction it is given by
       construction, so it can never report this.
     """
-    print("\n--- drawings: the COM half, which has never run")
+    print("\n--- drawings: the COM half, which has not yet made a sheet")
     if session.backend.name == "mock":
         report.skip("drawing: not run",
                     "the simulator honours every direction by construction and "
@@ -2005,19 +2012,21 @@ CHECKS = {
 #: is a shorter thing to diagnose than a sheet that will not dimension, so the
 #: cheap answers come first.
 #:
-#: `thicken` left this list on 2026-09-07: its signature was read, its side and
-#: its corners were measured, and both fixtures now agree with Inventor to four
-#: decimals. The other three stayed -- two of them because the feature takes a
-#: definition object whose class the type library does not publish, and the
-#: drawing surface because it never got past creating the document.
-UNMEASURED = ("move-face", "sketch-driven-pattern", "drawing")
+#: `thicken` left this list on 2026-09-07 and `move_face` and
+#: `sketch_driven_pattern` on 2026-09-08, once the calls both of them needed had
+#: been read off the live objects rather than guessed -- all three then agreed
+#: with Inventor to four decimals on the first run that reached them.
+#:
+#: The drawing surface is what is left, and it has never got past creating the
+#: document: a bare filename for a template, then a template from an older
+#: release wanting migration. Two failures, neither in the call.
+UNMEASURED = ("drawing",)
 
-#: What to read before spending the seat, because each of these answers in a
-#: second what a run narrows down over several. The signature reading is done;
-#: what is left is a *live* probe, because `MoveFaceTypeDefinition` and the
-#: sketch-driven-pattern definition have no generated class to read and
-#: `GeneralDimension` has no generated module until a drawing document has been
-#: opened. `dir()` on a live object answers all three.
+#: What to read before spending the seat. The feature calls are all measured
+#: now; what is left is the drawing surface, and `GeneralDimension` has no
+#: generated module to read until a drawing document has actually been opened --
+#: so the probe is what answers first, and it also lists the templates that are
+#: really installed.
 READ_FIRST = (
     "python scripts/probe_definitions.py",
 )
@@ -2053,9 +2062,9 @@ def main(argv: list[str] | None = None) -> int:
         asked.extend(UNMEASURED)
         print("\nThe groups whose COM half has not built anything yet, in order:")
         print("  " + ", ".join(UNMEASURED))
-        print("\nRun this first -- two of these features take a definition object")
-        print("whose class the type library does not publish, so a live dir() is")
-        print("the only thing that answers what goes on it:")
+        print("\nRun this first -- it lists the drawing templates that are really")
+        print("installed, and GeneralDimension has no generated module to read")
+        print("until a drawing document has actually been opened:")
         for line in READ_FIRST:
             print(f"  {line}")
         print("=" * 70)

@@ -3223,11 +3223,21 @@ class ComBackend(Backend):
                     sheet: str = "a3", units: str = "mm") -> DocInfo:  # pragma: no cover
         """A new drawing document, which is `new_part` with a different enum.
 
-        The one call in this whole drawing surface that carries no risk:
-        `Documents.Add` is measured and `kDrawingDocumentObject` has been in the
-        constants table since before anything used it. A template given here is
-        the title block, and without one Inventor's default drawing template is
-        used -- which has one, so a sheet is at least sendable.
+        **This was called the one call in the drawing surface that carried no
+        risk, and it is the only one that has failed.** Twice, for two different
+        reasons, and neither was the enum or the method:
+
+        1. the recipe's `"ISO.idw"` was handed over verbatim and a bare filename
+           is not a path -- `_drawing_template` resolves that now;
+        2. with a real path to a real `ISO.idw`, `Documents.Add` still answered
+           a bare *"Exception occurred"*, because **the template is from an
+           older Inventor and wants migrating**. `_migrate_template` does what a
+           person would: opens it and saves it.
+
+        Both times the claim was about a *call* while the fault was in what the
+        call was given. A template given here is the title block, and without
+        one Inventor's default drawing template is used -- which has one, so a
+        sheet is at least sendable.
 
         `sheet` is recorded and not applied. Inventor takes the sheet size from
         the template, and overriding it means finding the sheet and setting its
@@ -3239,15 +3249,102 @@ class ComBackend(Backend):
         with self._translate_errors("Creating the drawing document", DocumentError):
             drawing_type = self._k("kDrawingDocumentObject")
             path, found = self._drawing_template(app, drawing_type, template)
-            document = _specialise(app.Documents.Add(drawing_type, path, True))
+            document, migrated = self._drawing_from(app, drawing_type, path)
             try:
                 document.DisplayName = name
             except Exception:
                 pass
         info = self._register(document, units, "deg")
         info.detail = {"sheet_asked_for": sheet, "template": path,
-                       "template_from": found}
+                       "template_from": found, "template_migrated": migrated}
         return info
+
+    def _drawing_from(self, app: Any, drawing_type: int,
+                      path: str) -> tuple[Any, bool]:  # pragma: no cover
+        """A drawing made from *path*, migrating the template if that is why not.
+
+        **Measured 2026-09-08.** With a resolved path to a real `ISO.idw`,
+        `Documents.Add` answered *"Exception occurred"* and nothing else --
+        Inventor's least helpful failure, and the one this project has spent the
+        most effort learning not to pass on. The template dates from an older
+        release and wants **migrating**, which interactively is a dialog and
+        through the API is silence.
+
+        Migrating a file is opening it and saving it, so that is what happens on
+        a failure: `Documents.Open`, save if Inventor marks it dirty, close. Then
+        the `Add` is tried once more.
+
+        Three things about the shape of this.
+
+        **It happens on failure, not on the way past.** The template is a file
+        somebody else owns -- here a company one on a shared drive -- and
+        rewriting it is not a side effect to have while creating a drawing.
+        A template that opens without being dirtied is left exactly as it was,
+        and `template_migrated` in the feature detail says which happened, so a
+        run that modified a shared file says so rather than being silently
+        helpful.
+
+        **The retry is once.** If a migrated template still will not make a
+        drawing, the reason is not migration, and a loop would turn one bare
+        "Exception occurred" into several.
+
+        **And the failure names both attempts**, because "Exception occurred"
+        twice over with no path in it is what cost the two runs before this one.
+        """
+        try:
+            return _specialise(app.Documents.Add(drawing_type, path, True)), False
+        except Exception as first:
+            try:
+                migrated = self._migrate_template(app, path)
+            except Exception as exc:
+                raise DocumentError(
+                    f"Inventor would not make a drawing from {path!r}, and "
+                    f"would not migrate it either: {_com_message(exc)}",
+                    hint="The first failure was "
+                    f"{_com_message(first)!r}. A template from an older "
+                    "release wants migrating, which is an explicit open and "
+                    "save -- if it cannot be opened, open it in Inventor by "
+                    "hand once and save it, or point `template` at one that is "
+                    "already current.",
+                ) from first
+            try:
+                return _specialise(app.Documents.Add(drawing_type, path, True)), migrated
+            except Exception as exc:
+                raise DocumentError(
+                    f"Inventor would not make a drawing from {path!r}: "
+                    f"{_com_message(exc)}",
+                    hint="Tried twice, migrating the template in between "
+                    f"({'it was saved' if migrated else 'it was already current'}"
+                    "), so migration is not the reason. Open that template in "
+                    "Inventor by hand to see what it says about itself.",
+                ) from exc
+
+    def _migrate_template(self, app: Any, path: str) -> bool:  # pragma: no cover
+        """Open the template and save it, and say whether saving was needed.
+
+        Which is all migrating a file is. The document is opened *invisibly* --
+        this is maintenance on a file, not something to show somebody -- and
+        saved only if Inventor marks it dirty, because a save it did not ask for
+        rewrites a file that was already fine.
+
+        `Dirty` unreadable is treated as dirty: the only reason to be here is
+        that `Documents.Add` refused, so the file is a suspect already, and
+        saving a current template costs a modification date where not saving an
+        old one costs the run.
+        """
+        document = app.Documents.Open(path, False)
+        try:
+            try:
+                dirty = bool(document.Dirty)
+            except Exception:  # pragma: no cover - version-specific
+                dirty = True
+            if dirty:
+                document.Save()
+            return dirty
+        finally:
+            # True is "skip saving": whatever needed saving has been saved, and
+            # a close that saves again on the way out would hide a failure.
+            document.Close(True)
 
     def _drawing_template(self, app: Any, drawing_type: int,
                           template: str | None) -> tuple[str, str]:  # pragma: no cover

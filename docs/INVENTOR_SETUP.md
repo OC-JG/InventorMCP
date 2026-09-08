@@ -271,16 +271,23 @@ reach, so **three COM calls in `backend/com/backend.py` have never executed**.
 The simulator side is measured and tested; the live side is a proposal.
 
 Those three have since been measured -- see *Running all five*, below, and the
-six runs it took. **`move_face`, `sketch_driven_pattern` and the whole drawing
-surface, all added 2026-09-07, are the section's current occupants.** They were
-a step worse than the work geometry was, because those three had signatures read
-off a type library and these did not; a live run on 2026-09-07 read the
-signatures and closed the gap partway. `thicken` came out of that run **measured
-and working** and has left this section -- its subsection is now a record. Each
-of the others has its own subsection at the end, and the drawing one is much the
-largest: it is four calls rather than one, one fact it rests on has still never
-been asked of Inventor, and the first run did not get past creating the
-document.
+six runs it took. **The whole drawing surface, added 2026-09-07, is what is left
+of this section.**
+
+The other three that arrived with it have gone: `thicken` on 2026-09-07,
+`move_face` and `sketch_driven_pattern` on 2026-09-08. They started a step worse
+off than the work geometry had been -- those five had signatures somebody had
+read off a type library, and these three did not -- and what closed the gap was
+`ITypeInfo` on the live objects, which answers for a class the type library does
+not publish at all. Their subsections below are records now rather than
+warnings, and they are kept because what each one got wrong before the read is
+the argument for reading.
+
+The drawing surface stays, and it is much the largest: four calls rather than
+one, one fact it rests on has still never been asked of Inventor, and **three
+runs have not got past creating the document** -- a bare filename where a path
+was wanted, then a template from an older release wanting migration. Neither
+failure was in the call.
 
 What a live run has to confirm, in this order:
 
@@ -475,14 +482,29 @@ for.
   relies on it.
 
 
-### `move_face`, measured argument by argument, and never yet run
+### `move_face`, measured argument by argument, then measured against a part
 
 Added 2026-09-07 in a session with no Inventor to reach, **run against Inventor
-2027.1 the same day, where it failed**, and taken apart over two probe runs the
-day after. The failure was the useful kind: it eliminated everything the code
-had guessed and named what to ask next. Every argument of every call is now
-measured -- and no part has been built, which is the distinction this section
-keeps.
+2027.1 the same day, where it failed**, taken apart over two probe runs the day
+after, and then **built and measured on the first run that reached it**:
+
+| fixture | derived | Inventor | |
+|---|---|---|---|
+| `lifted_face` | +6.4000 cm^3 | **+6.4000** | 0.0% |
+| `lifted_face`, `lift` doubled | +12.8000 cm^3 | **+12.8000** | 0.0% |
+| `widened_wall` | +0.2400 cm^3 | **+0.2400** | 0.0% |
+| `widened_wall`, `grow` doubled | +0.4800 cm^3 | **+0.4800** | 0.0% |
+
+`PREDICTED["move_face"]` came down 0.50 -> 0.02 on the strength of it, and the
+doubling rows are the reading a volume alone cannot give: **the distance
+expression reaches Inventor's own dimension**, so the feature is parametric in
+fact and not in name. That is defect 11's lesson, which cost four runs to learn
+the first time and one fixture to check here.
+
+Four attempts and three failures to get there, none of them about arithmetic.
+The failures were the useful kind: each eliminated something the code had
+guessed. What follows is that record, kept because what a guess got wrong is
+the argument for reading.
 
 **What the type library says** (`python scripts/com_signatures.py --search
 MoveFace`):
@@ -555,8 +577,9 @@ assumed: `SetPlanarMoveType(PointOne, PointTwo, Plane)` is point-to-point and
 direction and a distance by accident, so keeping the candidate list narrow was
 right -- and now provably rather than presumably.
 
-**What is left is a run.** Every argument of every call in this operation is
-measured; nothing about it has built a part.
+**And then it built.** Every argument of every call in this operation was
+measured before a part was ever made from it, which is the order this file
+argues for -- one probe run costs a second and a failed build costs a session.
 
     python scripts/probe_definitions.py
 
@@ -586,14 +609,14 @@ symptoms for the obvious reason. `scripts/apartment.py` holds the two helpers
 for doing it properly; `describe_feature` in `backend/base.py` is the same
 lesson on the server side, and it was written down before this happened.
 
-One thing from the earlier design is still open, because no run has tested it:
-**the distance has to go in as an expression string.** Every length in this
-server reaches Inventor as an expression so the dimension keeps its parameter,
-and a setter that insisted on a number would take that away silently. The
-signature says `Distance` and says nothing about what it accepts, so the
-fixture that changes `lift` is what settles it.
+One thing from the earlier design was still open until the run: **the distance
+has to go in as an expression string.** Every length in this server reaches
+Inventor as an expression so the dimension keeps its parameter, and a setter
+that insisted on a number would have taken that away silently -- the signature
+says `Distance` and says nothing about what it accepts. Doubling `lift` doubling
+the volume is what settles it: the expression is in the dimension.
 
-The fixtures are unchanged and still waiting. `check_move_face` builds
+The fixtures, and what each of them was shaped to catch: `check_move_face` builds
 `examples/calibration/lifted_face.json` and `widened_wall.json`, whose true
 answers are exact rather than estimated -- a prism's face keeps its area as it
 translates, so the solid changes by exactly area times distance:
@@ -702,10 +725,14 @@ surface, so the only surface a part could hold is one that arrived through
 file, since it is a fact about this server.
 
 
-### `sketch_driven_pattern`, where the question is a count
+### `sketch_driven_pattern`, measured, with the count still open
 
 The third and the lowest-risk of the three, and worth reading for what it is
-*not* worried about as much as for what it is.
+*not* worried about as much as for what it is. **Built and measured on
+2026-09-08 at -1.2000 cm^3 exactly** -- and that was never the interesting part.
+The occurrence count still is, and the run did not settle it; the last
+subsection here says why not, and it is a limitation of the check rather than a
+finding.
 
 **The first run rejected the call's shape, not its arguments.** On Inventor
 2027.1, 2026-09-07, Inventor's wrapper answered *"Add() takes from 1 to 2
@@ -719,23 +746,20 @@ object rather than the library.** `--search SketchDrivenPattern` publishes `Add`
 and nothing else -- no factory, no definition class -- but the object's own
 `ITypeInfo` lists:
 
-    CreateDefinition(...)   4 arguments, 2 of them optional
-    Add(Definition)         1 argument
+    CreateDefinition(ParentFeatures, Sketch, BasePoint, ReferenceFaces)
+    Add(Definition)
 
-and `CreateDefinition(parents, sketch, point)` then produced a definition. So
-two arguments are required, the point is one of the optional pair, and the
-fourth is left to Inventor -- the definition offers `ReferenceFaces`,
-`AffectedBodies`, `AffectedOccurrences` and a read-only `PatternOfBody`, so it
-is one of those and none of them is something a recipe says. It also carries a
-settable **`ComputeType`** (default 47361), which is where the
-`kAdjustToModelCompute` measurement now goes.
+with the last two optional -- the names coming from the same `GetNames` call
+that gives the arity, which the probe was discarding until it was fixed to read
+past `[0]`. `BasePoint` is supplied and `ReferenceFaces` is not: a recipe always
+names a point and a centroid is not something the simulator has, so a default
+that used one could not be rehearsed, while nothing in a recipe says reference
+faces at all. The definition also carries a settable **`ComputeType`** (default
+47361), which is where the `kAdjustToModelCompute` measurement now goes.
 
-That call is what the backend makes, positionally and in the measured order --
-type information gives arity, not parameter names, so `_call_named`'s keyword
-attempt would only fall back to this, and relying on a fallback for a call that
-has been measured is a worse record of what is known. **The COM half of this
-operation is no longer the unmeasured part**; what is left is what the part
-comes out as, below.
+That call is what the backend makes, named through `_call_named`. **The COM half
+of this operation is measured**; what is left is what the part comes out as,
+below.
 
 **Its arguments cannot be silently misordered**, which is why trying a factory's
 arguments is safe where guessing `thicken`'s were not. A feature collection, a
@@ -768,13 +792,20 @@ on it. Two of the three possible answers are the same volume:
 | -1.2000 cm^3, **five** features | the reference was patterned onto itself; the duplicate lands exactly on the seed and removes nothing extra |
 | -1.6000 cm^3 | five occurrences, the fifth somewhere unaccounted for |
 
-    python scripts/com_signatures.py SketchDrivenPatternFeatures
     python scripts/live_acceptance.py --only sketch-driven-pattern
 
-The check measures the part *and prints its feature list*, because that middle
-row is invisible to a volume. If it turns out to be the middle row, two things
-change together: this section, and the `elsewhere` filter in the mock's
-`sketch_driven_pattern` that excludes the reference.
+**The 2026-09-08 run gave the volume and not the count**, and the fixture's own
+design is what predicted that: -1.2000 exactly, with the finished part reading
+`Plate`, `Slot`, `Spread`. A sketch-driven pattern is **one feature holding its
+occurrences**, so counting features cannot count occurrences -- the check prints
+the feature list, which distinguishes nothing between the first two rows.
+
+That is this check's limitation rather than a finding about Inventor, and the
+note it prints says where the answer is instead: open the pattern in Inventor's
+browser and count, or read `feature.Occurrences.Count`, which nothing here has
+read. If it turns out to be the middle row, two things change together: this
+section, and the `elsewhere` filter in the mock's `sketch_driven_pattern` that
+excludes the reference.
 
 **One thing this run cannot check, because it is the simulator's own.** The mock
 *places* the occurrences -- it is the only pattern here that does -- so a cut
@@ -786,22 +817,47 @@ many occurrences there are and where -- and if the count is wrong, everything
 the placement then says is wrong with it.
 
 
-### Drawings, the largest unmeasured surface in the project
+### Drawings, the last unmeasured surface in the project
 
 Added 2026-09-07. Four `Backend` methods -- `new_drawing`, `place_view`,
 `retrieve_dimensions`, `read_drawing` -- implemented on both backends, with the
-simulator's half measured and tested and the COM half never executed. What makes
-this different from the three above is not only its size:
+simulator's half measured and tested and the COM half never executed. It is the
+only one of the four 2026-09-07 surfaces still here, and what makes it different
+from the three that have gone is not only its size.
 
-**One of the four was said to carry no risk at all, and it is what the first run
-failed on.** The claim was that `new_drawing` is `new_part` with a different
-enum: `Documents.Add` is measured, `kDrawingDocumentObject` has been in the
-constants table since before anything used it, so if the rest failed that call
-would not be why. On 2026-09-07 the rest never got the chance -- *"Creating the
-drawing document failed: Exception occurred."*
+**One of the four was said to carry no risk at all, and it is what three runs
+have now failed on.** The claim was that `new_drawing` is `new_part` with a
+different enum: `Documents.Add` is measured, `kDrawingDocumentObject` has been
+in the constants table since before anything used it, so if the rest failed that
+call would not be why. Three times the rest never got the chance -- *"Creating
+the drawing document failed: Exception occurred."*
 
-The enum was fine. The **template** was not: `Documents.Add` takes a *path*, the
-shipped drawing recipe says `"ISO.idw"`, and a bare filename is not a path. So
+Both causes were in what the call was **given**, and the enum and the method
+were fine every time. That is the lesson worth keeping from this: "carries no
+risk at all" was a claim about a call, and a call is its arguments too.
+
+**Second cause first, because it is the more interesting one: the template
+wanted migrating.** With a resolved path to a real `ISO.idw`, `Documents.Add`
+still answered a bare "Exception occurred" -- Inventor's least helpful failure,
+and the one this project has spent the most effort learning not to pass on. The
+template dates from an older release, and interactively that is a migration
+dialog; through the API it is silence. Migrating a file is opening it and saving
+it, so `_drawing_from` does exactly that on a failure and retries the `Add`
+once.
+
+Three things about the shape of that, because it writes to somebody else's file.
+It happens **on failure rather than on the way past** -- a template is a file
+somebody else owns, here a company one on a shared drive, and rewriting it is
+not a side effect to have while creating a drawing. It saves **only if Inventor
+marks the document dirty**, so a template that was already current is left
+exactly as it was. And `template_migrated` in the result detail says which
+happened, so a run that modified a shared file says so rather than being
+silently helpful. The retry is once: if a migrated template still will not make
+a drawing then migration was not the reason, and a loop would turn one bare
+"Exception occurred" into several.
+
+**First cause: the template was a bare name.** `Documents.Add` takes a *path*,
+the shipped drawing recipe says `"ISO.idw"`, and a bare filename is not a path. So
 Inventor refused and named nothing, which is the error this file has spent the
 most effort learning not to produce. `_drawing_template` now resolves a bare
 name against the folders Inventor itself uses and their immediate subfolders --

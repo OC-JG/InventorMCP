@@ -17,19 +17,26 @@ side of the plane a trim throws away, and that had to be settled before any
 number could mean anything.
 
 **`move_face` and `thicken` are the fifth and sixth, added 2026-09-07, and they
-are at the placeholder for a different reason from the other four: not that no
-example reaches them, but that their COM halves have never executed at all.** So
-there is no Inventor column for their four fixtures yet.
-`docs/INVENTOR_SETUP.md` says what a run has to confirm for each.
+sat at the placeholder for a different reason from the other four: not that no
+example reached them, but that their COM halves had never executed at all.**
+`thicken` came off it on 2026-09-07 and `move_face` on 2026-09-08, each once its
+COM call had been read off the live API rather than guessed, and both landed at
+0.0%. `docs/INVENTOR_SETUP.md` records what each run confirmed.
 
 **`spread_pockets` is here for a third reason and is not calibrating a
-tolerance at all.** `sketch_driven_pattern`'s COM half has never run either,
-but its arithmetic is the rule the other two patterns use and is already
-measured at 0.02, so it sits at 0.02 rather than the placeholder. What its
-fixture asks is a *semantic* question -- whether Inventor also places an
-occurrence on the reference point -- and the answer is an occurrence count
-rather than a volume. It is kept here because this is where the instruments
-live, not because a number needs fitting.
+tolerance at all.** `sketch_driven_pattern`'s arithmetic is the rule the other
+two patterns use and was already measured at 0.02, so it never sat at the
+placeholder. What its fixture asks is a *semantic* question -- whether Inventor
+also places an occurrence on the reference point -- and the answer is an
+occurrence count rather than a volume. It is kept here because this is where the
+instruments live, not because a number needs fitting.
+
+The 2026-09-08 run gave the volume (−1.2000, exactly) and **left the semantic
+question open**, exactly as the fixture's design predicted it would: the
+finished part is `Plate`, `Slot`, `Spread` -- one pattern feature holding its
+occurrences -- so a fifth occurrence sitting on top of the seed would remove
+nothing extra and show up nowhere in the volume. Counting the occurrences inside
+that feature in Inventor's browser is the reading that settles it.
 
 Run them with:
 
@@ -58,17 +65,23 @@ the operation being measured.
 | `stepped_split_negative` | `split` | −20.8000 cm³ | −20.8000 cm³ | 0.0% |
 | `origin_plane_split` | `split` | −8.0000 cm³ | −8.0000 cm³ | 0.0% |
 | `shelled_both_ways` | `shell` | −35.1920 cm³ | −35.1920 cm³ | 0.0% |
-| `lifted_face` | `move_face` | +6.4000 cm³ | not yet run | — |
-| `widened_wall` | `move_face` | +0.2400 cm³ | not yet run | — |
+| `lifted_face` | `move_face` | +6.4000 cm³ | +6.4000 cm³ | 0.0% |
+| `widened_wall` | `move_face` | +0.2400 cm³ | +0.2400 cm³ | 0.0% |
 | `thickened_walls` | `thicken` | +1.4640 cm³ | +1.4640 cm³ | 0.0% |
 | `thinned_wall` | `thicken` | −0.2400 cm³ | −0.2400 cm³ | 0.0% |
-| `spread_pockets` | `sketch_driven_pattern` | −1.2000 cm³ | not yet run | — |
+| `spread_pockets` | `sketch_driven_pattern` | −1.2000 cm³ | −1.2000 cm³ | 0.0% |
 
-Measured on Inventor 2027.1 -- the first seven rows on 2026-09-03 and the two
-`thicken` rows on 2026-09-07, when `thicken` became the fifth entry to come off
-the placeholder. The `move_face` and `sketch_driven_pattern` rows are still
-unrun: both of those calls failed on the 2026-09-07 pass before any number came
-out of them, for reasons recorded in `docs/INVENTOR_SETUP.md`. All four of the original tolerances in `PREDICTED` now
+Measured on Inventor 2027.1 -- the first seven rows on 2026-09-03, the two
+`thicken` rows on 2026-09-07, and the `move_face` and `sketch_driven_pattern`
+rows on 2026-09-08, once the COM calls those three operations need had been read
+off the live objects rather than guessed. **Every fixture in this table now has
+a real Inventor number beside it**, and the last three operations to arrive came
+in at 0.0%.
+
+Both `move_face` rows also answered the question a volume cannot: doubling
+`lift` doubled the change to +12.8000 cm³ and doubling `grow` doubled +0.2400 to
++0.4800, so the distance expressions reach Inventor's own dimensions and those
+features are parametric in fact rather than in name. All four of the original tolerances in `PREDICTED` now
 come from that run rather than from a placeholder: `coil` 0.15, `draft`
 0.20, `emboss` 0.40, `split` 0.05. Each is deliberately looser than its own
 measurement, for reasons recorded beside the table in
@@ -145,7 +158,7 @@ could break.
   edge, and is blind to a cut that took the right amount off the wrong side
   whenever the two halves are near enough in size.
 
-## The two nobody has run
+## The two that were predictions before they were measurements
 
 `lifted_face` and `widened_wall` are the instruments for `move_face`, and they
 are the only fixtures here whose *true* answer is exact rather than estimated. A
@@ -155,26 +168,30 @@ exactly area times distance: 32 cm² × 0.2 cm is 6.4 cm³ for the lifted cap, a
 simulator says 6.4000 and 0.2400, from a dot product of the move against each
 face's own normal, which is the same arithmetic arrived at the same way.
 
-So these two are predictions Inventor can break, in the sense `drafted_block`
-was, and not measurements to be copied down. What the run is worth is not the
-number:
+So these two were predictions Inventor could break, in the sense `drafted_block`
+was, rather than measurements to be copied down. **On 2026-09-08 it did not
+break either**, and what the run was worth was not the number:
 
-- **`lifted_face` asks whether the parametric chain reaches the feature.** The
-  distance is the parameter `lift`, and the lesson of defect 11 is that a work
-  axis can be built, measured, and still be parametric in name only. Change
-  `lift` and the volume has to change with it.
-- **`widened_wall` asks two questions its partner cannot.** Its face is picked
-  out of four by a selector rather than by being the only cap, so it fails if
-  the COM selector reaches a different face than the simulator's; and it moves
-  along an axis that is not the extrude's own, so it fails if Inventor reads the
-  direction relative to the face rather than to the model. Its 0.24 cm³ is
-  deliberately small beside the 19.2 cm³ plate it sits on: a move that took the
-  whole wall with it is then a large fraction rather than a rounding error.
+- **`lifted_face` asked whether the parametric chain reaches the feature**, and
+  it does. The distance is the parameter `lift`, and the lesson of defect 11 is
+  that a work axis can be built, measured, and still be parametric in name only.
+  Doubling `lift` doubled the volume to +12.8000 cm³, so the expression reaches
+  Inventor's own dimension. That is the reading a volume alone cannot give, and
+  it is the reason this fixture is driven by a parameter rather than a literal.
+- **`widened_wall` asked two questions its partner cannot**, and answered both.
+  Its face is picked out of four by a selector rather than by being the only
+  cap, so it would have failed if the COM selector reached a different face than
+  the simulator's; and it moves along an axis that is not the extrude's own, so
+  it would have failed if Inventor read the direction relative to the face
+  rather than to the model. Its 0.24 cm³ is deliberately small beside the
+  19.2 cm³ plate it sits on: a move that took the whole wall with it would have
+  been a large fraction rather than a rounding error. +0.2400, and doubling
+  `grow` gave +0.4800.
 
-Neither is tractable as an estimate to loosen. If a run disagrees on either, the
-answer is a fault to find rather than a tolerance to widen — which is why
-`PREDICTED["move_face"]` should come down from 0.50 to something like an
-extrude's 0.02 the moment a run agrees, rather than being split down the middle.
+Neither was tractable as an estimate to loosen. Had a run disagreed on either,
+the answer would have been a fault to find rather than a tolerance to widen --
+which is why `PREDICTED["move_face"]` went from 0.50 straight to an extrude's
+0.02 rather than being split down the middle.
 
 What both leave untouched is the assumption underneath the arithmetic: that the
 moved face keeps its area. It does on a prism, which is what these measure. It

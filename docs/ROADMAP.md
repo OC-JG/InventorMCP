@@ -597,8 +597,17 @@ actually bitten.
       the guard and the attempt list are both gone: `_call_named` puts the names
       at the call site, and a permutation is not possible when the names are
       there.
-- [ ] **Measure `sketch_driven_pattern` against a live Inventor** — attempted
-      2026-09-07, and the call's *shape* was wrong. Inventor's wrapper answered
+- [x] **Measure `sketch_driven_pattern` against a live Inventor** —
+      *(2026-09-08.)* It builds, and `spread_pockets` measured **−1.2000 cm³
+      exactly**. The volume was never the interesting part; the occurrence count
+      is, and the run did not settle it — the finished part reads `Plate`,
+      `Slot`, `Spread`, because a sketch-driven pattern is *one* feature holding
+      its occurrences, so counting features cannot count occurrences. That is
+      the check's limitation rather than a finding, and reading
+      `feature.Occurrences.Count` is what would answer it. Ticked because the
+      COM half is measured; the count is the next item.
+
+      Attempted 2026-09-07, and the call's *shape* was wrong. Inventor's wrapper answered
       "Add() takes from 1 to 2 positional arguments but 5 were given":
       `SketchDrivenPatternFeatures.Add` takes **one Definition**, so the three
       named arguments through `_patterned` could never have worked here. It now
@@ -656,8 +665,35 @@ actually bitten.
       happens to be right. A value passed for a wrong reason that happens to be
       right is not a measurement, and only the signature told the two apart. The
       attempt list and the factor-of-four result guard are both gone with it.
-- [ ] **Measure `move_face` against a live Inventor** — attempted 2026-09-07 and
-      it did not build, which narrowed the question rather than answering it.
+- [ ] **Count a sketch-driven pattern's occurrences** — the one semantic
+      question `spread_pockets` was built to ask, and the only thing about that
+      operation still unknown: does Inventor place an occurrence on the
+      reference point as well? Two of the three possible answers are the same
+      volume and the third would read −1.6000 cm³. The 2026-09-08 run gave
+      −1.2000, which rules out the third and separates neither of the others.
+
+      What settles it is `feature.Occurrences.Count` on the pattern, which
+      nothing here has read — the check counts *features*, and a pattern is one
+      feature holding its occurrences. Four occurrences means the reference was
+      patterned onto itself, and then two things change together:
+      `INVENTOR_SETUP.md`, and the `elsewhere` filter in the mock's
+      `sketch_driven_pattern` that excludes the reference. Cheap either way:
+      open the pattern in Inventor's browser, or add the property read to
+      `check_sketch_driven_pattern`.
+
+- [x] **Measure `move_face` against a live Inventor** — *(2026-09-08, after
+      three failures that were all about the call and none about the
+      arithmetic.)* Both fixtures came in at 0.0%: `lifted_face` **+6.4000 cm³**
+      and `widened_wall` **+0.2400**, and doubling each driving parameter
+      doubled the change to **+12.8000** and **+0.4800**. That last pair is the
+      reading a volume alone cannot give — the distance expression reaches
+      Inventor's own dimension, so the feature is parametric in fact rather
+      than in name, which is defect 11's lesson checked by a fixture instead of
+      by four runs. `PREDICTED["move_face"]` came down 0.50 → 0.02.
+
+      The three failures are worth keeping, since each eliminated something a
+      guess had put there. Attempted 2026-09-07: it did not build, which
+      narrowed the question rather than answering it.
       Split from the item above for the reason the work axis was: a tick
       covering unmeasured COM is the claim this file exists not to make.
 

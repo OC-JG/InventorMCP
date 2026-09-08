@@ -191,9 +191,13 @@ also passes the simulator rehearsal.
    setters are measured to be point-to-point and a transformation matrix, so
    the narrow candidate list was right provably rather than presumably.
 
-   **So every argument of every call here is measured and no part has been
-   built.** `docs/INVENTOR_SETUP.md` has the interface table and the fixtures
-   the run has to satisfy.
+   **And then it built.** *(2026-09-08.)* `lifted_face` +6.4000 cm^3 and
+   `widened_wall` +0.2400, both 0.0% against figures derived beforehand, and
+   doubling each driving parameter doubled the change -- so the distance
+   expression reaches Inventor's own dimension and the feature is parametric in
+   fact rather than in name. `PREDICTED["move_face"]` came down 0.50 -> 0.02.
+   `docs/INVENTOR_SETUP.md` has the interface table and what each fixture was
+   shaped to catch.
 
 6. **Thicken.** *Added 2026-09-07 as `{"op":"thicken",...}`, and it closes half
    of what this item asked for.* The half it closes is the wall-thickness one: a
@@ -329,9 +333,15 @@ also passes the simulator rehearsal.
    a definition carrying `ParentFeatures`, `Sketch`, `BasePoint`, a settable
    `ComputeType`, `Operation`, `ReferenceFaces`, `AffectedBodies`,
    `AffectedOccurrences` and a read-only `PatternOfBody`. The backend makes
-   that one call, positionally and in the measured order, and sets the compute
-   type on the definition before `Add`. `scripts/probe_definitions.py` is what
-   asked.
+   that one call, named, and sets the compute type on the definition before
+   `Add`. `scripts/probe_definitions.py` is what asked.
+
+   **It built on 2026-09-08 and measured -1.2000 cm^3 exactly**, which was
+   never the interesting part. The occurrence count still is, and that run did
+   not settle it: the finished part reads `Plate`, `Slot`, `Spread`, because a
+   sketch-driven pattern is *one* feature holding its occurrences -- so counting
+   features cannot count occurrences. `feature.Occurrences.Count` is what would,
+   and nothing here has read it.
 
 ### Tier 2 -- frequently wanted, no current workaround
 
