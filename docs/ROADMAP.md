@@ -663,14 +663,20 @@ actually bitten.
       the area-times-thickness prediction and refused outside a factor of four,
       with the feature deleted rather than left in the part.
 - [ ] **Measure `sketch_driven_pattern` against a live Inventor** — `python
-      scripts/com_signatures.py SketchDrivenPatternFeatures`, then `--only
-      sketch-driven-pattern`. The lowest-risk of the three: its arguments are
-      three different COM types so a wrong order raises, it goes through
-      `_patterned`, and its arithmetic is the rule the other patterns already
-      confirm at 0.02. What needs a seat is one semantic question whose answer
-      is a *count* rather than a volume — whether Inventor also places an
+      scripts/com_signatures.py SketchDrivenPatternFeatures
+      SketchDrivenPatternDefinition`, then `--only sketch-driven-pattern`. The
+      lowest-risk of the three: its arguments are three different COM types so
+      a wrong order raises, and its arithmetic is the rule the other patterns
+      already confirm at 0.02. What needs a seat is one semantic question whose
+      answer is a *count* rather than a volume — whether Inventor also places an
       occurrence on the reference point — and two of its three readings are the
       same volume, so the check prints the feature list.
+
+      *Corrected 2026-09-08*: the published page says `Add` takes a
+      `SketchDrivenPatternDefinition`, so the three-argument `Add` the backend
+      made could never have worked. It calls `CreateDefinition(parents, sketch,
+      reference)` and `Add(definition)` now; the factory's argument list is not
+      on the pages read and is the first thing the run settles.
 - [ ] **Measure `thicken` against a live Inventor** — `python
       scripts/com_signatures.py ThickenFeatures`, then `--only thicken`. Two
       questions, one fixture each, and neither is the magnitude: on a single
@@ -697,18 +703,20 @@ actually bitten.
       rather than the model, and a distance expression that never reaches
       Inventor's dimension each show up as a different wrong number.
 
-      *Narrowed 2026-09-08*: the published catalogue has a `MoveFaceDefinition`
-      page and a `MoveFaceTypeEnum`, so the direction mode may be an enum on
-      the definition rather than a choice of setter, and all three spellings
-      the backend tries may be wrong in the same way. `dump_constants.py --find
-      MoveFaceType` is the read to add beside the signature.
+      *Settled on paper 2026-09-08*: the `MoveFaceDefinition` page names the
+      setter, `SetDirectionAndDistanceMoveType`, and says `MoveFaceType` starts
+      at `kFreeMoveType`. The backend calls that one name and reads the type
+      back before `Add`. Still unread: the setter's argument list, which is the
+      per-member page `MoveFaceDefinition_SetDirectionAndDistanceMoveType.htm`
+      or `com_signatures.py MoveFaceDefinition` on a seat.
 - [ ] **Measure `thread` by the published call, then take it out of
       `_KNOWN_BROKEN`.** *(Opened 2026-09-08.)* The backend now calls
       `ThreadFeatures.Add(Face, StartEdge, ThreadInfo, ...)` with a `ThreadInfo`
-      from `HoleFeatures.CreateTapInfo`, which the published `HoleTapInfo` page
-      says is a `StandardThreadInfo`, and falls back to the published
-      `CreateStandardThreadInfo` the makepy wrapper does not list. `--only
-      threading` is the run. Two readings: whether `Add` accepts a tap info at
+      from the published `CreateStandardThreadInfo(Internal, RightHanded,
+      ThreadType, ThreadDesignation, Class)` -- its per-member page was read
+      the same day; the makepy wrapper does not list it -- and falls back to the
+      measured `CreateTapInfo`, whose result the `HoleTapInfo` page says is a
+      `StandardThreadInfo`. `--only threading` is the run. Two readings: whether `Add` accepts a tap info at
       all, and whether the external thread it makes is cosmetic, as Inventor's
       threads are -- so the volume must *not* change, and the check is the
       feature's `ThreadInfo` read back rather than material moved. If it works,
@@ -958,11 +966,11 @@ The market's 2026 feature, and a gap in the whole open-source field.
 
       *What the run has to settle changed on 2026-09-08*: whether
       `GetRetrievableAnnotations2` is in the installed wrapper and offers the
-      part's dimension constraints, and whether a `FeatureDimension` -- an
-      extrude's distance, a hole's diameter -- names its `Parameter` the way a
-      `DimensionConstraint` is documented to. If it does not, feature-driven
-      parameters can be retrieved but not chosen, and the round trip reports the
-      sheet under-dimensioned rather than passing.
+      part's dimension constraints and feature dimensions. Whether a
+      `FeatureDimension` names its `Parameter` is settled on paper the same day
+      -- its page lists the property, and `FeatureDimensionProxy.NativeObject`
+      beside it -- so what is left is whether the call hands feature dimensions
+      back for a part built here.
 - [ ] **Measure a view's direction instead of reading its name.** *(Opened
       2026-09-08.)* Defect 4 and its drawing cousin both rest on a name.
       `DrawingView.ModelToSheetTransform` is a documented matrix: push the
@@ -1023,8 +1031,11 @@ drifts when the solver runs. The BOM is exportable per view with
 **The trap, and the risk it carries here.** Geometry taken from
 `occurrence.Definition` is in the *part's* space; a constraint wants a proxy in
 the assembly's, made by `CreateGeometryProxy(native, Result)` -- and `Result` is
-a COM **output argument**. The reference's own caveat is that late-bound
-win32com may not supply one. This server talks to Inventor late-bound for
+a COM **output argument** -- the per-member page, read 2026-09-08, confirms
+`CreateGeometryProxy(Geometry As Object, Result As Object)` with `Result`
+"output proxy object created", and its samples proxy *work planes* from parts
+for a mate. The reference's own caveat is that late-bound win32com may not
+supply an output argument. This server talks to Inventor late-bound for
 reasons `INVENTOR_SETUP.md` measures, so the first thing Phase 4 has to
 establish on a seat is whether the proxy comes back at all that way. Two
 documented ways round it if not: `occurrence.SurfaceBodies` (not

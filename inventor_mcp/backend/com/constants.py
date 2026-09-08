@@ -140,6 +140,12 @@ FALLBACK: dict[str, int] = {
     "kLeftViewOrientation": 10758,
     "kIsoTopLeftViewOrientation": 10760,
     "kArbitraryViewOrientation": 10763,
+    # MoveFaceTypeEnum, from the published page (2026-09-08). `move_face`
+    # reads MoveFaceType back after the setter and refuses a definition still
+    # at kFreeMoveType, which is the documented initial value.
+    "kDirectionAndDistanceMoveType": 91393,
+    "kPlanarMoveType": 91394,
+    "kFreeMoveType": 91395,
     # DrawingViewStyleEnum, named by `_VIEW_STYLES`.
     "kHiddenLineDrawingViewStyle": 32257,
     "kHiddenLineRemovedDrawingViewStyle": 32258,

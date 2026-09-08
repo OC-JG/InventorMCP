@@ -938,16 +938,15 @@ MOVE_FACE_FIXTURES = {
 
 
 def check_move_face(session: Session, report: Report) -> None:
-    """`move_face`, whose COM half has never executed -- nor been read.
+    """`move_face`, whose COM half has never executed.
 
-    ``docs/INVENTOR_SETUP.md`` has the ordered list of what this has to settle
-    and why this one is worse off than the five work-geometry behaviours were:
-    they had signatures somebody had read off a type library, and here the
-    definition object's setter is unknown, so the backend tries three spellings
-    and names them all when none works.
+    ``docs/INVENTOR_SETUP.md`` has the ordered list of what this has to settle.
+    The definition's setter is published since 2026-09-08 --
+    `SetDirectionAndDistanceMoveType` -- and the backend reads `MoveFaceType`
+    back before `Add`, so what is left unread is that setter's argument list.
 
     **Read the signature before running this.** ``python
-    scripts/com_signatures.py --search MoveFace`` costs nothing and answers in
+    scripts/com_signatures.py MoveFaceDefinition`` costs nothing and answers in
     one go what this check can only narrow down.
 
     Three readings per fixture, for the reason defect 11 cost four runs: a

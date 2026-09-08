@@ -491,39 +491,37 @@ for.
   relies on it.
 
 
-### `move_face`, where the signature itself is unknown
+### `move_face`, where the signature was unknown and is now published
 
-Added 2026-09-07, in another session with no Inventor to reach. The difference
-from the five above is worth being precise about, because it changes what a run
-should do first.
+Added 2026-09-07, in another session with no Inventor to reach, with a gap the
+five above did not have: the definition object was measured to exist and its
+setter was not, so the backend tried three spellings and named them all. **The
+`MoveFaceDefinition` page was read on 2026-09-08** and settles the name and
+the shape, though not the argument list:
 
-Each of those five was written against a signature somebody had read: the call
-existed in the type library, its arguments were known, and what a live run had
-to settle was behaviour. **Here even the call is uncertain.** What
-`FEATURE_COVERAGE.md` records is that `MoveFaceFeatures` has `Add` and
-`CreateDefinition` -- read off the type library -- and *not* what the definition
-object's setter is called. Nothing in this repository has ever seen a
-`MoveFaceDefinition`.
+* the setter is **`SetDirectionAndDistanceMoveType`** -- "the move is defined
+  using a direction and a distance along the direction" -- beside
+  `SetFreeMoveType` (a matrix) and `SetPlanarMoveType` (two points and an
+  optional plane). None of the three spellings tried before exists;
+* `MoveFaceType` is a property that **starts at `kFreeMoveType`** when the
+  definition is created and the setter moves it to
+  `kDirectionAndDistanceMoveType` (91393; the enum is in the fallback table).
+  So the backend reads it back before `Add` and refuses a definition the setter
+  left at free-move -- a move defined by no matrix, which is the part that
+  builds and is wrong;
+* `Faces` and `AutomaticBlending` are properties, and
+  `MoveFaceFeatures.CreateDefinition` is the accessor the page names, so the
+  longer factory spelling the backend also tried is gone.
 
-So the backend does not guess once. It tries, in order,
-`SetDirectionAndDistance`, `SetDirectionMove` and
-`SetDirectionAndDistanceMoveData`, and if none of them exist or take the
-arguments it names every attempt and its error. Two things about that list:
-
-* **Every candidate can only mean direction-and-distance.** A free-drag or
-  point-to-point setter takes different arguments with different meanings, and
-  one of those quietly accepting a direction and a distance is the failure mode
-  this whole file exists to prevent -- a part that builds and is wrong. They are
-  left out even though one of them might be the real method.
-* **A wrong argument order cannot pass silently.** The direction is a COM object
-  and the distance an expression string, so swapping them is a type mismatch.
-  What the list cannot rule out is a third argument whose default means
-  something, which is the first thing to look for in the real signature.
+What the page does not give is the setter's argument list, so the call is
+`SetDirectionAndDistanceMoveType(direction, distance)` -- a COM object and an
+expression string, so a swap is a type mismatch -- and a third argument with a
+meaningful default is still the first thing to look for.
 
 **So start by reading it, not by running the check:**
 
-    python scripts/com_signatures.py --search MoveFace
-    python scripts/com_signatures.py MoveFaceFeatures
+    python scripts/com_signatures.py MoveFaceDefinition
+    python scripts/dump_constants.py --find MoveFaceType
 
 Then:
 
@@ -531,15 +529,13 @@ Then:
 
 What the run has to answer, in this order:
 
-1. **`MoveFaceFeatures.CreateDefinition(faces)`** -- that it exists under that
-   name, and takes a `FaceCollection` and nothing else. `_move_face_definition`
-   also tries `CreateMoveFaceDefinition`, because Inventor's other definition
-   factories are named for their feature (`CreateShellDefinition`,
-   `CreateFaceDraftDefinition`) and the longer name is as likely on any release.
-2. **Which setter the definition actually has**, and whether the distance goes
-   in as an expression string. Every length in this server reaches Inventor as
-   an expression so the dimension keeps its parameter; a setter that insists on
-   a number would take that away and is worth knowing about.
+1. **`MoveFaceFeatures.CreateDefinition(faces)`** -- that it takes a
+   `FaceCollection` and nothing else.
+2. **`SetDirectionAndDistanceMoveType`'s argument list**, and whether the
+   distance goes in as an expression string. Every length in this server reaches
+   Inventor as an expression so the dimension keeps its parameter; a setter that
+   insists on a number would take that away and is worth knowing about. The
+   `MoveFaceType` read-back says whether the setter took at all.
 3. **Whether a negative distance is accepted.** `flip` is passed as
    `-(expression)` rather than through a reversal property, because no such
    property has been read. If Inventor refuses it, the fix is that property, and
@@ -676,14 +672,19 @@ Tier 1c rather than as a gap in this file, since it is a fact about this server.
 The third and the lowest-risk of the three, and worth reading for what it is
 *not* worried about as much as for what it is.
 
-**Its arguments cannot be silently misordered.** A collection, a sketch and a
-point are three different COM types, so a wrong order is a type mismatch rather
-than a part built wrongly -- unlike `thicken`, whose variant-and-two-enums has
-its own factor-of-four guard for exactly that reason. And it goes through
-`_patterned`, which carries each argument's name beside its value at the call
-site and already handles the compute-type question a pattern of a hole needs
-(measured on 2027.1: patterning a hole fails outright until the compute type is
-`kAdjustToModelCompute`). So there is no attempt list and no result guard here.
+**It was calling the wrong shape, and the published page said so** (read
+2026-09-08): `SketchDrivenPatternFeatures.Add(Definition As
+SketchDrivenPatternDefinition)`. The backend had passed a collection, a sketch
+and a point straight to `Add`, which could never have worked. It now calls
+`CreateDefinition(parents, sketch, reference)` -- whose argument list is *not*
+on the pages read, so those three are the assumption and a wrong count or order
+is a type mismatch rather than a part built wrongly -- then sets `ComputeType`
+on the definition and calls `Add(definition)`. The compute-type question is the
+one the other two patterns settled on 2027.1: a pattern of a hole fails outright
+until each occurrence is recomputed. `python scripts/com_signatures.py
+SketchDrivenPatternFeatures SketchDrivenPatternDefinition` is the read that
+settles the factory's arguments and whether the definition carries a
+`ComputeType` at all.
 
 **Its arithmetic is not new either.** An occurrence does whatever its seed did,
 which is the rule `rectangular_pattern` and `circular_pattern` use and which the
@@ -787,11 +788,12 @@ Two things are still unmeasured, and a run should read them in this order:
   all (it is a 2026.1 method, and 2027.1 is later, so it should be), and what
   it returns for a part built here -- a `DimensionConstraintProxy` names its
   parameter through `NativeObject`, and the backend tries that too;
-* whether a `FeatureDimension` (an extrude's distance, a hole's diameter) names
-  a `Parameter` the same way. Its members are not published on the pages read.
-  If it does not, feature-driven parameters can be retrieved but not chosen,
-  and the sheet will carry the sketch-driven ones only -- which the round trip
-  will report as under-dimensioned rather than pass.
+* ~~whether a `FeatureDimension` names a `Parameter` the same way~~ -- *settled
+  on paper the same day*: the `FeatureDimension` page lists `Parameter`
+  ("the parameter associated with the dimension") and `FeatureDimensionProxy.
+  NativeObject`, which are the two paths `_model_parameter_name` reads. What is
+  left for a seat is whether `GetRetrievableAnnotations2` hands feature
+  dimensions back at all for a part built here.
 
 The outcome that would have sent this back to the drawing board -- a retrieved
 dimension unable to name its parameter -- can no longer happen, because nothing
@@ -907,16 +909,17 @@ These are the parts of the COM backend most likely to need adjustment, and why:
   since 2026-09-08 it follows the published `ThreadFeatures.Add(Face, StartEdge,
   ThreadInfo, [DirectionReversed], [FullDepth], [ThreadDepth], [ThreadOffset])`,
   with `StartEdge` an edge of the threaded face. Where the `ThreadInfo` comes
-  from is the open question, and the reference gives two leads: the
-  `HoleTapInfo` page says that object *derives from* `StandardThreadInfo`, and
-  `HoleFeatures.CreateTapInfo` is measured to make one -- so a tap info, with
-  its `Internal` property set, is offered first; and `ThreadFeatures` publishes
-  a `CreateStandardThreadInfo` that the 2027.1 makepy wrapper does not list,
-  the same shape as `WorkPoints.AddByPoint` (absent from the wrapper, executes
-  late-bound), which is tried second with the tap info's arguments. Neither
-  has run, so `thread` stays in `_KNOWN_BROKEN` and a `hole` with `tap` is the
-  route that works. `python scripts/live_acceptance.py --only threading` is
-  where this gets settled.
+  from is published as well, on a per-member page read the same day:
+  `ThreadFeatures.CreateStandardThreadInfo(Internal, RightHanded, ThreadType,
+  ThreadDesignation, Class) As StandardThreadInfo`, with `ThreadType` a sheet
+  name in `Thread.xls` and `Class` such as `2B` or `6g`. The 2027.1 makepy
+  wrapper does not list it -- the shape `WorkPoints.AddByPoint` had, which
+  executed regardless -- so it is called late-bound in that order, first; the
+  measured `HoleFeatures.CreateTapInfo`, whose `HoleTapInfo` the pages say
+  derives from `StandardThreadInfo`, is the fallback with `Internal` set.
+  Neither has run, so `thread` stays in `_KNOWN_BROKEN` and a `hole` with `tap`
+  is the route that works. `python scripts/live_acceptance.py --only threading`
+  is where this gets settled.
 - **A tapped hole is cut to the thread's minor diameter**, `D - 1.0825 x pitch`
   for ISO metric — 6.6469 mm for M8x1.25, measured from the removed volume to
   four decimal places. That is narrower than the 6.75 mm tapping drill, so a

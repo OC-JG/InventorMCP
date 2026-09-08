@@ -37,10 +37,24 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   - **`thread`** calls the published `ThreadFeatures.Add(Face, StartEdge,
     ThreadInfo, [DirectionReversed], [FullDepth], ...)` instead of a
     `CreateThreadDefinition` that exists on no release, with a `ThreadInfo`
-    from `HoleFeatures.CreateTapInfo` first -- the published `HoleTapInfo` page
-    says it derives from `StandardThreadInfo` -- and the published-but-unlisted
-    `ThreadFeatures.CreateStandardThreadInfo` second. Still refused by the
+    from the published `ThreadFeatures.CreateStandardThreadInfo(Internal,
+    RightHanded, ThreadType, ThreadDesignation, Class)` first -- absent from the
+    2027.1 makepy wrapper, like `WorkPoints.AddByPoint` was, so called late-bound
+    -- and the measured `HoleFeatures.CreateTapInfo`, whose result the
+    `HoleTapInfo` page says derives from `StandardThreadInfo`, second. The
+    class follows the table and the side (`2B`, `6g`). Still refused by the
     builder: nothing has run.
+  - **`move_face`** calls the published setter,
+    `MoveFaceDefinition.SetDirectionAndDistanceMoveType`, instead of three
+    spellings that exist on no release, and reads `MoveFaceType` back before
+    `Add` -- the page says a new definition starts at `kFreeMoveType`, and a
+    setter that was accepted without changing it would build a move defined by
+    nothing. The `MoveFaceTypeEnum` values are in the fallback table.
+  - **`sketch_driven_pattern`** calls `CreateDefinition(parents, sketch,
+    reference)` and then `Add(definition)`. The published page says `Add` takes
+    a `SketchDrivenPatternDefinition`; the three-argument `Add` the backend made
+    before could never have worked. The factory's argument list is not
+    published and is the first thing a run settles.
   - **Edge convexity** gains Inventor's own answer, `SurfaceBody.ConvexEdges` /
     `ConcaveEdges`, read once per `select` and keyed by `Edge.TransientKey` --
     placed *behind* the measured boundary-loop method, so it decides only where

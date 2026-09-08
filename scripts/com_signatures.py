@@ -71,6 +71,7 @@ INTERESTING = [
     # MoveFaceFeatures` -- since the definition's own class is what is missing.
     "MoveFaceFeatures.CreateDefinition",
     "MoveFaceFeatures.Add",
+    "MoveFaceDefinition.SetDirectionAndDistanceMoveType",
     # `thicken`, added the same day and riskier than move_face for one
     # reason: its arguments are a variant and two enum integers, so an order
     # that is wrong would not be a type mismatch -- it would hand Inventor a
@@ -91,6 +92,8 @@ INTERESTING = [
     # signature would settle is whether there is a reference-point argument at
     # all, and whether an occurrence lands on it.
     "SketchDrivenPatternFeatures.Add",
+    "SketchDrivenPatternFeatures.CreateDefinition",
+    "SketchDrivenPatternDefinition",
     # Drawings, added 2026-09-07 and the largest unmeasured surface here.
     # Retrieval follows the published 2026.1 pair since 2026-09-08: the
     # annotations are chosen on the *model* side, where DimensionConstraint's

@@ -2834,27 +2834,28 @@ class ComBackend(Backend):
     #: a reason worth stating: the two arguments cannot be swapped silently. A
     #: direction is a COM object and a distance is an expression string, so a
     #: wrong order is a type mismatch rather than a part that builds wrongly.
-    #: Every candidate here therefore means *direction and distance* and nothing
-    #: else -- a free-drag or point-to-point setter takes different arguments
-    #: with different meanings, and one of those accepting these two by accident
-    #: is exactly the quietly wrong part this file refuses to risk.
-    #: What a list cannot rule out is a *third* argument whose default means
-    #: something, which is why `scripts/com_signatures.py --search MoveFace` is
-    #: named in the failure and in `docs/INVENTOR_SETUP.md`.
-    _MOVE_FACE_SETTERS = (
-        "SetDirectionAndDistance",
-        "SetDirectionMove",
-        "SetDirectionAndDistanceMoveData",
-    )
+    #: One name, since 2026-09-08: the published `MoveFaceDefinition` page lists
+    #: `SetDirectionAndDistanceMoveType` -- "the move is defined using a
+    #: direction and a distance along the direction" -- beside `SetFreeMoveType`
+    #: (a matrix) and `SetPlanarMoveType` (two points), neither of which takes
+    #: these two arguments. The three spellings tried before it were guesses and
+    #: none of them exists. What the page does not give is the argument list, so
+    #: a third argument with a meaningful default is still the thing to look for
+    #: in `python scripts/com_signatures.py MoveFaceDefinition`.
+    _MOVE_FACE_SETTERS = ("SetDirectionAndDistanceMoveType",)
 
     def move_face(self, doc_id: str, request: MoveFaceRequest) -> FeatureInfo:  # pragma: no cover
         """Translate faces of an existing solid along a direction.
 
         **Never executed against a real Inventor.** `docs/INVENTOR_SETUP.md`
-        keeps this with the other unmeasured COM, and the reason it is written
-        this way rather than as one call is there too: the definition object is
-        measured to exist and its setter is not, so the setter is discovered and
-        the failure names every spelling that was tried.
+        keeps this with the other unmeasured COM. The definition object is
+        measured to exist and, since 2026-09-08, its setter is published:
+        `MoveFaceDefinition.SetDirectionAndDistanceMoveType`, which sets
+        `MoveFaceType` to `kDirectionAndDistanceMoveType` from its initial
+        `kFreeMoveType`. That property is read back before `Add`, because a
+        setter that was accepted and left the type at free-move would build a
+        feature that moves nothing along nothing -- and the published enum
+        values make the read cheap.
 
         The volume before and after is read and reported, because a move-face
         that moved nothing is this operation's version of a cut that met no
@@ -2894,11 +2895,13 @@ class ComBackend(Backend):
                 raise FeatureError(
                     "Nothing on this release's MoveFaceDefinition would take a "
                     f"direction and a distance: {'; '.join(failures)}",
-                    hint="Read the real signature with `python scripts/com_signatures.py "
-                    "--search MoveFace` and follow it here. This is the one call in "
-                    "this backend that has never run against an Inventor -- "
-                    "docs/INVENTOR_SETUP.md says so and says what to confirm.",
+                    hint="The published setter is SetDirectionAndDistanceMoveType "
+                    "and its argument list is not on the object page -- `python "
+                    "scripts/com_signatures.py MoveFaceDefinition` reads the "
+                    "installed one. This call has never run against an Inventor; "
+                    "docs/INVENTOR_SETUP.md says what to confirm.",
                 )
+            self._require_direction_and_distance_type(definition)
             try:
                 feature = features.Add(definition)
             except Exception as exc:
@@ -2924,17 +2927,42 @@ class ComBackend(Backend):
             ),
         })
 
+    def _require_direction_and_distance_type(self, definition: Any) -> None:  # pragma: no cover
+        """Refuse a definition whose type the setter did not change.
+
+        The published page says `MoveFaceType` starts at `kFreeMoveType` and the
+        setter moves it to `kDirectionAndDistanceMoveType`. A definition still
+        at free-move after a setter that raised nothing is a move defined by no
+        matrix, and whatever `Add` made of it would not be the move asked for.
+        A release that will not report the type is let through: the fixtures
+        catch a wrong move by its volume, and refusing every move over a
+        missing property would be the shell-`both` mistake again.
+        """
+        try:
+            actual = int(definition.MoveFaceType)
+            wanted = self._k("kDirectionAndDistanceMoveType")
+        except Exception:
+            return
+        if actual != wanted:
+            raise FeatureError(
+                f"The move-face definition reports MoveFaceType {actual}, not "
+                f"kDirectionAndDistanceMoveType ({wanted}), after the setter "
+                "returned without complaint.",
+                hint="SetDirectionAndDistanceMoveType did not take. Read its "
+                "argument list with `python scripts/com_signatures.py "
+                "MoveFaceDefinition`; a third argument with a default is the "
+                "likeliest reason.",
+            )
+
     def _move_face_definition(self, features: Any, faces: Any) -> tuple[Any, str]:  # pragma: no cover
         """A `MoveFaceDefinition` for *faces*, and which call produced it.
 
-        Two spellings are tried for the same reason the setters are: what is
-        recorded about this collection is that it has a `CreateDefinition`, and
-        Inventor's other definition factories are named for their feature
-        (`CreateShellDefinition`, `CreateFaceDraftDefinition`), so the longer
-        name is as likely as the short one on any given release.
+        `MoveFaceFeatures.CreateDefinition` is the accessor the published
+        `MoveFaceDefinition` page names, so it is the only one tried; the
+        longer spelling this used to try as well exists on no release.
         """
         failures: list[str] = []
-        for name in ("CreateDefinition", "CreateMoveFaceDefinition"):
+        for name in ("CreateDefinition",):
             factory = getattr(features, name, None)
             if factory is None:
                 failures.append(f"{name}: MoveFaceFeatures has no such method")
@@ -3637,42 +3665,53 @@ class ComBackend(Backend):
                               ) -> FeatureInfo:  # pragma: no cover
         """Copy features to a sketch's points.
 
-        **Never executed against a real Inventor**, and its signature has never
-        been read -- the third such call, after `move_face` and `thicken`.
-        `docs/INVENTOR_SETUP.md` has what a run must settle, and the question
-        that matters is not the signature: it is **whether Inventor puts an
-        occurrence on the reference point as well**, because that is an
-        off-by-one occurrence in the volume and a duplicate feature sitting
-        exactly on the seed.
+        **Never executed against a real Inventor.** The published
+        `SketchDrivenPatternFeatures_Add` page (read 2026-09-08) says the call
+        is `Add(Definition As SketchDrivenPatternDefinition)` -- a definition,
+        not the three arguments this passed to `Add` before, which could never
+        have worked. The definition comes from
+        `SketchDrivenPatternFeatures.CreateDefinition`, whose argument list is
+        *not* on the pages read; it is called with the three things a
+        sketch-driven pattern is made of, a collection, a sketch and a point,
+        and a wrong count or order is a type mismatch rather than a part built
+        wrongly. `python scripts/com_signatures.py
+        SketchDrivenPatternFeatures SketchDrivenPatternDefinition` is what
+        settles it.
 
-        `_patterned` does the work, which is why this is short. It carries the
-        argument names beside their values so the positions are documented at
-        the call, and it already handles the compute-type question a pattern of
-        a hole needs -- measured on 2027.1, where patterning a hole fails
-        outright until the compute type is `kAdjustToModelCompute`. There is no
-        reason to think a sketch-driven pattern of a hole differs.
+        The question that matters is still not the signature: it is **whether
+        Inventor puts an occurrence on the reference point as well**, because
+        that is an off-by-one occurrence in the volume and a duplicate feature
+        sitting exactly on the seed. `PREDICTED["sketch_driven_pattern"]` is
+        0.02 so that one occurrence too many on a three-point pattern, 33% out,
+        is reported rather than absorbed.
 
-        No result guard here, unlike `thicken`. The arguments are a collection,
-        a sketch and a point, so a wrong order is a type mismatch rather than a
-        part built wrongly -- and the occurrence-count question is caught by the
-        divergence check instead: `PREDICTED["sketch_driven_pattern"]` is 0.02,
-        and one occurrence too many on a three-point pattern is 33% out.
+        The compute type is set on the definition where it has one, recompute
+        first -- measured on 2027.1 for the other two patterns, where a pattern
+        of a hole fails outright until the compute type is
+        `kAdjustToModelCompute` -- and the default is the fallback.
         """
         document = self._doc(doc_id)
         parents = self._feature_collection(doc_id, request.features)
         sketch = self._sketch(doc_id, request.sketch)
+        # Inventor's own dialog offers the seed's centroid or a point you pick,
+        # and the recipe always names a point: a centroid is not something the
+        # simulator has, so a default that used one could not be rehearsed.
+        # See `_NO_CENTROID` in the mock.
         reference = self._sketch_point(sketch, request.reference_index)
         features = document.ComponentDefinition.Features.SketchDrivenPatternFeatures
         with self._batch(document), self._translate_errors("Sketch driven pattern"):
-            feature, compute = _patterned(features.Add, self._k, [
-                ("ParentFeatures", parents),
-                ("Sketch", sketch),
-                # Inventor's own dialog offers the seed's centroid or a point
-                # you pick, and the recipe always names a point: a centroid is
-                # not something the simulator has, so a default that used one
-                # could not be rehearsed. See `_NO_CENTROID` in the mock.
-                ("ReferencePoint", reference),
-            ])
+            try:
+                definition = features.CreateDefinition(parents, sketch, reference)
+            except Exception as exc:
+                raise FeatureError(
+                    f"SketchDrivenPatternFeatures.CreateDefinition refused "
+                    f"(ParentFeatures, Sketch, ReferencePoint): {self._explain(exc)}",
+                    hint="The published Add takes a SketchDrivenPatternDefinition and "
+                    "the CreateDefinition argument list is not on the pages read "
+                    "here -- `python scripts/com_signatures.py "
+                    "SketchDrivenPatternFeatures` says what it really takes.",
+                ) from exc
+            feature, compute = self._add_patterned_definition(features, definition)
             if request.name:
                 feature.Name = request.name
         return _feature_info(feature, "sketch_driven_pattern", {
@@ -3682,6 +3721,32 @@ class ComBackend(Backend):
             "reference_index": request.reference_index,
             "compute": compute,
         })
+
+    def _add_patterned_definition(self, features: Any, definition: Any) -> tuple[Any, str]:  # pragma: no cover
+        """`features.Add(definition)`, recomputing each occurrence where the definition allows.
+
+        The definition-based shape of `_patterned`: the compute type is a
+        property on the definition rather than an argument, so it is set and
+        the same two routes are tried -- adjust to model first, the default
+        second -- reporting which one built the feature.
+        """
+        failures: list[str] = []
+        for label, enum in (("adjust to model", "kAdjustToModelCompute"), ("default", None)):
+            try:
+                if enum is not None:
+                    if not hasattr(definition, "ComputeType"):
+                        failures.append(f"{label}: the definition has no ComputeType")
+                        continue
+                    definition.ComputeType = self._k(enum)
+                return features.Add(definition), label
+            except Exception as exc:
+                failures.append(f"{label}: {_com_message(exc)}")
+        raise FeatureError(
+            "The pattern could not be created. Tried " + "; ".join(failures) + ".",
+            hint="A pattern of a hole or a cut needs each occurrence recomputed, and "
+            "each one needs material to act on. Check that every point lands on "
+            "the part.",
+        )
 
     def _sketch_point(self, sketch: Any, index: int) -> Any:  # pragma: no cover
         """The *index*-th hole-centre point of a sketch, counted as the plan counts.
@@ -3901,17 +3966,18 @@ class ComBackend(Backend):
         input face", and `ThreadInfo` a `StandardThreadInfo` for a cylinder.
         The `CreateThreadDefinition` this called before exists on no release.
 
-        Where the `ThreadInfo` comes from is the one open question, and two
-        routes are tried. The published page for `HoleTapInfo` says it derives
-        from `StandardThreadInfo`, and `HoleFeatures.CreateTapInfo` is measured
-        to make one -- so a tap info is offered to `ThreadFeatures.Add` first,
-        with its `Internal` property set for the request. Second is
-        `ThreadFeatures.CreateStandardThreadInfo`, which the published
-        `ThreadFeatures` page lists and the 2027.1 makepy wrapper does not
-        generate a signature for -- the same shape as `WorkPoints.AddByPoint`,
-        which also executed while absent from the wrapper. Its argument list is
-        not published on the pages read here, so it is called with the tap
-        info's arguments and every failure is named.
+        Where the `ThreadInfo` comes from is published too, since the per-member
+        page was read on 2026-09-08:
+
+            ThreadFeatures.CreateStandardThreadInfo(Internal, RightHanded,
+                ThreadType, ThreadDesignation, Class) As StandardThreadInfo
+
+        The 2027.1 makepy wrapper does not list it -- the shape
+        `WorkPoints.AddByPoint` had, which executed regardless -- so it is called
+        late-bound in that order. `HoleFeatures.CreateTapInfo`, measured and
+        documented to make a `HoleTapInfo` that derives from
+        `StandardThreadInfo`, is the fallback, with `Internal` set on the
+        result. Every failure is named.
         """
         document = self._doc(doc_id)
         faces = self._topology_collection(doc_id, request.faces)
@@ -3962,37 +4028,48 @@ class ComBackend(Backend):
     def _thread_info(self, features: Any, request: ThreadRequest) -> tuple[Any, str]:  # pragma: no cover
         """A `StandardThreadInfo` for the designation, and which call made it.
 
-        The hole tap info first, because `CreateTapInfo` is measured and the
-        published type hierarchy says a `HoleTapInfo` *is* a
-        `StandardThreadInfo`. `Internal` is set on it because a tap info is
-        internal by construction and an external thread is the common case for
-        this operation.
+        The published `CreateStandardThreadInfo(Internal, RightHanded,
+        ThreadType, ThreadDesignation, Class)` first, in that order. The class
+        follows the table and the side, as the page's own examples do -- `2B`
+        for an internal inch thread, `6g` for an external metric one. The
+        measured `CreateTapInfo` is the fallback, its result documented to be a
+        `StandardThreadInfo`, with `Internal` set because a tap info is internal
+        by construction.
         """
         failures: list[str] = []
-        makers = (
-            ("HoleFeatures.CreateTapInfo", getattr(features.HoleFeatures, "CreateTapInfo", None)),
-            ("ThreadFeatures.CreateStandardThreadInfo",
-             getattr(features.ThreadFeatures, "CreateStandardThreadInfo", None)),
-        )
-        for label, maker in makers:
-            if maker is None:
-                failures.append(f"{label}: no such method on this release")
-                continue
+        standard = getattr(features.ThreadFeatures, "CreateStandardThreadInfo", None)
+        if standard is None:
+            failures.append("ThreadFeatures.CreateStandardThreadInfo: no such method on "
+                            "this release")
+        else:
             for table in self._THREAD_TABLES:
                 try:
-                    info = maker(True, table, request.designation, "6g", True)
+                    info = standard(bool(request.internal), True, table,
+                                    request.designation, _thread_class(table, request.internal))
                 except Exception as exc:
-                    failures.append(f"{label}({table!r}): {_com_message(exc)}")
+                    failures.append(f"CreateStandardThreadInfo({table!r}): {_com_message(exc)}")
+                    continue
+                return info, f"ThreadFeatures.CreateStandardThreadInfo [{table}]"
+
+        tap = getattr(features.HoleFeatures, "CreateTapInfo", None)
+        if tap is None:
+            failures.append("HoleFeatures.CreateTapInfo: no such method on this release")
+        else:
+            for table in self._THREAD_TABLES:
+                try:
+                    info = tap(True, table, request.designation,
+                               _thread_class(table, request.internal), True)
+                except Exception as exc:
+                    failures.append(f"CreateTapInfo({table!r}): {_com_message(exc)}")
                     continue
                 try:
                     info.Internal = bool(request.internal)
                 except Exception as exc:
-                    failures.append(f"{label}({table!r}): Internal is not settable "
+                    failures.append(f"CreateTapInfo({table!r}): Internal is not settable "
                                     f"({_com_message(exc)})")
-                    if request.internal:
-                        return info, f"{label} [{table}]"
-                    continue
-                return info, f"{label} [{table}]"
+                    if not request.internal:
+                        continue
+                return info, f"HoleFeatures.CreateTapInfo [{table}]"
         raise FeatureError(
             f"Nothing on this release made a ThreadInfo for {request.designation!r}: "
             + "; ".join(failures),
@@ -4515,6 +4592,18 @@ class ComBackend(Backend):
 # ---------------------------------------------------------------------------
 # Small COM helpers
 # ---------------------------------------------------------------------------
+
+
+def _thread_class(table: str, internal: bool) -> str:
+    """The thread class the published examples give for a table and a side.
+
+    `2B` and `2A` for the inch tables, `6H` and `6g` for the metric ones --
+    capital for internal, as the standards write them. A table this cannot
+    place is treated as metric, which the two metric tables tried here are.
+    """
+    if "unified" in table.lower():
+        return "2B" if internal else "2A"
+    return "6H" if internal else "6g"
 
 
 def _iterate(collection: Any) -> Iterator[Any]:  # pragma: no cover - Windows only

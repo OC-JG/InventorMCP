@@ -68,6 +68,14 @@ appears across all of Inventor.
    to try is recording the Inventor UI creating a rib and reading back what the
    resulting `RibDefinition` differs in.
 
+   *The published `RibFeatures_Add` page (read 2026-09-08) is
+   `Add(Definition As RibDefinition)` with no Remarks*, so the refusal is about
+   the definition's state and not the call. The `RibDefinition` page gives the
+   members nobody had tried: `ThicknessDirection`, `SetThicknessPlane` with
+   `kRibThicknessAtSketchPlane` / `kRibThicknessAtRoot`, `DraftAngle`, and the
+   meaning of `IsRib` -- True projects the profile *lateral* to the sketch
+   plane, False normal to it. The roadmap carries the retry.
+
    So `{"op":"rib",...}` is built by hand instead: the rib's silhouette -- its top
    edge from `start` to `end`, dropped to `root` -- as a closed profile, extruded
    symmetrically about its plane by `thickness`. Exact against Inventor: 20.88000
@@ -160,18 +168,18 @@ also passes the simulator rehearsal.
    file exists to catch. `docs/INVENTOR_SETUP.md` has what a live run must
    confirm, and `scripts/com_signatures.py --search MoveFace` is where it starts.
 
-   *Narrowed on 2026-09-08 by the published reference, and not settled.* The
-   2027 catalogue has a `MoveFaceDefinition` object page and a
-   `MoveFaceTypeEnum`, and a separate `DirectionAndDistanceMoveDefinition` that
-   belongs to `MoveFeatures` (moving a whole body) rather than to this. So the
-   definition exists under the name the backend asks for, and the direction
-   mode is an enum rather than a choice of setter -- which means the setter
-   spellings above may all be wrong in the same way, and `dump_constants.py
-   --find MoveFaceType` alongside `com_signatures.py MoveFaceDefinition` is the
-   pair of reads a live run should start with. The reference also lists
-   `MoveFaceFeatures` among the collections read-only *as properties* of
-   `PartFeatures`; `FaceDraftFeatures` is on the same list and is measured
-   building, so that reading says nothing about whether `Add` works.
+   *Settled on paper 2026-09-08, when the `MoveFaceDefinition` page was read.*
+   The setter is `SetDirectionAndDistanceMoveType`; none of the three
+   spellings above exists, and they are gone. `MoveFaceType` starts at
+   `kFreeMoveType` (91395) and the setter moves it to
+   `kDirectionAndDistanceMoveType` (91393), so the backend reads the type back
+   before `Add` and refuses a definition the setter left alone. What the page
+   does not give is the setter's argument list, so `(direction, distance)` is
+   still the assumption and `com_signatures.py MoveFaceDefinition` the read.
+   The reference also lists `MoveFaceFeatures` among the collections read-only
+   *as properties* of `PartFeatures`; `FaceDraftFeatures` is on the same list
+   and is measured building, so that reading says nothing about whether `Add`
+   works.
 
 6. **Thicken.** *Added 2026-09-07 as `{"op":"thicken",...}`, and it closes half
    of what this item asked for.* The half it closes is the wall-thickness one: a

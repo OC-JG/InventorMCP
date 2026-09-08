@@ -233,4 +233,47 @@ class TestThreadFollowsThePublishedCall:
         assert "features.CreateThreadDefinition" not in source
         assert "start_edge" in source and "_thread_info" in source
         assert "thread" in _KNOWN_BROKEN
-        assert "CreateTapInfo" in _KNOWN_BROKEN["thread"]
+        assert "CreateStandardThreadInfo" in _KNOWN_BROKEN["thread"]
+
+    def test_the_thread_class_follows_the_table_and_the_side(self):
+        """`2B` for an internal inch thread, `6g` for an external metric one --
+        the examples on the published page, and case-sensitive as the standards
+        write them."""
+        assert com._thread_class("ANSI Unified Screw Threads", True) == "2B"
+        assert com._thread_class("ANSI Unified Screw Threads", False) == "2A"
+        assert com._thread_class("ISO Metric profile", True) == "6H"
+        assert com._thread_class("ANSI Metric M Profile", False) == "6g"
+
+
+class TestMoveFaceFollowsThePublishedDefinition:
+    """`MoveFaceDefinition.SetDirectionAndDistanceMoveType` is the published
+    setter; the three spellings tried before exist on no release. The type is
+    read back, because the page says the definition starts at `kFreeMoveType`."""
+
+    def test_one_setter_and_it_is_the_published_one(self):
+        assert com.ComBackend._MOVE_FACE_SETTERS == ("SetDirectionAndDistanceMoveType",)
+
+    def test_the_move_face_type_enum_is_in_the_table(self):
+        assert FALLBACK["kDirectionAndDistanceMoveType"] == 91393
+        assert FALLBACK["kPlanarMoveType"] == 91394
+        assert FALLBACK["kFreeMoveType"] == 91395
+
+    def test_the_type_is_checked_before_add(self):
+        import inspect
+
+        source = inspect.getsource(com.ComBackend.move_face)
+        assert "_require_direction_and_distance_type(definition)" in source
+        assert source.index("_require_direction_and_distance_type") < source.index("features.Add(definition)")
+
+
+class TestSketchDrivenPatternIsDefinitionBased:
+    """`SketchDrivenPatternFeatures.Add(Definition)` per the published page;
+    the three-argument `Add` the code used before could never have worked."""
+
+    def test_add_takes_a_definition(self):
+        import inspect
+
+        source = inspect.getsource(com.ComBackend.sketch_driven_pattern)
+        assert "features.CreateDefinition(parents, sketch, reference)" in source
+        assert "_add_patterned_definition(features, definition)" in source
+        assert "_patterned(features.Add" not in source

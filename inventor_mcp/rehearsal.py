@@ -325,13 +325,14 @@ _MUST_MOVE = {"mirror", "rectangular_pattern", "circular_pattern"}
 _KNOWN_BROKEN = {
     "thread": (
         "The `thread` operation has never built on an Inventor. Its COM half now "
-        "follows the published call -- ThreadFeatures.Add(Face, StartEdge, "
-        "ThreadInfo, ...) with a ThreadInfo from HoleFeatures.CreateTapInfo, "
-        "which the published type hierarchy says is a StandardThreadInfo -- and "
-        "that route is unmeasured, so it stays refused until a live run says it "
-        "works. Use a `hole` with `tap` instead, which is measured and works: "
-        "Inventor cuts the thread's minor diameter and records the designation "
-        "on the feature."
+        "follows the published calls -- ThreadFeatures.Add(Face, StartEdge, "
+        "ThreadInfo, ...) with a ThreadInfo from "
+        "ThreadFeatures.CreateStandardThreadInfo(Internal, RightHanded, "
+        "ThreadType, ThreadDesignation, Class), HoleFeatures.CreateTapInfo as "
+        "the fallback -- and that route is unmeasured, so it stays refused until "
+        "a live run says it works. Use a `hole` with `tap` instead, which is "
+        "measured and works: Inventor cuts the thread's minor diameter and "
+        "records the designation on the feature."
     ),
 }
 
