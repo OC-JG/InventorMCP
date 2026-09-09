@@ -389,10 +389,25 @@ class ExtrudeOp(OpBase):
         "all", description="Which closed profiles of the sketch to use (0-based indices)."
     )
     distance: ValueSpec | None = None
-    extent: Literal["distance", "through_all", "to_next", "all"] = "distance"
+    extent: Literal["distance", "through_all", "to_next", "to", "from_to", "all"] = "distance"
     direction: Direction = "positive"
     operation: BooleanOp = "join"
     taper: ValueSpec | None = Field(None, description="Draft angle, e.g. '3 deg'.")
+    to: PlaneRef | None = Field(
+        None,
+        description="Where an extent of 'to' or 'from_to' stops: 'xy'|'xz'|'yz', "
+        "a named work plane, or 'face:<handle>' from `select`. \"Up to the "
+        "underside of the lid\" is how a boss is really specified, and saying it "
+        "this way means nobody has to derive the distance -- and nobody has to "
+        "re-derive it when the lid moves.",
+    )
+    from_: PlaneRef | None = Field(
+        None,
+        alias="from",
+        description="Where an extent of 'from_to' starts, in the same "
+        "vocabulary as `to`. The profile then bounds neither end: both come "
+        "from the model, so the feature follows both when either moves.",
+    )
     bodies: list[int] | None = Field(
         None,
         description="Bodies this feature may affect, 1-based in creation order. "
@@ -401,9 +416,21 @@ class ExtrudeOp(OpBase):
     )
 
     @model_validator(mode="after")
-    def _distance_required(self) -> "ExtrudeOp":
+    def _the_extent_carries_what_it_needs(self) -> "ExtrudeOp":
         if self.extent == "distance" and self.distance is None:
             raise ValueError("`distance` is required when extent is 'distance'.")
+        if self.extent == "to" and not self.to:
+            raise ValueError("`to` is required when extent is 'to': a plane, a "
+                             "work plane's name, or 'face:<handle>'.")
+        if self.extent == "from_to" and not (self.to and self.from_):
+            raise ValueError("`from` and `to` are both required when extent is "
+                             "'from_to'.")
+        if self.to and self.extent not in ("to", "from_to"):
+            raise ValueError(f"`to` means nothing to an extent of "
+                             f"{self.extent!r}; use extent 'to' or 'from_to'.")
+        if self.from_ and self.extent != "from_to":
+            raise ValueError(f"`from` means nothing to an extent of "
+                             f"{self.extent!r}; use extent 'from_to'.")
         return self
 
 

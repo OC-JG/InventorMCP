@@ -307,6 +307,8 @@ def _apply_one(session: Session, context: DocumentContext, op: Operation) -> dic
             operation=op.operation,
             taper=_driven(resolver.angle(op.taper, "extrude taper")) if op.taper else None,
             bodies=tuple(op.bodies or ()),
+            to=op.to,
+            start=op.from_,
             name=op.name,
         )
         return _record(context, backend.extrude(context.doc_id, request), "extrude")

@@ -2277,6 +2277,32 @@ class ComBackend(Backend):
                 definition.SetThroughAllExtent(direction)
             elif request.extent == "to_next":
                 definition.SetToNextExtent(direction)
+            elif request.extent == "to":
+                # `SetToExtent(ToEntity, [ExtendToFace])`, published and
+                # unmeasured. **No direction argument**: which way the sweep
+                # runs is decided by where the target is, which is the point of
+                # asking for a target rather than a distance -- so `direction`
+                # is ignored here and the schema says so.
+                #
+                # `ExtendToFace` is left at Inventor's default. It says what to
+                # do when the profile does not fully meet the target: extending
+                # the *face* to catch it is a helpful guess that quietly makes a
+                # feature bigger than the model justifies, and nothing here has
+                # measured which way Inventor defaults.
+                assert request.to is not None
+                definition.SetToExtent(self._extent_target(document, request.to))
+            elif request.extent == "from_to":
+                # `SetFromToExtent(FromFace, ExtendFromFace, ToFace,
+                # ExtendToFace)`. The two booleans are documented without
+                # brackets, so they are supplied rather than defaulted, and
+                # False is the conservative pair: neither face is extended to
+                # catch a profile that misses it. A feature that silently grew
+                # to meet a face it did not reach is the kind of success this
+                # server exists not to report.
+                assert request.to is not None and request.start is not None
+                definition.SetFromToExtent(
+                    self._extent_target(document, request.start), False,
+                    self._extent_target(document, request.to), False)
             else:
                 assert request.distance is not None
                 definition.SetDistanceExtent(request.distance.expression, direction)
@@ -2303,8 +2329,23 @@ class ComBackend(Backend):
         return _feature_info(feature, "extrude", {
             "sketch": request.sketch,
             "operation": request.operation,
+            "extent": request.extent,
             "distance": request.distance.as_dict() if request.distance else None,
+            "to": request.to,
+            "from": request.start,
         })
+
+    def _extent_target(self, document: Any, reference: str) -> Any:  # pragma: no cover
+        """What a `to` or `from_to` extent stops at.
+
+        The same three vocabularies a sketch plane accepts -- an origin plane,
+        a named work plane, a `face:` handle -- because "up to the underside of
+        the lid" is a face as often as it is a plane, and a caller should not
+        have to know which of the two the server wants. `SetToExtent` is
+        documented to take a face, a work plane, a vertex or a work point, so
+        the wider vocabulary is Inventor's own.
+        """
+        return self._resolve_plane(document, reference, None)
 
     def revolve(self, doc_id: str, request: RevolveRequest) -> FeatureInfo:  # pragma: no cover
         document = self._doc(doc_id)

@@ -62,6 +62,7 @@ still build the wrong part, and these are the ways it does:
   anyway, so the step will diverge too. Move the points, or check the sketch
   plane. This is the one pattern the simulator places rather than counts, which
   is why it can tell you at all.
+- **`this step's volume is not predicted, so the running total is short by whatever it adds`** — an `extent` of `to` or `from_to` aimed at something the simulator cannot measure against: a target on a perpendicular origin plane, a tilted plane, or a `face:` handle, since a face here is a midpoint and an area and says nothing about which way it faces. Inventor builds it; the rehearsal has no number for it, and every volume after it is short by that much. Give a `distance` if you want the arithmetic checked as well.
 - **`this feature is on a tilted work plane, so the simulator predicts its volume and not its placement`** — a `work_plane` with `kind: "angle"` is
   built for real on Inventor, and the simulator's ledger holds axis-aligned
   prisms, so a sweep from a plane turned about an axis is not one it can place.

@@ -848,17 +848,44 @@ actually bitten.
       publishes `kSplitPart` and `kTrimSolid` at the same value, which says the
       two are one feature under two names -- consistent with the older name
       still working.
-- [ ] **Extrude `to` a face or plane, and `from_to`.** *(Opened 2026-09-08.)*
-      `ExtrudeDefinition.SetToExtent(ToEntity, [ExtendToFace])` takes a face,
-      a work plane, a vertex or a work point; `SetFromToExtent(FromFace,
-      ExtendFromFace, ToFace, ExtendToFace)` takes two. "Extrude up to the
-      underside of the lid" is how a boss is actually specified, and today it
-      has to be written as a distance expression that somebody derives. The
-      recipe shape is `extent: "to"` with `to: "<plane or face selector>"`;
-      the simulator's ledger can answer for a planar target parallel to the
-      sketch plane and must decline otherwise. `SetToNextExtent` also wants a
-      `Terminator` body the code does not pass, which is worth reading against
-      the installed release while there.
+- [x] **Extrude `to` a face or plane, and `from_to`.** *(Opened 2026-09-08,
+      done 2026-09-09.)* `extent: "to"` with `to`, and `extent: "from_to"`
+      with `from` and `to` -- each an origin plane, a named work plane or a
+      `face:` handle, the same vocabulary a sketch plane takes. `from` is a
+      Python keyword, so it is the recipe's word by alias and `from_` in the
+      code. The schema refuses every combination that names too little or too
+      much, because a field silently ignored is how somebody learns the wrong
+      lesson about their own recipe.
+
+      Inventor's calls are `SetToExtent(ToEntity, [ExtendToFace])` and
+      `SetFromToExtent(FromFace, ExtendFromFace, ToFace, ExtendToFace)`,
+      published and unmeasured. **Neither takes a direction**, which is the
+      point of naming a target: where it is decides which way the sweep runs.
+      The two `from_to` booleans are documented without brackets so they are
+      supplied, and False is the conservative pair -- a feature that silently
+      grew to meet a face it did not reach is the kind of success this server
+      exists not to report.
+
+      The simulator answers for **a target parallel to the sketch plane** and
+      declines otherwise, which is what a ledger of axis-aligned prisms can
+      honestly do: a plane sharing the sketch's origin plane and not tilted is
+      a known offset along one axis, so the length is exact and the prism is
+      square to the axes like any other. A perpendicular plane, a tilted one
+      or a `face:` handle is not -- a face here is a midpoint and an area,
+      which says where a face is and not which way it faces -- and it charges
+      nothing and says why in `volume_from`, with a rehearsal warning that the
+      running total is short by whatever that step adds. The guess available
+      was the material's own thickness at the profile, which would be right
+      for "up to the far side of this plate" and wrong for everything else, in
+      the direction that reads as a feature that worked.
+
+      **Still to do here, and small**: `SetToNextExtent` takes a `Terminator`
+      this code does not pass, which is worth reading against the installed
+      release. And the simulator could answer for a *planar face* parallel to
+      the sketch plane if `_Topo` carried a normal rather than only a
+      midpoint -- which is the same missing fact that keeps the pattern-axis
+      checker declining on an angled plane.
+
 - [ ] **A sketch fillet.** *(Opened 2026-09-08.)* `SketchArcs.AddByFillet(
       EntityOne, EntityTwo, Radius, PointOnEntityOne, PointOnEntityTwo)`, the
       two proximity points choosing the corner. Closes the oldest bullet in

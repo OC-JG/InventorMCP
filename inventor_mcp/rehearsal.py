@@ -696,6 +696,24 @@ def _warn_about(warnings: list[dict[str, Any]], where: str, op: Operation,
                    "plane is the one you meant.",
         })
 
+    # An extent aimed at something the ledger cannot measure against. The
+    # feature is fine and Inventor will build it; what is missing is this
+    # step's own number, and the volume from here on is short by it. Saying so
+    # is the difference between "the simulator predicts nothing here" and a
+    # silent zero that reads as a feature that did nothing.
+    charged = (outcome.get("detail") or {}).get("volume_from") or ""
+    if isinstance(charged, str) and charged.startswith("not predicted:"):
+        warnings.append({
+            "where": where,
+            "warning": "this step's volume is not predicted, so the running "
+                       "total is short by whatever it adds",
+            "why": charged + ". Inventor will build the feature; the simulator "
+                   "cannot say how big it is, so a divergence reported against "
+                   "this step and every step after it is this and not the "
+                   "recipe. Give the extent as a distance if you want the "
+                   "rehearsal to check the arithmetic too.",
+        })
+
     # A feature on a tilted work plane. The volume is the feature's own
     # arithmetic and stands; what the simulator cannot do is say where the
     # material went, because a sweep from a plane turned about an axis is not

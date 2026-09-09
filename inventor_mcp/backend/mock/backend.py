@@ -971,9 +971,19 @@ class MockBackend(Backend):
         aimed = _aimed_body(document, request.bodies)
         centre = _loop_center(sketch.plan, loops[0])
         over = map3d(plane, centre[0], centre[1], sketch.offset)
+        unpredicted: str | None = None
         if request.extent == "distance":
             assert request.distance is not None
             distance = request.distance.value
+        elif request.extent in ("to", "from_to"):
+            distance, sketch_offset, unpredicted = self._extent_to_target(
+                document, sketch, request)
+            if unpredicted is not None:
+                distance = 0.0
+            elif sketch_offset is not None:
+                # A `from_to` sweep starts at its own `from` plane rather than
+                # at the sketch, so the span moves as well as the length.
+                sketch = replace(sketch, offset=sketch_offset)
         else:
             # Measured over the profile itself: how thick the part is *there*,
             # which for a slot at the end of an L-bracket's base is the base and
@@ -990,6 +1000,8 @@ class MockBackend(Backend):
                 measured=request.extent != "distance", body=aimed)
         else:
             reach, how = distance, None
+        if unpredicted is not None:
+            reach, how = 0.0, unpredicted
         signed = area * reach
 
         if request.operation == "new_body":
@@ -1026,6 +1038,10 @@ class MockBackend(Backend):
                 "profile_area_cm2": round(area, 6),
                 "volume_from": how,
                 "placement": self._tilt_note(sketch),
+                # The same two keys the COM half reports, so a feature read
+                # back says what it was aimed at whichever backend built it.
+                "to": request.to,
+                "from": request.start,
             },
         )
         document.features.append(feature)
@@ -1053,6 +1069,62 @@ class MockBackend(Backend):
             "material sits, and so what a later cut through it would meet, is "
             "not."
         )
+
+    def _extent_to_target(self, document: _Document, sketch: _Sketch,
+                          request: ExtrudeRequest
+                          ) -> tuple[float, float | None, str | None]:
+        """How far a `to` or `from_to` extent runs, or why that is unknown.
+
+        Returns the length, where the sweep starts if that is not the sketch's
+        own offset, and `None` -- or `(0.0, None, why)` when the target is one
+        this cannot measure against.
+
+        **It answers for a target parallel to the sketch plane and declines
+        otherwise**, which is the whole of what a ledger of axis-aligned prisms
+        can honestly do. A plane that shares the sketch's origin plane and is
+        not tilted is a known offset along one axis, so the distance is exact
+        arithmetic and the resulting prism is square to the axes like any
+        other. A target on a different origin plane, a tilted one, or a
+        `face:` handle is not: a face here is a midpoint and an area, which
+        says where a face is and not which way it faces.
+
+        Declining means charging nothing and saying so, rather than guessing.
+        The guess available -- the material's own thickness at the profile, the
+        way `through_all` measures -- would be right for "up to the far side of
+        this plate" and wrong for every other target, and wrong in the
+        direction that reads as a working feature.
+        """
+        assert request.to is not None
+        stops: list[float] = []
+        for reference, label in ((request.start, "from"), (request.to, "to")):
+            if reference is None:
+                continue
+            if reference.startswith("face:"):
+                return (0.0, None,
+                        f"not predicted: the {label} target {reference!r} is a "
+                        "face, and a face here is a midpoint and an area -- it "
+                        "says where a face is, not which way it faces, so the "
+                        "distance to it is not something this can measure")
+            base, offset = self._base_plane_of(document, reference, f"an extrude's {label}")
+            if reference in document.tilted_planes:
+                axis, angle = document.tilted_planes[reference]
+                return (0.0, None,
+                        f"not predicted: the {label} target {reference!r} is "
+                        f"turned {math.degrees(angle):.4g} degrees about {axis}, "
+                        "so it is not parallel to the sketch plane and the "
+                        "distance to it varies across the profile")
+            if base != sketch.base_plane:
+                return (0.0, None,
+                        f"not predicted: the {label} target {reference!r} lies on "
+                        f"{base.upper()} and the sketch is on "
+                        f"{sketch.base_plane.upper()}, so the two are "
+                        "perpendicular rather than parallel and there is no one "
+                        "distance between them")
+            stops.append(offset)
+        if request.start is not None:
+            start, stop = stops
+            return (abs(stop - start), min(start, stop), None)
+        return (abs(stops[0] - sketch.offset), None, None)
 
     def _record_slabs(self, document: _Document, sketch: _Sketch,
                       loops: Sequence[Sequence[str]], plane: str,

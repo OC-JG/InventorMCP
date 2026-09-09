@@ -228,6 +228,14 @@ class ResolvedSelector:
 
 @dataclass
 class ExtrudeRequest:
+    """A profile swept into a solid, and where the sweep stops.
+
+    `extent` decides which of the remaining fields carries the answer:
+    `distance` needs `distance`, `to` needs `to`, `from_to` needs both `to` and
+    `start`. The schema has already refused the combinations that say neither,
+    so a backend can trust the pairing.
+    """
+
     sketch: str
     distance: Driven | None = None
     profiles: Sequence[int] | str = "all"
@@ -236,6 +244,13 @@ class ExtrudeRequest:
     operation: str = "join"
     taper: Driven | None = None
     bodies: Sequence[int] = ()
+    #: Where a `to` or `from_to` extent stops: a plane reference, a work
+    #: plane's name, or a `face:` handle. Named `to` and `start` rather than
+    #: `to` and `from` because `from` is a Python keyword -- the recipe says
+    #: `from`, which is what a reader of a recipe wants, and the alias lives in
+    #: the schema.
+    to: str | None = None
+    start: str | None = None
     name: str | None = None
 
 

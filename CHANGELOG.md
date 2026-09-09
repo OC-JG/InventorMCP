@@ -6,6 +6,33 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
 ### Added
 
+- **Extrude `to` a plane and `from_to` between two.** *(Roadmap Phase 2.)*
+  "Up to the underside of the lid" is how a boss is actually specified, and
+  until now it had to be written as a distance somebody derived -- and
+  re-derived by hand every time the lid moved, in a server whose whole argument
+  is that numbers follow their parameters. `extent: "to"` takes `to`;
+  `extent: "from_to"` takes `from` and `to`; each is an origin plane, a named
+  work plane or a `face:` handle, the same vocabulary a sketch plane accepts.
+
+  Inventor's `SetToExtent` and `SetFromToExtent` are published and unmeasured.
+  Neither takes a direction, which is the point of naming a target: where it is
+  decides which way the sweep runs. The two `from_to` booleans are documented
+  without brackets so they are supplied as False -- neither face is extended
+  to catch a profile that misses it, because a feature that silently grew to
+  meet a face it did not reach is the kind of success this server exists not to
+  report.
+
+  The simulator answers for a target **parallel to the sketch plane** and
+  declines otherwise: a plane sharing the sketch's origin plane and not tilted
+  is a known offset along one axis, so the length is exact. A perpendicular
+  plane, a tilted one or a `face:` handle is not -- a face here is a midpoint
+  and an area, which says where a face is and not which way it faces -- so it
+  charges nothing, says why in `volume_from`, and the rehearsal warns that the
+  running total is short by whatever that step adds. The available guess was
+  the material's own thickness at the profile, which would be right for one
+  target and wrong for the rest, in the direction that reads as a feature that
+  worked.
+
 - **An angled work plane, and a simulator that says what it cannot place.**
   *(Defect 12, opened 2026-09-08 and closed 2026-09-09.)* `WorkPlaneOp` gains
   an `axis` -- an origin axis, a work axis or a sketch line, resolved the way a
