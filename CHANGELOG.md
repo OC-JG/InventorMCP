@@ -6,6 +6,33 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
 ### Added
 
+- **A topology handle says whether it survives a rebuild, and every face says
+  which feature made it.** *(Roadmap Phase 2.)* `TopoInfo.feature` is read
+  from the published `Face.CreatedByFeature` on the live backend, closing a
+  divergence rather than adding a feature: the simulator has answered "which
+  feature made this face" since it was written and the COM side never did, so
+  the field was set on one half and `None` on the other. An edge's answer is
+  the first of its faces that will give one, since an edge belongs to both.
+  It is the field that makes a DFM finding sayable as "the faces of the boss"
+  instead of as four indices.
+
+  `TopoInfo.durable` says, per handle, whether it can be rebound after a
+  rebuild -- a `ReferenceKeyManager` key on the live backend, always true on
+  the simulator, whose topology is a ledger nothing invalidates. The
+  `select_topology` note used to say handles expire, flatly, which overstates
+  it where a key exists and gets a caller re-selecting geometry that would
+  have been fine.
+
+  The rebinding call is published and its **marshalling is not**:
+  `GetReferenceKey` takes the key as a byte-array `[out]` parameter, which
+  pywin32 usually turns into the return value. So it is tried and `None` on
+  any failure, which costs nothing -- a handle with no key behaves exactly as
+  every handle behaved before. The published rule that a B-Rep key needs the
+  context it was made with is what shapes the code: the context is kept per
+  document, because one made per call is a key that can never be used.
+  `scripts/probe_reference_keys.py` answers it in four steps, of which the
+  fourth -- rebinding after a rebuild -- is the only one that matters.
+
 - **A sketch can borrow the solid it sits on: `use_face_edges` and
   `project`.** *(Roadmap Phase 2, closing most of the second-oldest gap
   bullet.)* `use_face_edges` takes the whole outline of the face the sketch is
@@ -403,6 +430,16 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   argument names at the call site where a permutation is not possible.
 
 ### Fixed
+
+- **A stale topology handle handed back a dead COM object instead of a
+  refusal.** Found while writing the durability above, and it is the more
+  valuable half of that item: the docstrings said handles expire on rebuild
+  and *nothing enforced it*, so a handle from before a rebuild was used
+  directly -- a pointer at geometry that no longer existed. Every use now goes
+  through one accessor which probes the stored object, rebinds it from a
+  reference key if it has one, and refuses with what to do about it if neither
+  works. The DFM loop is the customer: a finding points at faces, the loop
+  changes a parameter and rebuilds, and the faces it pointed at are gone.
 
 - **A simulator sketch on a `face:` handle was placed at XY, offset zero.**
   Found while building the projection above, and silent: a sketch on the top

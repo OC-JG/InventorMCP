@@ -496,6 +496,11 @@ class ComBackend(Backend):
         #: *name* that no code had ever assigned. See `_labelled_entity`.
         self._sketch_entities: dict[str, dict[str, dict[str, Any]]] = {}
         self._topology: dict[str, dict[str, Any]] = {}
+        #: One `ReferenceKeyManager` key context per document, or `False`
+        #: for a document whose release would not make one. Kept rather
+        #: than made per call because the published rule is that a B-Rep
+        #: key needs the context it was made with to be bound back.
+        self._key_contexts: dict[str, Any] = {}
         #: Drawing dimensions this session retrieved, by document, each with
         #: the model parameter it was retrieved for. See `_retrieve_by_parameter`.
         self._retrieved: dict[str, list[tuple[Any, str]]] = {}
@@ -592,6 +597,7 @@ class ComBackend(Backend):
         self._sketches.clear()
         self._sketch_entities.clear()
         self._topology.clear()
+        self._key_contexts.clear()
         if pythoncom is not None:
             try:
                 pythoncom.CoUninitialize()
@@ -1637,7 +1643,7 @@ class ComBackend(Backend):
         added = 0
         with self._translate_errors("Projecting model geometry", SketchError):
             for match in borrowed:
-                entity = self._topology[match.id]["object"]
+                entity = self._live(doc_id, match.id)
                 made = sketch.AddByProjectingEntity(entity)
                 added += 1
                 try:
@@ -1662,7 +1668,7 @@ class ComBackend(Backend):
         app = self._require_app()
         transient = app.TransientGeometry
 
-        plane = self._resolve_plane(document, plan.plane, plan.offset_expression)
+        plane = self._resolve_plane(doc_id, document, plan.plane, plan.offset_expression)
         # Resolved before the batch opens, so a selector that matches nothing
         # fails with the recipe's own message and no half-built sketch behind
         # it.
@@ -2252,7 +2258,7 @@ class ComBackend(Backend):
         raise SketchError(f"No sketch named {name!r} in this part.")
 
     # -- planes and axes ---------------------------------------------------
-    def _resolve_plane(self, document: Any, reference: str,
+    def _resolve_plane(self, doc_id: str, document: Any, reference: str,
                        offset_expression: str | None) -> Any:  # pragma: no cover
         component = document.ComponentDefinition
         base: Any
@@ -2261,13 +2267,11 @@ class ComBackend(Backend):
             base = _origin_plane(component, key)
         elif reference.startswith("face:"):
             handle = reference.split(":", 1)[1]
-            entry = self._topology.get(handle)
-            if entry is None:
-                raise SketchError(
-                    f"Unknown face handle {handle!r}.",
-                    hint="Face handles come from `select_topology` and expire on rebuild.",
-                )
-            base = entry["object"]
+            # Through `_live`, so a handle from before a rebuild is rebound
+            # from its reference key or refused -- not handed back dead, which
+            # is what happened until 2026-09-09 while the hint here said
+            # handles expire.
+            base = self._live(doc_id, handle)
         else:
             base = _named_work_plane(component, reference)
 
@@ -2314,10 +2318,7 @@ class ComBackend(Backend):
                 return _named_work_axis(component, axis.value)
             return component.WorkAxes.Item(index)
         if axis.kind == "edge":
-            entry = self._topology.get(axis.value)
-            if entry is None:
-                raise SelectionError(f"Unknown edge handle {axis.value!r}.")
-            return entry["object"]
+            return self._live(doc_id, axis.value)
         sketch = self._sketch(doc_id, axis.sketch or "")
         kept = self._labelled_entity(doc_id, str(sketch.Name), axis.value)
         if kept is not None:
@@ -2396,7 +2397,7 @@ class ComBackend(Backend):
                 # feature bigger than the model justifies, and nothing here has
                 # measured which way Inventor defaults.
                 assert request.to is not None
-                definition.SetToExtent(self._extent_target(document, request.to))
+                definition.SetToExtent(self._extent_target(doc_id, document, request.to))
             elif request.extent == "from_to":
                 # `SetFromToExtent(FromFace, ExtendFromFace, ToFace,
                 # ExtendToFace)`. The two booleans are documented without
@@ -2407,8 +2408,8 @@ class ComBackend(Backend):
                 # server exists not to report.
                 assert request.to is not None and request.start is not None
                 definition.SetFromToExtent(
-                    self._extent_target(document, request.start), False,
-                    self._extent_target(document, request.to), False)
+                    self._extent_target(doc_id, document, request.start), False,
+                    self._extent_target(doc_id, document, request.to), False)
             else:
                 assert request.distance is not None
                 definition.SetDistanceExtent(request.distance.expression, direction)
@@ -2441,7 +2442,8 @@ class ComBackend(Backend):
             "from": request.start,
         })
 
-    def _extent_target(self, document: Any, reference: str) -> Any:  # pragma: no cover
+    def _extent_target(self, doc_id: str, document: Any,
+                       reference: str) -> Any:  # pragma: no cover
         """What a `to` or `from_to` extent stops at.
 
         The same three vocabularies a sketch plane accepts -- an origin plane,
@@ -2451,7 +2453,7 @@ class ComBackend(Backend):
         documented to take a face, a work plane, a vertex or a work point, so
         the wider vocabulary is Inventor's own.
         """
-        return self._resolve_plane(document, reference, None)
+        return self._resolve_plane(doc_id, document, reference, None)
 
     def revolve(self, doc_id: str, request: RevolveRequest) -> FeatureInfo:  # pragma: no cover
         document = self._doc(doc_id)
@@ -2870,7 +2872,7 @@ class ComBackend(Backend):
             )
         collection = self._new_collection(selector.kind)
         for match in matches:
-            collection.Add(self._topology[match.id]["object"])
+            collection.Add(self._live(doc_id, match.id))
         return collection, matches
 
     #: AddSimple's trailing options, in declaration order. They are
@@ -2965,7 +2967,7 @@ class ComBackend(Backend):
             definition = features.CreateFilletDefinition()
             for match in matches:
                 edges = self._new_collection("edge")
-                edges.Add(self._topology[match.id]["object"])
+                edges.Add(self._live(doc_id, match.id))
                 definition.AddVariableRadiusEdgeSet(edges, start, end)
             return definition
 
@@ -3155,7 +3157,7 @@ class ComBackend(Backend):
                 "No faces matched, so there is nothing to draft.",
                 hint="Run `select_topology` with the same selector to see what it matches.",
             )
-        plane = self._resolve_plane(document, request.plane, None)
+        plane = self._resolve_plane(doc_id, document, request.plane, None)
         features = document.ComponentDefinition.Features.FaceDraftFeatures
         with self._batch(document), self._translate_errors("Draft"):
             definition = features.CreateFaceDraftDefinition()
@@ -4339,7 +4341,7 @@ class ComBackend(Backend):
         """
         document = self._doc(doc_id)
         component = document.ComponentDefinition
-        tool = self._resolve_plane(document, request.tool, None)
+        tool = self._resolve_plane(doc_id, document, request.tool, None)
         features = component.Features.SplitFeatures
         with self._batch(document), self._translate_errors("Split"):
             try:
@@ -4645,7 +4647,7 @@ class ComBackend(Backend):
     def mirror(self, doc_id: str, request: MirrorRequest) -> FeatureInfo:  # pragma: no cover
         document = self._doc(doc_id)
         parents = self._feature_collection(doc_id, request.features)
-        plane = self._resolve_plane(document, request.plane, None)
+        plane = self._resolve_plane(doc_id, document, request.plane, None)
         features = document.ComponentDefinition.Features.MirrorFeatures
         with self._batch(document), self._translate_errors("Mirror"):
             feature = features.Add(
@@ -4696,14 +4698,14 @@ class ComBackend(Backend):
                 "server yet.",
                 hint="'offset', 'midplane', 'angle' and 'tangent' are implemented.",
             )
-        base = self._resolve_plane(document, request.base, None)
+        base = self._resolve_plane(doc_id, document, request.base, None)
         touched = (self._one_cylindrical_face(doc_id, request.face, "A tangent work plane")
                    if request.kind == "tangent" else None)
         with self._batch(document), self._translate_errors("Work plane"):
             if request.kind == "tangent":
                 assert touched is not None
                 plane = component.WorkPlanes.AddByPlaneAndTangent(
-                    base, self._topology[touched.id]["object"])
+                    base, self._live(doc_id, touched.id))
             elif request.kind == "angle":
                 if request.axis is None:  # pragma: no cover - the schema refuses it
                     raise FeatureError(
@@ -4724,7 +4726,7 @@ class ComBackend(Backend):
                         request.name or plane.Name, request.angle.expression)
             elif request.kind == "midplane" and request.second:
                 plane = component.WorkPlanes.AddByTwoPlanes(
-                    base, self._resolve_plane(document, request.second, None)
+                    base, self._resolve_plane(doc_id, document, request.second, None)
                 )
             else:
                 plane = component.WorkPlanes.AddByPlaneAndOffset(base, 0.0)
@@ -5058,6 +5060,88 @@ class ComBackend(Backend):
         return FeatureInfo(id=f"feat:{new_name}", name=new_name,
                            kind=_feature_kind(feature, self._constants))
 
+    def _reference_key(self, doc_id: str, entity: Any) -> Any | None:  # pragma: no cover
+        """A durable key for *entity*, or ``None`` if this release will not give one.
+
+        `Entity.GetReferenceKey(KeyContext)` with a context from
+        `Document.ReferenceKeyManager.CreateKeyContext()` -- published, and the
+        published rule is the reason the context is kept per document rather
+        than made per call: **a B-Rep key needs the context it was made with**
+        to be bound back, so a context created and thrown away is a key that
+        can never be used.
+
+        **Unmeasured, and the uncertainty is in the marshalling rather than in
+        the call.** `GetReferenceKey` takes the key as a byte-array `[out]`
+        parameter in the type library, and pywin32 usually turns one of those
+        into the return value -- usually. So this tries and returns `None` on
+        any failure, which costs nothing: a handle with no key behaves exactly
+        as every handle behaved before this existed.
+        `scripts/probe_reference_keys.py` is what settles it.
+        """
+        context = self._key_contexts.get(doc_id)
+        if context is None:
+            try:
+                context = self._doc(doc_id).ReferenceKeyManager.CreateKeyContext()
+            except Exception as exc:
+                logger.debug("No ReferenceKeyManager on this release: %s", exc)
+                self._key_contexts[doc_id] = False
+                return None
+            self._key_contexts[doc_id] = context
+        if context is False:
+            return None
+        try:
+            return entity.GetReferenceKey(context)
+        except Exception as exc:
+            logger.debug("GetReferenceKey declined: %s", exc)
+            return None
+
+    def _live(self, doc_id: str, handle: str) -> Any:  # pragma: no cover
+        """The entity *handle* names, rebound if the model has moved under it.
+
+        Every use of a topology handle goes through here, and that is the
+        point. Before 2026-09-09 the stored COM object was used directly, so a
+        handle from before a rebuild handed back a **dead** object: the
+        docstrings said handles expire and nothing enforced it, so what a
+        caller got was not a refusal but a pointer at geometry that no longer
+        existed. The DFM loop is the customer for the fix -- a finding points
+        at faces, the loop changes a parameter and rebuilds, and the faces it
+        pointed at are gone.
+
+        Three outcomes, in order: the stored object still answers, so use it;
+        it does not and a reference key rebinds it, so use that and keep it;
+        or neither, and the handle is **refused** with what to do about it.
+        """
+        entry = self._topology.get(handle)
+        if entry is None:
+            raise SelectionError(
+                f"Unknown topology handle {handle!r}.",
+                hint="Handles come from `select_topology` and belong to one "
+                "document. Run it again to get current ones.",
+            )
+        entity = entry.get("object")
+        if entity is not None and _still_there(entity):
+            return entity
+        key, context = entry.get("key"), self._key_contexts.get(doc_id)
+        if key is not None and context not in (None, False):
+            try:
+                rebound = self._doc(doc_id).ReferenceKeyManager.BindKeyToObject(
+                    key, context)
+            except Exception as exc:
+                logger.info("Handle %s could not be rebound: %s", handle, exc)
+            else:
+                if rebound is not None and _still_there(rebound):
+                    entry["object"] = rebound
+                    logger.info("Handle %s was rebound after a rebuild.", handle)
+                    return rebound
+        raise SelectionError(
+            f"Topology handle {handle!r} no longer points at anything.",
+            hint="The model was rebuilt and this handle did not survive it"
+            + ("" if key is not None else
+               " -- and this release gave no reference key for it, so it could "
+               "not be rebound")
+            + ". Run `select_topology` again against the part as it is now.",
+        )
+
     def select(self, doc_id: str, selector: ResolvedSelector) -> list[TopoInfo]:  # pragma: no cover
         document = self._doc(doc_id)
         component = document.ComponentDefinition
@@ -5098,7 +5182,7 @@ class ComBackend(Backend):
             if key in seen:
                 continue
             seen.add(key)
-            info = self._describe(entity, selector.kind, convexity)
+            info = self._describe(doc_id, entity, selector.kind, convexity)
             if info is not None:
                 results.append(info)
 
@@ -5126,7 +5210,7 @@ class ComBackend(Backend):
             results = results[: selector.limit]
         return results
 
-    def _describe(self, entity: Any, kind: str,
+    def _describe(self, doc_id: str, entity: Any, kind: str,
                   convexity_index: dict[str, set[int]] | None = None) -> TopoInfo | None:  # pragma: no cover
         handle = self._next("edge" if kind == "edge" else "face")
         try:
@@ -5175,7 +5259,19 @@ class ComBackend(Backend):
             )
             direction = None
 
-        self._topology[handle] = {"object": entity, "info": info, "direction": direction}
+        # Which feature made it, from the published `Face.CreatedByFeature`.
+        # The simulator has answered this since it was written and this
+        # backend never did, so `TopoInfo.feature` was set on one side and
+        # `None` on the other -- and it is the field that makes a DFM finding
+        # sayable as "the faces of the boss" rather than as four indices.
+        info.feature = _created_by(entity, kind)
+        # A durable key, so the handle can be rebound after a rebuild. `None`
+        # from a release that will not give one, which costs nothing: the
+        # handle then behaves exactly as every handle behaved before this.
+        key = self._reference_key(doc_id, entity)
+        info.durable = key is not None
+        self._topology[handle] = {"object": entity, "info": info,
+                                  "direction": direction, "key": key}
         return info
 
     def topology_counts(self, doc_id: str) -> dict[str, int]:  # pragma: no cover
@@ -6412,6 +6508,43 @@ def _set_option(settings: Any, name: str, value: Any) -> None:  # pragma: no cov
             settings.Remove(index)
             break
     settings.Add(name, value)
+
+
+def _created_by(entity: Any, kind: str) -> str | None:  # pragma: no cover
+    """The name of the feature that made this face, or edge's face.
+
+    `Face.CreatedByFeature` is published and a plain property. An **edge** has
+    no such property -- it is where two faces meet, so it belongs to both --
+    and the answer taken here is the first of its faces that will say, which
+    is what "the edges of the boss I just made" means in practice and what a
+    selector's `feature` filter already matches on the face side.
+    """
+    try:
+        if kind == "face":
+            feature = entity.CreatedByFeature
+        else:
+            feature = next(
+                (made for made in
+                 (getattr(face, "CreatedByFeature", None) for face in _iterate(entity.Faces))
+                 if made is not None), None)
+        return None if feature is None else str(feature.Name)
+    except Exception:
+        return None
+
+
+def _still_there(entity: Any) -> bool:  # pragma: no cover - Windows only
+    """Whether a stored COM entity still refers to live geometry.
+
+    Probed by asking for something every B-Rep entity has and nothing computes
+    -- `Evaluator` -- because a dead reference raises on the first access and a
+    live one does not. Cheap, and it is the only way to tell: Inventor does not
+    hand out a validity flag, and a released object looks like an object until
+    it is touched.
+    """
+    try:
+        return entity.Evaluator is not None
+    except Exception:
+        return False
 
 
 def _surface_type(face: Any) -> str:  # pragma: no cover - Windows only

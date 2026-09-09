@@ -89,11 +89,19 @@ def register(server: Any, session: Session) -> None:
                     "normal": list(match.normal) if match.normal else None,
                     "length": display_length(match.length, unit) if match.length is not None else None,
                     "area": round(match.area, 4) if match.area is not None else None,
+                    "durable": match.durable,
                 }
                 for match in matches
             ],
             "units": unit,
-            "note": "Handles expire on the next rebuild.",
+            # `durable` per match says which handles can be rebound after a
+            # rebuild and which cannot, so this no longer claims they all
+            # expire -- a note that overstates the limit gets a caller
+            # re-selecting geometry that would have been fine, and one that
+            # understates it is worse. Read the field.
+            "note": ("Handles belong to one document. A handle marked "
+                     "`durable` can be rebound after a rebuild; one that is "
+                     "not is valid only until the next one."),
         }
 
     @server.tool(

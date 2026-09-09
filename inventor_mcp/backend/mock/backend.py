@@ -260,6 +260,13 @@ class _Topo:
             geometry=self.geometry,
             convexity=self.convexity,
             convexity_from="profile corner" if self.convexity else None,
+            # Always true here, and honestly so rather than flatteringly: this
+            # backend's topology is a ledger nothing invalidates, so a handle
+            # is a key into a list that survives everything -- including a
+            # `rebuild`, which does not re-solve geometry at all and says so.
+            # The live backend's answer depends on whether Inventor gave it a
+            # reference key, which is the interesting half of the field.
+            durable=True,
         )
 
 

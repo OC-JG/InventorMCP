@@ -173,6 +173,12 @@ class TopoInfo(Info):
     #: a face with a hole in it can fool. Worth showing, because a wrong
     #: convexity puts a fillet on the wrong edge with nothing else to see.
     convexity_from: str | None = None
+    #: Whether this handle can be rebound after a rebuild. On the live backend
+    #: that means a `ReferenceKeyManager` key was captured for it; on the
+    #: simulator it is always true, because its topology is a ledger nothing
+    #: invalidates. A handle that is *not* durable is the state the docs have
+    #: always described -- valid until the next rebuild and no longer.
+    durable: bool = False
 
 
 @dataclass

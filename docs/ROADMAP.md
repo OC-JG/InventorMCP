@@ -1092,17 +1092,62 @@ actually bitten.
       it -- defect 11's lesson on the one operation whose position is another
       feature's geometry.
 
-- [ ] **Durable topology handles and a `feature:` selector.** *(Opened
-      2026-09-08.)* Handles from `select_topology` expire on any rebuild and
-      the docs say to re-select. The published `ReferenceKeyManager` --
-      `CreateKeyContext`, `GetReferenceKey(key, ctx)`, `BindKeyToObject`, with
-      the rule that B-Rep keys need their context -- is the durable form, and
-      `Face.CreatedByFeature` plus `PartFeature.Faces` is the semantic one:
-      "the faces of the boss I just made" without an index. The DFM loop is
-      the customer: a finding points at faces, the loop changes a parameter and
-      rebuilds, and today the faces it pointed at are gone.
+- [x] **Durable topology handles and a `feature:` selector.** *(Opened
+      2026-09-08, done 2026-09-09. The `chain` half is split off below; the
+      rebinding is written and needs one run.)*
+
+      **The `feature:` half was already there and half-wired.** `Selector` has
+      taken `feature` since it was written and the COM backend already walked
+      `PartFeature.Faces` for it -- what was missing was the other direction:
+      `Face.CreatedByFeature`, which the simulator has answered since *it* was
+      written and the live backend never did, so `TopoInfo.feature` was set on
+      one side and `None` on the other. It is read now, and an edge's answer is
+      the first of its faces that will give one, since an edge is where two
+      faces meet and belongs to both. That closes a divergence rather than
+      adding a feature, and it is the field that makes a DFM finding sayable
+      as "the faces of the boss" instead of as four indices.
+
+      **The durability half turned out to have a bug under it, and the bug was
+      the more valuable find.** The docstrings said handles expire on rebuild;
+      *nothing enforced it*, so a handle from before a rebuild handed back a
+      **dead COM object** rather than a refusal. Every use now goes through
+      `_live`, which probes the stored object, rebinds it from a
+      `ReferenceKeyManager` key if it has one, and refuses with what to do
+      about it if neither works. That refusal is an improvement whatever
+      happens to the rebinding -- which matters, because:
+
+      **the call is published and the marshalling is not.**
+      `Document.ReferenceKeyManager.CreateKeyContext()` and
+      `entity.GetReferenceKey(context)` are documented, and the key is a
+      byte-array `[out]` parameter that pywin32 *usually* turns into the return
+      value. So `_reference_key` tries and returns `None` on any failure, which
+      costs nothing: a handle with no key behaves exactly as every handle
+      behaved before. The published rule that a B-Rep key needs the context it
+      was made with is what shapes the code -- the context is kept per
+      document, because one created per call is a key that can never be used.
+      `scripts/probe_reference_keys.py` answers it in four steps and stops
+      being interesting as soon as one fails; step 4, rebinding *after* a
+      rebuild, is the only question that matters, since a key that works only
+      while nothing has moved is a key with no use.
+
+      `TopoInfo.durable` is the honest reporting of all that, per handle. The
+      tool's note used to say handles expire, flatly, which overstates it where
+      a key exists and gets a caller re-selecting geometry that would have been
+      fine.
+
+- [ ] **`chain: true` on a selector.** *(Opened 2026-09-09, split off the item
+      above, which had it as "for the same money" -- it is not.)*
       `Edge.TangentiallyConnectedEdges` and `Face.TangentiallyConnectedFaces`
-      give a `chain: true` on selectors for the same money.
+      make the COM side one property. The simulator side is the work: an edge
+      is tangentially connected to its neighbour when the faces meeting at
+      them join smoothly, which for a synthesised prism is decided by whether
+      the *profile* was tangent at that junction -- and the ledger records an
+      edge's midpoint, direction and length but not which primitive it came
+      from, so the tangency is not recoverable today. One field on `_Topo`
+      would fix it, the same way recording a cap face's loop made
+      `use_face_edges` exact. Until then `chain` on one backend and not the
+      other would be a recipe that rehearses differently from how it builds,
+      which is the one thing the two-backend arrangement exists to prevent.
 - [x] **Export through the translator add-ins, with options.** *(Opened
       2026-09-08, done 2026-09-09.)* `export` takes
       `TranslatorAddIn.SaveCopyAs(document, context, options, data)` where a

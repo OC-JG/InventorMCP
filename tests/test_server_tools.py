@@ -165,7 +165,11 @@ class TestInspection:
             "selector": {"kind": "face", "filter": "top"}})
         assert result["count"] == 1
         assert result["matches"][0]["midpoint"][2] == pytest.approx(8.0)
-        assert "expire" in result["note"]
+        # Whether a handle survives a rebuild is now per handle rather than a
+        # blanket claim in the note: the live backend can rebind one it has a
+        # reference key for, and the simulator's ledger invalidates nothing.
+        assert result["matches"][0]["durable"] is True
+        assert "durable" in result["note"]
 
     def test_select_topology_rejects_an_unknown_filter(self, connected, plate_recipe):
         call(connected, "build_part_from_recipe", {"recipe": plate_recipe})
