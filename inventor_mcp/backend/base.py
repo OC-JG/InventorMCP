@@ -135,6 +135,12 @@ class SketchInfo(Info):
     #: internal orientation is not derivable from its name, and getting it wrong
     #: moves geometry silently, so what was measured is worth reporting.
     axes: str | None = None
+    #: How many curves were projected into this sketch from the model, by
+    #: `use_face_edges` or `project`. Worth reporting rather than left implicit
+    #: in the geometry count: a sketch that borrowed four edges and one that
+    #: borrowed none look the same in `entities`, and the difference decides
+    #: whether the profile follows the solid when the solid moves.
+    projected: int = 0
 
 
 @dataclass

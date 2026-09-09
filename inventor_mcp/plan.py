@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Literal, Sequence
+from typing import Any, Literal, Sequence
 
 
 class PointRef(str, Enum):
@@ -52,6 +52,11 @@ class Primitive:
     construction: bool = False
     centerline: bool = False
     label: str | None = None  # user-facing name from the recipe
+    #: True for geometry projected in from the model rather than described by
+    #: the recipe -- `use_face_edges` or `project` on a sketch. It carries no
+    #: free parameters of its own, because the solid drives it, which is why
+    #: the degrees-of-freedom estimate skips it and why nothing dimensions it.
+    projected: bool = False
 
 
 @dataclass
@@ -184,6 +189,20 @@ class SketchPlan:
     #: expressions the planner had to drop, so a run can say which parameter
     #: did not reach the model rather than leaving it to be noticed later
     undriven_expressions: list[str] = field(default_factory=list)
+    #: Project the outline of the face this sketch sits on into it, at
+    #: creation. Only meaningful when `plane` is a `face:` handle, which the
+    #: schema enforces. Inventor's own `PlanarSketches.Add(face, True)`.
+    use_face_edges: bool = False
+    #: Model edges to project into the sketch, as a selector resolved against
+    #: the live part. `None` for the ordinary case of a sketch that references
+    #: nothing.
+    #:
+    #: Projection is the one thing in a plan that **cannot** be worked out
+    #: before the part exists, so unlike every other field here it is carried
+    #: as an instruction rather than as geometry: the backend resolves it and
+    #: adds the primitives. That is why the plan a caller reads back from a
+    #: rehearsal has more primitives in it than the recipe listed.
+    project: "Any | None" = None
 
     def add(self, primitive: Primitive, label: str | None = None) -> Primitive:
         self.primitives.append(primitive)

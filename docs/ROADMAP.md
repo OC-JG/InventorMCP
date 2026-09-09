@@ -953,15 +953,62 @@ actually bitten.
       chord length alone does not say a chamfer is symmetric, and the sketch
       would come out loose rather than wrong, which is worse.
 
-- [ ] **Project geometry.** *(Opened 2026-09-08.)* `PlanarSketch.
-      AddByProjectingEntity(Entity)` one edge, vertex, work axis or work point
-      at a time; `PlanarSketches.Add(face, UseFaceEdges=True)` for a whole
-      outline; `ProjectedCuts.Add()` for cut edges. A projected entity comes
-      back `Reference = True` and bounds no material until that flag is
-      cleared -- the one detail that decides whether an extrude from a
-      projected loop works. Closes the second gap bullet. The simulator half is
-      the harder one: it has to know where the solid's edges are, which the
-      ledger knows for prisms and not for revolves.
+- [x] **Project geometry.** *(Opened 2026-09-08, done 2026-09-09.)*
+      `use_face_edges` on a sketch takes the whole outline of the face it sits
+      on, through `PlanarSketches.Add(face, UseFaceEdges=True)` -- the only
+      place it can be asked for, there being no after-the-fact call for a whole
+      face, which is why it is a flag on the sketch and not an entity. And
+      `project`, a `Selector`, takes named edges one at a time through
+      `PlanarSketch.AddByProjectingEntity(Entity)`.
+
+      **The `Reference` flag is what the whole thing turns on**, and this item
+      said so before it was written: what Inventor hands back bounds no
+      material, so a profile built from a loop of it comes back empty and the
+      feature after it sweeps nothing -- while the sketch looks right. It is
+      cleared, and a release that will not clear it is a hard error rather
+      than a sketch nobody can use.
+
+      **The simulator's half was called the harder one here and came out
+      exact.** The prediction was that it would need to know where the solid's
+      edges are, which the ledger knows for prisms and not for revolves; what
+      it actually needed was for a prism's end face to *record the loop that
+      made it*, which is one field and a copy. So `use_face_edges` reproduces
+      that loop's own lines and arcs -- not a polygon through samples of them,
+      so a rounded rectangle's outline comes back as four lines and four arcs
+      -- and the extrude after it is predicted to the digit rather than
+      declined. A straight edge is a midpoint, a direction and a length, which
+      is enough to project; an edge perpendicular to the sketch plane becomes
+      a **point**, as it does in Inventor, which is also the useful answer
+      since that is where a hole goes.
+
+      Where the ledger cannot answer it **refuses**, and that is a deliberate
+      departure from the declining-in-writing this simulator does everywhere
+      else. A declined placement still leaves a feature with a volume; a
+      projection silently skipped leaves a sketch with *no profile*, so the
+      extrude after it does nothing and the recipe looks like it worked. So a
+      cylindrical face, and a circular edge whose facing the ledger does not
+      hold, are refused by name.
+
+      **A silent bug fell out of it**, and it is the find worth keeping:
+      sketching on a `face:` handle was answered *XY at offset zero* by the
+      simulator, so a sketch on the top of a 10 mm plate was filed at the
+      bottom of it and every cut from it was charged against material 10 mm
+      from where it really was. Nothing said so, and no test had ever sketched
+      on a face handle in the simulator -- the boss composite uses a work
+      plane. The face's recorded plane and depth are the real answer, and they
+      are the same record the projection reads.
+
+- [ ] **Project cut edges, and a sketch offset.** *(Opened 2026-09-09, split
+      off the item above.)* `PlanarSketch.ProjectedCuts.Add()` is Project Cut
+      Edges: for a sketch plane that slices *through* the solid, the section
+      outline rather than a face's. The simulator's half is the one that makes
+      this its own item -- a section through a ledger of signed prisms is a
+      real geometric operation, not a copy of a recorded loop, and the honest
+      first version may be to refuse it and say so.
+      `OffsetSketchEntitiesUsingDistance` is the other half of the old gap
+      bullet: an outline offset inward or outward by a distance, which is
+      `inset_area`'s identity as *geometry* rather than as an area, and which
+      the shell already relies on numerically.
 - [x] **An angled work plane, properly.** *(Opened 2026-09-08 by defect 12,
       done 2026-09-09.)* `WorkPlaneOp` has an `axis` -- an origin axis, a work
       axis or a sketch line, resolved the way a pattern's is -- and it is

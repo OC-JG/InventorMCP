@@ -70,6 +70,14 @@ OPERATIONS -- executed in order; each has an optional "name" used to refer back.
 
 sketch      {"op":"sketch","name":"Base","plane":"xy","offset":null,"entities":[...]}
             plane: "xy" | "xz" | "yz" | a work-plane name | "face:<handle>" from select_topology
+            "use_face_edges":true  // borrow the whole outline of the face this
+               // sketch sits on, so a wall or a pocket follows the shape that
+               // is already there. Needs plane to be a "face:<handle>".
+            "project":{"kind":"edge","filter":"horizontal"}  // borrow named
+               // model edges. Each becomes a real curve, so it can be
+               // dimensioned to or form part of a profile. Both of these keep
+               // following the solid when the solid changes, which writing the
+               // outline out again does not.
   entities (each may set "name", "construction", "dimension", "locate"):
     {"type":"rectangle","center":[0,0],"width":"plate_w","height":"plate_h"}
     {"type":"rectangle","corner":[0,0],"width":40,"height":20}

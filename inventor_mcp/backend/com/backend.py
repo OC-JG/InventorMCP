@@ -1618,6 +1618,44 @@ class ComBackend(Backend):
             parameter.Delete()
 
     # -- sketches ----------------------------------------------------------
+    def _project_entities(self, sketch: Any, doc_id: str,
+                          borrowed: Sequence[TopoInfo]) -> int:  # pragma: no cover
+        """Project model entities into *sketch*, and make them bound material.
+
+        `PlanarSketch.AddByProjectingEntity(Entity)` is the published call, one
+        entity at a time -- there is no collection form. What it hands back is
+        marked **`Reference = True`**, and reference geometry bounds no
+        material: an extrude from a loop of it finds no profile. That flag is
+        the one detail this whole feature turns on, so it is cleared, and a
+        release that will not clear it is a hard error rather than a sketch
+        that looks right and builds nothing.
+
+        The projected curve stays *associative* either way -- it follows the
+        edge it came from -- which is the point of projecting rather than
+        copying coordinates.
+        """
+        added = 0
+        with self._translate_errors("Projecting model geometry", SketchError):
+            for match in borrowed:
+                entity = self._topology[match.id]["object"]
+                made = sketch.AddByProjectingEntity(entity)
+                added += 1
+                try:
+                    if bool(made.Reference):
+                        made.Reference = False
+                except Exception as exc:
+                    raise SketchError(
+                        f"Projected {match.description} into the sketch and "
+                        "could not clear its reference flag: "
+                        f"{_com_message(exc)}",
+                        hint="Reference geometry bounds no material, so a "
+                        "profile built from it would come back empty and the "
+                        "feature after it would find nothing to sweep. This is "
+                        "refused rather than left, because the sketch would "
+                        "look right.",
+                    ) from exc
+        return added
+
     def build_sketch(self, doc_id: str, plan: SketchPlan) -> SketchInfo:  # pragma: no cover
         document = self._doc(doc_id)
         component = document.ComponentDefinition
@@ -1625,11 +1663,25 @@ class ComBackend(Backend):
         transient = app.TransientGeometry
 
         plane = self._resolve_plane(document, plan.plane, plan.offset_expression)
+        # Resolved before the batch opens, so a selector that matches nothing
+        # fails with the recipe's own message and no half-built sketch behind
+        # it.
+        borrowed = (self._topology_selection(doc_id, plan.project)[1]
+                    if plan.project is not None else [])
         with self._batch(document):
             with self._translate_errors("Creating the sketch", SketchError):
-                sketch = component.Sketches.Add(plane, False)
+                # `PlanarSketches.Add(PlanarEntity, UseFaceEdges)`: the second
+                # argument projects the face's own outline at creation, which
+                # is the only place it can be asked for -- there is no
+                # after-the-fact call for a whole face. It is meaningless on
+                # anything but a face, and the schema has already refused
+                # `use_face_edges` on a plane that is not one.
+                sketch = component.Sketches.Add(plane, bool(plan.use_face_edges))
                 if plan.name:
                     sketch.Name = plan.name
+            projected = _count_curves(sketch) if plan.use_face_edges else 0
+            if borrowed:
+                projected += self._project_entities(sketch, doc_id, borrowed)
 
             # The sketch has to exist before its axes can be measured, and its
             # axes have to be known before any geometry goes in: a plane's
@@ -1798,6 +1850,11 @@ class ComBackend(Backend):
             refused_dimensions=len(refused_dimensions),
             driven_parameters=_driven_parameters(plan, driving),
             undriven_expressions=list(plan.undriven_expressions),
+            # Counted from the sketch rather than from the plan: with
+            # `use_face_edges` it is Inventor that decided how many curves the
+            # face's outline came to, and a recipe that asked for an outline
+            # and got nothing is exactly what this number is for.
+            projected=projected,
             axes=axes,
         )
 
@@ -6250,6 +6307,24 @@ def _describe_sketch(sketch: Any) -> str:  # pragma: no cover - Windows only
         label = name.replace("Sketch", "").lower()
         parts.append(f"{total} {label}" + (f" ({construction} construction)" if construction else ""))
     return ", ".join(parts) or "no geometry at all"
+
+
+def _count_curves(sketch: Any) -> int:  # pragma: no cover - Windows only
+    """How many curves a sketch holds, across every collection that has any.
+
+    Asked immediately after `Sketches.Add(plane, True)` so the count of what
+    the face's outline contributed is known before the recipe's own geometry
+    goes in. `SketchEntities` would be one call, and it is not used: it also
+    counts points and text, and the number wanted here is curves.
+    """
+    total = 0
+    for name in ("SketchLines", "SketchCircles", "SketchArcs", "SketchEllipses",
+                 "SketchSplines"):
+        try:
+            total += int(getattr(sketch, name).Count)
+        except Exception:
+            continue
+    return total
 
 
 def _count_profiles(sketch: Any) -> int:  # pragma: no cover - Windows only

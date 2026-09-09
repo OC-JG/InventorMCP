@@ -1231,8 +1231,18 @@ def _apply_dimensions(plan: SketchPlan, resolver: Resolver, specs: Iterable[Dime
 
 
 def plan_sketch(spec: SketchOp, resolver: Resolver) -> SketchPlan:
-    """Expand a sketch operation into geometry, constraints and dimensions."""
-    plan = SketchPlan(name=spec.name, plane=spec.plane)
+    """Expand a sketch operation into geometry, constraints and dimensions.
+
+    `use_face_edges` is copied across here and `project` is **not**: a
+    selector's lengths have to be resolved into database units, and
+    `resolve_selector` lives a layer above this module, in `builder.py`, with
+    the recipe's units. So the builder fills that field in immediately after
+    calling this, and `tests/test_project_geometry.py` pins the pair -- a plan
+    that carried one and not the other would rehearse a sketch that referenced
+    nothing and build one that did.
+    """
+    plan = SketchPlan(name=spec.name, plane=spec.plane,
+                      use_face_edges=spec.use_face_edges)
     if spec.offset is not None:
         offset = resolver.length(spec.offset, "sketch plane offset")
         plan.offset_expression = offset.expression

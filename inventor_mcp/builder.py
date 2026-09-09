@@ -298,6 +298,10 @@ def _apply_one(session: Session, context: DocumentContext, op: Operation) -> dic
 
     if isinstance(op, SketchOp):
         plan = plan_sketch(op, resolver)
+        # Resolved here rather than in `plan_sketch`, which has no way to turn
+        # a selector's lengths into database units -- see its docstring.
+        if op.project is not None:
+            plan.project = resolve_selector(op.project, resolver, kind="edge")
         info = backend.build_sketch(context.doc_id, plan)
         context.remember_sketch(info.name, plan)
         return {"op": "sketch", **info.as_dict()}

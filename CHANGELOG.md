@@ -6,6 +6,37 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
 ### Added
 
+- **A sketch can borrow the solid it sits on: `use_face_edges` and
+  `project`.** *(Roadmap Phase 2, closing most of the second-oldest gap
+  bullet.)* `use_face_edges` takes the whole outline of the face the sketch is
+  on, through `PlanarSketches.Add(face, UseFaceEdges=True)` -- the only place
+  it can be asked for, since there is no after-the-fact call for a whole face.
+  `project` is a selector that takes named edges one at a time through
+  `PlanarSketch.AddByProjectingEntity(Entity)`. Both keep following the solid
+  when the solid changes, which writing the outline out again does not, and
+  that is the whole reason for having them.
+
+  **The `Reference` flag is what it turns on.** What Inventor hands back is
+  marked `Reference = True` and bounds no material, so a profile built from a
+  loop of it comes back empty and the feature after it sweeps nothing -- while
+  the sketch looks right. It is cleared, and a release that will not clear it
+  is a hard error.
+
+  **The simulator's half came out exact**, where the roadmap had expected it to
+  be the harder side and possibly declined. A prism's end face now records the
+  loop that made it, so `use_face_edges` reproduces that loop's own lines and
+  arcs rather than a polygon through samples of them -- a rounded rectangle
+  comes back as four lines and four arcs -- and the extrude after it is
+  predicted to the digit. A straight edge projects from its midpoint,
+  direction and length; one perpendicular to the sketch plane becomes a
+  **point**, as in Inventor, which is where a hole goes.
+
+  Where the ledger cannot answer it **refuses** rather than declining in
+  writing, which is a deliberate exception to how this simulator behaves
+  everywhere else: a declined placement still leaves a feature with a volume,
+  where a projection silently skipped leaves a sketch with no profile and a
+  recipe that looks like it worked.
+
 - **Export goes through the translator add-in, so `options` reaches its
   settings.** *(Roadmap Phase 2.)*
   `TranslatorAddIn.SaveCopyAs(document, context, options, data)`, with the
@@ -372,6 +403,15 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   argument names at the call site where a permutation is not possible.
 
 ### Fixed
+
+- **A simulator sketch on a `face:` handle was placed at XY, offset zero.**
+  Found while building the projection above, and silent: a sketch on the top
+  of a 10 mm plate was filed at the *bottom* of it, so every cut from it was
+  charged against material 10 mm from where it really was, and no test had
+  ever sketched on a face handle in the simulator -- the boss composite uses a
+  work plane offset instead. A face's recorded plane and depth are the real
+  answer, and a face the ledger cannot place is refused with the reason rather
+  than falling back on one.
 
 - **The first probe could not read anything, and the error blamed Inventor.**
   *(2026-09-08.)* `python scripts/probe_definitions.py` on the CAD machine

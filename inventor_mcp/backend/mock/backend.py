@@ -134,6 +134,18 @@ def map3d(plane: str, u: float, v: float, w: float) -> tuple[float, float, float
     return (coords[0], coords[1], coords[2])
 
 
+def map2d(plane: str, point: Sequence[float]) -> tuple[float, float, float]:
+    """`map3d` backwards: a model-space point as (u, v, w) for *plane*.
+
+    `w` is the signed distance along the plane's normal, so dropping it is
+    exactly the orthographic projection onto the plane -- which is what
+    Inventor's `AddByProjectingEntity` does with an entity that does not lie
+    in the sketch plane.
+    """
+    axes, _ = _PLANES[plane]
+    return tuple(point[axis] * sign for axis, sign in axes)  # type: ignore[return-value]
+
+
 def plane_normal(plane: str) -> tuple[float, float, float]:
     return _PLANES[plane][1]
 
@@ -217,6 +229,22 @@ class _Topo:
     #: or concave exactly as that corner turns. Everything else stays None and
     #: matches neither filter, as on the live backend.
     convexity: str | None = None
+    #: For a planar cap face, the sketch primitives its outline was built from
+    #: -- copies, so a later sketch can project them back in. This is what
+    #: makes `use_face_edges` exact rather than sampled: the loop's own lines
+    #: and arcs are reproduced, not a polygon through points on them.
+    #:
+    #: Only cap faces carry it. A cylindrical face has no outline in one
+    #: plane, and a planar *side* face's outline lies in a plane that is not
+    #: one of the three origin planes unless the edge happens to be
+    #: axis-aligned -- so those are left None, and `build_sketch` refuses to
+    #: project them with the reason rather than approximating.
+    outline: tuple[Any, ...] | None = None
+    #: Which origin plane that outline's 2D coordinates belong to, and at what
+    #: offset along its normal. Both are needed to say whether a sketch asking
+    #: for the outline is on the same plane as it.
+    outline_plane: str | None = None
+    outline_depth: float | None = None
 
     def to_info(self) -> TopoInfo:
         return TopoInfo(
@@ -965,7 +993,8 @@ class MockBackend(Backend):
     def build_sketch(self, doc_id: str, plan: SketchPlan) -> SketchInfo:
         document = self._doc(doc_id)
         base_plane = plan.plane.split(":")[0]
-        if base_plane not in _PLANES and plan.plane not in document.work_planes:
+        if (base_plane not in _PLANES and plan.plane not in document.work_planes
+                and not plan.plane.startswith("face:")):
             raise SketchError(
                 f"Unknown sketch plane {plan.plane!r}.",
                 hint="Use 'xy', 'xz', 'yz', a work plane name, or 'face:<handle>' from `select`.",
@@ -974,6 +1003,7 @@ class MockBackend(Backend):
         if any(sketch.name == name for sketch in document.sketches):
             raise SketchError(f"A sketch named {name!r} already exists.")
 
+        projected = self._project_into(document, plan)
         loops = profile_loops(plan)
         base, offset = self._plane_and_offset(document, plan)
         sketch = _Sketch(id=self._next("sk"), name=name, plan=plan, loops=loops,
@@ -982,14 +1012,140 @@ class MockBackend(Backend):
         document.sketches.append(sketch)
         document.modified = True
         self._record("build_sketch", name=name, plane=plan.plane, **plan.summary())
-        return _sketch_info(sketch)
+        info = _sketch_info(sketch)
+        if projected:
+            info.projected = projected
+        return info
+
+    def _project_into(self, document: _Document, plan: SketchPlan) -> int:
+        """Add the model geometry *plan* asks for, and return how much.
+
+        Two sources, and both put **real curves** into the plan rather than
+        references, so everything downstream -- `profile_loops`, the area, the
+        ledger -- works on them unchanged. That is the whole reason this is
+        worth having in the simulator: an extrude from a projected outline is
+        predicted exactly, not declined.
+
+        Where it cannot be done it is **refused rather than approximated**,
+        and that is a deliberate departure from the declining-in-writing this
+        backend does elsewhere. A declined placement still leaves a feature
+        with a volume; a sketch whose projection was silently skipped has *no
+        profile*, so the extrude after it does nothing and the recipe looks
+        like it worked. A refusal naming the face is the only honest answer.
+        """
+        added = 0
+        # `proj_` so a projected primitive's id cannot collide with one the
+        # planner made: those are `line1`, `arc1` and so on.
+        counter = count(1)
+        ids = lambda kind: f"proj_{kind}{next(counter)}"  # noqa: E731
+        if plan.use_face_edges:
+            added += self._project_face_edges(document, plan, ids)
+        if plan.project is not None:
+            added += self._project_edges(document, plan, ids)
+        return added
+
+    def _project_face_edges(self, document: _Document, plan: SketchPlan,
+                            ids: Any) -> int:
+        """The outline of the face this sketch sits on, as its own curves."""
+        handle = plan.plane.split(":", 1)[1] if plan.plane.startswith("face:") else ""
+        face = next((topo for topo in document.topology if topo.id == handle), None)
+        if face is None:
+            raise SketchError(
+                f"`use_face_edges` names face {handle!r} and this part has no "
+                "such face.",
+                hint="Handles come from `select_topology` and are per-document; "
+                "they expire when the part is rebuilt, so re-select.",
+            )
+        if face.outline is None:
+            raise SketchError(
+                f"This ledger holds no outline for {face.description!r}, so "
+                "`use_face_edges` has nothing to project.",
+                hint="It records the outline of a prism's end faces, where the "
+                "loop that made them is known exactly. A cylindrical face has "
+                "no outline in one plane, and a flat side face's outline lies "
+                "in a plane that is not one of the three origin ones unless "
+                "its edge happens to be axis-aligned. Sketch on an end face, "
+                "or name the edges with `project`.",
+            )
+        # No plane check: the sketch is *on* this face, so `_plane_of_face`
+        # gave it the face's own plane, and the outline's 2D coordinates are
+        # already the sketch's. A `offset` on top of the face moves the sketch
+        # along the normal, which leaves those coordinates unchanged -- the
+        # projection is orthographic, which is what makes the offset harmless
+        # here and not merely tolerated.
+        for primitive in face.outline:
+            plan.add(replace(primitive, id=ids(type(primitive).__name__[1:].lower()),
+                             projected=True))
+        return len(face.outline)
+
+    def _project_edges(self, document: _Document, plan: SketchPlan,
+                       ids: Any) -> int:
+        """The model edges a selector names, projected onto the sketch plane.
+
+        A straight edge is a midpoint, a direction and a length, which is
+        enough: the two ends come out of that arithmetic and `map2d` drops the
+        component along the plane's normal, which *is* the orthographic
+        projection Inventor performs. Anything else is refused -- a circular
+        edge here is a centre and a circumference, which says nothing about
+        which way it faces, so whether it projects to a circle or to a line is
+        not something this can answer.
+        """
+        matches = self.select(self._doc_id_of(document), plan.project)
+        if not matches:
+            raise SketchError(
+                "`project` matched no edges, so this sketch would reference "
+                "nothing.",
+                hint="Call `select_topology` with the same selector to see what "
+                "the part offers.",
+            )
+        base, _ = self._base_plane_of(document, plan.plane, "a sketch")
+        for match in matches:
+            topo = next((t for t in document.topology if t.id == match.id), None)
+            if topo is None or topo.direction is None or topo.length is None:
+                raise SketchError(
+                    f"`project` matched {match.description!r}, and this ledger "
+                    "cannot say where that lands on the sketch plane.",
+                    hint="A straight edge is a midpoint, a direction and a "
+                    "length, which is enough to project. A circular edge here "
+                    "is a centre and a circumference, which does not say which "
+                    "way it faces, so it might project to a circle or to a "
+                    "line. Narrow the selector to straight edges.",
+                )
+            half = topo.length / 2
+            ends = [
+                tuple(topo.midpoint[axis] + sign * topo.direction[axis] * half
+                      for axis in range(3))
+                for sign in (-1.0, 1.0)
+            ]
+            first, second = (map2d(base, end)[:2] for end in ends)
+            if math.dist(first, second) <= 1e-7:
+                # An edge perpendicular to the sketch plane projects to a
+                # *point*, which is what Inventor gives too -- and a
+                # zero-length line would be worse than useless here: the loop
+                # walker chains segments on their endpoints and one with both
+                # at the same place would join anything to anything. A point is
+                # also the useful answer, since it is where a hole goes.
+                plan.add(PPoint(ids("point"), projected=True, position=first))
+            else:
+                plan.add(PLine(ids("line"), projected=True,
+                               start=first, end=second))
+        return len(matches)
+
+    def _doc_id_of(self, document: _Document) -> str:
+        for doc_id, held in self._documents.items():
+            if held is document:
+                return doc_id
+        raise DocumentError("That document is not in this session.")  # pragma: no cover
 
     def _plane_and_offset(self, document: _Document,
                           plan: SketchPlan) -> tuple[str, float]:
         """Which origin plane a sketch really lies on, and how far along it.
 
         A work plane contributes its own offset on top of any the sketch asks
-        for; a `face:` reference has no cheap answer, so it falls back to XY.
+        for, and so does a `face:` handle -- which used to fall back to **XY at
+        zero**, silently, so a sketch on the top of a 10 mm plate was filed at
+        the bottom of it. `_plane_of_face` answers properly for a prism's end
+        face and refuses for the rest.
         """
         named = plan.plane.split(":")[0]
         if named in _PLANES:
@@ -997,7 +1153,8 @@ class MockBackend(Backend):
         if plan.plane in document.work_planes:
             base, offset = document.work_planes[plan.plane]
             return base, offset + plan.offset_value
-        return "xy", plan.offset_value
+        base, offset = self._plane_of_face(document, plan.plane, "a sketch")
+        return base, offset + plan.offset_value
 
     def list_sketches(self, doc_id: str) -> list[SketchInfo]:
         document = self._doc(doc_id)
@@ -1336,6 +1493,13 @@ class MockBackend(Backend):
 
         for loop_index, loop in enumerate(loops):
             area = loop_area(sketch.plan, loop)
+            # The loop's own primitives, copied, so `use_face_edges` on a
+            # sketch placed on this face reproduces the real outline rather
+            # than a polygon through samples of it.
+            outline = tuple(replace(sketch.plan.by_id(primitive_id),
+                                    label=None, construction=False,
+                                    centerline=False)
+                            for primitive_id in loop)
             for depth, label in ((near, "start"), (far, "end")):
                 center = _loop_center(sketch.plan, loop)
                 document.topology.append(
@@ -1348,6 +1512,9 @@ class MockBackend(Backend):
                         midpoint=map3d(plane, center[0], center[1], depth),
                         normal=tuple(component * (1 if label == "end" else -1) for component in normal),  # type: ignore[arg-type]
                         area=area,
+                        outline=outline,
+                        outline_plane=plane,
+                        outline_depth=depth,
                     )
                 )
             corners = _corner_convexity(loop_points(sketch.plan, loop), inverted=cut)
@@ -3109,17 +3276,60 @@ class MockBackend(Backend):
         """Which origin plane a bare plane reference means, and its offset.
 
         The same rule `_plane_and_offset` applies to a sketch, for the callers
-        that have a plane name and no `SketchPlan` to carry it.
+        that have a plane name and no `SketchPlan` to carry it -- including a
+        `face:` handle, which this backend could not place at all until
+        2026-09-09: the *outline* recorded for a prism's end face says which
+        origin plane it is parallel to and how far along, which is exactly the
+        answer, and it is the same record `use_face_edges` projects from.
         """
         named = reference.split(":")[0]
         if named in _PLANES:
             return named, 0.0
         if reference in document.work_planes:
             return document.work_planes[reference]
+        if reference.startswith("face:"):
+            return self._plane_of_face(document, reference, what)
         raise FeatureError(
             f"Unknown plane {reference!r} for {what}.",
             hint="Use 'xy', 'xz', 'yz' or the name of a work plane created earlier.",
         )
+
+    def _plane_of_face(self, document: _Document, reference: str,
+                       what: str) -> tuple[str, float]:
+        """Which origin plane a `face:` handle lies in, and at what offset.
+
+        Answerable for a prism's end face and refused for everything else,
+        which is the ledger's shape rather than an omission: an end face was
+        made from a known loop on a known plane at a known depth, and those
+        three facts are recorded. A cylindrical face lies in no plane at all,
+        and a flat side face lies in one that is not an origin plane unless its
+        edge happened to be axis-aligned.
+
+        Refused rather than fallen back on, and the fallback is why this
+        function exists: until 2026-09-09 `_plane_and_offset` answered **XY at
+        offset zero** for any face, so a sketch on the top of a 10 mm plate was
+        filed at the bottom of it and every cut from that sketch was charged
+        against material 10 mm away. Nothing said so.
+        """
+        handle = reference.split(":", 1)[1]
+        face = next((topo for topo in document.topology if topo.id == handle), None)
+        if face is None:
+            raise FeatureError(
+                f"This part has no face {handle!r}, named for {what}.",
+                hint="Handles come from `select_topology`, are per-document, and "
+                "expire when the part is rebuilt. Re-select.",
+            )
+        if face.outline_plane is None or face.outline_depth is None:
+            raise FeatureError(
+                f"This ledger cannot say which plane {face.description!r} lies "
+                f"in, so it cannot place {what} on it.",
+                hint="It records the plane and depth of a prism's end faces, "
+                "where the loop that made them is known. A cylindrical face "
+                "lies in no plane, and a flat side face lies in one that is not "
+                "an origin plane unless its edge is axis-aligned. Use an origin "
+                "plane, or a work plane offset from one.",
+            )
+        return face.outline_plane, face.outline_depth
 
     def work_point(self, doc_id: str, request: WorkPointRequest) -> FeatureInfo:
         document = self._doc(doc_id)
@@ -4461,6 +4671,12 @@ def _degrees_of_freedom(plan: SketchPlan) -> int:
     """
     dof = 0
     for primitive in plan.primitives:
+        if primitive.projected:
+            # Driven by the solid, not by the sketch: it has no free
+            # parameters to remove, and Inventor treats projected geometry as
+            # fully constrained for the same reason. Counting it would report
+            # every sketch that borrows an outline as under-constrained.
+            continue
         if isinstance(primitive, PLine):
             dof += 4
         elif isinstance(primitive, PCircle):

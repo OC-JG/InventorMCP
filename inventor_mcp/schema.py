@@ -415,6 +415,16 @@ class OpBase(Base):
 
 
 class SketchOp(OpBase):
+    """A sketch, and optionally what it borrows from the solid it sits on.
+
+    `use_face_edges` and `project` are the two ways a sketch can reference
+    geometry that already exists rather than only geometry the recipe
+    describes. Both go in as **real curves** rather than as references: what
+    Inventor's `AddByProjectingEntity` hands back is marked `Reference = True`
+    and bounds no material until that flag is cleared, and it is cleared here,
+    because a projected outline that cannot be extruded is not worth having.
+    """
+
     op: Literal["sketch"] = "sketch"
     plane: PlaneRef = Field(
         "xy",
@@ -426,6 +436,34 @@ class SketchOp(OpBase):
     entities: list[SketchEntity] = Field(default_factory=list)
     constraints: list[ConstraintSpec] = Field(default_factory=list)
     dimensions: list[DimensionSpec] = Field(default_factory=list)
+    use_face_edges: bool = Field(
+        False,
+        description="Project the outline of the face this sketch sits on into "
+        "it, so a cut or a boss can be built from the shape that is already "
+        "there. Needs `plane` to be a 'face:<handle>', because there is no "
+        "other way to say which face -- an origin plane is not a face and a "
+        "work plane has no edges.",
+    )
+    project: Selector | None = Field(
+        None,
+        description="Model edges to project into this sketch, picked the way a "
+        "fillet picks its edges. Each becomes a real curve in the sketch, so it "
+        "can be dimensioned to, or form part of a profile. An edge not lying in "
+        "the sketch plane is projected onto it along the plane's normal, which "
+        "is what Inventor does.",
+    )
+
+    @model_validator(mode="after")
+    def _face_edges_need_a_face(self) -> "SketchOp":
+        if self.use_face_edges and not self.plane.startswith("face:"):
+            raise ValueError(
+                f"`use_face_edges` needs `plane` to be a 'face:<handle>', and "
+                f"it is {self.plane!r}. An origin plane is not a face and a "
+                "work plane has no edges, so there would be no outline to "
+                "project. Run `select_topology` for a face handle, or use "
+                "`project` to name the edges instead."
+            )
+        return self
 
 
 class ExtrudeOp(OpBase):

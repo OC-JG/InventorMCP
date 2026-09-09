@@ -462,16 +462,45 @@ Found by using the server rather than by reading its API surface:
   corner has now and stops being a `d` setback the moment the outline is
   revised. A chord length plus an angle is the drafting answer there, and
   nothing here writes one.
-* **No project geometry or sketch offset**, so a sketch cannot reference the edges
-  of the solid it sits on. *The calls are published* (2026-09-08):
-  `PlanarSketch.AddByProjectingEntity(Entity)` projects one edge, vertex, work
-  axis or work point at a time and returns reference geometry;
-  `PlanarSketches.Add(face, UseFaceEdges=True)` projects a whole face's outline
-  at creation; `PlanarSketch.ProjectedCuts.Add()` is Project Cut Edges; and
-  `OffsetSketchEntitiesUsingDistance` is the offset. A projected entity comes
-  back with `Reference = True` and bounds no material until that flag is
-  cleared, which is the detail a `project` entity has to get right. Also in the
-  roadmap's Phase 2.
+* ~~**No project geometry or sketch offset**, so a sketch cannot reference the
+  edges of the solid it sits on.~~ **The projection half closed 2026-09-09;
+  the sketch offset is still missing.** `use_face_edges` on a sketch takes the
+  whole outline of the face it sits on, through
+  `PlanarSketches.Add(face, UseFaceEdges=True)` -- the only place it can be
+  asked for, since there is no after-the-fact call for a whole face -- and
+  `project`, a selector, takes named edges one at a time through
+  `PlanarSketch.AddByProjectingEntity(Entity)`.
+
+  **Both go in as real curves rather than references**, which is the detail the
+  whole thing turns on: what Inventor hands back is marked `Reference = True`
+  and bounds no material, so a profile built from a loop of it comes back
+  empty and the feature after it sweeps nothing -- while the sketch looks
+  right. The flag is cleared, and a release that will not clear it is a hard
+  error.
+
+  **The simulator's half landed exact rather than declined**, which the
+  roadmap had called the harder side. A prism's end face records the loop that
+  made it, so `use_face_edges` reproduces that loop's own lines and arcs --
+  not a polygon through samples of them -- and the extrude after it is
+  predicted to the digit. A straight edge is a midpoint, a direction and a
+  length, which is enough to project; an edge perpendicular to the sketch
+  plane becomes a *point*, as it does in Inventor. Where the ledger cannot
+  answer -- a cylindrical face, a circular edge whose facing it does not hold
+  -- it **refuses**, deliberately unlike the declining-in-writing it does
+  elsewhere: a declined placement still leaves a feature with a volume, where
+  a projection silently skipped leaves a sketch with no profile and a recipe
+  that looks like it worked.
+
+  **A bug fell out of it, and it was silent.** Sketching on a `face:` handle
+  was answered *XY at offset zero* by the simulator, so a sketch on the top of
+  a 10 mm plate was filed at the bottom of it and every cut from it was
+  charged against material 10 mm from where it really was. The face's recorded
+  plane and depth are the real answer, and they are the same record the
+  projection reads.
+
+  Still open, both in the roadmap: `PlanarSketch.ProjectedCuts.Add()` (Project
+  Cut Edges, for a sketch plane that slices through the solid) and
+  `OffsetSketchEntitiesUsingDistance` (the sketch offset).
 * ~~**`work_plane` builds only `offset` and `midplane` on Inventor.**~~
   **Closed 2026-09-09: all four kinds build.** *Found 2026-09-08 by reading
   the COM backend against the schema.* `WorkPlaneOp` accepted `kind: "angle"`
