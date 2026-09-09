@@ -62,6 +62,15 @@ still build the wrong part, and these are the ways it does:
   anyway, so the step will diverge too. Move the points, or check the sketch
   plane. This is the one pattern the simulator places rather than counts, which
   is why it can tell you at all.
+- **`this feature is on a tilted work plane, so the simulator predicts its volume and not its placement`** — a `work_plane` with `kind: "angle"` is
+  built for real on Inventor, and the simulator's ledger holds axis-aligned
+  prisms, so a sweep from a plane turned about an axis is not one it can place.
+  The volume is exact; what goes unchecked is where the material sits, and so
+  whether a *later* cut or hole through it meets anything.
+- **`this cut is on a tilted work plane, so it is charged its whole swept prism rather than the material it meets`** — the same limit, on the step that pays
+  for it: a cut there is billed its entire sweep, which is an upper bound
+  rather than a prediction, so expect that step to diverge. The part is
+  probably right; the number is the thing to distrust.
 - **`this layer changes nothing: ...`** — a `thicken` whose `direction` and
   `operation` cancel: the layer lies where the material already is, or already
   is not, so the boolean has nothing to do. `positive` + `join` grows the part,

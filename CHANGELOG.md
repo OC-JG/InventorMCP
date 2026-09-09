@@ -4,6 +4,51 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
 ## Unreleased
 
+### Added
+
+- **An angled work plane, and a simulator that says what it cannot place.**
+  *(Defect 12, opened 2026-09-08 and closed 2026-09-09.)* `WorkPlaneOp` gains
+  an `axis` -- an origin axis, a work axis or a sketch line, resolved the way a
+  pattern's is. It is **required** for `kind: "angle"` and refused on every
+  other kind: a plane turned about one of its own directions is a different
+  plane from the same plane turned about the other, so there is nothing to
+  default to, and defaulting one would have been defect 12 again with a tilt on
+  it. The COM call is the published `AddByLinePlaneAndAngle(axis, plane,
+  angle)`, called positionally because the argument order is documented and the
+  parameter names are not, with the angle going in as a value and then as an
+  expression -- the value makes the geometry right whatever happens next and
+  the expression is what keeps it parametric, which is the pattern the offset
+  already used.
+
+  **The simulator records the tilt instead of placing it, and that was the
+  decision worth making.** Its ledger holds axis-aligned prisms -- an outline
+  in a plane's own 2D coordinates plus a near and a far along its normal -- and
+  a sweep from a plane turned 30 degrees about X is not one of those. So the
+  volume is still predicted, because area times depth does not care how a prism
+  is oriented; no slab enters the ledger; each feature's `placement` says why;
+  and a **cut** there is charged its whole sweep with the reason in
+  `volume_from`, since what a tilted sweep meets is not something an
+  axis-aligned ledger can measure. `rehearse` warns on both and differently: a
+  cut's own number is then an upper bound where a join's is exact.
+
+  Placing it anyway would have been wrong in the one direction nobody checks.
+  Every later cut, hole and pattern reads that ledger, so one tilted prism in
+  the wrong place makes every feature after it wrong too, and quietly. This
+  also settles defect 7's note that `mock.work_plane` filed every plane against
+  its base whatever its kind.
+
+  **The COM half is unmeasured** -- no run has built a work plane of any kind
+  directly -- and `scripts/live_acceptance.py --only work-planes` is the run.
+  It reads three things: that each kind builds, that the angled plane is *not*
+  parallel to its base (defect 12's own symptom, so "it built" proves nothing),
+  and that doubling the angle moves the geometry, which is defect 11's lesson
+  on the one operation whose whole point is a driven angle.
+
+  `tangent` stays refused, with its rehearsal warning narrowed to it alone:
+  `AddByPlaneAndTangent` wants a cylindrical face and the recipe has no field
+  naming one. It is its own roadmap item now.
+
+
 ### Measured
 
 - **`move_face` and `sketch_driven_pattern` both build in Inventor, and every

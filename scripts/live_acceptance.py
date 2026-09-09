@@ -2294,6 +2294,110 @@ def check_promotion(session: Session, report: Report) -> None:
         session.forget(context.doc_id)
 
 
+def check_work_planes(session: Session, report: Report) -> None:
+    """Every work-plane kind this server builds, on Inventor.
+
+    **Nothing here has ever run.** A work plane has only ever been created as a
+    side effect -- `_carrier_point` builds a sketch on one -- so
+    `WorkPlanes.AddByPlaneAndOffset`, `AddByTwoPlanes` and, since 2026-09-09,
+    `AddByLinePlaneAndAngle` are all unmeasured. The last is the one worth the
+    seat: it is the fix for defect 12, its parameter *names* are not published
+    so it is called positionally, and the angle goes in twice -- as a value to
+    make the geometry right and as an expression to keep it parametric.
+
+    Three readings, and the second is the one a wrong call would pass:
+
+    * that each kind builds at all;
+    * that a sketch on the angled plane is **not** parallel to the base one.
+      This is defect 12's own symptom: an angled request used to build an
+      offset plane and report success, so "it built" proves nothing. A 30
+      degree plane through the middle of a plate, extruded, gives a prism whose
+      bounding box is taller than the plate by a computable amount -- and an
+      offset plane would give exactly the plate's own height;
+    * that the angle **follows its parameter**, which is defect 11's lesson:
+      double the angle and the box changes again. An angle that reached
+      Inventor as a number rather than an expression builds the right part once
+      and never moves.
+    """
+    print("\n--- work planes: offset, midplane and the angled one defect 12 opened")
+    if session.backend.name == "mock":
+        report.skip("work-planes: not run",
+                    "the simulator records a tilt and does not place the "
+                    "material, so it cannot answer where an angled plane's "
+                    "geometry lands. Use --backend inventor.")
+        return
+
+    recipe = PartRecipe.model_validate({
+        "name": "WorkPlaneKinds", "units": "mm",
+        "parameters": [{"name": "tilt", "value": 30, "units": "deg"}],
+        "operations": [
+            {"op": "sketch", "name": "S", "plane": "xy", "entities": [
+                {"type": "rectangle", "center": [0, 0], "width": 60, "height": 40}]},
+            {"op": "extrude", "name": "Plate", "sketch": "S", "distance": 10},
+            {"op": "work_plane", "name": "Up", "kind": "offset", "base": "xy",
+             "offset": 20},
+            {"op": "work_plane", "name": "Middle", "kind": "midplane",
+             "base": "xy", "second": "Up"},
+            {"op": "work_plane", "name": "Tilt", "kind": "angle", "base": "xy",
+             "axis": "x", "angle": "tilt"},
+            {"op": "sketch", "name": "OnTilt", "plane": "Tilt", "entities": [
+                {"type": "rectangle", "center": [0, 0], "width": 20, "height": 20}]},
+            {"op": "extrude", "name": "Fin", "sketch": "OnTilt", "distance": 4},
+        ]})
+    context, broken = build(session, recipe)
+    if not report.check(not broken and context is not None,
+                        "work-planes: all three kinds build",
+                        broken[0][:400] if broken else "no document"):
+        if context:
+            session.backend.close_document(context.doc_id, save=False)
+            session.forget(context.doc_id)
+        return
+
+    try:
+        planes = session.backend.list_work_geometry(context.doc_id)["work_planes"]
+        report.note(f"work-planes: the part holds {planes}")
+        report.check(
+            all(name in planes for name in ("Up", "Middle", "Tilt")),
+            "work-planes: each one is in WorkPlanes by the name the recipe gave",
+            f"the part holds {planes}")
+
+        # The reading that tells an angled plane from an offset one. A 20 mm
+        # square on a plane through the origin turned `tilt` about X, extruded
+        # 4 mm, reaches above the plate by however much the tilt lifts its far
+        # corner. Flat against XY it would reach the plate's own 10 mm and no
+        # further, which is exactly what defect 12 built.
+        first = session.backend.mass_properties(context.doc_id).bounding_box
+        report.note(f"work-planes: box with a {30} degree fin -- {first}")
+        report.check(
+            first is not None and first[5] > 1.0 + 1e-6,
+            "work-planes: the angled plane is not parallel to its base "
+            f"(the part reaches {first[5] if first else 0:.4f} cm, past the "
+            "plate's 1.0)",
+            "a fin on a genuinely angled plane reaches above the plate; one on "
+            "an offset plane parallel to XY would stop at the plate's own "
+            "height, which is what defect 12 built and reported as success.")
+
+        # And that the angle is the parameter's, not a number that reached
+        # Inventor once. Defect 11's lesson, on the one operation whose whole
+        # point is a driven angle.
+        session.backend.set_parameter(context.doc_id, "tilt", "60 deg", units="deg")
+        session.backend.rebuild(context.doc_id)
+        second = session.backend.mass_properties(context.doc_id).bounding_box
+        report.note(f"work-planes: box at 60 degrees -- {second}")
+        report.check(
+            first is not None and second is not None
+            and abs(second[5] - first[5]) > 1e-4,
+            "work-planes: doubling `tilt` moved the geometry, so the angle "
+            "reached Inventor as an expression",
+            f"the part reached {first[5] if first else 0:.4f} cm at 30 degrees "
+            f"and {second[5] if second else 0:.4f} at 60. The same figure twice "
+            "means the plane took a number and not the parameter -- the plane "
+            "is right once and never moves, which is defect 11's shape.")
+    finally:
+        session.backend.close_document(context.doc_id, save=False)
+        session.forget(context.doc_id)
+
+
 def check_view_directions(session: Session, report: Report) -> None:
     """What each drawing-view direction actually shows, all seven in one run.
 
@@ -2501,6 +2605,7 @@ CHECKS = {
     "sketch-driven-pattern": check_sketch_driven_pattern,
     "drawing": check_drawing,
     "view-directions": check_view_directions,
+    "work-planes": check_work_planes,
     "views": check_views,
 }
 

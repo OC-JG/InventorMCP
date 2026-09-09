@@ -4508,33 +4508,64 @@ class ComBackend(Backend):
                 feature.Name = request.name
         return _feature_info(feature, "mirror", {"plane": request.plane})
 
-    #: The work-plane kinds this backend can build. The schema accepts two more,
-    #: `angle` and `tangent`, and until 2026-09-08 a recipe asking for either
-    #: got an *offset* plane and an `ok` -- defect 12 in
-    #: docs/FEATURE_COVERAGE.md. The published calls exist
-    #: (`WorkPlanes.AddByLinePlaneAndAngle(WorkAxis, WorkPlane, Angle, Boolean)`
-    #: and `AddByPlaneAndTangent`), but an angled plane needs an axis to turn
-    #: about and the schema has no field for one, so refusing is the honest
-    #: answer until it does.
-    _WORK_PLANE_KINDS = ("offset", "midplane")
+    #: The work-plane kinds this backend can build. `tangent` is the one the
+    #: schema accepts and this cannot: Inventor's `AddByPlaneAndTangent` wants a
+    #: cylindrical *face* as well as a plane, and the recipe has no field naming
+    #: one. `angle` was in this position until 2026-09-09 -- and before
+    #: 2026-09-08 it was worse than refused, because a recipe asking for an
+    #: angled plane got an *offset* one and an `ok`, which is defect 12.
+    _WORK_PLANE_KINDS = ("offset", "midplane", "angle")
 
     def work_plane(self, doc_id: str, request: WorkPlaneRequest) -> FeatureInfo:  # pragma: no cover
+        """A datum plane: offset from another, between two, or turned about an axis.
+
+        The angled one is `WorkPlanes.AddByLinePlaneAndAngle(axis, plane,
+        angle)`, published and **unmeasured** -- the whole surface is, since no
+        run has built a work plane of any kind except through a sketch. It is
+        called positionally on purpose: the argument *order* is documented and
+        the parameter *names* are not, so naming them would be inventing the
+        one part nobody has read.
+
+        The angle goes in as the resolved value and then again as the
+        expression, which is the pattern the offset already uses: the value
+        makes the geometry right whatever happens next, and the expression is
+        what keeps it parametric. If the second step fails the plane is at the
+        right angle and a log line says it will not follow its parameter --
+        which is the honest half-success, and better than a plane at zero.
+        """
         document = self._doc(doc_id)
         component = document.ComponentDefinition
         if request.kind not in self._WORK_PLANE_KINDS:
             raise FeatureError(
                 f"A {request.kind!r} work plane cannot be built on Inventor by this "
                 "server yet.",
-                hint="Only 'offset' and 'midplane' are implemented. Inventor's call "
-                "for an angled plane is WorkPlanes.AddByLinePlaneAndAngle(axis, "
-                "plane, angle), and the recipe schema has no field naming the axis "
-                "to turn about -- docs/FEATURE_COVERAGE.md defect 12. An offset "
-                "plane plus a sketch on it is the workaround for most angled "
-                "features.",
+                hint="'offset', 'midplane' and 'angle' are implemented. Inventor's "
+                "call for a tangent plane is WorkPlanes.AddByPlaneAndTangent(plane, "
+                "face), and the recipe schema has no field naming the cylindrical "
+                "face to touch -- the roadmap carries it. An angled plane about a "
+                "work axis is the nearest thing this can build.",
             )
         base = self._resolve_plane(document, request.base, None)
         with self._batch(document), self._translate_errors("Work plane"):
-            if request.kind == "midplane" and request.second:
+            if request.kind == "angle":
+                if request.axis is None:  # pragma: no cover - the schema refuses it
+                    raise FeatureError(
+                        "An angled work plane needs an axis to turn about.",
+                        hint="Give `axis` on the operation: 'x', 'y', 'z', a work "
+                        "axis, or a sketch line.",
+                    )
+                axis = self._resolve_axis(doc_id, request.axis)
+                assert request.angle is not None
+                plane = component.WorkPlanes.AddByLinePlaneAndAngle(
+                    axis, base, request.angle.value)
+                try:
+                    plane.Definition.Angle.Expression = request.angle.expression
+                except Exception:  # pragma: no cover - version-specific
+                    logger.warning(
+                        "Work plane %r is at %s but will not follow that "
+                        "expression: its definition would not take one.",
+                        request.name or plane.Name, request.angle.expression)
+            elif request.kind == "midplane" and request.second:
                 plane = component.WorkPlanes.AddByTwoPlanes(
                     base, self._resolve_plane(document, request.second, None)
                 )
@@ -4545,8 +4576,12 @@ class ComBackend(Backend):
             if request.name:
                 plane.Name = request.name
             plane.Visible = False
+        detail: dict[str, Any] = {"base": request.base, "kind": request.kind}
+        if request.kind == "angle" and request.axis is not None:
+            detail["axis"] = request.axis.value
+            detail["angle"] = request.angle.as_dict() if request.angle else None
         return FeatureInfo(id=f"wp:{plane.Name}", name=str(plane.Name), kind="work_plane",
-                           detail={"base": request.base})
+                           detail=detail)
 
     # -- work points and axes ---------------------------------------------
     #

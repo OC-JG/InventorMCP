@@ -375,23 +375,22 @@ _KNOWN_BROKEN_FIELDS = {
         "operation 'cut'."
     ),
     ("work_plane", "kind"): (
-        "The COM backend builds only 'offset' and 'midplane' work planes. Until "
-        "2026-09-08 a recipe asking for 'angle' or 'tangent' got an offset plane "
-        "and an `ok` from Inventor; it is refused there now -- defect 12 in "
-        "docs/FEATURE_COVERAGE.md. Inventor's call is "
-        "WorkPlanes.AddByLinePlaneAndAngle(axis, plane, angle) and the schema has "
-        "no field naming the axis, so the angled plane cannot be asked for yet. "
-        "The simulator files every work plane against its base whatever the kind, "
-        "so the rehearsal will not notice either. Use an offset plane and draw "
-        "the angle into the sketch on it."
+        "The COM backend cannot build a 'tangent' work plane. Inventor's call is "
+        "WorkPlanes.AddByPlaneAndTangent(plane, face) and it wants a cylindrical "
+        "face, which the recipe has no field to name; it is refused rather than "
+        "quietly built as an offset plane, which is what it was until 2026-09-08 "
+        "-- defect 12 in docs/FEATURE_COVERAGE.md. An 'angle' plane about a work "
+        "axis is buildable since 2026-09-09 and is the nearest thing; failing "
+        "that, an offset plane with the angle drawn into the sketch on it."
     ),
 }
 
 #: For a broken *field*, the values that are broken. A field absent from here
 #: is broken whenever it is set; `work_plane.kind` is set on every work plane
-#: (it defaults to 'offset') and is only broken for two of its four values.
+#: (it defaults to 'offset') and is only broken for one of its four values --
+#: two, until `angle` was implemented on 2026-09-09.
 _KNOWN_BROKEN_VALUES: dict[tuple[str, str], set[str]] = {
-    ("work_plane", "kind"): {"angle", "tangent"},
+    ("work_plane", "kind"): {"tangent"},
 }
 
 
@@ -696,6 +695,34 @@ def _warn_about(warnings: list[dict[str, Any]], where: str, op: Operation,
                    "excluded. Move the points onto the part, or check the sketch "
                    "plane is the one you meant.",
         })
+
+    # A feature on a tilted work plane. The volume is the feature's own
+    # arithmetic and stands; what the simulator cannot do is say where the
+    # material went, because a sweep from a plane turned about an axis is not
+    # one of the axis-aligned prisms its ledger holds. Worth a warning rather
+    # than a silence for the two things that then go unchecked, and worth
+    # saying which they are: a *cut* there is charged its whole sweep rather
+    # than the material it meets, and no later feature can be checked against
+    # this one's material at all.
+    placement = (outcome.get("detail") or {}).get("placement") or ""
+    if isinstance(placement, str) and placement.startswith("not recorded:"):
+        cut_here = getattr(op, "operation", None) == "cut" or op.op in _SUBTRACTIVE
+        if cut_here:
+            warnings.append({
+                "where": where,
+                "warning": "this cut is on a tilted work plane, so it is charged "
+                           "its whole swept prism rather than the material it meets",
+                "why": placement + " So this step's own volume is an upper bound "
+                       "rather than a prediction, and a divergence here is expected.",
+            })
+        else:
+            warnings.append({
+                "where": where,
+                "warning": "this feature is on a tilted work plane, so the "
+                           "simulator predicts its volume and not its placement",
+                "why": placement + " The volume is exact; a later cut or hole "
+                       "aimed through this material cannot be checked against it.",
+            })
 
     subtractive = op.op in _SUBTRACTIVE or getattr(op, "operation", None) == "cut"
     if subtractive and abs(moved) < 1e-9:

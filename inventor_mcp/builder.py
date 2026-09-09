@@ -479,6 +479,12 @@ def _apply_one(session: Session, context: DocumentContext, op: Operation) -> dic
             second=op.second,
             offset=_driven(resolver.length(op.offset, "work plane offset")),
             angle=_driven(resolver.angle(op.angle, "work plane angle")),
+            # Resolved the way a pattern's axis is, so an angled plane can turn
+            # about an origin axis, a work axis created earlier, or a sketch
+            # line -- and so a name that means none of those fails here, with
+            # the recipe's own vocabulary in the message, rather than inside a
+            # COM call.
+            axis=resolve_axis(context, op.axis) if op.axis else None,
             name=op.name,
         )
         return _record(context, backend.work_plane(context.doc_id, request), "work_plane")

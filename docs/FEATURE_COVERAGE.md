@@ -710,10 +710,11 @@ Each of these was hit while building real parts, and each passed
    XY -- the cheapest way to make the mistake, since `axis` defaults to `"z"`),
    when it is a sketch line on that plane, and when it is one on a work plane
    offset from it, following the offset chain however long. It declines on an
-   angled work plane -- **which the simulator gets wrong**, since
-   `mock.work_plane` files every work plane against an origin base whatever its
-   `kind`, so inheriting that would report a correct angled recipe as a fault --
-   on a revolved seed, whose geometry does not sit in its sketch plane, on a
+   angled work plane -- the simulator **records** the tilt since 2026-09-09,
+   which is a change from when this was written, but it still does not work out
+   where a tilted plane's faces end up, so the checker declines rather than
+   judging a correct angled recipe a fault -- on a revolved seed, whose
+   geometry does not sit in its sketch plane, on a
    `two_points` work axis, on an `edge:` handle, and on a pattern whose axis is
    right for one seed and wrong for another.
 
@@ -887,27 +888,57 @@ Each of these was hit while building real parts, and each passed
     one mechanism is what makes this a measurement rather than a number that
     came out close.
 
-12. **A `work_plane` with `kind: "angle"` or `"tangent"` built an offset plane
-    on Inventor and reported success.** *Found 2026-09-08, reading the COM
-    backend against the schema while checking the published `WorkPlanes`
-    overloads; not measured live, because the code path is unambiguous --
-    `kind` was never read.* `WorkPlaneOp` has offered four kinds since it was
-    written; `ComBackend.work_plane` handled `midplane` and fell through to
+12. ~~**A `work_plane` with `kind: "angle"` or `"tangent"` built an offset plane
+    on Inventor and reported success.**~~ *Refused 2026-09-08, and `angle`
+    built properly on 2026-09-09.* Found by reading the COM backend against the
+    schema while checking the published `WorkPlanes` overloads -- not measured
+    live, because the code path was unambiguous: `kind` was never read.
+
+    `WorkPlaneOp` has offered four kinds since it was written;
+    `ComBackend.work_plane` handled `midplane` and fell through to
     `AddByPlaneAndOffset` for everything else, so an angled plane came out
     parallel to its base, every sketch on it was drawn in the wrong place, and
     nothing raised. The simulator has the same blind spot for a different
     reason -- `mock.work_plane` records every plane against its base whatever
     the kind, which defect 7's note already records -- so the rehearsal agreed
-    with the build and the divergence check had nothing to compare.
+    with the build and the divergence check had nothing to compare. **Both
+    halves are fixed now**, and the simulator's is the more interesting of the
+    two.
 
-    Refused now, on the COM side, with the published call named in the hint
-    (`AddByLinePlaneAndAngle(WorkAxis, WorkPlane, Angle, Boolean)`) and the
-    reason it cannot simply be made: the schema has no field for the axis an
-    angled plane turns about. `rehearse` warns on the two kinds so a caller
-    learns before spending a seat. `tests/test_published_reference.py` holds
-    the three places -- schema, backend, rehearsal -- to the same two kinds.
-    The fix proper is a schema field and the simulator learning to tilt a
-    plane, which the roadmap carries as one Phase 2 item.
+    Refused on 2026-09-08, and **built on 2026-09-09**, which took the schema
+    field the refusal named. `WorkPlaneOp` has an `axis` now -- an origin axis,
+    a work axis or a sketch line, resolved the way a pattern's is -- and it is
+    **required** for `kind: "angle"` and refused on every other kind, because a
+    plane turned about one of its own directions is a different plane from the
+    same plane turned about the other. Defaulting one would have been this
+    defect again with a tilt on it. The COM call is the published
+    `AddByLinePlaneAndAngle(axis, plane, angle)`, called positionally on
+    purpose: the argument *order* is documented and the parameter *names* are
+    not, so naming them would be inventing the one part nobody has read.
+
+    **The simulator's half is where the interesting decision was.** Its ledger
+    holds axis-aligned prisms -- an outline in a plane's own 2D coordinates plus
+    a near and a far along its normal -- and a sweep from a plane turned 30
+    degrees about X is not one of those. So the tilt is *recorded*, which is
+    also the fix for defect 7's note that `mock.work_plane` filed every plane
+    against its base; the volume is still predicted, because area times depth
+    does not care how a prism is oriented; and the **placement is declined in
+    writing**. No slab enters the ledger, the feature's own `placement` says
+    why, and a *cut* there is charged its whole sweep with the reason in
+    `volume_from`. `rehearse` warns on both and differently, since a cut's
+    number is then an upper bound where a join's is exact.
+
+    Placing it anyway would have been wrong in the direction nobody checks:
+    every later cut, hole and pattern reads that ledger, so one tilted prism in
+    the wrong place makes every feature after it wrong too, quietly.
+
+    `tangent` is still refused and still in `_KNOWN_BROKEN_VALUES`:
+    `AddByPlaneAndTangent` wants a cylindrical face and the recipe has no field
+    naming one. `tests/test_angled_work_plane.py` and
+    `tests/test_published_reference.py` hold schema, backend and rehearsal to
+    the same one remaining kind. **The COM half is unmeasured**: no run has
+    built a work plane of any kind directly, which is what
+    `--only work-planes` is for.
 
 13. **A promotion the simulator performed happily failed on Inventor, on the
     word.** *Measured on Inventor 2027.1, 2026-09-08, by

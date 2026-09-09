@@ -658,12 +658,52 @@ class MirrorOp(OpBase):
 
 
 class WorkPlaneOp(OpBase):
+    """A datum plane, for sketching on somewhere the origin planes are not.
+
+    `kind` decides which of the remaining fields carries the answer:
+
+    * `offset` -- `base` and `offset`, the common case;
+    * `midplane` -- `base` and `second`, halfway between them;
+    * `angle` -- `base`, `axis` and `angle`: the base plane turned about the
+      axis. **`axis` has to be given**, because Inventor's call for this is
+      `WorkPlanes.AddByLinePlaneAndAngle(axis, plane, angle)` and there is no
+      axis to guess: a plane can be turned about either of its own directions
+      and they are different planes. Until 2026-09-09 this operation quietly
+      built an *offset* plane for an angled request -- defect 12 -- which is
+      why the field is required rather than defaulted;
+    * `tangent` -- not implemented, and refused with the reason. Inventor's
+      call wants a cylindrical face as well as a plane, and this schema has no
+      field naming one; the roadmap carries it.
+    """
+
     op: Literal["work_plane"] = "work_plane"
     kind: Literal["offset", "midplane", "angle", "tangent"] = "offset"
     base: PlaneRef = "xy"
     second: PlaneRef | None = Field(None, description="Second plane for a midplane.")
     offset: ValueSpec = 10.0
     angle: ValueSpec = "45 deg"
+    axis: AxisRef | None = Field(
+        None,
+        description="Which axis an angled plane turns about: 'x', 'y', 'z', a "
+        "named work axis, or a sketch line. Required for kind 'angle' and "
+        "meaningless for the others -- a plane turned about one of its "
+        "directions is a different plane from the same plane turned about the "
+        "other, so there is nothing to default to.",
+    )
+
+    @model_validator(mode="after")
+    def _the_angle_needs_its_axis(self) -> "WorkPlaneOp":
+        if self.kind == "angle" and not self.axis:
+            raise ValueError(
+                "An 'angle' work plane needs `axis`: which axis to turn the base "
+                "plane about. Use 'x', 'y' or 'z', a work axis, or a sketch line."
+            )
+        if self.kind != "angle" and self.axis:
+            raise ValueError(
+                f"`axis` means nothing to a {self.kind!r} work plane; only an "
+                "'angle' plane turns about one."
+            )
+        return self
 
 
 class WorkPointOp(OpBase):

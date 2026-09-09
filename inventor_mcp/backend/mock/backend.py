@@ -239,6 +239,13 @@ class _Sketch:
     #: z=0 rather than from the top of its flange, and came out 12 mm short.
     base_plane: str = "xy"
     offset: float = 0.0
+    #: The tilt of the work plane this sketch sits on, as (axis, radians), or
+    #: None for a plane parallel to an origin plane -- which is every plane
+    #: this simulator could represent before 2026-09-09. It is carried rather
+    #: than resolved away because it decides what the ledger may claim: a
+    #: prism swept from a tilted sketch is not axis-aligned, and axis-aligned
+    #: prisms are the whole of what the ledger holds.
+    tilt: tuple[str, float] | None = None
 
 
 @dataclass
@@ -418,6 +425,13 @@ class _Document:
     sketches: list[_Sketch] = field(default_factory=list)
     features: list[_Feature] = field(default_factory=list)
     work_planes: dict[str, tuple[str, float]] = field(default_factory=dict)
+    #: The work planes that are *not* parallel to their base, by name, as the
+    #: axis they turn about and the angle in radians. Kept beside
+    #: `work_planes` rather than inside it so that every reader of that mapping
+    #: -- there are six -- keeps working unchanged, and the readers that must
+    #: care look here. Defect 7's note was that a plane's tilt was not recorded
+    #: at all; this is where it is recorded.
+    tilted_planes: dict[str, tuple[str, float]] = field(default_factory=dict)
     #: Work points by name, as a model-space position in cm.
     work_points: dict[str, tuple[float, float, float]] = field(default_factory=dict)
     #: Work axes by name, as a model-space point on the axis and a unit
@@ -907,7 +921,8 @@ class MockBackend(Backend):
         loops = profile_loops(plan)
         base, offset = self._plane_and_offset(document, plan)
         sketch = _Sketch(id=self._next("sk"), name=name, plan=plan, loops=loops,
-                         base_plane=base, offset=offset)
+                         base_plane=base, offset=offset,
+                         tilt=document.tilted_planes.get(plan.plane))
         document.sketches.append(sketch)
         document.modified = True
         self._record("build_sketch", name=name, plane=plan.plane, **plan.summary())
@@ -1010,6 +1025,7 @@ class MockBackend(Backend):
                 "profiles": len(loops),
                 "profile_area_cm2": round(area, 6),
                 "volume_from": how,
+                "placement": self._tilt_note(sketch),
             },
         )
         document.features.append(feature)
@@ -1017,6 +1033,26 @@ class MockBackend(Backend):
         document.modified = True
         self._record("extrude", name=name, sketch=sketch.name, operation=request.operation)
         return _feature_info(feature)
+
+    @staticmethod
+    def _tilt_note(sketch: _Sketch) -> str | None:
+        """Why a feature on this sketch has no placement recorded, or None.
+
+        On every feature built from a tilted sketch, so a caller reading the
+        part back is told once per feature rather than having to know that a
+        plane it never asked about is at an angle. The volume is still the
+        feature's own arithmetic; what is missing is where the material went.
+        """
+        if sketch.tilt is None:
+            return None
+        axis, angle = sketch.tilt
+        return (
+            f"not recorded: sketch {sketch.name!r} is on a plane turned "
+            f"{math.degrees(angle):.4g} degrees about {axis}, and this ledger "
+            "holds axis-aligned prisms. The volume is predicted; where the "
+            "material sits, and so what a later cut through it would meet, is "
+            "not."
+        )
 
     def _record_slabs(self, document: _Document, sketch: _Sketch,
                       loops: Sequence[Sequence[str]], plane: str,
@@ -1029,7 +1065,20 @@ class MockBackend(Backend):
         material afterwards however much it held before, so the ledger is right
         about it either way, and the next cut through the same place is charged
         what is left instead of the same material again.
+
+        **Nothing is recorded for a sketch on a tilted plane.** The ledger holds
+        axis-aligned prisms -- `_Slab` is an outline in a plane's own 2D
+        coordinates plus a near and a far along its normal -- and a sweep from a
+        plane turned 30 degrees about X is not one of those. Recording it as if
+        it were would put material in the wrong place and, worse, do it
+        silently: every later cut, hole and pattern reads this ledger. So the
+        volume is still predicted (area times depth does not care how the prism
+        is oriented) and the placement is declined, which the feature's own
+        `placement` note says. `sketch_driven_pattern` already declines the same
+        way for a revolved seed.
         """
+        if sketch.tilt is not None:
+            return
         near, far = span
         for loop in loops:
             outline = loop_points(sketch.plan, loop)
@@ -1097,6 +1146,21 @@ class MockBackend(Backend):
         volume that is obviously off, where too little looks like a cut that
         worked.
         """
+        if sketch.tilt is not None:
+            # The sweep is not axis-aligned, so the ledger cannot say what it
+            # meets: `_material_spans` walks one axis and every prism in it is
+            # square to the origin planes. Charging the whole sweep is the
+            # pre-ledger answer and an upper bound -- too much material removed
+            # reads as a volume that is obviously off, where too little reads as
+            # a cut that worked. Saying which of the two this is matters more
+            # than the number.
+            axis, angle = sketch.tilt
+            return (distance,
+                    f"the whole swept prism: the sketch plane is turned "
+                    f"{math.degrees(angle):.4g} degrees about {axis}, and the "
+                    "ledger holds axis-aligned prisms, so how much material "
+                    "the cut meets is not something this can measure",
+                    span)
         normal = plane_normal(plane)
         axis = max(range(3), key=lambda index: abs(normal[index]))
         best: list[tuple[float, float]] | None = None
@@ -2836,19 +2900,58 @@ class MockBackend(Backend):
                     self._expand_bounds(document, [tuple(point)])
 
     def work_plane(self, doc_id: str, request: WorkPlaneRequest) -> FeatureInfo:
+        """A datum plane, and for an angled one the fact that it is angled.
+
+        **The tilt is recorded rather than flattened**, which it was not until
+        2026-09-09: every plane went into `work_planes` as an origin plane and
+        an offset, so an angled plane was filed as one parallel to its base and
+        the rehearsal agreed with a build that came out at 30 degrees to it.
+        That is the note defect 7 left and half of what made defect 12 invisible
+        here -- the COM half built the wrong plane and this half could not have
+        told.
+
+        What the tilt then buys is not a tilted prism: the ledger holds
+        axis-aligned prisms and a sweep from a tilted sketch is not one. It buys
+        the simulator the ability to *say so* -- see `_record_slabs`, which
+        records nothing for a tilted sketch, and `_cut_reach`, which charges the
+        whole sweep and says why.
+        """
         document = self._doc(doc_id)
         base = request.base.split(":")[0]
         if base not in _PLANES and request.base not in document.work_planes:
             raise FeatureError(f"Unknown base plane {request.base!r}.")
         name = self._feature_name(document, request.name, "workplane")
         offset = request.offset.value if request.offset else 0.0
-        document.work_planes[name] = (base if base in _PLANES else document.work_planes[request.base][0], offset)
+        resolved = base if base in _PLANES else document.work_planes[request.base][0]
+        document.work_planes[name] = (resolved, offset)
+        detail: dict[str, Any] = {
+            "kind": request.kind, "base": request.base,
+            "offset": request.offset.as_dict() if request.offset else None,
+        }
+        if request.kind == "angle" and request.axis is not None and request.angle:
+            # A plane turned about its base's own axis. The angle is in radians
+            # here, as every angle in this backend is.
+            document.tilted_planes[name] = (request.axis.value, request.angle.value)
+            # Inherited from the base plane where that is itself tilted, so a
+            # plane offset from a tilted one is not silently flattened.
+            detail["axis"] = request.axis.value
+            detail["angle"] = request.angle.as_dict()
+            detail["placement"] = (
+                "recorded as tilted: the simulator predicts volumes on this "
+                "plane and does not place the material, because its ledger "
+                "holds axis-aligned prisms"
+            )
+        elif request.base in document.tilted_planes:
+            document.tilted_planes[name] = document.tilted_planes[request.base]
+            detail["placement"] = (
+                f"recorded as tilted: it is offset from {request.base!r}, "
+                "which is tilted"
+            )
         feature = _Feature(
             id=self._next("feat"),
             name=name,
             kind="work_plane",
-            detail={"kind": request.kind, "base": request.base,
-                    "offset": request.offset.as_dict() if request.offset else None},
+            detail=detail,
         )
         document.features.append(feature)
         self._record("work_plane", name=name)

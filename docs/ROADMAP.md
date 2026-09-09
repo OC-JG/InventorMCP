@@ -875,14 +875,45 @@ actually bitten.
       projected loop works. Closes the second gap bullet. The simulator half is
       the harder one: it has to know where the solid's edges are, which the
       ledger knows for prisms and not for revolves.
-- [ ] **An angled work plane, properly.** *(Opened 2026-09-08 by defect 12.)*
-      `WorkPlanes.AddByLinePlaneAndAngle(WorkAxis, WorkPlane, Angle, Boolean)`
-      needs an axis, so `WorkPlaneOp` gains an `axis` field (an origin axis,
-      a `work_axis`, or a sketch line, resolved like a pattern's) and the
-      refusal the backend gives today goes. The simulator has to learn to
-      tilt a plane -- which is also the fix for the note in defect 7 that
-      `mock.work_plane` files every plane against its base -- so this is
-      ledger-sized rather than five files.
+- [x] **An angled work plane, properly.** *(Opened 2026-09-08 by defect 12,
+      done 2026-09-09.)* `WorkPlaneOp` has an `axis` -- an origin axis, a work
+      axis or a sketch line, resolved the way a pattern's is -- and it is
+      **required** for `kind: "angle"` and refused on every other kind, since a
+      plane turned about one of its own directions is a different plane from
+      the same plane turned about the other. The COM call is the published
+      `AddByLinePlaneAndAngle(axis, plane, angle)`, positional because the
+      argument order is documented and the parameter names are not, with the
+      angle going in as a value and then as an expression the way the offset
+      already does.
+
+      **The simulator learned to record the tilt rather than to place it**,
+      which is the honest half of "learn to tilt a plane": the ledger holds
+      axis-aligned prisms and a sweep from a turned plane is not one, so the
+      volume is still predicted -- area times depth does not care about
+      orientation -- and the placement is declined in writing, per feature,
+      with a *cut* there charged its whole sweep and told to expect a
+      divergence. That also settles defect 7's note. Placing it anyway would
+      have been wrong in the direction nobody checks, since every later cut,
+      hole and pattern reads that ledger.
+
+      **Unmeasured, and `--only work-planes` is the run**: no seat has built a
+      work plane of any kind directly. It reads three things -- that each kind
+      builds, that the angled plane is *not* parallel to its base (defect 12's
+      own symptom, so "it built" proves nothing), and that doubling the angle
+      moves the geometry, which is defect 11's lesson on the one operation
+      whose whole point is a driven angle.
+
+      `tangent` stays refused: `AddByPlaneAndTangent` wants a cylindrical face
+      and the recipe has no field naming one, so it keeps its rehearsal warning
+      and its own line in this list.
+
+- [ ] **A tangent work plane.** *(Opened 2026-09-09, split off the item above.)*
+      `WorkPlanes.AddByPlaneAndTangent(plane, face)` wants a cylindrical face,
+      and `WorkPlaneOp` has no field naming one -- a `Selector` would do it,
+      the way `fillet` and `shell` take theirs. The simulator's half is the
+      same declining-to-place as the angled plane, so the work is the schema
+      field and the face resolution rather than the ledger.
+
 - [ ] **Durable topology handles and a `feature:` selector.** *(Opened
       2026-09-08.)* Handles from `select_topology` expire on any rebuild and
       the docs say to re-select. The published `ReferenceKeyManager` --

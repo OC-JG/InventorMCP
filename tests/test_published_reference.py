@@ -209,9 +209,13 @@ class TestConvexityFromTheBody:
 
 
 class TestWorkPlaneKindsAgree:
-    """Defect 12: the schema accepts four work-plane kinds, the COM backend
-    builds two, and until 2026-09-08 the other two built an offset plane and
-    reported success. Three places now say which two, and they have to agree."""
+    """Defect 12: the schema accepts four work-plane kinds, and until 2026-09-08
+    two of them built an *offset* plane and reported success. Three places say
+    which are buildable and they have to agree.
+
+    `angle` came off the unbuildable list on 2026-09-09 -- it has an `axis`
+    field now and `AddByLinePlaneAndAngle` to call -- leaving `tangent`, which
+    wants a cylindrical face the recipe cannot name."""
 
     def schema_kinds(self) -> set[str]:
         from inventor_mcp.schema import WorkPlaneOp
@@ -222,12 +226,11 @@ class TestWorkPlaneKindsAgree:
         from inventor_mcp.rehearsal import _KNOWN_BROKEN_FIELDS, _KNOWN_BROKEN_VALUES
 
         unbuildable = self.schema_kinds() - set(com.ComBackend._WORK_PLANE_KINDS)
-        assert unbuildable == {"angle", "tangent"}
+        assert unbuildable == {"tangent"}
         assert ("work_plane", "kind") in _KNOWN_BROKEN_FIELDS
         assert _KNOWN_BROKEN_VALUES[("work_plane", "kind")] == unbuildable
 
-    @pytest.mark.parametrize("kind", ["angle", "tangent"])
-    def test_a_rehearsal_warns_about_an_unbuildable_kind(self, kind):
+    def _rehearsed(self, plane: dict) -> list[str]:
         from inventor_mcp.builder import rehearse
         from inventor_mcp.schema import PartRecipe
 
@@ -236,10 +239,36 @@ class TestWorkPlaneKindsAgree:
                 {"op": "sketch", "name": "Base", "plane": "xy", "entities": [
                     {"type": "rectangle", "center": [0, 0], "width": 40, "height": 20}]},
                 {"op": "extrude", "sketch": "Base", "distance": 6},
-                {"op": "work_plane", "name": "Tilt", "kind": kind, "base": "xy",
-                 "angle": "30 deg"}]}))
-        warnings = [w["warning"] for w in report["warnings"]]
-        assert any(f"`work_plane.kind` set to '{kind}' does not work" in w for w in warnings), warnings
+                plane]}))
+        return [w["warning"] for w in report["warnings"]]
+
+    def test_a_rehearsal_warns_about_an_unbuildable_kind(self):
+        warnings = self._rehearsed(
+            {"op": "work_plane", "name": "Round", "kind": "tangent", "base": "xy"})
+        assert any("`work_plane.kind` set to 'tangent' does not work" in w
+                   for w in warnings), warnings
+
+    def test_an_angled_plane_no_longer_warns_because_it_works(self):
+        """It was on the same list until 2026-09-09. A warning about a kind the
+        backend builds is worse than no warning: it teaches a caller to avoid
+        the thing that would have worked."""
+        warnings = self._rehearsed(
+            {"op": "work_plane", "name": "Tilt", "kind": "angle", "base": "xy",
+             "axis": "x", "angle": "30 deg"})
+        assert [w for w in warnings if "work_plane" in w] == [], warnings
+
+    def test_an_angled_plane_without_an_axis_is_refused_by_the_schema(self):
+        """There is nothing to default to: a plane turned about one of its own
+        directions is a different plane from the same plane turned about the
+        other. Defaulting one would be defect 12 again with a tilt."""
+        import pydantic
+
+        from inventor_mcp.schema import WorkPlaneOp
+
+        with pytest.raises(pydantic.ValidationError, match="needs `axis`"):
+            WorkPlaneOp(kind="angle", base="xy", angle="30 deg")
+        with pytest.raises(pydantic.ValidationError, match="means nothing"):
+            WorkPlaneOp(kind="offset", base="xy", axis="x")
 
     def test_an_offset_plane_does_not_warn(self):
         from inventor_mcp.builder import rehearse

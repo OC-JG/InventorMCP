@@ -677,11 +677,22 @@ class MirrorRequest:
 
 @dataclass
 class WorkPlaneRequest:
+    """A datum plane. `kind` decides which fields carry the answer.
+
+    `axis` is present for `kind == "angle"` and absent otherwise: a plane
+    turned about one of its own directions is a different plane from the same
+    plane turned about the other, so there is nothing to default to. The schema
+    refuses the combinations that say neither.
+    """
+
     kind: str = "offset"
     base: str = "xy"
     second: str | None = None
     offset: Driven | None = None
     angle: Driven | None = None
+    #: An `AxisSpec` for an angled plane's axis, resolved the way a pattern's
+    #: is -- an origin axis, a named work axis, or a sketch line.
+    axis: "AxisSpec | None" = None
     name: str | None = None
 
 

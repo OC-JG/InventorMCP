@@ -220,14 +220,19 @@ class TestWhatItRefusesToGuess:
     """Three cases where an answer was available and would have been wrong."""
 
     def test_an_angled_work_plane_is_left_alone(self):
-        """And the simulator disagrees, which is the point. `mock.work_plane`
-        records every work plane against an origin base whatever its `kind`, so
-        it believes an angled plane is parallel to its base. Inheriting that
-        would report a correct angled-plane recipe as a fault.
+        """Because the checker cannot say where a tilted plane's faces are.
+
+        The simulator *records* the tilt since 2026-09-09 -- defect 12 -- so it
+        no longer believes an angled plane is parallel to its base. What it
+        still does not do is work out where the faces of a feature built on one
+        end up, which is what judging a pattern axis needs. Declining is the
+        answer either way: inheriting the old wrong belief would have reported a
+        correct angled recipe as a fault, and guessing from the tilt would be
+        the same mistake with more arithmetic.
         """
         assert complaints(PLATE + [
             {"op": "work_plane", "name": "Tilt", "kind": "angle", "base": "xy",
-             "angle": "30 deg"},
+             "axis": "x", "angle": "30 deg"},
             {"op": "sketch", "name": "Aim", "plane": "Tilt", "entities": [
                 {"type": "line", "name": "Spoke", "start": [0, 0], "end": [30, 0]}]},
         ] + BOLT + [
