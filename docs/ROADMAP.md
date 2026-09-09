@@ -1120,16 +1120,40 @@ actually bitten.
       calibration fixture measuring the same wall at two resolutions.
 
 - [ ] **Rib, one more time, with the published definition.** *(Opened
-      2026-09-08.)* Fourteen `E_INVALIDARG`s were recorded against
-      `RibFeatures.Add(definition)` without the definition's member list. The
-      page gives it: `ThicknessDirection`, `DraftAngle`, `ExtendProfile`,
+      2026-09-08. `scripts/probe_rib.py` written 2026-09-09; **this needs one
+      run on a seat and cannot be closed from a cloud session**.)* Fourteen
+      `E_INVALIDARG`s were recorded against `RibFeatures.Add(definition)`
+      without the definition's member list. The page gives it:
+      `ThicknessDirection`, `DraftAngle`, `ExtendProfile`,
       `SetThicknessPlane` with `RibThicknessPlaneEnum`
       (`kRibThicknessAtSketchPlane`, `kRibThicknessAtRoot`), and the meaning of
       `IsRib` -- True projects the profile *lateral* to the sketch plane, False
       normal to it. A rib drawn on a plane perpendicular to the plate wants
       `IsRib=True`; one drawn on the plate's own face wants False. Whether the
-      failures were the second case is the first thing to try. The composite
-      rib stays until then.
+      failures were the second case is the first thing to try.
+
+      **The probe walks the matrix rather than guessing at it.** Two open
+      profiles -- a line on XZ standing on the plate, which is the geometry all
+      fourteen used, and a line on the plate's own top face, which nothing has
+      tried -- crossed with both `IsRib` values, all three thickness-plane
+      states (both published values and "never set", which is what the fourteen
+      did), and then a pass with a draft and an extended profile. Every attempt
+      prints what Inventor said; a successful one is measured and then deleted,
+      so the matrix keeps running against the same part and a later combination
+      is not judged against an earlier one's material.
+
+      It also prints the `RibDefinition`'s own member list *before* attempting
+      anything, because that listing is worth having even if every combination
+      refuses -- it is precisely what the fourteen attempts were missing, and
+      what would say what is left to try.
+
+      **The composite rib stays whatever the run says.** It is measured and
+      exact -- 20.88000 cm^3 for a 60 x 14 mm silhouette 2 mm thick -- and
+      moving a measured route onto an unmeasured one is what `DECISIONS.md`
+      refuses. What a success buys is a *second* route with a `DraftAngle` on
+      it, which is the one thing a single planar silhouette pushed through a
+      linear extrude cannot express, and that becomes its own item with its own
+      calibration fixture.
 - [ ] **`Update2`'s verdict, measured.** *(Opened 2026-09-08.)* `_batch` now
       calls `Document.Update2(True)` and logs when it returns False. Whether a
       cut that meets no material -- which the volume check catches -- also

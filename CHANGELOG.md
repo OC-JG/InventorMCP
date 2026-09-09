@@ -252,6 +252,26 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
 ### Changed
 
+- **`scripts/probe_rib.py`: the rib retry, as a matrix rather than a guess.**
+  Fourteen `E_INVALIDARG`s were spent on `RibFeatures.Add(definition)` without
+  the definition's member list, which the published `RibDefinition` page now
+  gives. The probe walks two open profiles -- a line on a perpendicular plane,
+  which is what all fourteen used, and a line on the plate's own top face,
+  which nothing has tried -- crossed with both `IsRib` values (True projects
+  the profile *lateral* to the sketch plane, False normal to it) and all three
+  thickness-plane states, including "never set", which is what the fourteen
+  did. Then a pass with a `DraftAngle`, the one thing the composite rib
+  deliberately cannot express.
+
+  A combination that builds is measured and deleted again, so a later
+  combination is not judged against an earlier one's material, and the
+  definition's member list is printed *before* anything is attempted --
+  because that listing is what the fourteen were missing whatever the attempts
+  then say. **The composite rib stays whatever the run says**: it is measured
+  and exact, and moving a measured route onto an unmeasured one is what
+  `DECISIONS.md` refuses. This is one of the Phase 2 items that needs a CAD
+  seat and cannot be closed without one.
+
 - **The simulator's "tilted plane" is now "a plane it cannot locate", because
   a tangency is the second way to get there and it is not a tilt.** `_Tilt`
   became `_Unplaceable` and carries prose rather than only numbers: an angled

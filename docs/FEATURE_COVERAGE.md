@@ -76,7 +76,17 @@ appears across all of Inventor.
    members nobody had tried: `ThicknessDirection`, `SetThicknessPlane` with
    `kRibThicknessAtSketchPlane` / `kRibThicknessAtRoot`, `DraftAngle`, and the
    meaning of `IsRib` -- True projects the profile *lateral* to the sketch
-   plane, False normal to it. The roadmap carries the retry.
+   plane, False normal to it.
+
+   **`scripts/probe_rib.py` is the retry, written 2026-09-09 and not yet run.**
+   It walks the matrix instead of guessing at it: two open profiles -- a line on
+   a perpendicular plane, which is what all fourteen used, and a line on the
+   plate's own top face, which nothing has tried -- crossed with both `IsRib`
+   values and all three thickness-plane states, then a pass with a draft. A
+   combination that builds is measured and deleted again, so the matrix stays
+   honest. And it prints the `RibDefinition`'s member list before attempting
+   anything, because that listing is what the fourteen were missing whatever
+   the attempts then say.
 
    So `{"op":"rib",...}` is built by hand instead: the rib's silhouette -- its top
    edge from `start` to `end`, dropped to `root` -- as a closed profile, extruded
