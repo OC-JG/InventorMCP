@@ -16,7 +16,7 @@ import logging
 import math
 from dataclasses import replace
 from itertools import count
-from typing import Iterable, Sequence
+from typing import Any, Iterable, Sequence
 
 from .errors import ExpressionError, SketchError
 from .expressions import _parse
@@ -232,22 +232,32 @@ def _plan_polyline(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: Polyli
     if spec.closed:
         segments.append((len(points) - 1, 0))
 
-    lines = []
     for start, end in segments:
         if math.dist(points[start], points[end]) <= TOL:
             raise SketchError("A polyline may not contain a zero-length segment.")
-        lines.append(
-            plan.add(
-                PLine(ids.next("line"), spec.construction, spec.centerline,
-                      start=points[start], end=points[end]),
-                spec.name,
-            )
-        )
 
-    for previous, current in zip(lines, lines[1:]):
-        plan.constrain("coincident", Ref(previous.id, PointRef.END), Ref(current.id, PointRef.START))
-    if spec.closed:
-        plan.constrain("coincident", Ref(lines[-1].id, PointRef.END), Ref(lines[0].id, PointRef.START))
+    if spec.corners is not None:
+        radius = resolver.length(spec.corners, "polyline corner radius", positive=True)
+        # An open polyline's two ends are not corners, which `_rounded_outline`
+        # knows: it rounds every vertex of a closed outline and the interior
+        # ones of an open one.
+        lines = _rounded_outline(plan, ids, spec, points, spec.closed, radius,
+                                 "This polyline")
+    else:
+        lines = []
+        for start, end in segments:
+            lines.append(
+                plan.add(
+                    PLine(ids.next("line"), spec.construction, spec.centerline,
+                          start=points[start], end=points[end]),
+                    spec.name,
+                )
+            )
+
+        for previous, current in zip(lines, lines[1:]):
+            plan.constrain("coincident", Ref(previous.id, PointRef.END), Ref(current.id, PointRef.START))
+        if spec.closed:
+            plan.constrain("coincident", Ref(lines[-1].id, PointRef.END), Ref(lines[0].id, PointRef.START))
 
     if spec.dimension:
         kinds: list[str | None] = []
@@ -400,6 +410,157 @@ def _drive_rail(
                    text_offset=offset, optional=True)
 
 
+def _rounded_outline(plan: SketchPlan, ids: _Ids, spec: Any,
+                     points: Sequence[tuple[float, float]], closed: bool,
+                     radius: Resolved, label: str) -> list[Any]:
+    """A closed or open outline with every corner rounded, as lines and arcs.
+
+    The `corners` radius on a rectangle or a polyline. It is written as
+    geometry rather than as Inventor's own `SketchArcs.AddByFillet` for the
+    reason `docs/DECISIONS.md` gives about measured routes: a line-and-arc
+    outline with tangencies is what `_plan_slot` already builds and what a live
+    seat has built since the slot shipped, where `AddByFillet` is published and
+    unmeasured -- and this way the simulator gets the real outline, so a
+    filleted profile's area is `w * h - (4 - pi) * r^2` by its own arithmetic
+    rather than by a special case.
+
+    The maths per corner, for an incoming direction `a` and an outgoing `b`:
+    the tangent points sit back from the vertex by `r * tan(phi / 2)` where
+    `phi` is the turn, and the centre is one radius off the edge on the inside.
+    A corner that turns the other way -- a notch rather than a corner -- is
+    refused rather than rounded the wrong way round: the arc would sweep the
+    long way about its centre and close a loop nobody asked for.
+    """
+    count_points = len(points)
+    rounded = range(count_points) if closed else range(1, count_points - 1)
+    if not list(rounded):
+        raise SketchError(
+            f"{label} has no corner to round: `corners` needs at least one "
+            "vertex with a segment on each side.",
+            hint="An open polyline of two points is a line, and its ends are "
+            "not corners. Close it, or add a point.",
+        )
+
+    def unit(from_point: tuple[float, float],
+             to_point: tuple[float, float]) -> tuple[float, float]:
+        span = math.dist(from_point, to_point)
+        return ((to_point[0] - from_point[0]) / span,
+                (to_point[1] - from_point[1]) / span)
+
+    #: Per rounded vertex: the two tangent points, the arc centre and its
+    #: angles. Worked out before anything is added to the plan, so a radius
+    #: that will not fit is refused with nothing half-built.
+    corners: dict[int, tuple[tuple[float, float], tuple[float, float],
+                             tuple[float, float], float, float]] = {}
+    for index in rounded:
+        vertex = points[index]
+        before = points[(index - 1) % count_points]
+        after = points[(index + 1) % count_points]
+        incoming = unit(before, vertex)
+        outgoing = unit(vertex, after)
+        cross = incoming[0] * outgoing[1] - incoming[1] * outgoing[0]
+        dot = incoming[0] * outgoing[0] + incoming[1] * outgoing[1]
+        if abs(cross) <= TOL:
+            raise SketchError(
+                f"{label} has a straight or doubled-back corner at "
+                f"{_pretty(vertex)}, which cannot be rounded.",
+                hint="Remove the point, or give the two segments an angle "
+                "between them.",
+            )
+        if cross < 0:
+            raise SketchError(
+                f"{label} turns inward at {_pretty(vertex)}, and `corners` "
+                "rounds outward corners only.",
+                hint="An inward corner is a notch, and rounding it is a "
+                "different arc -- the roadmap carries it. List the points "
+                "anticlockwise, or round that corner with an explicit `arc`.",
+            )
+        turn = math.atan2(cross, dot)
+        setback = radius.value * math.tan(turn / 2)
+        for neighbour in (before, after):
+            if setback > math.dist(vertex, neighbour) / 2 + TOL:
+                raise SketchError(
+                    f"A {radius.expression} radius does not fit the corner at "
+                    f"{_pretty(vertex)}: it would eat "
+                    f"{setback * 10:.4g} mm of a segment "
+                    f"{math.dist(vertex, neighbour) * 10:.4g} mm long.",
+                    hint="Use a radius smaller than half the shortest segment "
+                    "either side of the tightest corner.",
+                )
+        into = (vertex[0] - incoming[0] * setback, vertex[1] - incoming[1] * setback)
+        out_of = (vertex[0] + outgoing[0] * setback, vertex[1] + outgoing[1] * setback)
+        # One radius off the incoming edge, on the side the outline turns
+        # toward, which for an outward corner is the inside of the shape.
+        inward = (-incoming[1], incoming[0])
+        centre = (into[0] + inward[0] * radius.value,
+                  into[1] + inward[1] * radius.value)
+        start = math.atan2(into[1] - centre[1], into[0] - centre[0])
+        # **`start + turn`, not `atan2` of the far end.** An arc here sweeps
+        # anticlockwise from its start angle to its end angle, and `atan2`
+        # answers in (-pi, pi]: a corner whose sweep crosses that seam gets an
+        # end angle *below* its start, and the arc then goes the long way round
+        # its own centre. Measured on the rounded rectangle, where the
+        # bottom-left corner swept 270 degrees and the profile area came out
+        # 22.99991 cm^2 against the 23.785398 the shape has -- the difference
+        # being exactly the four quarter-discs it had carved out instead of
+        # rounding. The sweep of a rounded corner *is* the turn, so saying so
+        # avoids the seam rather than handling it.
+        end = start + turn
+        corners[index] = (into, out_of, centre, start, end)
+
+    segments = [(index, (index + 1) % count_points)
+                for index in range(count_points if closed else count_points - 1)]
+    lines: list[Any] = []
+    arcs: dict[int, Any] = {}
+    for start_index, end_index in segments:
+        begins = corners[start_index][1] if start_index in corners else points[start_index]
+        ends = corners[end_index][0] if end_index in corners else points[end_index]
+        lines.append(plan.add(
+            PLine(ids.next("line"), spec.construction, spec.centerline,
+                  start=begins, end=ends),
+            spec.name,
+        ))
+    for index, (_, _, centre, start, end) in corners.items():
+        arcs[index] = plan.add(
+            PArc(ids.next("arc"), spec.construction, center=centre,
+                 radius=radius.value, start_angle=start, end_angle=end),
+            spec.name,
+        )
+
+    # Each arc joins the line that ends at it to the line that leaves it, and
+    # is tangent to both -- which is what makes the radius the only thing left
+    # to say about that corner.
+    for position, (start_index, end_index) in enumerate(segments):
+        line = lines[position]
+        if end_index in arcs:
+            arc = arcs[end_index]
+            plan.constrain("coincident", Ref(line.id, PointRef.END),
+                           Ref(arc.id, PointRef.START))
+            plan.constrain("tangent", Ref(line.id), Ref(arc.id))
+        if start_index in arcs:
+            arc = arcs[start_index]
+            plan.constrain("coincident", Ref(arc.id, PointRef.END),
+                           Ref(line.id, PointRef.START))
+            plan.constrain("tangent", Ref(line.id), Ref(arc.id))
+
+    ordered = [arcs[index] for index in sorted(arcs)]
+    for other in ordered[1:]:
+        plan.constrain("equal_radius", Ref(ordered[0].id), Ref(other.id))
+    if spec.dimension:
+        # One dimension for the lot: `equal_radius` carries it to the others,
+        # which is how a drafter writes it and what keeps the sketch from being
+        # over-dimensioned -- Inventor refuses a redundant one, as the hexagon's
+        # closing equality shows.
+        plan.dimension("radius", (Ref(ordered[0].id),), radius.expression,
+                       radius.value, text_offset=(radius.value, radius.value))
+    return lines
+
+
+def _pretty(point: tuple[float, float]) -> str:
+    """A sketch coordinate in millimetres, for a message about it."""
+    return f"({point[0] * 10:.4g}, {point[1] * 10:.4g}) mm"
+
+
 def _plan_rectangle(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: RectangleEntity) -> None:
     width = resolver.length(spec.width, "rectangle width", positive=True)
     height = resolver.length(spec.height, "rectangle height", positive=True)
@@ -418,15 +579,22 @@ def _plan_rectangle(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: Recta
         (cx - half_w, cy + half_h),
     ]
 
-    lines = [
-        plan.add(
-            PLine(ids.next("line"), spec.construction, spec.centerline, start=corners[i], end=corners[(i + 1) % 4]),
-            spec.name,
-        )
-        for i in range(4)
-    ]
-    for previous, current in zip(lines, lines[1:] + lines[:1]):
-        plan.constrain("coincident", Ref(previous.id, PointRef.END), Ref(current.id, PointRef.START))
+    if spec.corners is not None:
+        radius = resolver.length(spec.corners, "rectangle corner radius", positive=True)
+        lines = _rounded_outline(plan, ids, spec, corners, True, radius,
+                                 "This rectangle")
+    else:
+        lines = [
+            plan.add(
+                PLine(ids.next("line"), spec.construction, spec.centerline, start=corners[i], end=corners[(i + 1) % 4]),
+                spec.name,
+            )
+            for i in range(4)
+        ]
+        for previous, current in zip(lines, lines[1:] + lines[:1]):
+            plan.constrain("coincident", Ref(previous.id, PointRef.END), Ref(current.id, PointRef.START))
+    # The four edges stay square to the axes whether or not the corners are
+    # rounded: a rounded rectangle's straight parts are still a rectangle's.
     plan.constrain("horizontal", Ref(lines[0].id))
     plan.constrain("horizontal", Ref(lines[2].id))
     plan.constrain("vertical", Ref(lines[1].id))

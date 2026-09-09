@@ -419,12 +419,21 @@ Found by using the server rather than by reading its API surface:
   was **wrong**: `resolve_axis` has always taken a named sketch line. What is
   true is that no line on a face can be that face's pattern axis, which is
   defect 7 below.
-* **No sketch fillet or chamfer.** Corner rounding has to happen as a model
-  feature, which is often not where it belongs. *The call is published*
-  (2026-09-08): `SketchArcs.AddByFillet(EntityOne, EntityTwo, Radius,
-  PointOnEntityOne, PointOnEntityTwo)`, the two proximity points choosing which
-  corner. A `fillet` entry on a sketch entity's corner list is the recipe shape;
-  the roadmap's Phase 2 has it.
+* ~~**No sketch fillet or chamfer.**~~ *A fillet landed 2026-09-09 as `corners`
+  on `rectangle` and `polyline`, a radius expression that rounds every corner.
+  A chamfer is still missing.* It rounds the **profile** rather than the
+  solid's edges, so the rounding is part of the shape being swept and survives
+  whatever the profile is used for.
+
+  Written as geometry -- shortened edges and tangent arcs, one radius dimension
+  carried to the rest by `equal_radius` -- rather than through the published
+  `SketchArcs.AddByFillet`, for the reason `docs/DECISIONS.md` gives about
+  measured routes: that outline is what `_plan_slot` already builds and a seat
+  has built since the slot shipped, and writing it out means the simulator gets
+  the real outline, so a rounded rectangle's area is `w * h - (4 - pi) * r^2`
+  by its own arithmetic. Refused rather than guessed: a radius that will not
+  fit its corner, and an **inward** corner, whose arc sweeps the other way
+  round its centre. The roadmap carries both that and the chamfer.
 * **No project geometry or sketch offset**, so a sketch cannot reference the edges
   of the solid it sits on. *The calls are published* (2026-09-08):
   `PlanarSketch.AddByProjectingEntity(Entity)` projects one edge, vertex, work

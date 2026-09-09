@@ -886,13 +886,41 @@ actually bitten.
       midpoint -- which is the same missing fact that keeps the pattern-axis
       checker declining on an angled plane.
 
-- [ ] **A sketch fillet.** *(Opened 2026-09-08.)* `SketchArcs.AddByFillet(
-      EntityOne, EntityTwo, Radius, PointOnEntityOne, PointOnEntityTwo)`, the
-      two proximity points choosing the corner. Closes the oldest bullet in
-      `FEATURE_COVERAGE.md`'s gap list. The recipe shape is a `corners` list
-      on `rectangle` and `polyline` carrying a radius expression; the plan
-      gains an arc per corner with two tangencies, which `geometry.py` already
-      knows how to write for a slot.
+- [x] **A sketch fillet.** *(Opened 2026-09-08, done 2026-09-09.)* `corners`
+      on `rectangle` and `polyline`: a radius expression that rounds every
+      corner, closing the oldest bullet in `FEATURE_COVERAGE.md`'s gap list.
+      It rounds the **profile**, so the rounding is part of the shape being
+      swept rather than a feature applied afterwards.
+
+      Written as geometry -- shortened edges and tangent arcs, one radius
+      dimension carried to the rest by `equal_radius`, which is how a drafter
+      writes it and what keeps Inventor from refusing a redundant one --
+      rather than through the published `SketchArcs.AddByFillet`. That is the
+      `DECISIONS.md` rule about measured routes: the line-and-arc outline is
+      what `_plan_slot` already builds and a seat has built since the slot
+      shipped, and writing it out means the simulator gets the real outline,
+      so a rounded rectangle's area is `w * h - (4 - pi) * r^2` by its own
+      arithmetic rather than by a special case.
+
+      **The bug worth remembering** was in the arithmetic and was invisible:
+      an arc whose sweep crossed `atan2`'s seam at pi came out going the long
+      way round its own centre, and the profile area read 22.99991 cm^2
+      against the 23.785398 the shape has -- exactly the four quarter-discs it
+      had carved out of the corners instead of rounding them. Nothing raised,
+      the sketch closed, the loop walked. `tests/test_sketch_fillet.py` checks
+      every case against the closed form for that reason.
+
+- [ ] **An inward corner, and a sketch chamfer.** *(Opened 2026-09-09, split
+      off the item above.)* `corners` refuses a corner that turns inward: its
+      arc sweeps the other way round its centre, and emitting it the outward
+      way would close a loop nobody asked for. The fix is to emit that arc
+      reversed so it still sweeps anticlockwise, which needs
+      `profile_loops`/`loop_points` checked for whether they will walk an arc
+      from its end to its start -- unverified, and the reason this is its own
+      item. **An L-bracket profile is the common case that wants it.** A
+      sketch *chamfer* is the same shape of work with a line instead of an
+      arc, and no published call was read for it.
+
 - [ ] **Project geometry.** *(Opened 2026-09-08.)* `PlanarSketch.
       AddByProjectingEntity(Entity)` one edge, vertex, work axis or work point
       at a time; `PlanarSketches.Add(face, UseFaceEdges=True)` for a whole

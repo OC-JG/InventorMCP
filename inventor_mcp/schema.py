@@ -115,6 +115,11 @@ class PolylineEntity(EntityBase):
     type: Literal["polyline"] = "polyline"
     points: Annotated[list[Point2D], Field(min_length=2)]
     closed: bool = True
+    corners: ValueSpec | None = Field(
+        None,
+        description="Radius to round every corner to. On an open polyline the "
+        "two ends are left square, because there is no corner there to round.",
+    )
 
 
 class RectangleEntity(EntityBase):
@@ -123,6 +128,14 @@ class RectangleEntity(EntityBase):
     corner: Point2D | None = Field(None, description="Lower-left corner; alternative to `center`.")
     width: ValueSpec = Field(description="Size along X.")
     height: ValueSpec = Field(description="Size along Y.")
+    corners: ValueSpec | None = Field(
+        None,
+        description="Radius to round every corner to, as an expression like any "
+        "other length -- so the corners follow the parameter that sets them. "
+        "The alternative is a `fillet` on the extruded edges afterwards, which "
+        "is a different thing: this rounds the PROFILE, so the rounding is part "
+        "of the shape being swept and survives whatever the profile is used for.",
+    )
 
     @model_validator(mode="after")
     def _one_anchor(self) -> "RectangleEntity":

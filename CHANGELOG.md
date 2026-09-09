@@ -6,6 +6,37 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
 ### Added
 
+- **A sketch fillet: `corners` on a rectangle or a polyline.** *(Roadmap Phase
+  2, and the oldest bullet in `FEATURE_COVERAGE.md`'s gap list.)* A radius
+  expression that rounds every corner of the **profile** -- so the rounding is
+  part of the shape being swept and survives whatever the profile is used for,
+  which a `fillet` on the solid's edges afterwards does not.
+
+  Written as geometry rather than through the published
+  `SketchArcs.AddByFillet`: shortened edges and tangent arcs, with one radius
+  dimension carried to the rest by `equal_radius`, which is how a drafter
+  writes it and what keeps Inventor from refusing a redundant dimension. That
+  is `DECISIONS.md`'s rule about measured routes -- the line-and-arc outline is
+  what the slot already builds and a seat has built since the slot shipped --
+  and it means the simulator gets the real outline, so a rounded rectangle's
+  area is `w * h - (4 - pi) * r^2` by its own arithmetic rather than by a
+  special case.
+
+  Refused rather than guessed: a radius that will not fit its corner (two
+  overlapping fillets are not a shape) and an **inward** corner, whose arc
+  sweeps the other way round its centre. Both are roadmap items now, and an
+  L-bracket profile is the common case that wants the second.
+
+  **The bug worth recording** was in the arithmetic and was invisible. An arc
+  whose sweep crossed `atan2`'s seam at pi came out going the long way round
+  its own centre, and the profile area read 22.99991 cm^2 against the
+  23.785398 the shape has -- exactly the four quarter-discs it had carved out
+  of the corners instead of rounding them. Nothing raised, the sketch closed,
+  the loop walked, and only the number said so. The sweep of a rounded corner
+  *is* its turn, so saying that avoids the seam rather than handling it, and
+  every case in `tests/test_sketch_fillet.py` is checked against the closed
+  form.
+
 - **A frozen parameter is marked key, and Inventor's dependency graph is read
   as a second source.** *(Roadmap Phase 2.)* Two small things, both about a
   freeze being legible rather than only enforced. `Parameter.IsKey` puts a
