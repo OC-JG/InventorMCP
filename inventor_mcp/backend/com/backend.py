@@ -1221,10 +1221,79 @@ class ComBackend(Backend):
             except Exception:
                 continue
 
-        return {
+        # 4. Inventor's own graph, as a second source rather than a
+        #    replacement. `Parameter.DrivenBy` and `Parameter.Dependents` are
+        #    documented, and everything above this point reconstructs the same
+        #    relation by *parsing expressions* -- which is the thing the freeze
+        #    guard rests on, so a disagreement between the two is worth having
+        #    rather than choosing between. The parser stays the answer: it
+        #    works on the simulator too, and it is what `rehearse` uses before
+        #    any seat is involved.
+        graph = self._parameter_graph(doc_id, feature, known)
+        answer: dict[str, Any] = {
             "parameters": sorted(via, key=str.lower),
             "via": {parameter: sorted(where) for parameter, where in via.items()},
         }
+        if graph is not None:
+            answer["inventors_graph"] = sorted(graph, key=str.lower)
+            missed = sorted(graph - set(via), key=str.lower)
+            extra = sorted(set(via) - graph, key=str.lower)
+            if missed or extra:
+                answer["graph_disagrees"] = {
+                    "inventor_says_also": missed,
+                    "expressions_say_also": extra,
+                    "why_it_matters": (
+                        "The freeze guard reads dependencies by parsing "
+                        "expressions, and this is Inventor's own answer to the "
+                        "same question. A parameter only Inventor lists is one "
+                        "a freeze on this feature would not have protected; "
+                        "one only the parser lists is a reference Inventor does "
+                        "not count, which is usually a dimension that drives no "
+                        "geometry. Neither is wrong on its face -- they are "
+                        "different questions -- but a difference here is worth "
+                        "reading before trusting a freeze."
+                    ),
+                }
+        return answer
+
+    def _parameter_graph(self, doc_id: str, feature: Any,
+                         known: dict[str, str]) -> set[str] | None:  # pragma: no cover - Windows only
+        """Which user parameters Inventor itself says this feature depends on.
+
+        `Parameter.DrivenBy` is what a parameter is computed from and
+        `Dependents` what is computed from it, both documented and neither
+        measured here. None where the release will not answer at all, which is
+        the difference between "Inventor says nothing depends on this" and
+        "Inventor was not asked" -- and the caller reports the second as an
+        absence rather than as agreement.
+        """
+        found: set[str] = set()
+        answered = False
+        try:
+            parameters = feature.Parameters
+            count = int(parameters.Count)
+        except Exception:
+            return None
+        for index in range(1, count + 1):
+            try:
+                parameter = _dynamic(parameters.Item(index))
+            except Exception:
+                continue
+            for route in ("DrivenBy", "Dependents"):
+                try:
+                    related = getattr(parameter, route)
+                    total = int(related.Count)
+                except Exception:
+                    continue
+                answered = True
+                for step in range(1, total + 1):
+                    try:
+                        name = str(getattr(related.Item(step), "Name", "") or "")
+                    except Exception:
+                        continue
+                    if name.lower() in known:
+                        found.add(known[name.lower()])
+        return found if answered else None
 
     def document_path(self, doc_id: str) -> str | None:  # pragma: no cover - Windows only
         document = self._doc(doc_id)

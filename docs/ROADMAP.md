@@ -979,20 +979,25 @@ actually bitten.
       makes `Update2` say so, or whether Inventor calls that a success, decides
       whether the log line is worth promoting to a finding. One run of the
       angle bracket with a deliberately missed cut answers it.
-- [ ] **Key parameters and Inventor's own dependency graph.** *(Opened
-      2026-09-08.)* `Parameter.IsKey` is a documented read-write flag; the
-      freeze list `apply_parameter` enforces could set it, so a frozen
-      parameter is visible as key in the parameters dialog. And
-      `Parameter.DrivenBy` / `Dependents` are Inventor's own graph, which the
-      freeze guard today reconstructs by parsing expressions -- a second
-      source to check the parser against, not a replacement for it.
-- [x] **`save_part` names the conflict** when the path is already open —
-      defect 3. *(2026-09-07.)* The item said "names the conflict" and the fix
-      turned out not to be a message at all: Inventor's refusal to overwrite a
-      file it has open is a bare "Exception occurred" with nothing in the
-      ErrorManager, so there was nothing to translate. The conflict is knowable
-      *before* the write, so it is refused there — with the filename, the
-      document handle holding it, and both ways out.
+- [x] **Key parameters and Inventor's own dependency graph.** *(Opened
+      2026-09-08, done 2026-09-09.)* A parameter this server refuses to change
+      is marked `IsKey` as well, which is what puts it at the top of Inventor's
+      parameters dialog with a tick beside it -- a freeze otherwise lives in a
+      sidecar and a property set, both places somebody would have to know to
+      look. **The refusal is still the protection**; the flag is how it is
+      visible, and the order in `apply_parameter` says so.
+
+      `Parameter.DrivenBy` and `Dependents` are read in
+      `feature_dependencies` and reported *beside* the parser's answer as
+      `inventors_graph`, with `graph_disagrees` both ways round when they
+      differ and what each direction would mean: a parameter only Inventor
+      lists is one a freeze on that feature would not have protected, and one
+      only the parser lists is usually a dimension driving no geometry. The
+      parser stays the answer, because it works on the simulator and is what
+      `rehearse` uses before any seat is involved. A release that will not
+      answer at all reports no graph rather than an empty one -- "Inventor was
+      not asked" is not "Inventor says nothing". **Unmeasured**: both flags are
+      documented and neither has been read off a seat.
 
       Two things worth recording. **The check belongs below the tool layer**, and
       not only for the usual reason that a rule enforced on one path is not a

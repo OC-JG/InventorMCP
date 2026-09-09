@@ -186,6 +186,14 @@ def apply_parameter(session: Session, context: DocumentContext, spec: ParameterS
     """
     if not override_frozen and context.frozen is not None:
         context.frozen.refuse(spec.name)
+    # A frozen parameter is marked *key* in Inventor as well as refused here.
+    # `Parameter.IsKey` is what puts it at the top of the parameters dialog
+    # with a tick beside it, so somebody opening the part sees which numbers
+    # the design depends on without being told -- and the freeze itself lives
+    # in a sidecar and a property set they would have to know to look for. The
+    # protection is still this refusal; the flag is how it is visible.
+    frozen_here = (context.frozen is not None
+                   and context.frozen.check(spec.name) is not None)
     if spec.name in RESERVED_NAMES:
         raise ParameterError(
             f"{spec.name!r} is reserved (it is a function or constant in expressions).",
@@ -199,7 +207,7 @@ def apply_parameter(session: Session, context: DocumentContext, spec: ParameterS
         resolved.expression,
         units=unit,
         comment=spec.comment,
-        key=spec.key,
+        key=spec.key or frozen_here,
     )
     context.resolver.declare(spec.name, Quantity(resolved.value, resolved.dim))
     return info.as_dict()

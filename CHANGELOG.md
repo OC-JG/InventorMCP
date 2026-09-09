@@ -6,6 +6,23 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
 ### Added
 
+- **A frozen parameter is marked key, and Inventor's dependency graph is read
+  as a second source.** *(Roadmap Phase 2.)* Two small things, both about a
+  freeze being legible rather than only enforced. `Parameter.IsKey` puts a
+  parameter at the top of Inventor's parameters dialog with a tick beside it,
+  so a parameter this server refuses to change is marked there too -- a freeze
+  otherwise lives in a sidecar and a property set, places somebody would have
+  to know to look. The refusal is still the protection.
+
+  And `Parameter.DrivenBy` / `Dependents` are Inventor's own answer to the
+  question the freeze guard answers by parsing expressions, so
+  `feature_dependencies` reports them beside the parser's rather than instead
+  of it, with `graph_disagrees` both ways round and what each direction means.
+  The parser stays the answer: it works on the simulator, and `rehearse` uses
+  it before any seat is involved. A release that will not answer reports no
+  graph rather than an empty one, because "Inventor was not asked" is not
+  "Inventor says nothing depends on this".
+
 - **Extrude `to` a plane and `from_to` between two.** *(Roadmap Phase 2.)*
   "Up to the underside of the lid" is how a boss is actually specified, and
   until now it had to be written as a distance somebody derived -- and
