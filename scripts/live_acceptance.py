@@ -38,6 +38,7 @@ from inventor_mcp.builder import (  # noqa: E402
     measure,
 )
 from inventor_mcp.drafting import build_drawing  # noqa: E402
+from inventor_mcp.errors import DocumentError  # noqa: E402
 from inventor_mcp.schema import DrawingRecipe, ExtrudeOp, PartRecipe, SketchOp  # noqa: E402
 from inventor_mcp.session import Session  # noqa: E402
 
@@ -1395,14 +1396,67 @@ def check_drawing(session: Session, report: Report) -> None:
     into.mkdir(exist_ok=True)
     part_file = into / "drawn_plate.ipt"
 
-    try:
-        outcome = build_drawing(session, drawing, part, part_path=str(part_file))
-    except Exception as exc:
-        hint = getattr(exc, "hint", None)
-        report.check(False, "drawing: the sheet was made",
-                     f"{type(exc).__name__}: {exc}"
-                     + (f"\n         hint: {hint}" if hint else ""))
+    # A leftover from an earlier run is housekeeping, not a finding. The 
+    # 2026-09-09 sweep failed here and nowhere else: this check had saved the
+    # part and never closed it, so running `--only drawing` and then the whole
+    # sweep hit "drawn_plate.ipt is already open in this Inventor session" --
+    # the save guard working exactly as designed, on a document this check left
+    # behind. It closes both documents in a `finally` now, and a path still
+    # held by a document from a *previous process* gets a numbered name rather
+    # than stopping the run.
+    outcome = None
+    for attempt, path in enumerate(_numbered(part_file), start=1):
+        try:
+            outcome = build_drawing(session, drawing, part, part_path=str(path))
+            if attempt > 1:
+                report.note(f"{part_file.name} was still open from an earlier "
+                            f"run, so the part was saved as {path.name}")
+            break
+        except DocumentError as exc:
+            if attempt >= 3:
+                report.check(False, "drawing: the sheet was made",
+                             f"{type(exc).__name__}: {exc}")
+                return
+            continue
+        except Exception as exc:
+            hint = getattr(exc, "hint", None)
+            report.check(False, "drawing: the sheet was made",
+                         f"{type(exc).__name__}: {exc}"
+                         + (f"\n         hint: {hint}" if hint else ""))
+            return
+    if outcome is None:  # pragma: no cover - the loop returns on failure
         return
+    documents = [outcome.get("document"),
+                 (outcome.get("part") or {}).get("document")]
+    try:
+        _check_the_sheet(session, report, drawing, outcome)
+    finally:
+        for doc_id in documents:
+            if not doc_id:
+                continue
+            try:
+                session.backend.close_document(doc_id, save=False)
+                session.forget(doc_id)
+            except Exception as exc:  # pragma: no cover - Windows only
+                report.note(f"could not close {doc_id}: {exc}")
+
+
+def _numbered(path: Path):
+    """*path*, then the same name with `_2`, `_3` ... appended.
+
+    For a path a document from an earlier process still holds open. Inventor
+    will not write a file it has open and says so by name, which is the right
+    answer to a real conflict and pure obstruction when the holder is a
+    leftover nobody wants.
+    """
+    yield path
+    for index in range(2, 5):
+        yield path.with_name(f"{path.stem}_{index}{path.suffix}")
+
+
+def _check_the_sheet(session: Session, report: Report, drawing: "DrawingRecipe",
+                     outcome: dict) -> None:
+    """Everything the sheet has to answer, once it exists."""
 
     made = report.check(bool(outcome.get("document")), "drawing: a drawing document exists",
                         str(outcome.get("findings"))[:400])
@@ -1538,10 +1592,10 @@ def check_drawing(session: Session, report: Report) -> None:
             "The sheet is first angle, so this project put TOP below FRONT.")
         if reported in (None, "unknown"):
             report.note(
-                "Inventor would not say which way that projected view faces: "
-                f"`ViewOrientationType` read as {reported!r}. So the "
-                "projection angle is still unverified -- a projected view is "
-                "told a position and nothing about its direction, which makes "
+                "Neither the view's camera nor `ViewOrientationType` would say "
+                f"which way that projected view faces: {reported!r}. So the "
+                "projection angle is unverified -- a projected view is told a "
+                "position and nothing about its direction, which makes "
                 "Inventor's own answer the only evidence that "
                 "`drafting._THIRD_ANGLE_STEP` has first and third angle the "
                 "right way round. `scripts/com_signatures.py DrawingView` says "
@@ -1549,7 +1603,8 @@ def check_drawing(session: Session, report: Report) -> None:
         else:
             report.check(
                 reported == "top",
-                f"drawing: Inventor calls the projected view {reported!r}",
+                f"drawing: the projected view faces {reported!r}, read off its "
+                "own camera",
                 "It should be the top view: this sheet is first angle and TOP "
                 "was placed below FRONT. If Inventor calls it 'bottom' then the "
                 "two conventions are the other way round from what "
@@ -2324,9 +2379,15 @@ def check_view_directions(session: Session, report: Report) -> None:
             report.note(
                 f"{direction}: spans {extent} cm -- "
                 f"{planes.get(rounded, 'no plane of this block')}"
-                f", Inventor reports {detail.get('orientation_reported')!r}"
-                + (f", camera eye {camera['eye']} up {camera.get('up')}"
+                f", camera says {detail.get('direction_measured')!r}, "
+                f"enum says {detail.get('orientation_reported')!r}"
+                + (f", eye {camera['eye']} up {camera.get('up')}"
                    if camera.get("eye") else ", camera unreadable"))
+            if detail.get("direction_measured") not in (direction, None):
+                report.note(
+                    f"    ^ asked for {direction!r} and the camera says "
+                    f"{detail.get('direction_measured')!r}: either this release "
+                    "orients a base view differently or `_VIEW_EYE` has drifted")
         report.note(
             "What `base.VIEW_AXES` says, measured 2026-09-08: front and rear "
             "show XY (12 x 8 here), top and bottom XZ (12 x 0.8), left and "
@@ -2411,8 +2472,11 @@ def check_views(session: Session, report: Report) -> None:
                 path=str(path), orientation=orientation, display_mode="shaded"))
             if path.is_file():
                 report.note(f"views: {orientation} -> {path.stat().st_size} bytes")
-        report.note("views: look at them before trusting the orientation names -- "
-                    "defect 4 says they do not describe what you get")
+        report.note("views: the orientation names are Inventor's, which is "
+                    "Y-up -- `front` is the XY plan of a part modelled Z-up, "
+                    "and `top` puts -Z up the screen. Measured on 2026-09-09 "
+                    "off the drawing cameras, deliberate, and written down in "
+                    "docs/DECISIONS.md.")
         report.note(f"views: delete {into} when you are done")
     finally:
         session.backend.close_document(context.doc_id, save=False)

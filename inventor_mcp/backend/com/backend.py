@@ -3761,11 +3761,12 @@ class ComBackend(Backend):
         # it: the orientation it reports, and the camera, which is the only
         # reading that settles which way is up inside the plane an extent
         # measures. See defect 16.
+        camera = _view_camera(view)
         detail: dict[str, Any] = {
             "orientation_reported": _view_orientation_name(
                 view, self._VIEW_ORIENTATIONS, self._k),
+            "direction_measured": _direction_from_camera(camera),
         }
-        camera = _view_camera(view)
         if camera:
             detail["camera"] = camera
         return ViewInfo(
@@ -3980,17 +3981,38 @@ class ComBackend(Backend):
         views: list[ViewInfo] = []
         for index in range(1, int(sheet.DrawingViews.Count) + 1):
             view = sheet.DrawingViews.Item(index)
+            camera = _view_camera(view)
+            from_camera = _direction_from_camera(camera)
+            labelled = _view_orientation_name(
+                view, self._VIEW_ORIENTATIONS, self._k)
+            direction = from_camera or labelled
+            detail: dict[str, Any] = {
+                "direction_from": "camera" if from_camera else "ViewOrientationType",
+                "orientation_reported": labelled,
+            }
+            if camera:
+                detail["camera"] = camera
             views.append(ViewInfo(
                 id=str(getattr(view, "Name", index)),
                 name=str(getattr(view, "Name", f"view{index}")),
                 # Asked of the view rather than remembered from the request: a
                 # sheet read back has to be able to disagree with what was asked
                 # for, or reading it back proves nothing.
-                direction=_view_orientation_name(
-                    view, self._VIEW_ORIENTATIONS, self._k),
+                #
+                # **From the camera, because the orientation enum is not
+                # readable on 2027.1** -- measured 2026-09-09 on all seven
+                # directions, base and projected alike, where
+                # `ViewOrientationType` answered nothing at all. The camera
+                # does, and it says more: where the view looks from and which
+                # way is up. The enum stays behind it for a release that has
+                # it, and the detail says which answered, because a direction
+                # derived from a camera and one Inventor labelled are different
+                # kinds of evidence.
+                direction=direction,
                 at=_view_position(view),
                 scale=float(getattr(view, "Scale", 1.0)),
                 extent=_view_extent(view),
+                detail=detail,
             ))
         dimensions: list[DimensionInfo] = []
         for index in range(1, int(sheet.DrawingDimensions.Count) + 1):
@@ -6546,6 +6568,68 @@ def _view_position(view: Any) -> tuple[float, float]:  # pragma: no cover
         return (float(centre.X), float(centre.Y))
     except Exception:
         return (0.0, 0.0)
+
+
+#: Where a base view's camera sits, per direction, as the sign of the axis it
+#: looks down from. Measured on Inventor 2027.1, 2026-09-09, by placing one
+#: base view per direction of a 120 x 80 x 8 mm block and reading each camera:
+#:
+#:     front   eye (0, 0, +29)   up (0, +1, 0)
+#:     rear    eye (0, 0, -28)   up (0, +1, 0)
+#:     top     eye (0, +29, 0)   up (0, 0, -1)
+#:     bottom  eye (0, -29, 0)   up (0, 0, +1)
+#:     left    eye (-29, 0, 0)   up (0, +1, 0)
+#:     right   eye (+29, 0, 0)   up (0, +1, 0)
+#:
+#: Which is Inventor being **consistently Y-up**: every view but the top and
+#: bottom pair has +Y up the screen, and those two -- looking down and up the
+#: Y axis, where Y cannot be up -- put -Z and +Z there instead. That is the
+#: whole of "`top` renders Z inverted", the observation defect 4 recorded and
+#: could not explain, and it is a convention rather than a fault.
+#:
+#: This exists because **`DrawingView.ViewOrientationType` is not readable on
+#: 2027.1** -- measured the same run, on all seven views, base and projected
+#: alike. The camera is, and it says strictly more: an orientation enum names
+#: a view and a camera says where it looks from and which way is up. So a
+#: view's direction is derived from it.
+_VIEW_EYE: dict[str, tuple[int, int, int]] = {
+    "front": (0, 0, 1), "rear": (0, 0, -1),
+    "top": (0, 1, 0), "bottom": (0, -1, 0),
+    "left": (-1, 0, 0), "right": (1, 0, 0),
+}
+
+
+def _direction_from_camera(camera: dict[str, Any]) -> str | None:
+    """Which direction a view looks from, out of its camera. None if it cannot say.
+
+    The eye against the target, reduced to the axis it lies along. A diagonal
+    eye -- all three components of a size -- is an isometric and says so; a
+    camera missing either point says nothing, which is not the same as saying
+    `front`.
+
+    The up vector is not needed to name the direction and is reported beside
+    it, because it answers the other question: which way is up inside the
+    plane the name settles.
+    """
+    eye, target = camera.get("eye"), camera.get("target")
+    if not eye or not target or len(eye) != 3 or len(target) != 3:
+        return None
+    away = [round(float(e) - float(t), 6) for e, t in zip(eye, target)]
+    size = max(abs(value) for value in away)
+    if size <= 0:
+        return None
+    # A tenth of the longest component: an axis view's other two components
+    # are the target's own offset from the origin, not zero, and an isometric's
+    # three are all within a factor of two of each other.
+    minor = [abs(value) for value in away if abs(value) < size / 10]
+    if len(minor) != 2:
+        return "iso" if len(minor) == 0 else None
+    for name, axis in _VIEW_EYE.items():
+        if all((value > size / 10) == (component > 0)
+               and (value < -size / 10) == (component < 0)
+               for value, component in zip(away, axis)):
+            return name
+    return None
 
 
 def _view_camera(view: Any) -> dict[str, Any]:  # pragma: no cover - Windows only

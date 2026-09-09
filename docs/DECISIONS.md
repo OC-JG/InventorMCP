@@ -460,9 +460,20 @@ one boundary where the vocabularies meet -- and transposes the extent for
 `left` and `right`, whose planes agree and whose axis order does not. Two
 tables here are two facts, not two copies of one.
 
-**What the decision does not settle** is which way is up inside the plane. An
-extent is a size: a view rotated or mirrored spans the same, and
-`capture_view`'s `top` is known to render Z inverted. `place_view` reports each
-view's camera now -- eye, target, up vector -- so the reading exists. Nothing
-has been concluded from it, which is the honest state and is recorded as the
-open half of defects 4 and 16.
+**What the decision did not settle, the cameras did.** An extent is a size, so
+it says which plane a view shows and never which way is up inside it. Read the
+views' cameras and both fall out: every one has +Y up the screen except the top
+and bottom pair, which look down and up the Y axis -- where Y cannot be up --
+and put -Z and +Z there. So `capture_view`'s `top` rendering Z inverted, the
+observation defect 4 recorded and could not explain, is Inventor being
+consistently Y-up. The decision to follow that naming is the same decision
+either way; what changed is that the last unexplained part of it has a
+measurement.
+
+It also settled how to *read* a view back. `DrawingView.ViewOrientationType`
+answered nothing on any of the seven views on 2027.1, so a direction read off
+the sheet comes from the camera, with the enum behind it and the detail saying
+which answered. A camera says more than an orientation enum can: an enum names
+a view and a camera says where it looks from and which way is up. That the
+better evidence was also the only readable evidence is luck, and worth
+recording as such.

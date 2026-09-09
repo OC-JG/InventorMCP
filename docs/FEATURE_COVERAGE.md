@@ -587,9 +587,24 @@ Each of these was hit while building real parts, and each passed
    written down instead of being discovered. `docs/DECISIONS.md` has the choice
    and defect 16 the measurement behind it.
 
-   **One half of this is still open and is now defect 16's**: `top` renders Z
-   inverted, so text that looks upside-down in one is not. An extent settles
-   which plane a view shows and never which way is up inside it.
+   **And the half that was still open is answered.** *(2026-09-09, off the
+   drawing views' own cameras.)* Every view has +Y up the screen except the
+   top and bottom pair, which look down and up the Y axis -- where Y cannot be
+   up -- and put -Z and +Z there instead:
+
+   | direction | eye | up |
+   |---|---|---|
+   | front | (0, 0, +29) | (0, +1, 0) |
+   | rear | (0, 0, -28) | (0, +1, 0) |
+   | top | (0, +29, 0) | (0, 0, **-1**) |
+   | bottom | (0, -29, 0) | (0, 0, **+1**) |
+   | left | (-29, 0, 0) | (0, +1, 0) |
+   | right | (+29, 0, 0) | (0, +1, 0) |
+
+   So "`top` renders Z inverted" is Inventor being consistently Y-up, not a
+   fault: a view looking down the Y axis has to put something else up the
+   screen, and -Z is what an ISO top view uses. Nothing to fix, and now
+   nothing unexplained.
 
 5. **A `trim` split threw away the opposite side to the one documented.**
    *Fixed and confirmed live, 2026-09-03: all three fixtures now agree with
@@ -1031,13 +1046,22 @@ Each of these was hit while building real parts, and each passed
     meet, and it transposes the extent for `left` and `right` because their
     planes agree and their axis order does not.
 
-    **What is still open, and it is the second half of defect 4 as well:**
-    which way is *up* inside the plane. An extent is a size -- a view rotated
-    or mirrored spans the same -- and `capture_view`'s `top` is known to render
-    Z inverted. `place_view` now reports each view's camera (eye, target, up
-    vector) in its result detail, and `live_acceptance.py --only
-    view-directions` prints them for all seven, so the reading exists; nothing
-    has been concluded from it yet.
+    **And the last open half was answered by the same mechanism.** An extent is
+    a size, so it settles which plane a view shows and never which way is up
+    inside it. The *camera* settles both, and it is readable: `place_view` and
+    `read_drawing` report each view's eye, target and up vector, and defect 4
+    above has the measured table. Inventor is consistently Y-up, `top` puts -Z
+    up the screen because a view down the Y axis must put something else
+    there, and the observation defect 4 could not explain is a convention.
+
+    **One thing that is *not* readable, measured the same run:**
+    `DrawingView.ViewOrientationType` answered nothing on any of the seven
+    views, base or projected. So a view's direction comes off its camera now,
+    with the enum kept behind it for a release that has it and
+    `direction_from` in the detail saying which answered -- a direction
+    derived from a camera and one Inventor labelled are different kinds of
+    evidence. `tests/test_view_axes.py` holds the mapping against that run's
+    own numbers.
 
 17. **Retrieval reported "0 of 0 dimensions" three times and the reason was
     already in the result.** *(2026-09-08.)* `build_drawing` catches each

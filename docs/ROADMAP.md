@@ -1135,13 +1135,14 @@ The market's 2026 feature, and a gap in the whole open-source field.
       view offers on this release, and a camera read is the other candidate
       since `place_view` already reports one for a base view.
 
-- [ ] **Which way is up inside the plane** -- the open half of defects 4 and
-      16. An extent is a size, so a view rotated or mirrored measures the same,
-      and `capture_view`'s `top` is known to render Z inverted. `place_view`
-      reports each view's camera now (eye, target, up vector) and `--only
-      view-directions` prints all seven, so **the reading exists and nothing
-      has been concluded from it**. One run and a table; the same pass should
-      cover `capture_view`, since both surfaces are the same quarter turn.
+- [x] **Which way is up inside the plane** -- the open half of defects 4 and
+      16, *answered 2026-09-09 off the views' own cameras*. Inventor is
+      consistently Y-up: every view has +Y up the screen except top and
+      bottom, which look down and up the Y axis and put -Z and +Z there. So
+      "`top` renders Z inverted" is the convention rather than a fault, and
+      defect 4 has the measured eye-and-up table. `DrawingView.
+      ViewOrientationType` turned out unreadable on 2027.1, so a view's
+      direction is derived from its camera, which says strictly more.
 
       `GeneralDimension` and `DrawingDimensions` have no generated module to
       read, which is not the same as their being absent — makepy generates what

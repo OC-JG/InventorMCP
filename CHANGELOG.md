@@ -481,6 +481,26 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
 ### Measured
 
+- **Which way is up inside a view, and Inventor is consistently Y-up.**
+  *(2026-09-09, off the drawing views' own cameras.)* Every base view has +Y up
+  the screen except the top and bottom pair, which look down and up the Y axis
+  -- where Y cannot be up -- and put -Z and +Z there instead. So
+  `capture_view`'s `top` rendering Z inverted, the observation defect 4
+  recorded and could not explain, is a convention rather than a fault, and the
+  last open half of defects 4 and 16 is closed. The eye-and-up table is in
+  defect 4 and `tests/test_view_axes.py` holds the mapping against that run's
+  own numbers.
+
+- **`DrawingView.ViewOrientationType` is not readable on 2027.1**, measured the
+  same run on all seven views, base and projected alike. So a view's direction
+  read back off a sheet is derived from its **camera** -- which says strictly
+  more, since an orientation enum names a view and a camera says where it looks
+  from and which way is up. The enum stays behind it for a release that has it,
+  and `direction_from` in the result detail says which answered: a direction
+  derived from a camera and one Inventor labelled are different kinds of
+  evidence. This is also what should finally settle the projection angle, since
+  a projected view's direction is the one thing nobody asserts.
+
 - **The whole drawing surface ran, on the fourth attempt.** *(2026-09-09,
   Inventor 2027.1.)* A sheet from a company template, three views carrying
   Inventor's own extents, and **five of five dimensions retrieved with each one
@@ -557,6 +577,16 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   has the same one.
 
 ### Fixed
+
+- **The drawing check left its part open, and the next run could not write
+  it.** *(2026-09-09: the full sweep failed on that and nothing else, having
+  passed the same check standing alone minutes before.)* The check saves the
+  part -- a drawing view needs a model file -- and never closed it, so the
+  second run met "drawn_plate.ipt is already open in this Inventor session":
+  the save guard working exactly as designed, on a document this check left
+  behind. Both documents are closed in a `finally` now, and a path a *previous
+  process* still holds gets a numbered name rather than stopping the run,
+  since a leftover is housekeeping and not a finding.
 
 - **The drawing check hid the diagnosis it had been given.** *(2026-09-08.)*
   Retrieval reported "0 of 0 dimensions" three times, and `build_drawing` had

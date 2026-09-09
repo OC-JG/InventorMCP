@@ -127,3 +127,85 @@ class TestTheTranslationIsConsistentWithBothTables:
         """A direction the schema does not have should not reach here, and if
         it does, guessing a transpose would corrupt the extent."""
         assert _as_read("section", [1.0, 2.0]) == ("front", [1.0, 2.0])
+
+
+class TestADirectionReadOffTheCamera:
+    """`DrawingView.ViewOrientationType` is not readable on Inventor 2027.1 --
+    measured 2026-09-09 on all seven directions, base views and a projected one
+    alike, where it answered nothing. So a view's direction is derived from its
+    camera, which is readable and says strictly more: an orientation enum names
+    a view, and a camera says where it looks from and which way is up.
+
+    The numbers below are that run's, to six places, with the target at the
+    block's own centre. They are the measurement, so a mapping that stops
+    agreeing with them has drifted from the seat rather than from an opinion.
+    """
+
+    TARGET = [0.0, 0.0, 0.4]
+    EYES = {
+        "front": [0.0, 0.0, 29.288752],
+        "rear": [0.0, 0.0, -28.488752],
+        "top": [0.0, 28.888752, 0.4],
+        "bottom": [0.0, -28.888752, 0.4],
+        "left": [-28.888752, 0.0, 0.4],
+        "right": [28.888752, 0.0, 0.4],
+    }
+    UPS = {
+        "front": [0.0, 1.0, 0.0],
+        "rear": [0.0, 1.0, 0.0],
+        "top": [0.0, 0.0, -1.0],
+        "bottom": [-0.0, -0.0, 1.0],
+        "left": [0.0, 1.0, 0.0],
+        "right": [0.0, 1.0, 0.0],
+    }
+
+    @pytest.mark.parametrize("direction", sorted(EYES))
+    def test_the_measured_camera_names_its_own_direction(self, direction):
+        from inventor_mcp.backend.com.backend import _direction_from_camera
+
+        camera = {"eye": self.EYES[direction], "target": self.TARGET,
+                  "up": self.UPS[direction]}
+        assert _direction_from_camera(camera) == direction
+
+    @pytest.mark.parametrize("direction", sorted(EYES))
+    def test_and_it_shows_the_plane_the_axis_table_says(self, direction):
+        """The two measurements have to agree: a view looking down Y shows the
+        XZ plane, and `VIEW_AXES` is what says so. One came off an extent and
+        the other off a camera, in the same run."""
+        looks_along = [index for index, (eye, target)
+                       in enumerate(zip(self.EYES[direction], self.TARGET))
+                       if abs(eye - target) > 1.0]
+        assert len(looks_along) == 1
+        assert looks_along[0] not in VIEW_AXES[direction], (
+            f"a {direction!r} view looks along axis {looks_along[0]} and cannot "
+            f"also span it, but VIEW_AXES says {VIEW_AXES[direction]}"
+        )
+
+    def test_inventor_is_consistently_y_up_except_where_it_cannot_be(self):
+        """Every view has +Y up the screen but the top and bottom pair, which
+        look down and up the Y axis -- where Y cannot be up -- and put -Z and
+        +Z there instead. That is the whole of "`top` renders Z inverted", the
+        observation defect 4 recorded and could not explain."""
+        for direction in ("front", "rear", "left", "right"):
+            assert self.UPS[direction] == [0.0, 1.0, 0.0], direction
+        assert self.UPS["top"][2] == -1.0, "a top view puts -Z up the screen"
+        assert self.UPS["bottom"][2] == 1.0
+
+    def test_an_isometric_says_so_rather_than_picking_an_axis(self):
+        from inventor_mcp.backend.com.backend import _direction_from_camera
+
+        camera = {"eye": [-16.678929, 16.678929, 17.078929], "target": self.TARGET,
+                  "up": [0.408248, 0.816497, -0.408248]}
+        assert _direction_from_camera(camera) == "iso"
+
+    def test_a_camera_that_says_nothing_answers_nothing(self):
+        """Not `front`. A view whose camera cannot be read is not evidence that
+        it faces the way it was asked to -- which is the mistake the projection
+        check made when it accepted `unknown` as a pass."""
+        from inventor_mcp.backend.com.backend import _direction_from_camera
+
+        assert _direction_from_camera({}) is None
+        assert _direction_from_camera({"eye": [1.0, 0.0, 0.0]}) is None
+        assert _direction_from_camera({"eye": [0.0, 0.0, 0.0],
+                                       "target": [0.0, 0.0, 0.0]}) is None
+        assert _direction_from_camera({"eye": [1.0, 2.0], "target": [0.0, 0.0]}) is None
