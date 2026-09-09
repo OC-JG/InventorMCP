@@ -4,6 +4,56 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
 ## Unreleased
 
+### Planned
+
+- **`docs/ROADMAP.md` gains Phase 6, for what a second over-engineering pass
+  found to delete.** *(2026-09-09.)* Six items, about 330 lines out, no
+  dependency out, no capability in: the number-word parsing in
+  `test_roadmap_still_true.py` and `test_docs_still_true.py` (a count in a
+  paragraph is a fact worth not stating rather than one worth testing),
+  `SingleThread` becoming a one-worker `ThreadPoolExecutor`,
+  `INVENTOR_MCP_BINDING=early` -- a switch its own documentation says not to set
+  -- the `compat.py` SDK shim now that `mcp` 2.0 has dropped
+  `mcp.server.fastmcp`, six definitions whose only occurrence in the repository
+  is their own, and two copies of `flatten`. The phase depends on nothing; its
+  number is where it was appended, not when it should happen.
+
+### Fixed
+
+- **Three of the simulator's eighteen `ponytail:` approximations were cheaper to
+  fix than to keep.** *(2026-09-09.)* Each was marked as a known ceiling; each
+  turned out to need no booleans and no ledger work, only the measurement the
+  marker said was being skipped. The count in `docs/ROADMAP.md` is sixteen now,
+  fifteen of them in `backend/mock/`, and `test_roadmap_still_true.py` is what
+  said so.
+
+  - **A through hole is measured over every centre, not over the first one.**
+    `hole` took `_through_all_distance` over `centers[0]` and charged that depth
+    to all of them, so on the L-section -- a 40 mm upright over a 6 mm base --
+    which point happened to be drawn first decided the volume of both holes.
+    `_record_bores` takes a depth per centre now, so each bore is *recorded* to
+    its own depth as well: a later feature sees the shallow hole as shallow.
+    The blind case is unchanged and still marked -- a depth deeper than the
+    material is charged in full.
+
+  - **Whitespace lays down no ink.** `_text_area` charged every character the
+    same, spaces included, so a two-word engraving read high by about a
+    character per gap. `_INK_PER_EM` was calibrated on "OnlyCat", which has no
+    space in it, so the constant did not have to move.
+
+  - **A revolve's axis is resolved rather than assumed.** `_radial_axis` gave up
+    on anything but `x`, `y` or `z`, and three callers then guessed: `_pappus`
+    fell back to `abs(centroid[u])`, `coil` read the helix radius the same way,
+    and `_expand_for_revolve` bounded the sweep with a cube -- the case its own
+    docstring says makes a pulley look like a ball. Its replacement,
+    `_turning_axis`, resolves a named work axis or a sketch line running along
+    either sketch axis into *which* sketch axis measures radius, *where* the
+    axis sits on it, and which model axis it turns about, and all four callers
+    read the same answer. So a spring wound about its own centreline at x = 5 is
+    25 mm out rather than 30, and a ring revolved about x = 10 reaches from
+    −10 mm to 30 mm rather than 30 mm every way from the origin. A line at an
+    angle to both axes, or an edge, still falls back, and still says so.
+
 ### Measured
 
 - **`move_face` and `sketch_driven_pattern` both build in Inventor, and every

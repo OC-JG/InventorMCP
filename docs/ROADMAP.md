@@ -5,7 +5,8 @@ Where this project goes next, and why it is not going somewhere else.
 `ARCHITECTURE.md` says what the code is. `DECISIONS.md` says why it behaves as
 it does. This document answers the question that was put after a night-long
 audit of both: *knowing what we know now, would we build it the same way?* The
-answer is no rebuild, four restructures, and five phases. The reasoning is kept
+answer was no rebuild, four restructures, and five phases; a second audit, on
+2026-09-09, added a sixth for what it found to delete. The reasoning is kept
 here alongside the plan because the plan will be read by someone who wants to
 skip the restructures and start on the interesting phase, and the reasoning is
 what says they cannot.
@@ -56,10 +57,12 @@ three are hygiene the code had earned the right to skip until it stopped being
 able to.
 
 **1. The simulator's volume model becomes a per-body ledger.** This is the only
-real redesign. Seventeen of the eighteen `ponytail:` markers (the repository's
+real redesign. Fifteen of the sixteen `ponytail:` markers (the repository's
 word for a deliberate approximation) live in `backend/mock/` — it was thirteen
 of fourteen when this was written, and the sentence said so until 2026-09-03,
-which is what put this file under `test_roadmap_still_true.py` — and the worst
+which is what put this file under `test_roadmap_still_true.py`; it was seventeen
+of eighteen until 2026-09-09, when the hole depth, the emboss ink and the
+revolve axis stopped being approximations — and the worst
 of them was structural rather than local: `document.volume` is one scalar,
 `document.slabs` is a list that only `extrude` appends to and nothing ever
 subtracts from, and every operation's estimate was bolted on separately. So a
@@ -1285,6 +1288,99 @@ exports on its own through `TranslatorAddIn.SaveCopyAs` with a `FlatPattern`
 as the source object -- the documented route to a cut file that is not the
 folded part -- and `ViewOrientationTypeEnum` carries seven flat-pattern
 orientations for putting it on a sheet.
+
+### Phase 6 — what the second audit found to delete
+
+*Opened 2026-09-09 by a whole-repository pass for over-engineering, the mirror
+of the one that produced restructures 1-4: not what is missing, but what is
+here and need not be.* **This phase depends on nothing.** Its number is where
+it was appended, per the rule at the foot of this file, and not a claim about
+when it should happen -- every item below could be taken today, and none of
+them waits on Phases 2-5. Roughly 330 lines come out in total, no dependency
+comes out, and nothing gains a capability. That is the point: each item is a
+thing the standard library, the platform or the code's own single caller
+already does.
+
+Three of the simulator's approximations were closed by the same pass and are
+not items here, because they are already done *(2026-09-09)*: the through-hole
+depth is measured over every centre rather than the first, `_text_area` stops
+charging whitespace as ink, and `_turning_axis` resolves a revolve's axis for
+`_pappus`, `coil`, `_revolve_window` and `_expand_for_revolve` instead of each
+of the four guessing. The count in restructure 1 came down accordingly. The
+approximations that remain there need booleans or the per-body ledger, which
+is restructure 1's work and not this phase's.
+
+- [ ] **The counted claims come out of the prose, and the regexes that guard
+      them come out with them.** *(Opened 2026-09-09.)* Restructure 2's rule --
+      a fact stated in two places needs a test that they agree -- built
+      `test_roadmap_still_true.py` and part of `test_docs_still_true.py` into
+      machinery that parses English number words out of Markdown: `WORDS`,
+      `word()`, and searches for "Four restructures.", "eleven shipped
+      examples", the tolerances sentence, and the marker sentence in
+      restructure 1. The finding is not that the rule is wrong but that it was
+      applied to the wrong facts. A count of markers in a paragraph is a fact
+      **worth not stating**, not a fact worth testing: writing "most of them"
+      costs the reader nothing and costs CI nothing, where the number costs a
+      failing test every time the thing it counts is improved -- which is
+      exactly what happened above, three times in one afternoon. Keep every
+      check that compares code with code: `PREDICTED` against the quoted
+      tolerances, one calibration recipe per calibrated operation, an
+      expectation for every example, the cheat-sheet against the schema, the
+      README's tool table against the registered tools, and the
+      convention-not-dropped guard. Drop the number-word parsing. About 170
+      lines, and one fewer reason to leave a sentence stale rather than fix it.
+- [ ] **`SingleThread` becomes a one-worker `ThreadPoolExecutor`.** *(Opened
+      2026-09-09.)* `backend/com/marshal.py` hand-rolls what
+      `concurrent.futures.ThreadPoolExecutor(max_workers=1,
+      initializer=CoInitialize)` ships: one dedicated thread, calls serialised
+      on it, `future.result(timeout=...)` re-raising the worker's exception
+      with its own type and traceback. Two things it does not ship and which
+      must survive the swap -- the reason this is an item and not a one-line
+      change: the `teardown` hook, because an executor has no finaliser and
+      `CoUninitialize` has to run on the worker; and the re-entrancy guard, so
+      a call already on the apartment runs in place instead of deadlocking on
+      itself. `ThreadStopped`'s message stays too, since "reconnect rather than
+      restarting" is a measured fact about COM apartments and not plumbing.
+      `tests/test_threading.py` is the check and should not need changing.
+      About 70 lines.
+- [ ] **`INVENTOR_MCP_BINDING=early` goes.** *(Opened 2026-09-09.)* A switch
+      whose own documentation says not to use it: `DEMO.md` tells the reader it
+      "must be empty, NOT `early`", and the comment on `resolve_binding` says
+      the generated early-bound wrapper mis-marshals the calls that matter.
+      `gencache.EnsureDispatch` stays -- it is what gives the exact enum values
+      and is independent of how we then talk to Inventor -- and
+      `_as_late_bound` becomes unconditional. `BINDING_MODES`,
+      `resolve_binding`, `self.binding`, the branch in `connect` and four tests
+      in `test_com_backend.py` go with it. About 35 lines, and one fewer way to
+      configure a live run into a failure the logs blame on Inventor.
+- [ ] **The MCP SDK shim goes, and the floor rises with it.** *(Opened
+      2026-09-09.)* `compat.py` exists to import `FastMCP` or `MCPServer`
+      whichever the installed SDK has, and to survive an SDK whose constructor
+      predates `version=`. Measured on this machine: `mcp` is 2.0.0 and
+      `mcp.server.fastmcp` no longer imports at all, so the `ImportError` arm
+      cannot run, and the `TypeError` arm has never run. `pyproject.toml` still
+      says `mcp>=1.2`, which is the only thing keeping either alive -- a floor
+      nothing tests is a claim rather than a fact, the same reading that put
+      `requires-python` under `test_supported_pythons.py`. Raise the floor to
+      `mcp>=2`, import `MCPServer` where it is used, delete the module. About
+      20 lines and one file.
+- [ ] **Six definitions nothing calls.** *(Opened 2026-09-09.)* Each has
+      exactly one occurrence in the repository, its own: `UnknownHandleError`
+      (`errors.py`), `default_unit_for` (`units.py`), `UnitContext.factor_for`
+      (`expressions.py`), `Check.is_advisory` (`dfm/report.py`),
+      `quantity_dict` (`tools/_common.py`), `_Context.wall_expression`
+      (`dfm/remedy.py`). No caller in the package, the tests or `scripts/`.
+      About 25 lines. Worth doing as one commit, so the sweep is repeatable:
+      the check that found them is a definition scan against a whole-repository
+      reference count, and it is worth re-running rather than remembering.
+- [ ] **Two duplications and a parameter with no caller.** *(Opened
+      2026-09-09.)* `flatten` -- `text.strip().lower().replace("_", "")` -- is
+      defined twice, once in `promotion_synonyms` in `backend/base.py` and once
+      in the function three lines up the call chain from it in
+      `backend/com/backend.py`. Export the first. And `next_version(taken=...)`
+      in `versioning.py` reserves names that are about to exist; its only
+      caller is the test written for it, so the reservation goes until
+      something plans several copies in one breath. About 10 lines.
 
 ### Throughout
 

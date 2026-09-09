@@ -1040,19 +1040,23 @@ class MockBackend(Backend):
 
     def _record_bores(self, document: _Document, plane: str, offset: float,
                       centres: Sequence[tuple[float, float]], radius: float,
-                      depth: float, *, body: int | None = None,
+                      depths: Sequence[float], *, body: int | None = None,
                       feature: str = "") -> None:
         """Record each drilled hole as a void, so later features see through it.
+
+        One depth per centre, in the same order: a through hole is measured over
+        each centre's own point, so a sketch straddling a step drills a
+        different depth at each of them.
 
         Which way the drill goes is measured rather than assumed, the same way
         the COM backend decides it: the material is on one side of the sketch
         plane, and that is the side the hole goes into.
 
-        ponytail: the bore is recorded for its full depth even where part of
-        that depth runs through air, and the hole is still *charged* its full
-        depth. A hole deeper than the material it stands on removes too much
-        here, as it always has; what is new is only that the next feature can
-        see the hole.
+        ponytail: a bore given an explicit depth is recorded -- and charged --
+        for the whole of it, even where part of that depth runs through air. A
+        blind hole deeper than the material it stands on removes too much here,
+        as it always has. A through hole no longer does: its depth is the
+        material it actually meets.
         """
         normal = plane_normal(plane)
         axis = max(range(3), key=lambda index: abs(normal[index]))
@@ -1060,7 +1064,7 @@ class MockBackend(Backend):
             (math.cos(step * math.pi / 12) * radius, math.sin(step * math.pi / 12) * radius)
             for step in range(24)
         ]
-        for u, v in centres:
+        for (u, v), depth in zip(centres, depths):
             over = map3d(plane, u, v, offset)
             spans = _material_spans(document, axis, over, body)
             side = 1.0
@@ -1379,18 +1383,23 @@ class MockBackend(Backend):
         Like every estimate here it ignores what happens where consecutive turns
         meet, so a coil whose pitch barely clears its profile will read high.
 
-        ponytail: the radius is read as the profile centroid's offset along the
-        sketch's *u* axis, which assumes the axis of revolution passes through
-        u = 0 and lies in the sketch plane. That is how a spring is drawn and it
-        is not enforced anywhere, so a profile sketched off to one side of its
-        axis, or on a plane the axis only crosses, gets a radius that is simply
-        the wrong number.
+        The axis is resolved rather than assumed: `_turning_axis` says which of
+        the sketch's own axes measures radius and where the axis sits along it,
+        so a wire at u = 30 wound about a centreline at u = 5 gets a radius of
+        25 rather than of 30.
+
+        ponytail: an axis at an angle to both sketch axes, or one on a plane it
+        only crosses, still falls back to the centroid's offset along u -- which
+        is the wrong number rather than an approximate one. `_turning_axis` says
+        when it could not resolve; nothing here refuses on that yet.
         """
         document = self._doc(doc_id)
         sketch = document.find_sketch(request.sketch)
         area = _net_area(sketch, sketch.loops)
         centre = _loop_center(sketch.plan, sketch.loops[0]) if sketch.loops else (0.0, 0.0)
-        radius = abs(centre[0])
+        turning = _turning_axis(sketch, request.axis)
+        radius = (abs(centre[turning.radial] - turning.at) if turning is not None
+                  else abs(centre[0]))
         pitch = request.pitch.value if request.pitch else None
         height = request.height.value if request.height else None
         turns = (request.revolutions.value if request.revolutions
@@ -1466,18 +1475,20 @@ class MockBackend(Backend):
         radius = request.diameter.value / 2
         aimed = _aimed_body(document, request.bodies)
         if request.depth:
-            depth = request.depth.value
+            depths = [request.depth.value] * len(centers)
         else:
-            # ponytail: measured over the *first* centre and then charged to
-            # every one of them. Right for a grid of holes through a plate,
-            # wrong for a sketch whose holes straddle a step or a rib -- and the
-            # holes that most want checking are the ones through varying
-            # material.
-            first = centers[0]
-            depth = _through_all_distance(
-                document, plane, over=map3d(plane, first[0], first[1], sketch.offset),
-                body=aimed)
-        removed = (math.pi * radius**2 * depth + _style_volume(request, radius)) * len(centers)
+            # One measurement per centre, over that centre's own point. It used
+            # to be measured over the first and charged to all of them, which is
+            # right for a grid through a plate and wrong for the holes that most
+            # want checking: the ones whose sketch straddles a step or a rib,
+            # where each drill meets a different thickness.
+            depths = [
+                _through_all_distance(
+                    document, plane, over=map3d(plane, u, v, sketch.offset), body=aimed)
+                for u, v in centers
+            ]
+        removed = (sum(math.pi * radius**2 * depth for depth in depths)
+                   + _style_volume(request, radius) * len(centers))
         # Counted before the bores are recorded: afterwards the hole's own void
         # has cut the material it passed through into more pieces, and the
         # question is how many pieces there were to begin with.
@@ -1487,10 +1498,11 @@ class MockBackend(Backend):
         # prism now carries the name of the feature that made it -- which is
         # what lets a pattern find its seed's prisms among everything else's.
         name = self._feature_name(document, request.name, "hole")
-        self._record_bores(document, plane, sketch.offset, centers, radius, depth,
+        self._record_bores(document, plane, sketch.offset, centers, radius, depths,
                            body=aimed, feature=name)
 
         for index, (u, v) in enumerate(centers):
+            depth = depths[index]
             document.topology.append(
                 _Topo(
                     id=self._next("face"),
@@ -2806,33 +2818,40 @@ class MockBackend(Backend):
             low_u, low_v, high_u, high_v = plan_bounds(sketch.plan)
         except Exception:  # pragma: no cover - an empty sketch cannot revolve
             return
-        turning = {"x": 0, "y": 1, "z": 2}.get(getattr(axis, "value", axis))
+        turning = _turning_axis(sketch, axis)
         corners = [map3d(plane, u, v, 0.0)
                    for u in (low_u, high_u) for v in (low_v, high_v)]
-        if turning is None:  # a sketch line or an edge: no cheap answer
-            # ponytail: and this does the cube anyway. Revolving about a sketch
-            # line is exactly the case the docstring above says makes a pulley
-            # look like a ball -- the named-axis path was fixed and this one was
-            # left. It over-states the bounds, which loses the "does this cut
-            # reach the part" warning rather than raising a false one.
+        if turning is None:
+            # ponytail: an axis at an angle to both sketch axes, or an edge, and
+            # this does the cube anyway -- the case the docstring above says
+            # makes a pulley look like a ball. It over-states the bounds, which
+            # loses the "does this cut reach the part" warning rather than
+            # raising a false one.
             reach = max(abs(value) for corner in corners for value in corner)
             self._expand_bounds(document, [
                 (x, y, z) for x in (-reach, reach)
                 for y in (-reach, reach) for z in (-reach, reach)])
             return
 
-        others = [index for index in range(3) if index != turning]
-        along = [corner[turning] for corner in corners]
+        # Where the axis itself runs. Zero on both counts for a named work
+        # axis; a sketch line drawn off to one side puts the ring's centre
+        # there instead, which is what makes its radius the right number.
+        seat = map3d(plane, *((turning.at, 0.0) if turning.radial == 0
+                              else (0.0, turning.at)), 0.0)
+        others = [index for index in range(3) if index != turning.world]
+        centre = [seat[index] for index in others]
+        along = [corner[turning.world] for corner in corners]
         radius = max(
-            math.dist([corner[index] for index in others], [0.0, 0.0])
+            math.dist([corner[index] for index in others], centre)
             for corner in corners
         )
         for low in (min(along), max(along)):
             for first in (-radius, radius):
                 for second in (-radius, radius):
                     point = [0.0, 0.0, 0.0]
-                    point[turning] = low
-                    point[others[0]], point[others[1]] = first, second
+                    point[turning.world] = low
+                    point[others[0]] = centre[0] + first
+                    point[others[1]] = centre[1] + second
                     self._expand_bounds(document, [tuple(point)])
 
     def work_plane(self, doc_id: str, request: WorkPlaneRequest) -> FeatureInfo:
@@ -3449,10 +3468,12 @@ def _text_area(primitive: "PText") -> float:
     """
     height = primitive.height
     ink = _INK_PER_EM * (_BOLD_INK if primitive.bold else 1.0)
-    # ponytail: every character is charged the same ink, spaces included, so a
-    # run of several words reads high by roughly one character per gap. Below
-    # the ~10% the heuristic is good to anyway, which is why it stands.
-    return len(primitive.text.strip()) * ink * height * height
+    # Whitespace lays down no ink. Every other character is charged the same,
+    # which is what keeps this a heuristic: an `i` and a `W` cost the same here.
+    # `_INK_PER_EM` was calibrated on "OnlyCat", which has no space in it, so
+    # the number itself is unaffected by not counting them.
+    inked = sum(1 for character in primitive.text if not character.isspace())
+    return inked * ink * height * height
 
 
 def _loft_volume(areas: Sequence[float], offsets: Sequence[float]) -> float:
@@ -3973,21 +3994,66 @@ def _hole_points(sketch: _Sketch, indices: Sequence[int]) -> list[tuple[float, f
     return points
 
 
-def _radial_axis(sketch: _Sketch, axis: AxisSpec) -> int | None:
-    """Which of the sketch's own axes measures radius, 0 for u and 1 for v.
+#: How far a line's two ends may differ on one sketch axis and still count as
+#: running along the other, in cm. Tight on purpose: a line placed by a
+#: `vertical` constraint or by typed coordinates is exact to far better than
+#: this, and anything looser starts resolving lines that are merely nearly
+#: vertical -- where a radius read off one coordinate is wrong rather than
+#: approximate. Failing to resolve costs a fallback; resolving wrongly costs a
+#: number nobody would question.
+_AXIS_SLACK = 1e-9
 
-    None when the answer is not clear: a revolve about the sketch plane's own
-    normal is degenerate, and an axis given as a sketch line or an edge is not
-    resolved here.
+
+@dataclass(frozen=True)
+class _Turning:
+    """A revolve's axis, in the frame of the sketch whose profile turns about it."""
+
+    #: 0 when radius is measured along the sketch's u, 1 when along its v.
+    radial: int
+    #: Where the axis sits on that sketch axis. Zero for a named work axis,
+    #: which passes through the origin; anything at all for a sketch line.
+    at: float
+    #: The model axis the revolve turns about.
+    world: int
+
+
+def _turning_axis(sketch: _Sketch, axis: AxisSpec) -> _Turning | None:
+    """Resolve *axis* into the sketch's own frame, or None if it cannot be.
+
+    A named work axis passes through the origin, so radius is the profile's own
+    coordinate. A sketch line running along one of the sketch's axes is how a
+    spring and a pulley are actually drawn, and it may sit anywhere across the
+    sketch -- which is the reason to resolve it rather than assume: the
+    centroid's `u` is the radius only while the axis is at `u = 0`.
+
+    Still not resolved, and each for a reason no cheap answer covers: a line at
+    an angle to both sketch axes, a line in a different sketch from the profile,
+    an edge, and a revolve about the sketch plane's own normal, which is
+    degenerate.
     """
-    if axis.kind != "work_axis" or axis.value not in ("x", "y", "z"):
-        return None
-    wanted = "xyz".index(axis.value)
     (u_axis, _), (v_axis, _), _ = _PLANES[sketch.base_plane][0]
-    if wanted == v_axis:
-        return 0
-    if wanted == u_axis:
-        return 1
+    if axis.kind == "work_axis":
+        if axis.value not in ("x", "y", "z"):
+            return None
+        wanted = "xyz".index(axis.value)
+        if wanted == v_axis:
+            return _Turning(0, 0.0, wanted)
+        if wanted == u_axis:
+            return _Turning(1, 0.0, wanted)
+        return None
+    if axis.kind != "sketch_line":
+        return None
+    if axis.sketch and axis.sketch not in (sketch.name, sketch.id):
+        return None
+    for primitive in sketch.plan.resolve_label(axis.value):
+        if not isinstance(primitive, PLine):
+            continue
+        run_u = primitive.end[0] - primitive.start[0]
+        run_v = primitive.end[1] - primitive.start[1]
+        if abs(run_u) <= _AXIS_SLACK < abs(run_v):
+            return _Turning(0, primitive.start[0], v_axis)
+        if abs(run_v) <= _AXIS_SLACK < abs(run_u):
+            return _Turning(1, primitive.start[1], u_axis)
     return None
 
 
@@ -3998,16 +4064,16 @@ def _revolve_window(document: _Document, sketch: _Sketch,
     A cut outside this removes nothing, so clipping to it is what makes a
     revolved cut's volume the material it actually takes away.
     """
-    radial = _radial_axis(sketch, axis)
-    if radial is None or not document.bounds:
+    turning = _turning_axis(sketch, axis)
+    if turning is None or not document.bounds:
         return None
-    along = "xyz".index(axis.value)
+    along = turning.world
     reach = max(
         max(abs(document.bounds[index]), abs(document.bounds[index + 3]))
         for index in range(3) if index != along
     )
     low, high = document.bounds[along], document.bounds[along + 3]
-    if radial == 0:
+    if turning.radial == 0:
         return (-reach, reach, low, high)
     return (low, high, -reach, reach)
 
@@ -4022,7 +4088,7 @@ def _pappus(sketch: _Sketch, loops: Sequence[Sequence[str]], axis: AxisSpec,
     the way from base to apex, and the box centre put the pulley's groove 2.6%
     out in a direction nothing would have questioned.
     """
-    radial = _radial_axis(sketch, axis)
+    turning = _turning_axis(sketch, axis)
     total_area = 0.0
     moment = 0.0
     for index, loop in enumerate(loops):
@@ -4040,7 +4106,8 @@ def _pappus(sketch: _Sketch, loops: Sequence[Sequence[str]], axis: AxisSpec,
         # An inner loop is a hole in the profile, so it takes area away and
         # takes its own moment with it.
         sign = 1.0 if index == 0 or len(loops) == 1 else -1.0
-        distance = abs(centroid[radial]) if radial is not None else abs(centroid[0])
+        distance = (abs(centroid[turning.radial] - turning.at)
+                    if turning is not None else abs(centroid[0]))
         total_area += sign * area
         moment += sign * area * distance
     if total_area <= 0:
