@@ -76,6 +76,12 @@ sketch      {"op":"sketch","name":"Base","plane":"xy","offset":null,"entities":[
     {"type":"circle","center":[0,0],"diameter":"bore_d"}       // or "radius"
     {"type":"line","start":[0,0],"end":[50,0],"name":"axis","construction":true}
     {"type":"polyline","points":[[0,0],[40,0],[40,10],[0,25]],"closed":true}
+    {"type":"rectangle","center":[0,0],"width":60,"height":40,"corners":"corner_r"}
+       // "corners" rounds EVERY corner of a rectangle or polyline, and
+       // "chamfers" cuts every one off by that much on each edge. This rounds
+       // the PROFILE, so it survives whatever the profile is swept into --
+       // different from a `fillet` on the solid's edges afterwards. An inward
+       // corner (an L's notch) is eased too. "chamfers" needs square corners.
     {"type":"arc","center":[0,0],"radius":12,"start_angle":0,"end_angle":180}
     {"type":"slot","center":[0,0],"length":30,"width":8,"angle":0}
        // `length` is CENTRE-TO-CENTRE, so that slot is 38 long overall.

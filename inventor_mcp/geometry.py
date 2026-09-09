@@ -14,7 +14,7 @@ from __future__ import annotations
 import ast
 import logging
 import math
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from itertools import count
 from typing import Any, Iterable, Sequence
 
@@ -236,13 +236,18 @@ def _plan_polyline(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: Polyli
         if math.dist(points[start], points[end]) <= TOL:
             raise SketchError("A polyline may not contain a zero-length segment.")
 
-    if spec.corners is not None:
-        radius = resolver.length(spec.corners, "polyline corner radius", positive=True)
-        # An open polyline's two ends are not corners, which `_rounded_outline`
-        # knows: it rounds every vertex of a closed outline and the interior
+    if spec.corners is not None or spec.chamfers is not None:
+        # An open polyline's two ends are not corners, which `_eased_corners`
+        # knows: it eases every vertex of a closed outline and the interior
         # ones of an open one.
-        lines = _rounded_outline(plan, ids, spec, points, spec.closed, radius,
-                                 "This polyline")
+        lines = _eased_corners(
+            plan, ids, spec, points, spec.closed, label="This polyline",
+            radius=(resolver.length(spec.corners, "polyline corner radius",
+                                    positive=True)
+                    if spec.corners is not None else None),
+            chamfer=(resolver.length(spec.chamfers, "polyline chamfer",
+                                     positive=True)
+                     if spec.chamfers is not None else None))
     else:
         lines = []
         for start, end in segments:
@@ -410,33 +415,76 @@ def _drive_rail(
                    text_offset=offset, optional=True)
 
 
-def _rounded_outline(plan: SketchPlan, ids: _Ids, spec: Any,
-                     points: Sequence[tuple[float, float]], closed: bool,
-                     radius: Resolved, label: str) -> list[Any]:
-    """A closed or open outline with every corner rounded, as lines and arcs.
+@dataclass(frozen=True)
+class _Corner:
+    """An eased corner, worked out before any of it is added to the plan.
 
-    The `corners` radius on a rectangle or a polyline. It is written as
-    geometry rather than as Inventor's own `SketchArcs.AddByFillet` for the
-    reason `docs/DECISIONS.md` gives about measured routes: a line-and-arc
-    outline with tangencies is what `_plan_slot` already builds and what a live
-    seat has built since the slot shipped, where `AddByFillet` is published and
-    unmeasured -- and this way the simulator gets the real outline, so a
-    filleted profile's area is `w * h - (4 - pi) * r^2` by its own arithmetic
-    rather than by a special case.
+    `into` and `out_of` are the two points where the corner meets its
+    neighbouring edges. The rest is a fillet's arc: its centre, the two angles
+    it is emitted with, and whether those are the other way round from the
+    direction the outline is walked -- which is how an inward corner is
+    emitted, since every arc here sweeps anticlockwise.
+    """
+
+    into: tuple[float, float]
+    out_of: tuple[float, float]
+    centre: tuple[float, float] | None = None
+    start_angle: float = 0.0
+    end_angle: float = 0.0
+    backwards: bool = False
+
+
+def _eased_corners(plan: SketchPlan, ids: _Ids, spec: Any,
+                   points: Sequence[tuple[float, float]], closed: bool, *,
+                   radius: Resolved | None = None,
+                   chamfer: Resolved | None = None,
+                   label: str) -> list[Any]:
+    """A closed or open outline with every corner rounded or cut off.
+
+    The `corners` radius and the `chamfers` distance on a rectangle or a
+    polyline. Both are written as geometry rather than through Inventor's own
+    `SketchArcs.AddByFillet` for the reason `docs/DECISIONS.md` gives about
+    measured routes: a line-and-arc outline with tangencies is what
+    `_plan_slot` already builds and what a live seat has built since the slot
+    shipped, where `AddByFillet` is published and unmeasured -- and this way
+    the simulator gets the real outline, so a filleted profile's area is
+    `w * h - (4 - pi) * r^2` by its own arithmetic rather than by a special
+    case. A chamfer has no published call read for it at all, so writing the
+    geometry is the only route there.
 
     The maths per corner, for an incoming direction `a` and an outgoing `b`:
-    the tangent points sit back from the vertex by `r * tan(phi / 2)` where
-    `phi` is the turn, and the centre is one radius off the edge on the inside.
-    A corner that turns the other way -- a notch rather than a corner -- is
-    refused rather than rounded the wrong way round: the arc would sweep the
-    long way about its centre and close a loop nobody asked for.
+    the two tangent points sit back from the vertex by `r * tan(|phi| / 2)`
+    where `phi` is the turn, and for a fillet the arc centre is one radius off
+    the edge on the side the outline turns toward. A chamfer's setback is the
+    distance itself -- "2 mm off each edge", which is what a drafter means by
+    it -- and the corner is a straight line between the two.
+
+    **An inward corner is emitted with its arc reversed.** A notch turns the
+    other way, so its arc sweeps *clockwise* from the incoming edge to the
+    outgoing one, and every arc in this planner sweeps anticlockwise from
+    `start_angle` to `end_angle` -- Inventor's
+    `AddByCenterStartEndPoint` always does, which
+    `docs/INVENTOR_SETUP.md` records. So the arc is emitted the other way
+    round, from the outgoing tangent point to the incoming one, and the two
+    coincidences swap ends with it. That is safe here because both loop
+    walkers are direction-agnostic: `profile_loops` matches a segment on
+    either endpoint, and `loop_points` chains segments end-to-end and reverses
+    whichever one starts further from the cursor, so a reversed arc walks the
+    same as any other. It was worth checking rather than assuming, because a
+    walker that had trusted the stored direction would have produced a
+    self-crossing polygon and a nonsense area -- silently, which is how the
+    seam bug below survived.
     """
+    if (radius is None) == (chamfer is None):  # pragma: no cover - callers pass one
+        raise SketchError("A corner is eased by a radius or by a chamfer, not both.")
+    size = radius if radius is not None else chamfer
+    assert size is not None
     count_points = len(points)
-    rounded = range(count_points) if closed else range(1, count_points - 1)
-    if not list(rounded):
+    eased = range(count_points) if closed else range(1, count_points - 1)
+    if not list(eased):
         raise SketchError(
-            f"{label} has no corner to round: `corners` needs at least one "
-            "vertex with a segment on each side.",
+            f"{label} has no corner to ease: `corners` and `chamfers` need at "
+            "least one vertex with a segment on each side.",
             hint="An open polyline of two points is a line, and its ends are "
             "not corners. Close it, or add a point.",
         )
@@ -447,12 +495,12 @@ def _rounded_outline(plan: SketchPlan, ids: _Ids, spec: Any,
         return ((to_point[0] - from_point[0]) / span,
                 (to_point[1] - from_point[1]) / span)
 
-    #: Per rounded vertex: the two tangent points, the arc centre and its
-    #: angles. Worked out before anything is added to the plan, so a radius
-    #: that will not fit is refused with nothing half-built.
-    corners: dict[int, tuple[tuple[float, float], tuple[float, float],
-                             tuple[float, float], float, float]] = {}
-    for index in rounded:
+    #: Per eased vertex: the two tangent points, and for a fillet the arc's
+    #: centre, its two angles and whether it is emitted reversed. Worked out
+    #: before anything is added to the plan, so a size that will not fit is
+    #: refused with nothing half-built.
+    corners: dict[int, _Corner] = {}
+    for index in eased:
         vertex = points[index]
         before = points[(index - 1) % count_points]
         after = points[(index + 1) % count_points]
@@ -463,39 +511,57 @@ def _rounded_outline(plan: SketchPlan, ids: _Ids, spec: Any,
         if abs(cross) <= TOL:
             raise SketchError(
                 f"{label} has a straight or doubled-back corner at "
-                f"{_pretty(vertex)}, which cannot be rounded.",
+                f"{_pretty(vertex)}, which cannot be eased.",
                 hint="Remove the point, or give the two segments an angle "
                 "between them.",
             )
-        if cross < 0:
-            raise SketchError(
-                f"{label} turns inward at {_pretty(vertex)}, and `corners` "
-                "rounds outward corners only.",
-                hint="An inward corner is a notch, and rounding it is a "
-                "different arc -- the roadmap carries it. List the points "
-                "anticlockwise, or round that corner with an explicit `arc`.",
-            )
         turn = math.atan2(cross, dot)
-        setback = radius.value * math.tan(turn / 2)
+        if radius is not None:
+            setback = radius.value * math.tan(abs(turn) / 2)
+        else:
+            # A chamfer's two driving dimensions are the horizontal and
+            # vertical spans of the line it puts across the corner, and those
+            # are the recipe's own expression exactly when both edges are
+            # axis-aligned. On an oblique corner they are that expression
+            # times a cosine, which would bake the corner's current angle into
+            # the model and stop being a `d` setback the moment the outline was
+            # revised -- so it is refused instead. A chord length plus an angle
+            # is the drafting answer there, and nothing here writes one.
+            if not _axis_aligned(incoming) or not _axis_aligned(outgoing):
+                raise SketchError(
+                    f"{label} has an oblique corner at {_pretty(vertex)}, and "
+                    "`chamfers` cuts square corners only.",
+                    hint="A chamfer on an oblique corner is dimensioned as a "
+                    "length and an angle, which this does not write -- the two "
+                    "spans it does write would bake in the corner's present "
+                    "angle. Use `corners` for a radius there, or draw that "
+                    "corner as an explicit `line`.",
+                )
+            setback = chamfer.value
         for neighbour in (before, after):
             if setback > math.dist(vertex, neighbour) / 2 + TOL:
                 raise SketchError(
-                    f"A {radius.expression} radius does not fit the corner at "
-                    f"{_pretty(vertex)}: it would eat "
+                    f"A {size.expression} {'radius' if radius is not None else 'chamfer'} "
+                    f"does not fit the corner at {_pretty(vertex)}: it would eat "
                     f"{setback * 10:.4g} mm of a segment "
                     f"{math.dist(vertex, neighbour) * 10:.4g} mm long.",
-                    hint="Use a radius smaller than half the shortest segment "
+                    hint="Use a size smaller than half the shortest segment "
                     "either side of the tightest corner.",
                 )
         into = (vertex[0] - incoming[0] * setback, vertex[1] - incoming[1] * setback)
         out_of = (vertex[0] + outgoing[0] * setback, vertex[1] + outgoing[1] * setback)
+        if radius is None:
+            corners[index] = _Corner(into=into, out_of=out_of)
+            continue
         # One radius off the incoming edge, on the side the outline turns
-        # toward, which for an outward corner is the inside of the shape.
-        inward = (-incoming[1], incoming[0])
-        centre = (into[0] + inward[0] * radius.value,
-                  into[1] + inward[1] * radius.value)
-        start = math.atan2(into[1] - centre[1], into[0] - centre[0])
-        # **`start + turn`, not `atan2` of the far end.** An arc here sweeps
+        # toward: the inside of the shape at an outward corner, and the
+        # opposite side at an inward one, which is what the sign does here.
+        sideways = ((-incoming[1], incoming[0]) if turn > 0
+                    else (incoming[1], -incoming[0]))
+        centre = (into[0] + sideways[0] * radius.value,
+                  into[1] + sideways[1] * radius.value)
+        at_into = math.atan2(into[1] - centre[1], into[0] - centre[0])
+        # **`at_into + turn`, not `atan2` of the far end.** An arc here sweeps
         # anticlockwise from its start angle to its end angle, and `atan2`
         # answers in (-pi, pi]: a corner whose sweep crosses that seam gets an
         # end angle *below* its start, and the arc then goes the long way round
@@ -505,55 +571,100 @@ def _rounded_outline(plan: SketchPlan, ids: _Ids, spec: Any,
         # being exactly the four quarter-discs it had carved out instead of
         # rounding. The sweep of a rounded corner *is* the turn, so saying so
         # avoids the seam rather than handling it.
-        end = start + turn
-        corners[index] = (into, out_of, centre, start, end)
+        at_out_of = at_into + turn
+        if turn > 0:
+            corners[index] = _Corner(into, out_of, centre, at_into, at_out_of, False)
+        else:
+            # Anticlockwise from the outgoing tangent point back to the
+            # incoming one: the same arc, traversed the other way.
+            corners[index] = _Corner(into, out_of, centre, at_out_of, at_into, True)
 
     segments = [(index, (index + 1) % count_points)
                 for index in range(count_points if closed else count_points - 1)]
     lines: list[Any] = []
-    arcs: dict[int, Any] = {}
     for start_index, end_index in segments:
-        begins = corners[start_index][1] if start_index in corners else points[start_index]
-        ends = corners[end_index][0] if end_index in corners else points[end_index]
+        begins = corners[start_index].out_of if start_index in corners else points[start_index]
+        ends = corners[end_index].into if end_index in corners else points[end_index]
         lines.append(plan.add(
             PLine(ids.next("line"), spec.construction, spec.centerline,
                   start=begins, end=ends),
             spec.name,
         ))
-    for index, (_, _, centre, start, end) in corners.items():
-        arcs[index] = plan.add(
-            PArc(ids.next("arc"), spec.construction, center=centre,
-                 radius=radius.value, start_angle=start, end_angle=end),
-            spec.name,
-        )
 
-    # Each arc joins the line that ends at it to the line that leaves it, and
-    # is tangent to both -- which is what makes the radius the only thing left
-    # to say about that corner.
+    #: What each eased corner became, and which of its ends meets the edge
+    #: arriving at the corner. For a chamfer and for an ordinary fillet that is
+    #: the primitive's START; for a reversed fillet it is its END.
+    eased_at: dict[int, tuple[Any, bool]] = {}
+    for index, corner in corners.items():
+        if radius is not None:
+            assert corner.centre is not None
+            primitive = plan.add(
+                PArc(ids.next("arc"), spec.construction, center=corner.centre,
+                     radius=radius.value, start_angle=corner.start_angle,
+                     end_angle=corner.end_angle),
+                spec.name,
+            )
+        else:
+            primitive = plan.add(
+                PLine(ids.next("line"), spec.construction, spec.centerline,
+                      start=corner.into, end=corner.out_of),
+                spec.name,
+            )
+        eased_at[index] = (primitive, corner.backwards)
+
+    # Each corner joins the edge that ends at it to the edge that leaves it. A
+    # fillet is tangent to both, which is what makes the radius the only thing
+    # left to say about it; a chamfer is not, and its own two spans say it.
     for position, (start_index, end_index) in enumerate(segments):
         line = lines[position]
-        if end_index in arcs:
-            arc = arcs[end_index]
+        if end_index in eased_at:
+            primitive, backwards = eased_at[end_index]
+            arriving = PointRef.END if backwards else PointRef.START
             plan.constrain("coincident", Ref(line.id, PointRef.END),
-                           Ref(arc.id, PointRef.START))
-            plan.constrain("tangent", Ref(line.id), Ref(arc.id))
-        if start_index in arcs:
-            arc = arcs[start_index]
-            plan.constrain("coincident", Ref(arc.id, PointRef.END),
+                           Ref(primitive.id, arriving))
+            if radius is not None:
+                plan.constrain("tangent", Ref(line.id), Ref(primitive.id))
+        if start_index in eased_at:
+            primitive, backwards = eased_at[start_index]
+            leaving = PointRef.START if backwards else PointRef.END
+            plan.constrain("coincident", Ref(primitive.id, leaving),
                            Ref(line.id, PointRef.START))
-            plan.constrain("tangent", Ref(line.id), Ref(arc.id))
+            if radius is not None:
+                plan.constrain("tangent", Ref(line.id), Ref(primitive.id))
 
-    ordered = [arcs[index] for index in sorted(arcs)]
-    for other in ordered[1:]:
-        plan.constrain("equal_radius", Ref(ordered[0].id), Ref(other.id))
-    if spec.dimension:
-        # One dimension for the lot: `equal_radius` carries it to the others,
-        # which is how a drafter writes it and what keeps the sketch from being
-        # over-dimensioned -- Inventor refuses a redundant one, as the hexagon's
-        # closing equality shows.
-        plan.dimension("radius", (Ref(ordered[0].id),), radius.expression,
-                       radius.value, text_offset=(radius.value, radius.value))
+    ordered = [eased_at[index][0] for index in sorted(eased_at)]
+    if radius is not None:
+        for other in ordered[1:]:
+            plan.constrain("equal_radius", Ref(ordered[0].id), Ref(other.id))
+        if spec.dimension:
+            # One dimension for the lot: `equal_radius` carries it to the
+            # others, which is how a drafter writes it and what keeps the
+            # sketch from being over-dimensioned -- Inventor refuses a
+            # redundant one, as the hexagon's closing equality shows.
+            plan.dimension("radius", (Ref(ordered[0].id),), radius.expression,
+                           radius.value, text_offset=(radius.value, radius.value))
+    elif spec.dimension:
+        # Two per chamfer, and both are the recipe's own expression: the
+        # horizontal and vertical spans of the line across the corner, which
+        # for a square corner between axis-aligned edges are each the setback.
+        # `equal_length` would share one dimension between the corners the way
+        # `equal_radius` does, but it would leave each chamfer free to slide
+        # along the corner it cuts -- a chord length alone does not say the
+        # chamfer is symmetric.
+        for primitive in ordered:
+            for kind in ("horizontal", "vertical"):
+                plan.dimension(
+                    kind,
+                    (Ref(primitive.id, PointRef.START), Ref(primitive.id, PointRef.END)),
+                    chamfer.expression, chamfer.value,
+                    text_offset=(chamfer.value, chamfer.value),
+                )
     return lines
+
+
+def _axis_aligned(direction: tuple[float, float]) -> bool:
+    """Whether a unit direction runs along X or along Y."""
+    return abs(direction[0]) <= TOL or abs(direction[1]) <= TOL
 
 
 def _pretty(point: tuple[float, float]) -> str:
@@ -579,10 +690,15 @@ def _plan_rectangle(plan: SketchPlan, ids: _Ids, resolver: Resolver, spec: Recta
         (cx - half_w, cy + half_h),
     ]
 
-    if spec.corners is not None:
-        radius = resolver.length(spec.corners, "rectangle corner radius", positive=True)
-        lines = _rounded_outline(plan, ids, spec, corners, True, radius,
-                                 "This rectangle")
+    if spec.corners is not None or spec.chamfers is not None:
+        lines = _eased_corners(
+            plan, ids, spec, corners, True, label="This rectangle",
+            radius=(resolver.length(spec.corners, "rectangle corner radius",
+                                    positive=True)
+                    if spec.corners is not None else None),
+            chamfer=(resolver.length(spec.chamfers, "rectangle chamfer",
+                                     positive=True)
+                     if spec.chamfers is not None else None))
     else:
         lines = [
             plan.add(

@@ -910,16 +910,48 @@ actually bitten.
       the sketch closed, the loop walked. `tests/test_sketch_fillet.py` checks
       every case against the closed form for that reason.
 
-- [ ] **An inward corner, and a sketch chamfer.** *(Opened 2026-09-09, split
-      off the item above.)* `corners` refuses a corner that turns inward: its
-      arc sweeps the other way round its centre, and emitting it the outward
-      way would close a loop nobody asked for. The fix is to emit that arc
-      reversed so it still sweeps anticlockwise, which needs
-      `profile_loops`/`loop_points` checked for whether they will walk an arc
-      from its end to its start -- unverified, and the reason this is its own
-      item. **An L-bracket profile is the common case that wants it.** A
-      sketch *chamfer* is the same shape of work with a line instead of an
-      arc, and no published call was read for it.
+- [x] **An inward corner, and a sketch chamfer.** *(Opened 2026-09-09, done
+      the same day, split off the item above.)* Both landed, and the check
+      this item said had to come first came back clean: **both loop walkers
+      are direction-agnostic.** `profile_loops` matches a segment on either
+      endpoint and `loop_points` chains segments end-to-end, reversing
+      whichever one starts further from the cursor, so an arc emitted from its
+      end to its start walks the same as any other. That is why it was worth
+      being its own item rather than assumed -- a walker that had trusted the
+      stored direction would have produced a self-crossing polygon and a
+      nonsense area, silently, which is exactly how the seam bug in the item
+      above survived.
+
+      So an inward corner is emitted with its arc reversed: from the outgoing
+      tangent point back to the incoming one, with the two coincidences
+      swapping ends, and the sweep therefore still anticlockwise. The
+      L-bracket this item named is checked against the closed form, and so is
+      a chevron whose inward corner is *oblique*, which is what says the
+      arithmetic is general rather than right-angle-shaped. The sign is the
+      reading that matters: rounding an outward corner cuts a sliver off and
+      rounding an inward one fills one in, so five square corners and one
+      notch net to four.
+
+      **The chamfer is `chamfers`**, a distance -- that much off each of the
+      two edges, which is what a drafter means by it -- and it needed no
+      published call at all, since the fillet was written as geometry rather
+      than through `AddByFillet` and there was nothing to look up. Its area is
+      exact rather than sampled, being straight lines: `w * h - 2 * d^2` for a
+      rectangle, to the digit.
+
+      **Where it is refused is the decision worth recording.** A chamfered
+      corner has two degrees of freedom -- each end slides along the edge it
+      meets -- so it takes two dimensions, and the two written are the chamfer
+      line's horizontal and vertical spans. On a square corner between
+      axis-aligned edges those are each the recipe's own expression, exactly,
+      and no trigonometry reaches the model. On an **oblique** corner they
+      would be that expression times a cosine, which bakes in the angle the
+      corner has now and stops being a `d` setback the moment the outline is
+      revised -- so it is refused, with the chord-length-plus-angle answer
+      named. `equal_length` would have shared one dimension between the
+      corners the way `equal_radius` does, and it is deliberately not used: a
+      chord length alone does not say a chamfer is symmetric, and the sketch
+      would come out loose rather than wrong, which is worse.
 
 - [ ] **Project geometry.** *(Opened 2026-09-08.)* `PlanarSketch.
       AddByProjectingEntity(Entity)` one edge, vertex, work axis or work point

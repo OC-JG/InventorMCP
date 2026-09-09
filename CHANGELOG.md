@@ -6,6 +6,48 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
 ### Added
 
+- **An inward corner is rounded too, and `chamfers` cuts a corner off.**
+  *(Roadmap Phase 2, closing the sketch-fillet gap bullet outright.)* Both
+  halves of the item the sketch fillet was split into.
+
+  **The inward corner** -- an L's notch -- was refused for a few hours because
+  its arc sweeps clockwise where every arc in this planner sweeps
+  anticlockwise, and rounding it the outward way would have closed a loop
+  nobody asked for. It is emitted reversed now: from the outgoing tangent
+  point back to the incoming one, with the two coincidences swapping ends. The
+  check the roadmap said had to come first came back clean, and it was worth
+  making rather than assuming -- **both loop walkers are direction-agnostic**.
+  `profile_loops` matches a segment on either endpoint and `loop_points`
+  chains segments end-to-end, reversing whichever starts further from the
+  cursor. A walker that had trusted the stored direction would have produced a
+  self-crossing polygon and a nonsense area, silently, which is how the seam
+  bug in the fillet survived.
+
+  The sign is the reading that matters and it is checked against the closed
+  form: rounding an outward corner cuts a sliver off and rounding an inward
+  one fills one in, so an L's five square corners and one notch net to four.
+  A chevron whose inward corner is *oblique* is checked too, which is what
+  says the arithmetic is general rather than right-angle-shaped.
+
+  **`chamfers`** is a distance -- that much off each of the two edges -- and it
+  needed no published call at all, the fillet having been written as geometry
+  rather than through `AddByFillet`. Its area is exact rather than sampled,
+  being straight lines: `w * h - 2 * d^2` for a rectangle, to the digit.
+
+  **An oblique corner's chamfer is refused**, and that is the decision worth
+  reading. A chamfered corner has two degrees of freedom, so it takes two
+  dimensions, and the two written are the chamfer line's horizontal and
+  vertical spans -- each the recipe's own expression exactly when both edges
+  are axis-aligned. On an oblique corner they would be that expression times a
+  cosine, which bakes in the angle the corner has now and stops being a `d`
+  setback the moment the outline is revised. `equal_length` would have shared
+  one dimension across the corners the way `equal_radius` does, and is
+  deliberately not used: a chord length alone does not say a chamfer is
+  symmetric, so the sketch would come out loose rather than wrong.
+
+  `corners` and `chamfers` are refused together, and both are now in the
+  recipe cheat-sheet, which had never mentioned either.
+
 - **A tangent work plane, with a `face` selector.** *(Roadmap Phase 2, and the
   half of defect 12 that a schema field had to close.)* `work_plane` with
   `kind: "tangent"` now builds: `WorkPlaneOp` has a `face`, a `Selector`

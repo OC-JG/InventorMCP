@@ -174,19 +174,142 @@ class TestWhatItRefuses:
             area_of({"type": "rectangle", "center": [0, 0], "width": 10,
                      "height": 10, "corners": 8})
 
-    def test_an_inward_corner(self):
-        """A notch is a different arc -- it sweeps the other way round its
-        centre -- and rounding it the outward way would close a loop nobody
-        asked for. Refused by name rather than rounded wrongly."""
-        from inventor_mcp.errors import SketchError
-
-        with pytest.raises(SketchError, match="turns inward"):
-            area_of({"type": "polyline", "corners": 3, "closed": True,
-                     "points": [[0, 0], [60, 0], [60, 40], [30, 20], [0, 40]]})
-
     def test_a_polyline_with_no_corner_at_all(self):
         from inventor_mcp.errors import SketchError
 
-        with pytest.raises(SketchError, match="no corner to round"):
+        with pytest.raises(SketchError, match="no corner to ease"):
             area_of({"type": "polyline", "corners": 3, "closed": False,
                      "points": [[0, 0], [60, 0]]})
+
+    def test_a_straight_or_doubled_back_corner(self):
+        """Three collinear points have no corner between them to round, and a
+        segment that doubles back on itself has no side for the arc to sit on.
+        Both come out of the same cross product being zero."""
+        from inventor_mcp.errors import SketchError
+
+        with pytest.raises(SketchError, match="straight or doubled-back"):
+            area_of({"type": "polyline", "corners": 3, "closed": False,
+                     "points": [[0, 0], [30, 0], [60, 0], [60, 40]]})
+
+
+def rounding_change(points: list[list[float]], radius: float) -> float:
+    """What rounding every corner of *points* by *radius* does to its area.
+
+    The closed form, in cm^2 to match the planner's own units. Rounding a
+    corner that turns by `phi` changes the area by
+    `-sign(phi) * r^2 * (tan(|phi|/2) - |phi|/2)` -- negative at an outward
+    corner, which loses the sliver outside the arc, and **positive at an
+    inward one**, which gains it. A right angle gives the familiar
+    `(1 - pi/4) r^2` per corner, and four of them the `(4 - pi) r^2` a rounded
+    rectangle loses.
+    """
+    corners = [(x / 10, y / 10) for x, y in points]
+    count = len(corners)
+    change = 0.0
+    for index in range(count):
+        before, vertex, after = (corners[index - 1], corners[index],
+                                 corners[(index + 1) % count])
+        incoming = (vertex[0] - before[0], vertex[1] - before[1])
+        outgoing = (after[0] - vertex[0], after[1] - vertex[1])
+        first = math.hypot(*incoming)
+        second = math.hypot(*outgoing)
+        incoming = (incoming[0] / first, incoming[1] / first)
+        outgoing = (outgoing[0] / second, outgoing[1] / second)
+        turn = math.atan2(incoming[0] * outgoing[1] - incoming[1] * outgoing[0],
+                          incoming[0] * outgoing[0] + incoming[1] * outgoing[1])
+        change -= math.copysign(1.0, turn) * (radius / 10) ** 2 * (
+            math.tan(abs(turn) / 2) - abs(turn) / 2)
+    return change
+
+
+def sharp_area(points: list[list[float]]) -> float:
+    corners = [(x / 10, y / 10) for x, y in points]
+    count = len(corners)
+    return 0.5 * abs(sum(
+        corners[index][0] * corners[(index + 1) % count][1]
+        - corners[(index + 1) % count][0] * corners[index][1]
+        for index in range(count)))
+
+
+class TestAnInwardCornerIsRoundedToo:
+    """The roadmap item this was split into on 2026-09-09, closed the same day.
+
+    A notch turns the other way, so its arc sweeps *clockwise* from the
+    incoming edge to the outgoing one -- and every arc in this planner sweeps
+    anticlockwise, as Inventor's `AddByCenterStartEndPoint` does. Rounding it
+    the outward way would have closed a loop nobody asked for, so it was
+    refused for a day; the fix is to emit the arc from the outgoing tangent
+    point back to the incoming one, with the two coincidences swapping ends.
+
+    The check the item said was needed first: **both loop walkers are
+    direction-agnostic.** `profile_loops` matches a segment on either endpoint
+    and `loop_points` reverses whichever segment starts further from the
+    cursor, so a reversed arc walks the same as any other. A walker that had
+    trusted the stored direction would have produced a self-crossing polygon
+    and a nonsense area, silently.
+    """
+
+    #: An L-bracket, anticlockwise, with the notch at [20, 20]. The common case
+    #: the roadmap named for wanting this.
+    L_BRACKET = [[0, 0], [60, 0], [60, 20], [20, 20], [20, 40], [0, 40]]
+
+    #: A chevron: the inward corner is oblique, and so are two of the outward
+    #: ones, which is what says the arithmetic is general rather than
+    #: right-angle-shaped.
+    CHEVRON = [[0, 0], [60, 0], [60, 40], [30, 20], [0, 40]]
+
+    @pytest.mark.parametrize("outline", ["L_BRACKET", "CHEVRON"])
+    def test_the_area_matches_the_closed_form(self, outline):
+        points = getattr(self, outline)
+        want = sharp_area(points) + rounding_change(points, 3)
+        assert area_of({"type": "polyline", "corners": 3, "closed": True,
+                        "points": points}) == pytest.approx(want, rel=SAMPLING)
+
+    def test_the_notch_gains_area_where_a_corner_loses_it(self):
+        """The sign is the whole reading: rounding an outward corner cuts a
+        sliver off, and rounding an inward one fills one in. An arc placed on
+        the wrong side of a notch would take area away instead, and the
+        closed-form check above would then be the only thing to notice."""
+        assert rounding_change(self.L_BRACKET, 3) == pytest.approx(
+            -4 * (1 - math.pi / 4) * 0.09, rel=1e-12), \
+            "five outward corners and one inward, all square: the inward one " \
+            "cancels one of the five"
+
+    def test_the_loop_still_closes_and_is_one_profile(self):
+        """Which is what a reversed arc could have broken."""
+        plan = plan_of({"type": "polyline", "corners": 3, "closed": True,
+                        "points": self.L_BRACKET})
+        loops = profile_loops(plan)
+        assert len(loops) == 1
+        assert len(loops[0]) == 12  # six edges and six arcs
+
+    def test_one_arc_is_emitted_the_other_way_round(self):
+        """Not an implementation detail: it is the fix. Every other arc's
+        `start_angle` is below its `end_angle` because the outline is walked
+        anticlockwise; the notch's is the one whose ends are swapped so that
+        its own sweep stays anticlockwise."""
+        plan = plan_of({"type": "polyline", "corners": 3, "closed": True,
+                        "points": self.L_BRACKET})
+        arcs = [p for p in plan.primitives if isinstance(p, PArc)]
+        assert len(arcs) == 6
+        sweeps = [arc.end_angle - arc.start_angle for arc in arcs]
+        assert all(sweep > 0 for sweep in sweeps), sweeps
+        assert sum(1 for sweep in sweeps
+                   if abs(sweep - math.pi / 2) < 1e-9) == 6, sweeps
+
+    def test_it_builds_fully_constrained(self, session):
+        """A reversed arc is coincident with its neighbours at the other end,
+        and getting that wrong leaves the sketch loose rather than refusing."""
+        from inventor_mcp.builder import build_part
+        from inventor_mcp.schema import PartRecipe
+
+        out = build_part(session, PartRecipe.model_validate(
+            {"name": "L", "units": "mm", "operations": [
+                {"op": "sketch", "name": "S", "plane": "xy", "entities": [
+                    {"type": "polyline", "corners": 3, "closed": True,
+                     "points": self.L_BRACKET}]},
+                {"op": "extrude", "name": "E", "sketch": "S", "distance": 10}]}))
+        assert out["ok"], out["errors"]
+        sketch = session.backend.list_sketches(out["document"])[-1]
+        assert sketch.fully_constrained is True
+        assert sketch.degrees_of_freedom == 0

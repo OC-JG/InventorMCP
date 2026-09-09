@@ -118,8 +118,29 @@ class PolylineEntity(EntityBase):
     corners: ValueSpec | None = Field(
         None,
         description="Radius to round every corner to. On an open polyline the "
-        "two ends are left square, because there is no corner there to round.",
+        "two ends are left square, because there is no corner there to round. "
+        "An inward corner -- the notch in an L -- is rounded too, with its arc "
+        "turning the other way.",
     )
+    chamfers: ValueSpec | None = Field(
+        None,
+        description="Distance to cut off every corner instead of rounding it: "
+        "that much off each of the two edges, which is what a drafter means by "
+        "a chamfer. Square corners only -- both edges along X or Y -- because "
+        "an oblique corner's chamfer is dimensioned as a length and an angle, "
+        "and the two spans written here would bake in the angle the corner "
+        "happens to have now.",
+    )
+
+    @model_validator(mode="after")
+    def _one_way_to_ease_a_corner(self) -> "PolylineEntity":
+        if self.corners is not None and self.chamfers is not None:
+            raise ValueError(
+                "Give `corners` (a radius) or `chamfers` (a distance), not both: "
+                "a corner is rounded or cut off, and this rounds or cuts every "
+                "corner of the outline."
+            )
+        return self
 
 
 class RectangleEntity(EntityBase):
@@ -136,11 +157,23 @@ class RectangleEntity(EntityBase):
         "is a different thing: this rounds the PROFILE, so the rounding is part "
         "of the shape being swept and survives whatever the profile is used for.",
     )
+    chamfers: ValueSpec | None = Field(
+        None,
+        description="Distance to cut off every corner instead of rounding it: "
+        "that much off each of the two edges, which is what a drafter means by "
+        "a chamfer. An expression like any other, so the chamfers follow the "
+        "parameter that sets them.",
+    )
 
     @model_validator(mode="after")
     def _one_anchor(self) -> "RectangleEntity":
         if (self.center is None) == (self.corner is None):
             raise ValueError("Give exactly one of `center` or `corner`.")
+        if self.corners is not None and self.chamfers is not None:
+            raise ValueError(
+                "Give `corners` (a radius) or `chamfers` (a distance), not both: "
+                "a corner is rounded or cut off, and this rounds or cuts all four."
+            )
         return self
 
 

@@ -419,21 +419,39 @@ Found by using the server rather than by reading its API surface:
   was **wrong**: `resolve_axis` has always taken a named sketch line. What is
   true is that no line on a face can be that face's pattern axis, which is
   defect 7 below.
-* ~~**No sketch fillet or chamfer.**~~ *A fillet landed 2026-09-09 as `corners`
-  on `rectangle` and `polyline`, a radius expression that rounds every corner.
-  A chamfer is still missing.* It rounds the **profile** rather than the
-  solid's edges, so the rounding is part of the shape being swept and survives
-  whatever the profile is used for.
+* ~~**No sketch fillet or chamfer.**~~ **Closed 2026-09-09**: `corners` on
+  `rectangle` and `polyline` is a radius that rounds every corner, and
+  `chamfers` is a distance that cuts every one off. Both round or cut the
+  **profile** rather than the solid's edges, so the easing is part of the shape
+  being swept and survives whatever the profile is used for.
 
-  Written as geometry -- shortened edges and tangent arcs, one radius dimension
-  carried to the rest by `equal_radius` -- rather than through the published
-  `SketchArcs.AddByFillet`, for the reason `docs/DECISIONS.md` gives about
-  measured routes: that outline is what `_plan_slot` already builds and a seat
-  has built since the slot shipped, and writing it out means the simulator gets
-  the real outline, so a rounded rectangle's area is `w * h - (4 - pi) * r^2`
-  by its own arithmetic. Refused rather than guessed: a radius that will not
-  fit its corner, and an **inward** corner, whose arc sweeps the other way
-  round its centre. The roadmap carries both that and the chamfer.
+  Written as geometry -- shortened edges and, for a fillet, tangent arcs with
+  one radius dimension carried to the rest by `equal_radius` -- rather than
+  through the published `SketchArcs.AddByFillet`, for the reason
+  `docs/DECISIONS.md` gives about measured routes: that outline is what
+  `_plan_slot` already builds and a seat has built since the slot shipped, and
+  writing it out means the simulator gets the real outline, so a rounded
+  rectangle's area is `w * h - (4 - pi) * r^2` by its own arithmetic and a
+  chamfered one's is `w * h - 2 * d^2` exactly.
+
+  **An inward corner is eased too**, which took a second pass: a notch turns
+  the other way, so its arc sweeps clockwise where every arc in this planner
+  sweeps anticlockwise, and it was refused for a few hours rather than rounded
+  the wrong way round. The fix is to emit the arc from the outgoing tangent
+  point back to the incoming one, with the two coincidences swapping ends --
+  safe because both loop walkers are direction-agnostic, which was checked
+  rather than assumed. An L-bracket is the case that wanted it.
+
+  Refused rather than guessed: a size that will not fit its corner (two
+  overlapping fillets are not a shape), and a chamfer on an **oblique**
+  corner. That second refusal is the interesting one. A chamfered corner has
+  two degrees of freedom and so takes two dimensions, and the two written here
+  are the chamfer line's horizontal and vertical spans -- each the recipe's own
+  expression exactly when both edges are axis-aligned. On an oblique corner
+  they would be that expression times a cosine, which bakes in the angle the
+  corner has now and stops being a `d` setback the moment the outline is
+  revised. A chord length plus an angle is the drafting answer there, and
+  nothing here writes one.
 * **No project geometry or sketch offset**, so a sketch cannot reference the edges
   of the solid it sits on. *The calls are published* (2026-09-08):
   `PlanarSketch.AddByProjectingEntity(Entity)` projects one edge, vertex, work
