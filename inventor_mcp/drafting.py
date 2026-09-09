@@ -35,31 +35,74 @@ from __future__ import annotations
 import math
 from typing import Any, Sequence
 
-from .backend.base import DrawingContents, RetrieveRequest, ViewRequest
+from .backend.base import (
+    DrawingContents,
+    RetrieveRequest,
+    ViewInfo,
+    ViewRequest,
+)
 from .drawing import DrawingDimension, DrawingReading, DrawingView, compare
-from .errors import InventorMCPError, RecipeError
+from .errors import ExpressionError, InventorMCPError, RecipeError
 from .resolve import Resolver
 from .schema import DrawingRecipe, DrawingViewSpec, PartRecipe
 from .session import Session
 from .units import Dim, Quantity, from_internal, to_internal
 
-#: A drawing view's direction mapped onto the kind a `DrawingReading` uses.
-#: `rear` and `iso` are spelled differently on the two sides, which is the whole
-#: of the difference -- and the reading's own `_overall_from` keys off these, so
-#: a wrong mapping there would silently stop the overall-size check working.
-_VIEW_KINDS: dict[str, str] = {
-    "front": "front", "rear": "rear", "top": "top", "bottom": "bottom",
-    "left": "left", "right": "right", "iso": "isometric",
+#: A recipe's view direction, mapped onto how a *reading* would label the same
+#: view, and whether the extent has to be transposed to get there.
+#:
+#: **The one place the two view vocabularies meet, and it used to be an
+#: identity map because nobody had measured that they differ.** A recipe's
+#: `direction` is Inventor's naming, which is Y-up: measured on 2027.1,
+#: 2026-09-08, `front` shows the XY plane -- the plan of a part modelled flat.
+#: A reading's `kind` is the view as the *sheet labels it*, which is the ISO
+#: drafting vocabulary a person reads with, where FRONT is the elevation. So
+#: Inventor's front is a reading's top, Inventor's top is a reading's front,
+#: and the pairs stay pairs.
+#:
+#: `left` and `right` need more than a rename. Both vocabularies put them on
+#: the YZ plane and disagree about which way round it is: Inventor spans Z
+#: across and Y up, a reading has Y across and Z up. So the extent is
+#: transposed for those two and for nothing else.
+#:
+#: Getting this wrong silently stops the overall-size check working, because
+#: `drawing._overall_from` reconstructs the part's bounding box from the kind
+#: and the extent together. `docs/DECISIONS.md` records why the recipe follows
+#: Inventor and the reading does not.
+_VIEW_KINDS: dict[str, tuple[str, bool]] = {
+    "front": ("top", False),
+    "rear": ("bottom", False),
+    "top": ("front", False),
+    "bottom": ("rear", False),
+    "left": ("left", True),
+    "right": ("right", True),
+    "iso": ("isometric", False),
 }
 
-#: Which of the part's axes a view of each direction shows across and up. The
-#: same table `drawing._overall_from` uses, for the same purpose: an `iso` view
-#: shows all three and pins none, so it is absent rather than guessed at.
-_VIEW_AXES: dict[str, tuple[int, int]] = {
-    "front": (0, 2), "rear": (0, 2),
-    "top": (0, 1), "bottom": (0, 1),
-    "left": (1, 2), "right": (1, 2),
-}
+
+def _read_view(view: ViewInfo, per_unit: float
+               ) -> tuple[str, list[float] | None]:
+    """One placed view as a reading would record it: its kind and its extent.
+
+    The scale comes out here too -- a view drawn at 1:2 spans half what the
+    part measures, and the reading is of the *part*.
+    """
+    extent = ([value / per_unit / view.scale for value in view.extent]
+              if view.extent else None)
+    kind, values = _as_read(view.direction, extent)
+    return kind, ([round(value, 4) for value in values] if values else None)
+
+
+def _as_read(direction: str, extent: Sequence[float] | None
+             ) -> tuple[str, list[float] | None]:
+    """How a reading would label this view, and its extent in the reading's order."""
+    kind, transposed = _VIEW_KINDS.get(direction, ("front", False))
+    if extent is None:
+        return kind, None
+    values = list(extent)
+    if transposed and len(values) == 2:
+        values = [values[1], values[0]]
+    return kind, values
 
 
 #: Which way a projected view sits from its parent in **third angle**, as a unit
@@ -222,7 +265,8 @@ def as_reading(recipe: DrawingRecipe, ledger: dict[str, Any]) -> DrawingReading:
         projection=recipe.projection,
         scale=recipe.scale,
         views=[
-            DrawingView(name=view["name"], kind=_VIEW_KINDS[view["direction"]])
+            DrawingView(name=view["name"],
+                        kind=_as_read(view["direction"], None)[0])
             for view in ledger["views"]
         ],
         dimensions=dimensions,
@@ -526,7 +570,8 @@ def _translated(comparison: dict[str, Any], recipe: DrawingRecipe, *,
 
 
 def build_drawing(session: Session, recipe: DrawingRecipe, part: PartRecipe, *,
-                  part_doc_id: str | None = None) -> dict[str, Any]:
+                  part_doc_id: str | None = None,
+                  part_path: str | None = None) -> dict[str, Any]:
     """Make the drawing, then read it back off the sheet and check it.
 
     The round trip, and the order matters: the sheet is read from the backend
@@ -539,6 +584,15 @@ def build_drawing(session: Session, recipe: DrawingRecipe, part: PartRecipe, *,
     are useful: a drawing of a part built in the same call is the ordinary case,
     and a drawing of a part somebody has open is what you want when the part
     took a minute to build.
+
+    **A drawing view is a reference to a model file, so the part has to be on
+    disk.** `part_path` is where to save it, and it is a separate argument
+    rather than something worked out from the recipe's name because writing a
+    file is the caller's decision to make: a part that is already saved is left
+    exactly where it is, and one that is not is saved only when a path was
+    given. Without it Inventor refuses the first view -- measured on 2027.1,
+    2026-09-08, three views refused in a row with nothing but "Exception
+    occurred", which is the failure this argument exists to make impossible.
     """
     from .builder import build_part
 
@@ -567,6 +621,13 @@ def build_drawing(session: Session, recipe: DrawingRecipe, part: PartRecipe, *,
         part_doc_id = built["document"]
     else:
         report["part"] = {"ok": True, "document": part_doc_id, "reused": True}
+
+    # On disk before any view is placed, because a view references a file. Only
+    # when a path was given and only when the part has none: a part somebody
+    # already saved keeps its own location, and nothing here writes over it.
+    saved_to = _on_disk(backend, part_doc_id, part_path)
+    if saved_to is not None:
+        report["part"]["path"] = saved_to
 
     # Checked before any sheet exists, and it has to be here rather than left to
     # the caller having rehearsed: a category error like dimensioning a count
@@ -625,7 +686,8 @@ def build_drawing(session: Session, recipe: DrawingRecipe, part: PartRecipe, *,
     report["warnings"].extend(_dimensions_that_did_not_reach_the_sheet(
         recipe, contents, rehearsed))
     report["warnings"].extend(_views_that_are_not_what_they_asked_for(recipe, contents))
-    report["warnings"].extend(_dimensions_that_state_something_else(contents))
+    report["warnings"].extend(_dimensions_that_state_something_else(
+        contents, set(rehearsed.get("parameters") or {})))
     reading = reading_of(recipe, contents)
     report["round_trip"] = _translated(
         compare(reading, rehearsed), recipe,
@@ -677,20 +739,21 @@ def reading_of(recipe: DrawingRecipe, contents: DrawingContents) -> DrawingReadi
         projection=recipe.projection,
         scale=recipe.scale,
         views=[
-            DrawingView(name=view.name,
-                        kind=_VIEW_KINDS.get(view.direction, "front"),
-                        # The extent comes off the sheet, so the overall-size
-                        # check has something to compare -- and how much that is
-                        # worth depends on which backend drew it, which is worth
-                        # being exact about. On Inventor the size is Inventor's,
-                        # measured from the view it actually placed, and the
-                        # check is real. On the simulator the extent is computed
-                        # from the part's own bounding box, so there the check
-                        # compares the part with itself and can only fail if the
-                        # scale arithmetic is wrong. `as_reading` supplies no
-                        # extent at all rather than that weaker version.
-                        extent=[round(value / per_unit / view.scale, 4)
-                                for value in view.extent] if view.extent else None)
+            # The extent comes off the sheet, so the overall-size check has
+            # something to compare -- and how much that is worth depends on
+            # which backend drew it, which is worth being exact about. On
+            # Inventor the size is Inventor's, measured from the view it
+            # actually placed, and the check is real. On the simulator the
+            # extent is computed from the part's own bounding box, so there the
+            # check compares the part with itself and can only fail if the
+            # scale arithmetic is wrong. `as_reading` supplies no extent at all
+            # rather than that weaker version.
+            #
+            # Both go through `_as_read` together, because the label and the
+            # order of the two numbers are one answer: a left view's extent
+            # means Y-then-Z to a reading and came off Inventor as Z-then-Y.
+            DrawingView(name=view.name, kind=_read_view(view, per_unit)[0],
+                        extent=_read_view(view, per_unit)[1])
             for view in contents.views
         ],
         dimensions=dimensions,
@@ -726,6 +789,28 @@ def _parents_first(recipe: DrawingRecipe) -> list[DrawingViewSpec]:
             placed.add(view.name)
             remaining.remove(view)
     return ordered
+
+
+def _on_disk(backend: Any, part_doc_id: str, part_path: str | None) -> str | None:
+    """Where the part is on disk, saving it to *part_path* if it is nowhere.
+
+    Returns the path the drawing will reference, or None where the question
+    could not be answered -- a backend that does not report a path, which is
+    not a reason to refuse to draw.
+
+    A part that already has a file is never re-saved to a new one. Somebody who
+    passes `part_path` while drawing a part they opened from elsewhere means
+    "put it here if it is nowhere", not "move it".
+    """
+    try:
+        where = backend.document_path(part_doc_id)
+    except Exception:
+        return None
+    if where:
+        return str(where)
+    if not part_path:
+        return None
+    return str(backend.save_document(part_doc_id, part_path).path or part_path)
 
 
 def _view_request(recipe: DrawingRecipe, resolver: Resolver, view: DrawingViewSpec,
@@ -840,8 +925,41 @@ def _parameters_they_feed(absent: Sequence[str],
     return feeds
 
 
+def _mentions_a_parameter_other_than(expression: str, parameter: str,
+                                     known: set[str]) -> bool:
+    """Whether *expression* is a formula naming a real parameter that is not *parameter*.
+
+    The line between "the sheet states a different number from the one asked
+    for" and "the sheet shows a number, as drawings do". A dimension's text is
+    a number with the sheet's own decoration; an expression is the part's
+    parameter names and operators. Only the second is worth warning about.
+
+    **`known` is what makes that distinction hold, and two live runs were
+    needed to find out why.** A retrieved dimension will not give its model
+    parameter's expression on 2027.1, so what arrives is the sheet text -- and
+    `'R10,00'` for a radius parses as the identifier `R10`, `'n6,60'` for a
+    diameter as `n6`. Sheet decoration read as a formula, so the warning fired
+    on every dimension that carried a prefix. A name the part does not have is
+    not a parameter, whatever the parser makes of it.
+    """
+    from .expressions import referenced_parameters
+
+    try:
+        names = referenced_parameters(expression)
+    except ExpressionError:
+        # Not parseable as an expression, so it is text: a number, a locale's
+        # decimal separator, whatever Inventor put on the sheet. Narrow on
+        # purpose -- the first version caught `Exception`, which swallowed the
+        # `NameError` from this import being missing and turned the whole
+        # warning off. A bare except is how a check stops checking silently.
+        return False
+    real = {name for name in names if name in known}
+    return bool(real) and real != {parameter}
+
+
 def _dimensions_that_state_something_else(
-        contents: DrawingContents) -> list[dict[str, Any]]:
+        contents: DrawingContents,
+        known: set[str] | None = None) -> list[dict[str, Any]]:
     """Dimensions retrieved for a parameter whose value is not that parameter's.
 
     Not a fault, and worth saying anyway. Retrieval can only offer dimensions the
@@ -851,12 +969,29 @@ def _dimensions_that_state_something_else(
     dimension the margin gets 96 mm. The sheet is right, the holes are pinned,
     and the number the author named is nowhere on it -- which is exactly the
     thing somebody should be told rather than left to notice.
+
+    **It has to state a formula, not merely a number, and that took a live run
+    to notice.** On Inventor 2027.1 a retrieved dimension answers neither
+    `ModelDimension.Parameter.Expression` nor `Parameter.Expression`, so the
+    expression falls back to the text on the sheet -- `'120,00'` for a 120 mm
+    plate, in whatever decimal separator the seat is set to. That is never the
+    parameter's name, so the first version of this warned about **every**
+    dimension on every live sheet, which is the fastest way to make a warning
+    ignored. It fires only where the expression references parameters and they
+    are not the one asked for; a bare number references none.
+
+    Under the choose-then-retrieve route this should now never fire at all,
+    because an annotation is only chosen when its expression *is* the wanted
+    parameter. It stays for the legacy retrieve-then-filter fallback and for a
+    sheet read back that this session did not place.
     """
     indirect = [
         f"{entry.parameter} is stated as {entry.expression!r}"
         for entry in contents.dimensions
         if entry.parameter and entry.expression
         and entry.expression.strip() != entry.parameter
+        and _mentions_a_parameter_other_than(entry.expression, entry.parameter,
+                                             known or set())
     ]
     if not indirect:
         return []

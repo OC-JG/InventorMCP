@@ -101,6 +101,59 @@ class TestRetrievalFiltersBeforeItRetrieves:
         assert com._model_parameter_name(proxy) == "plate_w"
         assert com._model_parameter_name(object()) is None
 
+    def test_the_expression_is_read_beside_the_name(self):
+        """Measured on 2027.1, 2026-09-08: the names Inventor offered were
+        `d0, d1, d4, d5, d6, d7, d8, d9`. A sketch dimension is driven by a
+        *model* parameter, and the user parameter a recipe asks for is what
+        that model parameter's expression is -- so a match on the name alone
+        found nothing on a real part and the whole design read as
+        unmeasurable."""
+        parameter = type("P", (), {"Name": "d4", "Expression": "plate_w"})()
+        constraint = type("D", (), {"Parameter": parameter})()
+        assert com._model_parameter(constraint) == ("d4", "plate_w")
+        proxy = type("Px", (), {"NativeObject": constraint})()
+        assert com._model_parameter(proxy) == ("d4", "plate_w")
+        assert com._model_parameter(object()) == (None, None)
+
+    def test_a_parameter_a_dimension_merely_mentions_is_not_stated(self):
+        """The distinction the whole match rests on. `plate_w` states 120;
+        `plate_w - 2 * edge_margin` states 96, which is neither of the numbers
+        the names in it are worth -- and the shipped drawing recipe records
+        exactly that about `edge_margin`."""
+        wanted = ["plate_w", "edge_margin", "thk"]
+        assert com._states_parameter("plate_w", wanted) == "plate_w"
+        assert com._states_parameter("plate_w * 1 mm", wanted) == "plate_w"
+        assert com._states_parameter("(thk)", wanted) == "thk"
+        assert com._states_parameter("plate_w - 2 * edge_margin", wanted) is None
+        assert com._states_parameter("2 * plate_w", wanted) is None
+        assert com._states_parameter("plate_w + 0", wanted) is None
+        assert com._states_parameter("120 mm", wanted) is None
+        assert com._states_parameter(None, wanted) is None
+
+    def test_a_model_parameter_is_matched_through_its_expression(self):
+        """The name is `d4` and the recipe said `plate_w`, so the name match
+        fails and the expression match is what finds it."""
+        named = [("a", "d4"), ("b", "d5"), ("c", "d6")]
+        expressions = ["plate_w", "plate_w - 2 * edge_margin", "thk"]
+        chosen = com._annotations_wanted(
+            named, {"plate_w": False, "thk": True}, expressions)
+        assert chosen == [("a", "plate_w"), ("c", "thk")]
+
+    def test_a_direct_name_match_still_wins(self):
+        """A recipe may name a parameter that drives a dimension itself, and
+        the expression route must not have displaced that."""
+        named = [("a", "plate_w")]
+        assert com._annotations_wanted(named, {"plate_w": False}, [None]) == \
+            [("a", "plate_w")]
+
+    def test_one_dimension_per_parameter_through_the_expression_too(self):
+        """Two model parameters both being `plate_w` is two dimensions of the
+        same number, and a draughtsman writes each one once."""
+        named = [("a", "d4"), ("b", "d8")]
+        chosen = com._annotations_wanted(named, {"plate_w": False},
+                                         ["plate_w", "plate_w"])
+        assert chosen == [("a", "plate_w")]
+
     def test_the_legacy_routes_are_still_there_for_an_older_release(self):
         """2026.1 introduced the pair; the fallback is what a 2025 seat gets."""
         assert com.ComBackend._RETRIEVAL_ROUTES == ("RetrieveDimensions", "AddRetrievedDimensions")
@@ -210,13 +263,24 @@ class TestThickenFollowsThePublishedCall:
     `VerifyResults`, which is `CreateVerticalSurfaces`."""
 
     def test_no_definition_route_and_no_true_in_an_optional_slot(self):
+        """The call is one `_call_named` with the published names in the
+        published order. The names are what make the earlier defect
+        impossible: `Distance` is a variant and the two enums are integers, so
+        a permutation would have built a part rather than raising."""
         import inspect
 
         source = inspect.getsource(com.ComBackend._add_thicken)
-        assert "CreateThickenDefinition" not in source
-        assert "(faces, thickness, direction, operation)" in source
-        assert "(faces, thickness, direction, operation, False, False, False)" in source
-        assert "operation, False, True)" not in source
+        body = source.split('"""')[-1]
+        assert "CreateThickenDefinition" not in body, \
+            "the definition route exists on no release"
+        names = [line.split('"')[1] for line in body.splitlines()
+                 if line.strip().startswith('("')]
+        assert names == ["Faces", "Distance", "ExtentDirection", "Operation",
+                         "AutomaticFaceChain", "CreateVerticalSurfaces",
+                         "AutomaticBlending"]
+        assert '("CreateVerticalSurfaces", True)' not in body, \
+            "True here adds side faces nothing predicts; it was believed to be VerifyResults"
+        assert '("AutomaticFaceChain", False)' in body
 
 
 class TestThreadFollowsThePublishedCall:
@@ -251,7 +315,10 @@ class TestMoveFaceFollowsThePublishedDefinition:
     read back, because the page says the definition starts at `kFreeMoveType`."""
 
     def test_one_setter_and_it_is_the_published_one(self):
-        assert com.ComBackend._MOVE_FACE_SETTERS == ("SetDirectionAndDistanceMoveType",)
+        """One name, not a list of candidates. The published page and the live
+        `ITypeInfo` read agree on it, which is two sources for a member the
+        type library does not publish at all."""
+        assert com.ComBackend._MOVE_FACE_SETTER == "SetDirectionAndDistanceMoveType"
 
     def test_the_move_face_type_enum_is_in_the_table(self):
         assert FALLBACK["kDirectionAndDistanceMoveType"] == 91393
@@ -262,7 +329,9 @@ class TestMoveFaceFollowsThePublishedDefinition:
         import inspect
 
         source = inspect.getsource(com.ComBackend.move_face)
-        assert "_require_direction_and_distance_type(definition)" in source
+        assert "_require_direction_and_distance_type(definition, was)" in source
+        assert "was = _move_face_type(definition)" in source, \
+            "the type before the setter is what makes the check meaningful"
         assert source.index("_require_direction_and_distance_type") < source.index("features.Add(definition)")
 
     def test_the_published_argument_order_distance_first_and_flip_as_the_flag(self):
@@ -272,8 +341,13 @@ class TestMoveFaceFollowsThePublishedDefinition:
         would not have been a type mismatch."""
         import inspect
 
+        assert com.ComBackend._MOVE_FACE_SETTER_ARGUMENTS == (
+            "Distance", "Direction", "DirectionReversed")
         source = inspect.getsource(com.ComBackend.move_face)
-        assert "setter(distance, direction, bool(request.flip))" in source
+        assert "(distance, direction, request.flip)" in source, \
+            "the values go in in the order the argument names are declared"
+        assert "self._MOVE_FACE_SETTER_ARGUMENTS,\n" in source, \
+            "named through _call_named, so the order is data rather than a call site"
         assert 'f"-({distance})"' not in source, "flip is the documented flag, not a negated expression"
         assert 'request.direction.kind not in ("work_axis", "edge")' in source
 
@@ -286,6 +360,17 @@ class TestSketchDrivenPatternIsDefinitionBased:
         import inspect
 
         source = inspect.getsource(com.ComBackend.sketch_driven_pattern)
-        assert "features.CreateDefinition(parents, sketch, reference)" in source
-        assert "_add_patterned_definition(features, definition)" in source
-        assert "_patterned(features.Add" not in source
+        assert "_sketch_driven_definition(" in source
+        assert "features.Add(definition)" in source
+        assert "_patterned(features.Add" not in source, \
+            "a three-argument Add could never have worked on this release"
+
+        factory = inspect.getsource(com.ComBackend._sketch_driven_definition)
+        body = factory.split('"""')[-1]
+        names = [line.split('"')[1] for line in body.splitlines()
+                 if line.strip().startswith('("')]
+        assert names[:3] == ["ParentFeatures", "Sketch", "BasePoint"], names
+        assert names[3] == "ReferenceFaces" and '("ReferenceFaces", DEFAULTED)' in body, \
+            "nothing in a recipe says reference faces, so Inventor's own default goes in"
+        assert "CreateSketchDrivenPatternDefinition" not in body, \
+            "measured absent, so it is gone rather than kept as a fallback"

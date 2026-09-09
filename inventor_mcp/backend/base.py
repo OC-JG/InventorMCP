@@ -402,6 +402,88 @@ THICKEN_SHARE: dict[tuple[str, str], float] = {
 }
 
 
+#: What a recipe calls a dimensioned feature property, against what Inventor
+#: calls it. Keyed by the recipe's word.
+#:
+#: This lives here for the same reason `THICKEN_SHARE` does: the two backends
+#: disagreeing about a word is defect 5's shape again. A promotion is asked for
+#: in a caller's words, the simulator matches them against its own feature
+#: detail -- which is keyed by the recipe's field names, so `taper` works --
+#: and Inventor's `ExtrudeDefinition` calls that property `TaperAngle`. So the
+#: promotion the simulator performed happily failed on the seat, measured on
+#: 2027.1 on 2026-09-08: *"The feature 'Block' has no drivable property
+#: 'taper'."* One table cannot disagree with itself.
+#:
+#: Only the words that differ. `thickness`, `radius`, `distance`, `depth`,
+#: `angle`, `count` and the pattern's `x_count` family already match Inventor's
+#: own spelling once case and underscores are ignored, and both backends ignore
+#: both.
+#: Which of the part's axes a view of each direction shows [across, up], as
+#: indices into (X, Y, Z). `iso` is absent: it shows all three foreshortened,
+#: which is not two numbers.
+#:
+#: **Inventor's convention, which is Y-up, and that is a decision rather than
+#: an inheritance.** Measured on 2027.1, 2026-09-08, by placing one base view
+#: per direction of a 120 x 80 x 8 mm block and reading what each spans:
+#: `front` and `rear` show XY, `top` and `bottom` show XZ, `left` and `right`
+#: show YZ with **Z across and Y up**. So Inventor's front view looks down Z.
+#:
+#: This project models Z-up -- every recipe sketches on XY and extrudes
+#: upward -- and this table used to say so: front meant XZ, the elevation. The
+#: two cannot be reconciled by picking different orientation enums, because
+#: `left` needs a quarter turn *within* the same plane and no enum does that.
+#: So the naming follows Inventor: a recipe asking for `front` gets what a
+#: person placing a base view by hand gets, both halves of the round trip
+#: measure the same axes, and the price is that a plate modelled flat has its
+#: plan as its front view. `docs/DECISIONS.md` records the choice and
+#: `docs/FEATURE_COVERAGE.md` defect 16 the measurement behind it.
+#:
+#: One table, above the three places that had a copy of it -- `drafting.py`
+#: writing a sheet, `drawing.py` reading one back, and the simulator measuring
+#: a view's extent. Three copies of one fact is how defect 5 survived three
+#: runs.
+VIEW_AXES: dict[str, tuple[int, int]] = {
+    "front": (0, 1), "rear": (0, 1),
+    "top": (0, 2), "bottom": (0, 2),
+    "left": (2, 1), "right": (2, 1),
+}
+
+
+PROMOTION_ALIASES: dict[str, str] = {
+    "taper": "TaperAngle",
+    "diameter": "HoleDiameter",
+    "cbore_diameter": "CounterboreDiameter",
+    "cbore_depth": "CounterboreDepth",
+    "csink_diameter": "CountersinkDiameter",
+    "csink_angle": "CountersinkAngle",
+    "bottom_angle": "BottomTipAngle",
+}
+
+
+def promotion_synonyms(prop: str) -> list[str]:
+    """Every word *prop* may be spelled as, flattened, for matching either way.
+
+    Both backends match a requested property name against names they hold, and
+    the two hold different vocabularies: Inventor's property names on one side
+    and the recipe's field names on the other. So each side flattens what it
+    holds and asks whether it is one of these -- which makes `taper` and
+    `TaperAngle` the same request in both directions, rather than in whichever
+    direction somebody remembered.
+    """
+    def flatten(text: str) -> str:
+        return text.strip().lower().replace("_", "")
+
+    wanted = flatten(prop)
+    if not wanted:
+        return []
+    words = [wanted]
+    for word, spelling in PROMOTION_ALIASES.items():
+        pair = (flatten(word), flatten(spelling))
+        if wanted in pair:
+            words.extend(name for name in pair if name not in words)
+    return words
+
+
 @dataclass
 class ThickenRequest:
     """Faces, a layer thickness, and which side of them it goes on.

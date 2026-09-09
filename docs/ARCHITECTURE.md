@@ -345,17 +345,25 @@ calibrated against a number somebody measured in Inventor, and `PREDICTED` in
 `rehearsal.py` says how far each is trusted. Those tolerances only stay honest
 if live acceptance runs keep happening. The four that once sat at a placeholder
 0.5 — coil, draft, emboss, split — were all measured on 2026-09-03, and
-`move_face` and `thicken` sit there now for a different reason: their COM calls
-have never executed, so there is no run behind any number for either.
+`thicken` joined them on 2026-09-07: it came down 0.5 → 0.02 on a run that also
+found the simulator 1.7% low, because Inventor closes the corner notch where two
+thickened faces meet and the mock was summing the layers alone. That is the
+pattern this whole section is for — the run did not confirm the number, it
+corrected it, and `_thicken_corners` is what the correction became.
+`move_face` still sits at the placeholder, and for the original reason: its COM
+call has never built anything, so there is no run behind any number for it.
 `scripts/live_acceptance.py` is where that debt is paid — `--only calibration`,
-`--only move-face`, `--only thicken` and `--only sketch-driven-pattern`. Two of
-those are cases where a tolerance is not the point at all. What is unmeasured
-about `thicken` is which side of a face a `negative` layer lies on, and a
-percentage cannot catch a side. What is unmeasured about
-`sketch_driven_pattern` is an occurrence *count*, whose wrong answers include
-one that leaves the volume unchanged — so that check prints the part's feature
-list, and its tolerance is 0.02 rather than the placeholder precisely so an
-off-by-one occurrence is reported instead of absorbed.
+`--only move-face` and `--only sketch-driven-pattern`.
+
+Two of those checks are cases where a tolerance is not the point at all, and one
+of them has now paid off. What was unmeasured about `thicken` was which side of a
+face a `negative` layer lies on, and a percentage cannot catch a side — so
+`thinned_wall` was shaped so the three possible answers were three different
+numbers, and it came back the one `THICKEN_SHARE` predicted. What is unmeasured
+about `sketch_driven_pattern` is an occurrence *count*, whose wrong answers
+include one that leaves the volume unchanged — so that check prints the part's
+feature list, and its tolerance is 0.02 rather than the placeholder precisely so
+an off-by-one occurrence is reported instead of absorbed.
 
 **The DFM analyser.** A pinned submodule with thresholds this project restates
 rather than imports, because the tool states them inline and does not export

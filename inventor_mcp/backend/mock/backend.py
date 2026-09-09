@@ -73,6 +73,8 @@ from ..base import (
     ViewInfo,
     ViewRequest,
     THICKEN_SHARE,
+    VIEW_AXES,
+    promotion_synonyms,
     EmbossRequest,
     ShellRequest,
     SplitRequest,
@@ -631,12 +633,23 @@ class MockBackend(Backend):
 
     def promote_parameter(self, doc_id: str, feature: str, prop: str,
                           name: str) -> dict[str, Any]:
+        """Give a value this feature already held a name.
+
+        The detail dictionary is keyed by the *recipe's* field names, and a
+        caller may just as well ask in Inventor's -- `discover_dfm_roles`
+        reports whatever it read off the feature, which live is `TaperAngle`
+        and here is `taper`. So the request is matched through
+        `promotion_synonyms`, the same shared vocabulary the COM backend uses,
+        because the two halves accepting different words is what made a
+        promotion pass here and fail on the seat.
+        """
         document = self._doc(doc_id)
         found = document.find_feature(feature)
         held = None
         key = None
+        words = promotion_synonyms(prop)
         for candidate, value in (found.detail or {}).items():
-            if candidate.lower().replace("_", "") != prop.lower().replace("_", ""):
+            if candidate.strip().lower().replace("_", "") not in words:
                 continue
             key = candidate
             held = value
@@ -2041,7 +2054,8 @@ class MockBackend(Backend):
         share = THICKEN_SHARE[(request.direction, request.operation)]
         area = sum(topo.area or 0.0 for topo in faces)
         curved = [topo.description for topo in faces if topo.normal is None]
-        swept = share * area * request.thickness.value
+        corners, edges = _thicken_corners(document, faces, share, request.thickness.value)
+        swept = share * area * request.thickness.value + corners
         moved = document.charge(swept)
 
         # A thickened face is where it was; what changed is how much material
@@ -2057,7 +2071,8 @@ class MockBackend(Backend):
                     for position, component in zip(topo.midpoint, topo.normal)
                 )])
 
-        how = "exact for a planar face: its area times the layer's thickness"
+        how = ("exact for a planar face: its area times the layer's thickness, "
+               "plus the corner where two of them meet")
         detail: dict[str, Any] = {
             "faces": len(faces),
             "thickness": request.thickness.as_dict(),
@@ -2065,6 +2080,8 @@ class MockBackend(Backend):
             "operation": request.operation,
             "area_cm2": round(area, 6),
             "share_of_the_layer": share,
+            "corner_edges": edges,
+            "corner_cm3": round(corners, 6),
             "volume_from": how,
         }
         if curved:
@@ -2099,17 +2116,13 @@ class MockBackend(Backend):
         return _feature_info(feature)
 
     # -- drawings ----------------------------------------------------------
-    #: Which of the part's axes a view of each direction shows across and up,
-    #: and which it looks along. The same table `drafting.py` and
-    #: `drawing._overall_from` use -- a view's extent is the part's own extent on
-    #: two axes, so this is the whole of what the simulator needs to know about
-    #: what a direction means. `iso` is absent: it shows all three foreshortened,
-    #: which is not two numbers.
-    _VIEW_SPAN = {
-        "front": (0, 2), "rear": (0, 2),
-        "top": (0, 1), "bottom": (0, 1),
-        "left": (1, 2), "right": (1, 2),
-    }
+    #: Which of the part's axes a view of each direction shows across and up.
+    #: The one shared table rather than a fourth copy: a view's extent is the
+    #: part's own extent on two axes, so this is the whole of what the simulator
+    #: needs to know about what a direction means, and it has to be the same
+    #: answer the COM half gives or the divergence check compares a sheet with
+    #: itself. Inventor's convention, which is Y-up -- see `base.VIEW_AXES`.
+    _VIEW_SPAN = VIEW_AXES
 
     def new_drawing(self, name: str, *, template: str | None = None,
                     sheet: str = "a3", units: str = "mm") -> DocInfo:
@@ -3256,6 +3269,63 @@ _FEATURE_DIMENSIONS = {
     "angle": "angle", "taper": "angle", "csink_angle": "angle",
     "bottom_angle": "angle", "included_angle": "angle",
 }
+
+
+def _thicken_corners(document: _Document, faces: Sequence[_Topo], share: float,
+                     thickness: float) -> tuple[float, int]:
+    """The corner where two thickened faces meet, and how many such corners.
+
+    **Measured on Inventor 2027.1, 2026-09-07, and this is what it answered.**
+    Four walls of a plate grown 1 mm outward came back at 1.4640 cm^3 where the
+    sum of the four layers is 1.4400: the layers do not meet, and Inventor
+    *closes* the 1 x 1 x 6 mm notch at each of the four corners. 4 x 6 mm^3 is
+    0.024, and 1.4400 + 0.024 is 1.4640 exactly.
+
+    So the term is derivable rather than a fudge. Two faces whose normals are
+    perpendicular share an edge running along the cross product of the two, and
+    the notch is a square of the layer's own thickness swept along that edge --
+    `t^2 * h`, where `h` is how far the part runs along that direction. The
+    thickness is the *effective* one, `share * t`, so a `symmetric` layer
+    reaching half as far has a quarter of the corner.
+
+    **The sign is the same either way**, which is worth stating because it looks
+    wrong. Growing four walls leaves gaps at the corners, so the true volume is
+    the sum of the layers *plus* the notches. Thinning four walls makes the
+    layers *overlap* at the corners, so the union is the sum *minus* the
+    overlap -- and since the change is negative, subtracting less means adding.
+    Both come out as `+corners`.
+
+    Deliberately geometric and therefore deliberately approximate about
+    adjacency: any two matched faces with perpendicular normals are counted, and
+    on a convex box that is exactly its edges. Two perpendicular faces that do
+    not actually touch -- the inside of an L -- would be counted and should not
+    be, which is a smaller error than ignoring corners altogether was.
+    """
+    planar = [topo for topo in faces if topo.normal is not None]
+    if not planar or not share or not document.bounds:
+        return (0.0, 0)
+    reach = share * thickness
+    total = 0.0
+    edges = 0
+    for first in range(len(planar)):
+        for second in range(first + 1, len(planar)):
+            one = planar[first].normal or (0.0, 0.0, 0.0)
+            two = planar[second].normal or (0.0, 0.0, 0.0)
+            if abs(sum(a * b for a, b in zip(one, two))) > 1e-9:
+                continue  # parallel or opposed: no shared edge to fill
+            along = _cross(one, two)
+            axis = max(range(3), key=lambda index: abs(along[index]))
+            span = abs(document.bounds[axis + 3] - document.bounds[axis])
+            total += reach * reach * span
+            edges += 1
+    return (total, edges)
+
+
+def _cross(one: Sequence[float], two: Sequence[float]) -> tuple[float, float, float]:
+    """The cross product, which is the direction two perpendicular faces share."""
+    return (one[1] * two[2] - one[2] * two[1],
+            one[2] * two[0] - one[0] * two[2],
+            one[0] * two[1] - one[1] * two[0])
 
 
 def _model_dimension_for(part: _Document,

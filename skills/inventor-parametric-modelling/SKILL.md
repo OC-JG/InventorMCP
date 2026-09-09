@@ -139,13 +139,18 @@ check in this server:
 
 A render costs one call and catches all five. Nothing else does.
 
-**Ask for `iso`.** The other orientation names do not describe what they
-return. On a part built on `"xy"` and extruded in +Z — which is what this Skill
-tells you to build — `front` and `back` give top and bottom views, and `top`
-gives a side elevation **with Z rendered inverted**. So text that looks
-upside-down in a `top` view is not upside-down, and a part that looks wrong in a
-`front` view may be a part you are looking at from above. That is recorded as
-defect 4 in `docs/FEATURE_COVERAGE.md` and has not been fixed.
+**The orientation names are Inventor's, and Inventor is Y-up.** `front` shows
+the XY plane, `top` shows XZ, `left` and `right` show YZ. On a part built on
+`"xy"` and extruded in +Z — which is what this Skill tells you to build — that
+means **`front` gives you the plan and `top` gives you an elevation**, which
+reads backwards until you know it. Measured on Inventor 2027.1 and kept
+deliberately, so a picture and a drawing sheet of the same part agree with each
+other and with what Inventor draws by hand: `docs/DECISIONS.md` has the choice.
+
+What is *not* settled is which way is up inside the plane — `top` renders Z
+inverted, so text that looks upside-down in one is not upside-down. Defect 16
+in `docs/FEATURE_COVERAGE.md` has that half. **Ask for `iso`** when you want a
+picture you can read without thinking about any of this.
 
 So: read the *shape* off the picture, and measure *coordinates* with
 `measure_part` and `select_topology`. If the picture and the numbers disagree,
@@ -572,7 +577,12 @@ fastener rather than deriving one.
   and `columns` accept an expression, so `"count": "bolts_per_side * 2"` works
   and a count is revisable like a length. A fractional result is refused rather
   than rounded, since 4.5 holes is a mistake.
-- **`sketch_driven_pattern` has never run against a live Inventor either.**
+- **`sketch_driven_pattern` is measured** — Inventor 2027.1, 2026-09-08, at
+  −1.2000 cm³ exactly. One thing about it is still unconfirmed and it is a
+  *count* rather than a volume: whether Inventor also places an occurrence on
+  the reference point. A duplicate would land on the seed and remove nothing, so
+  it would not show in any number — if a part's browser shows one occurrence more
+  than the recipe's points, that is why.
   Reach for it only when the feature is not already position-shaped: `hole`
   takes a list of points and `boss` a list of positions, so irregular holes and
   bosses need no pattern. The seed sits on `reference` and the occurrences go on
@@ -581,20 +591,21 @@ fastener rather than deriving one.
   would show as a duplicate feature rather than a wrong volume. It is the only
   pattern the simulator places rather than counts, so a rehearsal of it can tell
   you an occurrence landed off the part.
-- **`thicken` has never run against a live Inventor either**, and what is
-  unmeasured about it is not a number: the arithmetic is exact per planar face,
-  and what nobody has confirmed is which side of a face a `negative` layer lies
-  on. So `positive` + `join` to grow a part and `negative` + `cut` to thin it
-  are the pairs to write; if a rehearsal warns that a layer changes nothing,
-  believe it. It is the way to grow every wall of a box at once, which
-  `move_face` cannot say with a single direction. Turning a *surface* into a
-  wall — Inventor's other use for this feature — is not reachable here at all,
-  because nothing in this server creates a surface.
-- **`move_face` has never run against a live Inventor**, and unlike the
-  operations above it the COM signature itself is unconfirmed rather than just
-  the behaviour. It is exact in the simulator -- a planar face moved along its
-  own normal changes the part by area times distance -- so a rehearsal of it
-  means something; a live success does not, yet. It is the only way to alter
-  imported geometry, which is why it exists. Check the `measured` block against
-  the arithmetic by hand before reporting such a part finished.
+- **`thicken` is measured** — Inventor 2027.1, 2026-09-07, both fixtures to
+  four decimals. A `negative` layer does lie behind the face where the material
+  is, so `positive` + `join` grows a part and `negative` + `cut` thins it; those
+  are the pairs to write, and if a rehearsal warns that a layer changes nothing,
+  believe it. Inventor also **closes the corner** where two thickened faces
+  meet, so growing four walls of a box adds slightly more than the four layers
+  sum to and the simulator now says so. It is the way to grow every wall at once,
+  which `move_face` cannot express with a single direction. Turning a *surface*
+  into a wall — Inventor's other use for this feature — is not reachable here at
+  all, because nothing in this server creates a surface.
+- **`move_face` is measured** — Inventor 2027.1, 2026-09-08, both fixtures at
+  0.0%, and doubling the driving parameter doubled the volume, so the distance
+  expression really does reach Inventor's dimension. It is exact for a planar
+  face moved along its own normal: area times distance, straight out of the dot
+  product, and Inventor agrees. It is the only way to alter imported geometry,
+  which is why it exists. What is *not* covered is a curved face — a rehearsal
+  marks that step estimated, and the arithmetic is first-order there.
 - Assemblies, drawings and sheet metal are not supported at all.

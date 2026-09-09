@@ -256,7 +256,11 @@ class TestTheReadingItProduces:
         assert reading.projection == "third_angle"
         assert [d.label for d in reading.dimensions] == [
             "plate_w", "plate_t", "plate_d", "hole_d"]
-        assert [v.kind for v in reading.views] == ["front", "top"]
+        # The recipe's `front` and `top`, as a *reading* would label them. The
+        # two vocabularies differ and this is where they are translated:
+        # Inventor's front shows the XY plane, which a sheet labels the plan.
+        # Measured on 2027.1, 2026-09-08; `drafting._VIEW_KINDS` carries it.
+        assert [v.kind for v in reading.views] == ["top", "front"]
 
     def test_the_views_carry_no_extent_on_purpose(self):
         """An extent is what a view shows, and the only source for it here is
@@ -357,16 +361,25 @@ class TestBuildingTheDrawing:
                              part, **kwargs)
 
     def test_the_views_are_placed_and_measured_from_the_part(self, session):
-        """A front view of a 120 x 80 x 8 plate spans 120 by 8."""
+        """A 120 x 80 x 8 plate: its `front` view spans 120 by 80 and its
+        `top` view 120 by 8.
+
+        Which reads backwards and is what Inventor does. Its view names are
+        Y-up -- `front` looks down Z and shows the XY plane -- and a recipe's
+        `direction` follows them, so a plate modelled flat on XY has its plan
+        as its front view. Measured on 2027.1, 2026-09-08, by placing one base
+        view per direction; `base.VIEW_AXES` carries the table and
+        `docs/DECISIONS.md` the choice. The two extents differ, which is what
+        makes this a check rather than a coincidence."""
         report = self.build(session, COMPLETE)
         placed = {entry["view"]["name"]: entry["view"] for entry in report["views"]}
-        assert placed["FRONT"]["extent"] == pytest.approx([12.0, 0.8])
-        assert placed["TOP"]["extent"] == pytest.approx([12.0, 8.0])
+        assert placed["FRONT"]["extent"] == pytest.approx([12.0, 8.0])
+        assert placed["TOP"]["extent"] == pytest.approx([12.0, 0.8])
 
     def test_a_views_scale_shrinks_what_it_spans(self, session):
         report = self.build(session, {"name": "D", "template": "t.idw", "views": [
             {"name": "FRONT", "scale": 0.5, "dimension": ["plate_w"]}]})
-        assert report["views"][0]["view"]["extent"] == pytest.approx([6.0, 0.4])
+        assert report["views"][0]["view"]["extent"] == pytest.approx([6.0, 4.0])
 
     def test_the_dimensions_are_retrieved_by_parameter(self, session):
         report = self.build(session, COMPLETE)
@@ -459,8 +472,15 @@ class TestBuildingTheDrawing:
         reading = reading_of(
             DrawingRecipe.model_validate(COMPLETE),
             session.backend.read_drawing(report["document"]))
+        # The recipe asked for FRONT then TOP. A recipe's `front` is Inventor's,
+        # which shows XY, so the reading labels that view the plan and carries
+        # 120 x 80; the recipe's `top` shows XZ and reads as the elevation at
+        # 120 x 8. The pair is what `_overall_from` reconstructs the bounding
+        # box from, so the kind and the extent have to agree -- which is the
+        # whole reason `_as_read` translates both together.
+        assert [view.kind for view in reading.views] == ["top", "front"]
         assert [view.extent for view in reading.views] == [
-            pytest.approx([120.0, 8.0]), pytest.approx([120.0, 80.0])]
+            pytest.approx([120.0, 80.0]), pytest.approx([120.0, 8.0])]
         assert not any("overall size" in warning.get("warning", "")
                        for warning in report["round_trip"]["warnings"])
 
@@ -560,6 +580,39 @@ class TestWhatARetrievedDimensionActuallyStates:
     def test_and_that_is_said_rather_than_left_to_be_noticed(self, session):
         assert any("rather than the parameter" in warning["warning"]
                    for warning in self.built(session)["warnings"])
+
+    KNOWN = {"plate_w", "plate_d", "thk", "hole_d", "corner_r", "edge_margin"}
+
+    def test_a_number_on_the_sheet_is_not_warned_about(self, session):
+        """Measured on Inventor 2027.1, 2026-09-09: a retrieved dimension
+        answers neither `ModelDimension.Parameter.Expression` nor
+        `Parameter.Expression`, so its expression falls back to the text on the
+        sheet -- `'120,00'` for a 120 mm plate, in the seat's own decimal
+        separator. That is never the parameter's name, so warning on
+        "expression != parameter" alone warned about every dimension on every
+        live sheet, which is the fastest way to make a warning ignored.
+
+        **And a number is not always bare**, which took a second run to find:
+        `'R10,00'` for a radius parses as the identifier `R10` and `'n6,60'`
+        for a diameter as `n6`, so sheet decoration read as a formula and the
+        warning came back for every dimension carrying a prefix. Only names the
+        part actually has count."""
+        from inventor_mcp.drafting import _mentions_a_parameter_other_than as formula
+
+        assert formula("plate_w - 2 * edge_margin", "edge_margin", self.KNOWN) is True
+        assert formula("plate_w", "plate_w", self.KNOWN) is False
+        assert formula("120,00", "plate_w", self.KNOWN) is False, \
+            "a number is not a formula"
+        assert formula("6,60 mm", "hole_d", self.KNOWN) is False
+        assert formula("R10,00", "corner_r", self.KNOWN) is False, \
+            "the R is Inventor's radius prefix, not a parameter called R10"
+        assert formula("n6,60", "hole_d", self.KNOWN) is False, \
+            "the diameter glyph is not a parameter called n6"
+        assert formula("", "plate_w", self.KNOWN) is False
+        # A different parameter entirely is still worth saying.
+        assert formula("plate_d", "plate_w", self.KNOWN) is True
+        # And a name nothing in the part has is decoration, whatever it parses as.
+        assert formula("R10", "corner_r", set()) is False
 
     def test_a_parameter_the_model_states_directly_comes_back_as_itself(self, session):
         """Otherwise the warning above would be on everything and mean nothing."""

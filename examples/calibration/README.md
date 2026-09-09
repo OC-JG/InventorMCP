@@ -17,19 +17,39 @@ side of the plane a trim throws away, and that had to be settled before any
 number could mean anything.
 
 **`move_face` and `thicken` are the fifth and sixth, added 2026-09-07, and they
-are at the placeholder for a different reason from the other four: not that no
-example reaches them, but that their COM halves have never executed at all.** So
-there is no Inventor column for their four fixtures yet.
-`docs/INVENTOR_SETUP.md` says what a run has to confirm for each.
+sat at the placeholder for a different reason from the other four: not that no
+example reached them, but that their COM halves had never executed at all.**
+`thicken` came off it on 2026-09-07 and `move_face` on 2026-09-08, each once its
+COM call had been read off the live API rather than guessed, and both landed at
+0.0%. `docs/INVENTOR_SETUP.md` records what each run confirmed.
 
 **`spread_pockets` is here for a third reason and is not calibrating a
-tolerance at all.** `sketch_driven_pattern`'s COM half has never run either,
-but its arithmetic is the rule the other two patterns use and is already
-measured at 0.02, so it sits at 0.02 rather than the placeholder. What its
-fixture asks is a *semantic* question -- whether Inventor also places an
-occurrence on the reference point -- and the answer is an occurrence count
-rather than a volume. It is kept here because this is where the instruments
-live, not because a number needs fitting.
+tolerance at all.** `sketch_driven_pattern`'s arithmetic is the rule the other
+two patterns use and was already measured at 0.02, so it never sat at the
+placeholder. What its fixture asks is a *semantic* question -- whether Inventor
+also places an occurrence on the reference point -- and the answer is an
+occurrence count rather than a volume. It is kept here because this is where the
+instruments live, not because a number needs fitting.
+
+The 2026-09-08 run gave the volume (−1.2000, exactly) and **left the semantic
+question open**, exactly as the fixture's design predicted it would: the
+finished part is `Plate`, `Slot`, `Spread` -- one pattern feature holding its
+occurrences -- so a fifth occurrence sitting on top of the seed would remove
+nothing extra and show up nowhere in the volume.
+
+**Settled later the same day, and not by another fixture.** `describe_feature`
+learned to read the count off the pattern, and `PatternElements` answered **4**
+on a pattern of four points -- which is both answers at once: the seed plus
+three copies, or four copies with one landing on the reference. What told them
+apart was a *rectangular* pattern of three instances, where the total is not in
+doubt: the same collection reads 3 there, so it counts the seed, so four is
+seed-plus-three. **Inventor does not place an occurrence on the reference
+point.** The recipe's assumption holds and the mock's `elsewhere` filter is
+right.
+
+The lesson is worth more than the answer: a number read off an API is not a
+measurement until you know what it counts, and the instrument that calibrated
+it was an operation whose answer was already certain.
 
 Run them with:
 
@@ -58,14 +78,23 @@ the operation being measured.
 | `stepped_split_negative` | `split` | −20.8000 cm³ | −20.8000 cm³ | 0.0% |
 | `origin_plane_split` | `split` | −8.0000 cm³ | −8.0000 cm³ | 0.0% |
 | `shelled_both_ways` | `shell` | −35.1920 cm³ | −35.1920 cm³ | 0.0% |
-| `lifted_face` | `move_face` | +6.4000 cm³ | not yet run | — |
-| `widened_wall` | `move_face` | +0.2400 cm³ | not yet run | — |
-| `thickened_walls` | `thicken` | +1.4400 cm³ | not yet run | — |
-| `thinned_wall` | `thicken` | −0.2400 cm³ | not yet run | — |
-| `spread_pockets` | `sketch_driven_pattern` | −1.2000 cm³ | not yet run | — |
+| `lifted_face` | `move_face` | +6.4000 cm³ | +6.4000 cm³ | 0.0% |
+| `widened_wall` | `move_face` | +0.2400 cm³ | +0.2400 cm³ | 0.0% |
+| `thickened_walls` | `thicken` | +1.4640 cm³ | +1.4640 cm³ | 0.0% |
+| `thinned_wall` | `thicken` | −0.2400 cm³ | −0.2400 cm³ | 0.0% |
+| `spread_pockets` | `sketch_driven_pattern` | −1.2000 cm³ | −1.2000 cm³ | 0.0% |
 
-Measured on Inventor 2027.1, 2026-09-03, except the `move_face`, `thicken` and
-`sketch_driven_pattern` rows, which nothing has run. All four of the original tolerances in `PREDICTED` now
+Measured on Inventor 2027.1 -- the first seven rows on 2026-09-03, the two
+`thicken` rows on 2026-09-07, and the `move_face` and `sketch_driven_pattern`
+rows on 2026-09-08, once the COM calls those three operations need had been read
+off the live objects rather than guessed. **Every fixture in this table now has
+a real Inventor number beside it**, and the last three operations to arrive came
+in at 0.0%.
+
+Both `move_face` rows also answered the question a volume cannot: doubling
+`lift` doubled the change to +12.8000 cm³ and doubling `grow` doubled +0.2400 to
++0.4800, so the distance expressions reach Inventor's own dimensions and those
+features are parametric in fact rather than in name. All four of the original tolerances in `PREDICTED` now
 come from that run rather than from a placeholder: `coil` 0.15, `draft`
 0.20, `emboss` 0.40, `split` 0.05. Each is deliberately looser than its own
 measurement, for reasons recorded beside the table in
@@ -142,7 +171,7 @@ could break.
   edge, and is blind to a cut that took the right amount off the wrong side
   whenever the two halves are near enough in size.
 
-## The two nobody has run
+## The two that were predictions before they were measurements
 
 `lifted_face` and `widened_wall` are the instruments for `move_face`, and they
 are the only fixtures here whose *true* answer is exact rather than estimated. A
@@ -152,26 +181,30 @@ exactly area times distance: 32 cm² × 0.2 cm is 6.4 cm³ for the lifted cap, a
 simulator says 6.4000 and 0.2400, from a dot product of the move against each
 face's own normal, which is the same arithmetic arrived at the same way.
 
-So these two are predictions Inventor can break, in the sense `drafted_block`
-was, and not measurements to be copied down. What the run is worth is not the
-number:
+So these two were predictions Inventor could break, in the sense `drafted_block`
+was, rather than measurements to be copied down. **On 2026-09-08 it did not
+break either**, and what the run was worth was not the number:
 
-- **`lifted_face` asks whether the parametric chain reaches the feature.** The
-  distance is the parameter `lift`, and the lesson of defect 11 is that a work
-  axis can be built, measured, and still be parametric in name only. Change
-  `lift` and the volume has to change with it.
-- **`widened_wall` asks two questions its partner cannot.** Its face is picked
-  out of four by a selector rather than by being the only cap, so it fails if
-  the COM selector reaches a different face than the simulator's; and it moves
-  along an axis that is not the extrude's own, so it fails if Inventor reads the
-  direction relative to the face rather than to the model. Its 0.24 cm³ is
-  deliberately small beside the 19.2 cm³ plate it sits on: a move that took the
-  whole wall with it is then a large fraction rather than a rounding error.
+- **`lifted_face` asked whether the parametric chain reaches the feature**, and
+  it does. The distance is the parameter `lift`, and the lesson of defect 11 is
+  that a work axis can be built, measured, and still be parametric in name only.
+  Doubling `lift` doubled the volume to +12.8000 cm³, so the expression reaches
+  Inventor's own dimension. That is the reading a volume alone cannot give, and
+  it is the reason this fixture is driven by a parameter rather than a literal.
+- **`widened_wall` asked two questions its partner cannot**, and answered both.
+  Its face is picked out of four by a selector rather than by being the only
+  cap, so it would have failed if the COM selector reached a different face than
+  the simulator's; and it moves along an axis that is not the extrude's own, so
+  it would have failed if Inventor read the direction relative to the face
+  rather than to the model. Its 0.24 cm³ is deliberately small beside the
+  19.2 cm³ plate it sits on: a move that took the whole wall with it would have
+  been a large fraction rather than a rounding error. +0.2400, and doubling
+  `grow` gave +0.4800.
 
-Neither is tractable as an estimate to loosen. If a run disagrees on either, the
-answer is a fault to find rather than a tolerance to widen — which is why
-`PREDICTED["move_face"]` should come down from 0.50 to something like an
-extrude's 0.02 the moment a run agrees, rather than being split down the middle.
+Neither was tractable as an estimate to loosen. Had a run disagreed on either,
+the answer would have been a fault to find rather than a tolerance to widen --
+which is why `PREDICTED["move_face"]` went from 0.50 straight to an extrude's
+0.02 rather than being split down the middle.
 
 What both leave untouched is the assumption underneath the arithmetic: that the
 moved face keeps its area. It does on a prism, which is what these measure. It
@@ -181,7 +214,35 @@ fixture for it cannot go in this directory as it stands, because the rule these
 recipes are checked against is that nothing before the operation under test may
 be looser than an extrude — and a fillet is 0.30.
 
-## The two that ask a question rather than measure an estimate
+## The two that asked a question rather than measured an estimate
+
+*Both answered on 2026-09-07, Inventor 2027.1, and both fixtures now agree with
+Inventor to four decimals.*
+
+**The side is confirmed.** `thinned_wall` removed **−0.2400 cm³** against
+−0.2400 derived, so a `negative` layer does lie behind the face and
+`THICKEN_SHARE` has it right. The three-way reading was what made that a
+measurement rather than a number coming out close: 0.0000 would have meant the
+layer landed outside the solid, and any positive figure something else again.
+
+**And the corners close.** `thickened_walls` came back **+1.4640** where the sum
+of the four layers is 1.4400. Inventor fills the 1 × 1 × 6 mm notch where two
+layers meet, so the simulator's figure was 1.7% low on any multi-face thicken —
+and it is not low any more. Two faces whose normals are perpendicular share an
+edge running along the cross product of the two, and the notch is the layer's
+own thickness squared swept along that edge: `t² × h` per shared edge, four of
+them, 0.024 cm³. `_thicken_corners` derives it and the two figures now agree.
+
+The sign is the same either way, which looks wrong and is not. Growing four
+walls leaves gaps to fill; thinning four walls makes the layers *overlap* at the
+corners, so the union is the sum minus the overlap — and since the change is
+negative, subtracting less means adding. Both come out as `+corners`.
+
+`PREDICTED["thicken"]` is 0.02 now, the same as an extrude and a shell, because
+what is left is exact prism arithmetic.
+
+The original reasoning follows, because the way these two fixtures were shaped
+is why the answers were distinguishable at all.
 
 `thickened_walls` and `thinned_wall` are the instruments for `thicken`, and
 neither is really calibrating arithmetic. The arithmetic is exact per face — a
@@ -193,15 +254,16 @@ cross-check and not a second measurement.
 
 What is genuinely unmeasured is elsewhere, and each fixture isolates one of it.
 
-- **`thickened_walls` asks about the corners.** Four walls grown 1 mm outward is
-  the case a single named direction cannot express, and it is where the layers
-  stop being independent. They do not meet: the +X wall's layer covers x 40→41
-  over y −20→20, the +Y wall's covers y 20→21 over x −40→40, and the 1 × 1 × 6
-  mm notch at each corner belongs to neither. So the answer is **1.4400 cm³** if
-  Inventor leaves those notches and **1.4640** if it closes them — 4 × 6 mm³
-  apart, or 1.7%. The simulator says 1.4400 because summing face areas is what
-  it can defend, not because anybody knows. Either result is a fact worth
-  recording; what would be wrong is quoting one as though it had been measured.
+- **`thickened_walls` asked about the corners.** Four walls grown 1 mm outward
+  is the case a single named direction cannot express, and it is where the
+  layers stop being independent. They do not meet: the +X wall's layer covers
+  x 40→41 over y −20→20, the +Y wall's covers y 20→21 over x −40→40, and the
+  1 × 1 × 6 mm notch at each corner belongs to neither. So the answer was
+  **1.4400 cm³** if Inventor left those notches and **1.4640** if it closed them
+  — 4 × 6 mm³ apart, or 1.7%. The simulator said 1.4400 because summing face
+  areas was what it could defend, not because anybody knew. **Inventor closes
+  them: 1.4640.** Both candidates were written down before the run, which is the
+  only reason the answer took one run instead of three.
 
 - **`thinned_wall` asks about the side**, which no magnitude reveals.
   `THICKEN_SHARE` in `backend/base.py` says a `negative` layer lies behind the

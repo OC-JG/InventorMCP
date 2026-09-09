@@ -20,12 +20,14 @@ SketchDrivenPattern. Work planes, work axes, work points and material are
 covered too and are not `Features`
 collections, so they sit outside the count. `boss` and
 `rib` exist as recipe operations but are built from primitives, because neither
-Inventor feature can be created through the API -- see below. **MoveFace,
-Thicken and SketchDrivenPattern are the three on that list whose COM calls have
-never executed** -- all added 2026-09-07, measured in the simulator, unmeasured
-live, and kept in the count rather than out of it because the schema offers them
-to a caller either way. Tier 1c below says what that means, and for Thicken it
-also says which half of Inventor's feature is reachable at all.
+Inventor feature can be created through the API -- see below. **MoveFace, Thicken
+and SketchDrivenPattern were the three on that list whose COM calls had never
+executed, and all three ran on Inventor 2027.1 over 2026-09-07 and -08** --
+added in the simulator first, then measured live, and each of them cost more
+runs in the call than in the arithmetic. Tier 1c below says what each run
+answered and what it left open, and for Thicken it also says which half of
+Inventor's feature is reachable at all. Thread is now the one operation in this
+server with nothing measured about it.
 
 Twenty of fifty-three flatters the gap in one direction and overstates it in
 the other: the covered ones are the high-frequency core of solid
@@ -126,10 +128,12 @@ also passes the simulator rehearsal.
     were already implemented and are confirmed here: 1.9792 cm^3 for a 6 circle
     swept 70 mm, and 13.6136 cm^3 for a 30-to-10 loft over 40 mm.
 
-### Tier 1c -- landed in the simulator, unmeasured against Inventor
+### Tier 1c -- landed in the simulator, then measured against Inventor
 
 7. **MoveFace.** *Added 2026-09-07 as `{"op":"move_face",...}`. Exact in the
-   simulator; its COM half has never executed.* Taken ahead of the other two
+   simulator, and **measured exact on Inventor 2027.1 on 2026-09-08** -- both
+   fixtures at 0.0%, and doubling each driving parameter doubled the change, so
+   the distance expression reaches Inventor's own dimension.* Taken ahead of the other two
    Tier 2 items because it is the only one that adds a kind of reach rather than
    a feature: it is the one route to changing imported geometry, and the server
    could read a STEP part for DFM analysis and then alter nothing about it,
@@ -158,15 +162,54 @@ also passes the simulator rehearsal.
 
    **What is unmeasured here is unusual, and worth naming exactly.** Every other
    COM call in this server was read off a type library before it was written.
-   This one was not: what is recorded above is that `MoveFaceFeatures` has `Add`
-   and `CreateDefinition`, and *not* what the definition's setter is called. So
-   the backend tries three spellings, each of which can only mean direction and
-   distance, and names every one it tried when none of them work -- rather than
-   one guess that comes back as a bare "Exception occurred". A free-drag or
+   This one was not: what was recorded above is that `MoveFaceFeatures` has
+   `Add` and `CreateDefinition`, and *not* what the definition's setter is
+   called. So the backend tries spellings, each of which can only mean direction
+   and distance, and names every one it tried when none work -- rather than one
+   guess that comes back as a bare "Exception occurred". A free-drag or
    point-to-point setter is deliberately not among them: one of those accepting
    a direction and a distance by accident is exactly the quietly wrong part this
-   file exists to catch. `docs/INVENTOR_SETUP.md` has what a live run must
-   confirm, and `scripts/com_signatures.py --search MoveFace` is where it starts.
+   file exists to catch.
+
+   **A live run on 2027.1 on 2026-09-07 said all three are absent**, and the
+   type library will not answer the follow-up. Asking the live
+   `MoveFaceFeatures` on 2026-09-08 confirmed it has exactly two methods --
+   `Add(Definition)` and `CreateDefinition(1 argument)` -- and that the one
+   argument is a **`FaceCollection`**: given a generic `ObjectCollection` it
+   answers "Type mismatch". The backend has always built the right kind, which
+   is why the acceptance run reached a definition and failed a step later.
+   `MoveFaceDefinition`'s own `ITypeInfo` then gave the interface the type
+   library will not: `Faces` (get/put), a **read-only** `MoveFaceType`, a
+   `MoveFaceTypeDefinition` that is **`None`** on a fresh definition, a settable
+   `AutomaticBlending`, `Copy`, and three setters --
+   **`SetDirectionAndDistanceMoveType`** with three arguments and none optional,
+   `SetPlanarMoveType` with three and one optional, and `SetFreeMoveType` with
+   one.
+
+   So the setter is a fourth spelling, and the type is *implied* rather than
+   assigned: calling one of those three is what makes a definition that kind.
+   Not setting the type on the way past -- decided when it looked like an
+   unmeasured semantic claim -- turned out to be right for a reason nobody had.
+
+   **And the parameter names came back on the second probe run**, from the same
+   `GetNames` call that gives the arity:
+   `SetDirectionAndDistanceMoveType(Distance, Direction, DirectionReversed)`.
+   The distance comes *first*, which is not the order any version of this code
+   assumed -- so it lives in `_MOVE_FACE_SETTER_ARGUMENTS` as data, a test pins
+   it, and `_check_move_face_arguments` compares it against the live object
+   before every call. `DirectionReversed` is what `flip` was waiting for: it
+   went in as `-(expression)` while no reversal property had been read, and the
+   distance now reaches Inventor as the caller wrote it. The two excluded
+   setters are measured to be point-to-point and a transformation matrix, so
+   the narrow candidate list was right provably rather than presumably.
+
+   **And then it built.** *(2026-09-08.)* `lifted_face` +6.4000 cm^3 and
+   `widened_wall` +0.2400, both 0.0% against figures derived beforehand, and
+   doubling each driving parameter doubled the change -- so the distance
+   expression reaches Inventor's own dimension and the feature is parametric in
+   fact rather than in name. `PREDICTED["move_face"]` came down 0.50 -> 0.02.
+   `docs/INVENTOR_SETUP.md` has the interface table and what each fixture was
+   shaped to catch.
 
    *Settled on paper 2026-09-08, when the `MoveFaceDefinition` page was read.*
    The setter is `SetDirectionAndDistanceMoveType`; none of the three
@@ -215,37 +258,57 @@ also passes the simulator rehearsal.
    direction is arbitrary relative to the face so the dot product has no answer,
    while here the direction *is* the face's own normal.
 
-   **What is genuinely unmeasured is a side and a corner, not a number.**
-   `THICKEN_SHARE` in `backend/base.py` says which side of a face a `negative`
-   layer lies on, and therefore that `positive` + `cut` and `negative` + `join`
-   do nothing at all -- the layer is where the material already is not, or
-   already is. That is sound set algebra about a boolean against a slab and it
-   is silent on whether Inventor agrees, so the two cancelling pairs are warned
-   about at rehearsal rather than refused: a refusal would prevent the run that
-   settles it. And four walls grown outward leave a 1 x 1 x 6 mm notch at each
-   corner belonging to no wall, so the answer is 1.4400 cm^3 if Inventor leaves
-   them and 1.4640 if it closes them. `examples/calibration/thickened_walls.json`
-   and `thinned_wall.json` isolate one question each; a tolerance cannot catch
-   being wrong about a side, which is what defect 5 was.
+   **The side and the corner were the unmeasured parts, and both were measured
+   on Inventor 2027.1 on 2026-09-07.** `THICKEN_SHARE` in `backend/base.py` says
+   which side of a face a `negative` layer lies on, and therefore that
+   `positive` + `cut` and `negative` + `join` do nothing at all -- the layer is
+   where the material already is not, or already is. That was sound set algebra
+   about a boolean against a slab and silent on whether Inventor agreed, so the
+   two cancelling pairs are warned about at rehearsal rather than refused: a
+   refusal would have prevented the run that settled it.
+   `examples/calibration/thinned_wall.json` isolated the side and removed
+   **-0.2400 cm^3** against -0.2400 derived, so the table has it right. A
+   tolerance could not have caught being wrong about a side, which is what
+   defect 5 was; three distinguishable numbers could.
 
-   The COM call has never executed. Its signature *has* been read since
-   2026-09-08 -- off Autodesk's published 2027 reference, not a type library:
+   The corner was the other one, and it went the other way. Four walls grown
+   outward leave a 1 x 1 x 6 mm notch at each corner belonging to no wall, so
+   the answer was 1.4400 cm^3 if Inventor left them and 1.4640 if it closed
+   them. `examples/calibration/thickened_walls.json` came back at **1.4640**:
+   Inventor closes them, and the simulator was 1.7% low on every multi-face
+   thicken until `_thicken_corners` added `(share x t)^2 x h` per shared edge.
+   Both fixtures now agree with Inventor to four decimals and
+   `PREDICTED["thicken"]` is 0.02, an extrude's tolerance.
+
+   **The COM call is measured too, and it was not what the code assumed.**
    `ThickenFeatures.Add(Faces, Distance, ExtentDirection, Operation,
-   [AutomaticFaceChain], [CreateVerticalSurfaces], [AutomaticBlending])`, the
-   three Booleans defaulting False, and **no definition object at all**. The
-   backend used to try a `CreateThickenDefinition` first and, failing that,
-   pass a `True` into a sixth slot it believed was a `VerifyResults` flag; that
-   slot is `CreateVerticalSurfaces`, which adds side faces nothing here
-   predicts. Both are gone, and the call is the published order with the
-   Booleans left to default and then passed explicitly as False. The
-   factor-of-four guard on the result stays until a run has confirmed it, because
-   a published order is a second source and not a measurement -- and because
-   the *side* a `negative` layer lies on was never an argument-order question.
+   [AutomaticFaceChain], [CreateVerticalSurfaces], [AutomaticBlending])`. There
+   is no `CreateThickenDefinition` on this release, so the definition route the
+   backend tried first was reaching for a method that has never existed; and
+   there is no `IsOffset` argument, so the `False` passed in slot 4 for the
+   offset mode's sake was landing on `AutomaticFaceChain` -- where `False` is
+   also correct, because chaining would extend the selection past the faces the
+   selector named. It worked for a reason that was not the reason given. The
+   factor-of-four result guard that existed because a variant and two enum
+   *integers* can be misordered without raising is gone with the attempt list:
+   `_call_named` puts the argument names at the call site, and a permutation is
+   not possible when the names are there.
+
+   Autodesk's published reference gives that same signature, arguments and
+   optionality included, and says in its own table that Thicken has no
+   definition object at all -- read 2026-09-08 off `ThickenFeatures_Add.htm`,
+   the day after the run. So the measurement has a second source behind it, and
+   this is the one Phase 3 surface where the type library, the reference and a
+   built part all agree.
 
 5. **SketchDrivenPattern.** *Added 2026-09-07 as
    `{"op":"sketch_driven_pattern",...}`. The simulator **places** its
-   occurrences, which no other pattern here does; the COM call has never
-   executed.*
+   occurrences, which no other pattern here does, and the COM call **built and
+   measured exactly on 2026-09-08** at -1.2000 cm^3. What the run did not
+   settle is the occurrence count, which is what the fixture was really for --
+   the count off the pattern is where that answer is, which
+   `describe_feature` reads now -- so the question needs a run rather than more
+   code.*
 
    **The gap was narrower than this entry used to claim.** It said anything
    irregular "has to be enumerated by hand", and that reads as a bigger absence
@@ -292,11 +355,39 @@ also passes the simulator rehearsal.
    shell's cavity, and a shell is not a thing anyone patterns.
 
    `PREDICTED["sketch_driven_pattern"]` is **0.02 rather than the placeholder**,
-   which looks inconsistent beside the other two unmeasured operations and is
-   not. Its arithmetic is the rule the other patterns use and is measured. What
-   is unmeasured is whether Inventor also places an occurrence on the reference
-   point -- an off-by-one *occurrence*, 33% on a three-point pattern -- and a
-   tight tolerance reports that where 0.5 would hide it.
+   which looks inconsistent beside `move_face` and is not. Its arithmetic is the
+   rule the other patterns use and is measured. What is unmeasured is whether
+   Inventor also places an occurrence on the reference point -- an off-by-one
+   *occurrence*, 33% on a three-point pattern -- and a tight tolerance reports
+   that where 0.5 would hide it.
+
+   **The COM call was run on 2027.1 on 2026-09-07 and rejected, on its shape --
+   and measured in full the next day.** `SketchDrivenPatternFeatures.Add` takes
+   **one Definition**, not the collection, sketch and point this passed through
+   `_patterned`, so the call could never have worked here.
+
+   Where the definition comes from is not in the type library at all --
+   `--search SketchDrivenPattern` publishes `Add` and nothing else -- but the
+   live object's own `ITypeInfo` lists a `CreateDefinition` taking 4 arguments,
+   2 of them optional, and `CreateDefinition(parents, sketch, point)` produces
+   a definition carrying `ParentFeatures`, `Sketch`, `BasePoint`, a settable
+   `ComputeType`, `Operation`, `ReferenceFaces`, `AffectedBodies`,
+   `AffectedOccurrences` and a read-only `PatternOfBody`. The backend makes
+   that one call, named, and sets the compute type on the definition before
+   `Add`. `scripts/probe_definitions.py` is what asked.
+
+   **It built on 2026-09-08 and measured -1.2000 cm^3 exactly**, which was
+   never the interesting part. The occurrence count still is, and that run did
+   not settle it: the finished part reads `Plate`, `Slot`, `Spread`, because a
+   sketch-driven pattern is *one* feature holding its occurrences -- so counting
+   features cannot count occurrences. The count on the pattern itself is what
+   would, and `describe_feature` reads it: it asks a pattern feature for
+   `Occurrences` and then `PatternElements` and reports the number under
+   `pattern_elements` with the name that answered. **Answered on 2026-09-08**:
+   `PatternElements` counts the seed -- calibrated against a rectangular
+   pattern of three instances that reads 3 -- and the sketch-driven pattern
+   reads 4, which is the seed plus three copies. So Inventor does *not* pattern
+   the reference point onto itself and the recipe's assumption was right.
 
 ### Tier 2 -- frequently wanted, no current workaround
 
@@ -480,11 +571,40 @@ Each of these was hit while building real parts, and each passed
    session" and tells the caller to close it in Inventor -- rather than offering
    `close_part(document=None)`, which would be worse than saying nothing.
 
-4. **`capture_view` orientation names do not describe what you get.** On a part
+4. ~~**`capture_view` orientation names do not describe what you get.** On a part
    built on XY and extruded in +Z, `front` and `back` return top and bottom views,
-   and `top` returns a side elevation with **Z rendered inverted** -- which reads
-   as upside-down text that is not upside down. Anything checking its own work
-   from a render can be misled; coordinates must be measured instead.
+   and `top` returns a side elevation.~~ *Settled 2026-09-09, by deciding rather
+   than by fixing.* The names are **Inventor's**, and Inventor is Y-up: `front`
+   shows the XY plane, `top` shows XZ, `left` and `right` show YZ. On a part
+   modelled Z-up that means `front` is the plan -- which reads backwards and is
+   exactly what a person placing a base view by hand gets from the same seat.
+
+   The alternative was a vocabulary of our own that disagreed with every sheet
+   Inventor draws, and it could not be reached by picking different orientation
+   enums anyway: `left` needs a quarter turn *within* the YZ plane and no enum
+   does that. So the naming follows Inventor everywhere -- `capture_view`, a
+   drawing recipe's `direction`, and `base.VIEW_AXES` -- and the price is
+   written down instead of being discovered. `docs/DECISIONS.md` has the choice
+   and defect 16 the measurement behind it.
+
+   **And the half that was still open is answered.** *(2026-09-09, off the
+   drawing views' own cameras.)* Every view has +Y up the screen except the
+   top and bottom pair, which look down and up the Y axis -- where Y cannot be
+   up -- and put -Z and +Z there instead:
+
+   | direction | eye | up |
+   |---|---|---|
+   | front | (0, 0, +29) | (0, +1, 0) |
+   | rear | (0, 0, -28) | (0, +1, 0) |
+   | top | (0, +29, 0) | (0, 0, **-1**) |
+   | bottom | (0, -29, 0) | (0, 0, **+1**) |
+   | left | (-29, 0, 0) | (0, +1, 0) |
+   | right | (+29, 0, 0) | (0, +1, 0) |
+
+   So "`top` renders Z inverted" is Inventor being consistently Y-up, not a
+   fault: a view looking down the Y axis has to put something else up the
+   screen, and -Z is what an ISO top view uses. Nothing to fix, and now
+   nothing unexplained.
 
 5. **A `trim` split threw away the opposite side to the one documented.**
    *Fixed and confirmed live, 2026-09-03: all three fixtures now agree with
@@ -788,3 +908,240 @@ Each of these was hit while building real parts, and each passed
     the three places -- schema, backend, rehearsal -- to the same two kinds.
     The fix proper is a schema field and the simulator learning to tilt a
     plane, which the roadmap carries as one Phase 2 item.
+
+13. **A promotion the simulator performed happily failed on Inventor, on the
+    word.** *Measured on Inventor 2027.1, 2026-09-08, by
+    `scripts/live_acceptance.py --only promotion`: "The feature 'Block' has no
+    drivable property 'taper'."* The recipe field is `taper`; Inventor's
+    `ExtrudeDefinition` calls that property `TaperAngle`. The simulator matches
+    a promotion against its own feature detail, which is keyed by the recipe's
+    field names, so `taper` was right there -- and the COM backend matched the
+    request against Inventor's property names by normalised equality alone, so
+    it was nowhere. Each half was self-consistent and the two accepted
+    different words, which is defect 5's shape exactly.
+
+    Nothing was silently wrong here, which is the one good thing about it: the
+    promotion refused rather than naming the wrong value. The refusal was the
+    unhelpful kind, though -- "no drivable property" with nothing about what
+    the feature does carry -- and that is what turned a wrong word into a spent
+    seat.
+
+    `PROMOTION_ALIASES` in `backend/base.py` now holds the words that differ
+    (`taper`, `diameter`, the counterbore and countersink sizes, the drill's
+    bottom angle) and **both** backends resolve through it, so either
+    vocabulary works on either side: the shared table lives above them for the
+    same reason `THICKEN_SHARE` does. A name that merely *starts with* the
+    request is tried second and only when exactly one of them is there, so
+    `counterbore` asks which rather than choosing between a diameter and a
+    depth. The refusal now lists the properties the feature actually carries,
+    `promote_parameters` reports the hint beside the error rather than
+    dropping it, and `tests/test_promotion_names.py` pins each word against the
+    name Inventor answers to. The extent is also searched now: an extrude's
+    taper is on its definition and its distance is not, so
+    `definition.Extent.Distance` was unreachable before and would have failed
+    the same way.
+
+    **And the same promotion failed a second time, on the unit.** *(Measured
+    2026-09-08, on the run after the fix above: "Inventor refused the
+    expression '1.5 deg' for 'draft_a' (units 'mm')".)* `set_parameter`
+    defaults to millimetres and a taper's expression is an angle, so the
+    promotion created a length parameter and handed it `1.5 deg`. The unit now
+    comes off the property being promoted -- `Parameter.Units` through
+    `unit_from_inventor`, falling back to a length because every other
+    promotable property is one. The simulator had this right all along: it
+    resolves the expression's own dimension and reported `deg`. Same divergence
+    as the word, one layer down.
+
+14. **A pattern's element count was read and could not be interpreted.**
+    *(Measured 2026-09-08.)* `describe_feature` asks a pattern feature for its
+    occurrence collection, `spread_pockets` was built to ask whether Inventor
+    also patterns the reference point, and the read came back **4** on a
+    pattern of four points -- which is *both* answers at once: the seed plus
+    three copies, or four copies with one landing on the reference. A number
+    whose meaning is unknown is not a measurement, and this one was reported as
+    a failure when it was neither a pass nor a fail.
+
+    It is also a warning about a word. `occurrences` already means two things
+    here -- a rectangular pattern's feature detail counts every instance
+    *including* the seed (`count1 * count2`), and a sketch-driven pattern's
+    counts the copies alone -- so the live read has its own name,
+    `pattern_elements`, with `pattern_elements_from` saying which collection
+    answered. Reusing `occurrences` would have made three meanings share one
+    key.
+
+    What settles it is a calibration rather than a guess: `_seed_is_counted`
+    in `scripts/live_acceptance.py` builds a *rectangular* pattern of three
+    instances, where the total is not in doubt, and reads the same collection
+    -- 3 means it counts the seed, 2 means it counts only the copies. The
+    sketch-driven expectation is derived from that, so a release counting the
+    other way does not read as a defect and an uncalibrated one concludes
+    nothing.
+
+    **And with the calibration in place the run answered the question.**
+    *(2026-09-08: "PatternElements counts the seed: a 3-instance rectangular
+    pattern reads 3", and the sketch-driven pattern reads 4.)* Four is the seed
+    plus three copies, so **Inventor does not put an occurrence on the
+    reference point** -- the recipe's assumption holds, four points describe
+    four pockets, and the `elsewhere` filter in the mock's
+    `sketch_driven_pattern` that excludes the reference is right. The last
+    unmeasured thing about that operation is measured, and it took a
+    calibration and not another fixture.
+
+15. **Not one drawing view could be placed, and the reason was never in the
+    drawing.** *(Measured 2026-09-08: three views, three refusals, each
+    "Placing the view failed: Exception occurred." and nothing else.)* A
+    drawing view is a *reference to a model file* -- the sheet records which
+    document it draws and re-reads it on every open -- and the part being drawn
+    had only ever existed in memory, because `build_drawing` builds it and
+    nothing saved it. Inventor cannot store a reference to a document with no
+    file, and says so with the message it says everything with.
+
+    `place_view` checks it before the call now and refuses by name, because
+    Inventor's own answer cannot: "the part has not been saved, so there is no
+    file for a drawing view to reference". `build_drawing` and
+    `build_drawing_from_recipe` take a `part_path` for where to put it, kept a
+    separate argument rather than derived from the recipe's name because
+    writing a file is the caller's decision -- a part that already has a path
+    keeps it and nothing is overwritten. And the base-view call now reports
+    everything it was given when it fails at all: the model's file, the
+    position in centimetres beside the sheet's own size, the scale, and the
+    two enum names. Each of those has been a candidate cause and none of them
+    is visible in "Exception occurred".
+
+    The dimension-retrieval design is still unmeasured, and this is why: with
+    no views on the sheet, `GetRetrievableAnnotations2` was never reached. The
+    four failures after the first were all the same failure.
+
+    **The run after the fix placed all three**, with Inventor's own extents on
+    them, so the drawing surface now reaches its second question -- and found
+    two more things, below.
+
+16. ~~**A drawing view's `front` is the plan, not the elevation.**~~ *Measured
+    2026-09-08, settled 2026-09-09 by adopting Inventor's naming.* A 120 x 80 x
+    8 mm plate, one base view per direction, read off the sheet: `front` and
+    `rear` span 12 x 8 cm (**XY**, the plan), `top` and `bottom` span 12 x 0.8
+    (**XZ**, the elevation), `left` and `right` span 0.8 x 8 (**YZ**, with Z
+    across and Y up). Inventor's view names are Y-up -- its front view looks
+    down Z -- and every recipe here models Z-up.
+
+    **Two vocabularies, and no enum reconciles them.** Swapping `front` for
+    `kTopViewOrientation` fixes four of the six; `left` and `right` are on the
+    right plane already and turned a quarter turn inside it, which no
+    orientation enum changes. The choice was therefore between Inventor's
+    naming and a camera-built vocabulary of our own, and Inventor's won: a
+    recipe asking for `front` now gets what a person placing a base view by
+    hand gets, `capture_view` and a drawing sheet of the same part agree, and
+    both halves of the round trip measure the same axes.
+
+    One table, `base.VIEW_AXES`, above the three places that each had a copy --
+    `drafting.py` writing a sheet, the simulator measuring a view's extent, and
+    the acceptance check's expectations. `docs/DECISIONS.md` records the choice
+    and what it costs.
+
+    **The reading side deliberately did not change.** A `DrawingReading`'s
+    `kind` is the view *as the sheet labels it*, which is the ISO drafting
+    vocabulary a person reads with: a supplier's FRONT view is an elevation.
+    Sharing one table would have made every third-party FRONT elevation
+    reconstruct as a plan. `drafting._VIEW_KINDS` is the single place the two
+    meet, and it transposes the extent for `left` and `right` because their
+    planes agree and their axis order does not.
+
+    **And the last open half was answered by the same mechanism.** An extent is
+    a size, so it settles which plane a view shows and never which way is up
+    inside it. The *camera* settles both, and it is readable: `place_view` and
+    `read_drawing` report each view's eye, target and up vector, and defect 4
+    above has the measured table. Inventor is consistently Y-up, `top` puts -Z
+    up the screen because a view down the Y axis must put something else
+    there, and the observation defect 4 could not explain is a convention.
+
+    **One thing that is *not* readable, measured the same run:**
+    `DrawingView.ViewOrientationType` answered nothing on any of the seven
+    views, base or projected. So a view's direction comes off its camera now,
+    with the enum kept behind it for a release that has it and
+    `direction_from` in the detail saying which answered -- a direction
+    derived from a camera and one Inventor labelled are different kinds of
+    evidence. `tests/test_view_axes.py` holds the mapping against that run's
+    own numbers.
+
+17. **Retrieval reported "0 of 0 dimensions" three times and the reason was
+    already in the result.** *(2026-09-08.)* `build_drawing` catches each
+    view's retrieval failure into `findings`, the COM backend goes to real
+    trouble over those messages -- which route ran, how many annotations were
+    offered, which parameters they named -- and the acceptance check printed
+    none of them. A check that hides the answer it was given is worse than one
+    that never asked.
+
+    It prints every finding before it asserts anything now. And the one path
+    that could return an empty list with no reason at all -- a legacy retrieval
+    route that ran, raised nothing and put no dimension on the sheet -- raises
+    instead, naming the route and what it was asked for. `0 of 0` was never a
+    measurement of anything.
+
+18. **A retrieved dimension is known by the parameter its model dimension's
+    *expression* names, not by the parameter's own name.** *(Measured
+    2026-09-08 and fixed 2026-09-09; the first run of the whole drawing surface
+    to reach retrieval at all.)* `GetRetrievableAnnotations2` worked, and every
+    annotation it offered named a parameter -- `d0, d1, d4, d5, d6, d7, d8,
+    d9`. A sketch dimension is driven by a **model** parameter, and the user
+    parameter a recipe asks for is what that model parameter's *expression*
+    is. So matching on the name found nothing on any part this server builds,
+    and the design read as unmeasurable when it was one indirection out.
+
+    The match is name first, expression second, and the expression test is
+    narrow on purpose: a dimension states a parameter only when its expression
+    **is** that parameter, so `plate_w` and `plate_w * 1 mm` state 120 and
+    `plate_w - 2 * edge_margin` states 96 and is a statement of neither name in
+    it. **Measured working**: two of two retrieved dimensions came back known
+    by their parameters, which is the fact the whole choose-then-retrieve
+    design rests on and the first evidence for it.
+
+    Two things the same run then showed about what a *retrieved* dimension
+    will and will not say. It answers neither
+    `ModelDimension.Parameter.Expression` nor `Parameter.Expression`, so a
+    dimension's expression falls back to the text on the sheet -- `'120,00'`,
+    in the seat's own decimal separator. Nothing parses that (a dimension's
+    value comes from `ModelValue`, a float), but the warning about a sheet
+    stating something other than the parameter asked for compared the
+    expression against the parameter's name, so it fired for **every**
+    dimension on every live sheet. It now fires only where the expression
+    references parameters and they are not the one asked for; a bare number
+    references none. Under the 2026.1 route it should never fire at all, since
+    an annotation is only chosen when its expression *is* the wanted parameter.
+
+19. **Four parameters did not reach the sheet, and the recipe was asking for
+    them on the wrong views.** *(Measured 2026-09-08, fixed 2026-09-09.)*
+    A retrieval can only offer what the view actually *shows*: `thk` is the
+    extrude's distance along Z and cannot be dimensioned on a view of the XY
+    plane, and `plate_d` and `corner_r` are dimensions of the XY outline and
+    cannot be shown on a 120 x 8 elevation. `examples/drawings/
+    mounting_plate.json` had them the other way round, because it was written
+    when `front` was believed to mean the elevation -- so defect 16's naming
+    decision reaches into the shipped example, and this is what it cost.
+
+    `edge_margin` is the fifth and stays where it is: the model states it only
+    inside `plate_w - 2 * edge_margin`, so no model dimension states 12 and no
+    retrieval can produce one. It is in the recipe deliberately, as the live
+    demonstration of that, and `live_acceptance.py --only drawing` names it as
+    the one parameter expected not to arrive rather than counting it as a
+    failure.
+
+20. **A refused sketch constraint claimed a degree of freedom nobody had
+    measured.** *(Corrected 2026-09-09.)* Every live run of `hex_standoff`
+    printed *"equal_length(line1, line6) was refused; the sketch keeps a
+    degree of freedom"* -- and the code's own comment beside it says that
+    refusal is the polygon's redundant closing equality. A hexagon's sixth
+    equal-length pair adds nothing once the other five and the across-flats
+    dimension are in, so Inventor rejects it and the sketch is fully
+    constrained without it. The warning was asserting a consequence of the
+    refusal rather than reading one, on every run, for the one case where it
+    was wrong.
+
+    Inventor has no degrees-of-freedom count for a sketch -- `ConstraintStatus`
+    is the whole of the evidence, and `GetDegreesOfFreedom` belongs to an
+    assembly occurrence -- so the reading has to be "is this sketch fully
+    constrained", and it only means something on a *finished* sketch. The
+    per-refusal line states what happened and nothing more; `build_sketch` asks
+    the finished sketch and says which it was: every refusal redundant, a
+    freedom genuinely left behind (a warning, since a parameter change can then
+    move geometry the recipe did not mean to move), or a release that would not
+    say.

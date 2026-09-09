@@ -268,3 +268,142 @@ class TestTheLimitsTheirPonytailNames:
         # selector aimed there finds it. Its area is unchanged, so this second
         # move is another 6.4 cm^3.
         assert volume(out) == pytest.approx(19.2 + 64.0 + 6.4, abs=5e-6)
+
+
+class TestReadingWhatAnArgumentIsCalled:
+    """`_parameter_names`, which is how the COM half resolves by name.
+
+    Tested here even though the code it serves is Windows-only, because what it
+    does is arithmetic on a tuple and the arithmetic was wrong. `ITypeInfo`'s
+    `GetNames` returns the member's name *followed by* its parameters' names,
+    and the first version returned that tuple whole -- so `parameters[2]` read
+    as "the third argument" and was the second. A value passed into a slot
+    nobody had identified is exactly what resolving by name exists to prevent,
+    so the off-by-one is pinned rather than trusted.
+
+    The fakes stand in for pywin32's `PyITypeInfo`. They are the four calls
+    `_parameter_names` makes and nothing else -- a real COM object is not
+    needed to prove which end of a tuple is which.
+    """
+
+    class FakeFunc:
+        def __init__(self, memid):
+            self.memid = memid
+
+    class FakeAttr:
+        def __init__(self, count):
+            self.cFuncs = count
+
+    class FakeTypeInfo:
+        """`members` maps a name to its parameter names, in declaration order."""
+
+        def __init__(self, members):
+            self._members = list(members.items())
+
+        def GetTypeAttr(self):
+            return TestReadingWhatAnArgumentIsCalled.FakeAttr(len(self._members))
+
+        def GetFuncDesc(self, index):
+            return TestReadingWhatAnArgumentIsCalled.FakeFunc(index)
+
+        def GetNames(self, memid):
+            name, parameters = self._members[memid]
+            return (name, *parameters)
+
+    class FakeOle:
+        def __init__(self, info):
+            self._info = info
+
+        def GetTypeInfo(self):
+            return self._info
+
+    def object_offering(self, members):
+        class Live:
+            pass
+
+        live = Live()
+        live._oleobj_ = self.FakeOle(self.FakeTypeInfo(members))
+        return live
+
+    def test_the_members_own_name_is_not_one_of_its_parameters(self):
+        from inventor_mcp.backend.com.backend import _parameter_names
+
+        live = self.object_offering({
+            "SetDirectionAndDistanceMoveType": ("Direction", "Distance", "Third"),
+        })
+        names = _parameter_names(live, "SetDirectionAndDistanceMoveType")
+        assert names == ["Direction", "Distance", "Third"]
+        # The bug this exists for: index 2 is the third argument, not the
+        # second, and the method's own name is nowhere in the list.
+        assert names[2] == "Third"
+        assert "SetDirectionAndDistanceMoveType" not in names
+
+    def test_it_finds_the_member_among_others(self):
+        from inventor_mcp.backend.com.backend import _parameter_names
+
+        live = self.object_offering({
+            "Copy": (),
+            "Faces": ("Value",),
+            "SetFreeMoveType": ("Transform",),
+            "SetDirectionAndDistanceMoveType": ("Direction", "Distance", "Third"),
+        })
+        assert _parameter_names(live, "SetFreeMoveType") == ["Transform"]
+        assert len(_parameter_names(live, "SetDirectionAndDistanceMoveType")) == 3
+
+    def test_a_member_with_no_parameters_is_an_empty_list(self):
+        from inventor_mcp.backend.com.backend import _parameter_names
+
+        live = self.object_offering({"Copy": ()})
+        assert _parameter_names(live, "Copy") == []
+
+    def test_a_member_that_is_not_there_is_an_empty_list(self):
+        from inventor_mcp.backend.com.backend import _parameter_names
+
+        live = self.object_offering({"Copy": ()})
+        assert _parameter_names(live, "SetDirectionAndDistanceMoveType") == []
+
+    def test_an_object_that_answers_nothing_is_an_empty_list(self):
+        """Empty rather than raising: the caller is on its way to a refusal.
+
+        A second exception thrown while composing a good error message replaces
+        it with a worse one, which is the opposite of what this is for.
+        """
+        from inventor_mcp.backend.com.backend import _parameter_names
+
+        class Mute:
+            pass
+
+        assert _parameter_names(Mute(), "Anything") == []
+
+    def test_the_setters_measured_arguments_are_recorded_in_order(self):
+        """The measurement itself, pinned where a reader will see it.
+
+        `SetDirectionAndDistanceMoveType(Distance, Direction, DirectionReversed)`
+        was read off the live definition on 2027.1. Two things about it were
+        guessed wrong beforehand -- the method's name, and that the direction
+        came first -- so the order is data rather than a literal at the call,
+        and this is the test that says what was measured.
+
+        `_check_move_face_arguments` compares this tuple against what the live
+        object reports and refuses on a disagreement, which is the other half:
+        a measurement stated in code and never checked against the thing
+        measured is exactly the drift this repository writes tests about.
+        """
+        from inventor_mcp.backend.com.backend import ComBackend
+
+        assert ComBackend._MOVE_FACE_SETTER == "SetDirectionAndDistanceMoveType"
+        assert ComBackend._MOVE_FACE_SETTER_ARGUMENTS == (
+            "Distance", "Direction", "DirectionReversed")
+
+    def test_the_reversal_flag_is_the_third_argument_not_a_negated_distance(self):
+        """Why `move_face` stopped negating the expression.
+
+        `flip` went in as `-(expression)` for as long as no reversal property
+        had been read. `DirectionReversed` is the API's own way of saying it, so
+        the distance now reaches Inventor as the caller wrote it -- which is the
+        whole point of carrying expressions rather than numbers.
+        """
+        from inventor_mcp.backend.com.backend import ComBackend
+
+        assert ComBackend._MOVE_FACE_SETTER_ARGUMENTS[2] == "DirectionReversed"
+        assert ComBackend._MOVE_FACE_SETTER_ARGUMENTS.index("Distance") == 0

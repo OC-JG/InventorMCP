@@ -38,6 +38,7 @@ from inventor_mcp.builder import (  # noqa: E402
     measure,
 )
 from inventor_mcp.drafting import build_drawing  # noqa: E402
+from inventor_mcp.errors import DocumentError  # noqa: E402
 from inventor_mcp.schema import DrawingRecipe, ExtrudeOp, PartRecipe, SketchOp  # noqa: E402
 from inventor_mcp.session import Session  # noqa: E402
 
@@ -938,20 +939,20 @@ MOVE_FACE_FIXTURES = {
 
 
 def check_move_face(session: Session, report: Report) -> None:
-    """`move_face`, whose COM half has never executed.
+    """`move_face`, measured on Inventor 2027.1 on 2026-09-08.
 
-    ``docs/INVENTOR_SETUP.md`` has the ordered list of what this has to settle.
-    The definition's setter is published since 2026-09-08 --
-    `SetDirectionAndDistanceMoveType` -- and the backend reads `MoveFaceType`
-    back before `Add`, so what is left unread is that setter's argument list.
-
-    **Read the signature before running this.** ``python
-    scripts/com_signatures.py MoveFaceDefinition`` costs nothing and answers in
-    one go what this check can only narrow down.
+    It took three attempts to get here and none of them was about arithmetic.
+    The signature was not in the type library at all, so the setter's name, its
+    argument order and its reversal flag all had to be read off the live
+    definition -- ``docs/INVENTOR_SETUP.md`` has that interface table. Then it
+    built on the first run that reached it and agreed to four decimals on both
+    fixtures, so ``PREDICTED["move_face"]`` came down 0.50 -> 0.02.
 
     Three readings per fixture, for the reason defect 11 cost four runs: a
     feature that builds, and even one that measures right, can still be
-    parametric in name only.
+    parametric in name only. All three came back on the first run, and they are
+    assertions now rather than readings -- the point of writing a measurement
+    down is that the next release which disagrees fails a check.
 
     * **The magnitude**, against a figure derived beforehand rather than
       recorded afterwards. Both fixtures are prisms, so the true answer is exact
@@ -963,7 +964,7 @@ def check_move_face(session: Session, report: Report) -> None:
       changing it has to change the volume -- and by its own derived amount,
       since the geometry is the same face moving further.
     """
-    print("\n--- move_face: the COM half, which has never run")
+    print("\n--- move_face: measured 2026-09-08, and asserted since")
     if session.backend.name == "mock":
         # The simulator is the half that is already measured and tested. Running
         # it here would print six passes about arithmetic `tests/test_move_face.py`
@@ -1047,59 +1048,63 @@ def _parameter_value(recipe: PartRecipe, name: str) -> float:
 
 
 def check_thicken(session: Session, report: Report) -> None:
-    """`thicken`, whose COM half has never executed -- nor been read.
+    """`thicken`, measured on Inventor 2027.1 on 2026-09-07.
 
-    Two questions, one fixture each, and neither is about arithmetic. On a
+    Two questions, one fixture each, and neither was about arithmetic. On a
     single planar face `thicken` and `move_face` come out identical by
     construction, so the magnitude is already established by `--only move-face`
-    and `tests/test_thicken.py`. What a live seat is needed for is:
+    and `tests/test_thicken.py`. What needed a seat was:
 
     * **the corners**, which `thickened_walls` isolates. Four walls grown 1 mm
       outward is the case a single direction cannot express, and the four layers
       do not meet: a 1 x 1 x 6 mm notch at each corner belongs to no wall. So
-      the answer is 1.4400 cm^3 if Inventor leaves them and 1.4640 if it closes
-      them. Both are defensible; this reports which, rather than asserting the
-      one the simulator happens to sum.
+      the answer was 1.4400 cm^3 if Inventor left them and 1.4640 if it closed
+      them, and both were defensible -- so this *reported* which rather than
+      asserting the one the simulator happened to sum. **It closes them.** The
+      simulator was 1.7% low on every multi-face thicken until
+      `_thicken_corners` was derived from that reading, and this now asserts the
+      measured figure.
     * **the side**, which `thinned_wall` isolates and no magnitude reveals.
       `THICKEN_SHARE` says a `negative` layer lies behind the face, in the
-      material, so cutting it removes 0.24 cm^3. That is set algebra and says
-      nothing about whether Inventor agrees. Three outcomes are
-      distinguishable and this asserts the one the table claims.
+      material, so cutting it removes 0.24 cm^3. That was set algebra and said
+      nothing about whether Inventor agreed. Three outcomes were
+      distinguishable; it measured -0.2400, the one the table claims.
 
     That second one is defect 5's lesson applied in advance. A `trim` kept the
     wrong half of a part for as long as the feature existed, and one of the runs
     that found it was 1.2% apart -- inside every tolerance -- because the volume
     was right for the half it kept. Only a fixture whose wrong answers are
     *different numbers* catches a side.
+
+    Both are assertions now rather than readings, which is the point of writing
+    a measurement down: the next release that disagrees fails the check instead
+    of quietly reporting a third number.
     """
-    print("\n--- thicken: the COM half, which has never run")
+    print("\n--- thicken: measured 2026-09-07, and asserted since")
     if session.backend.name == "mock":
         report.skip("thicken: not run",
                     "the simulator implements the table it would be checked "
                     "against, so it would only confirm itself. Use --backend inventor.")
         return
 
-    # 1. The corners. Reported rather than asserted: nobody has measured which
-    #    of the two Inventor does, and a check that picked one would be
-    #    inventing the answer it then confirms.
+    # 1. The corners. Asserted now, because 2027.1 answered: 1.4640, the
+    #    closed one. It shipped as a report rather than an assertion precisely
+    #    so this run could settle it without a check inventing the answer it
+    #    then confirmed -- and the open figure is kept here because it is what a
+    #    release that stopped closing them would measure.
     walls = _thicken_fixture(session, report, "thickened_walls")
     if walls is not None:
         left, closed = 1.44, 1.464
-        matched = ("the notches left open" if abs(walls - left) < 5e-3 else
-                   "the corners closed" if abs(walls - closed) < 5e-3 else None)
         report.check(
-            matched is not None,
-            f"thicken: four walls moved {walls:+.4f} cm^3, which is "
-            f"{matched or 'neither candidate'}",
-            f"expected {left:+.4f} with the corner notches left open or "
-            f"{closed:+.4f} with them closed -- 4 x 6 mm^3 apart. Neither means "
-            "the layer is not area times thickness per face, which is the one "
-            "part of this that was thought to be arithmetic.")
-        if matched:
-            report.note(
-                f"The corner question is answered: {matched}. If it is the "
-                f"closed one, the simulator's {left:+.4f} is low by 1.7% on any "
-                "multi-face thicken and the ledger should gain the corner term.")
+            abs(walls - closed) < 5e-3,
+            f"thicken: four walls moved {walls:+.4f} cm^3 against {closed:+.4f} "
+            "measured -- the corners close",
+            f"{left:+.4f} would mean this release leaves the corner notches "
+            f"open, 4 x 6 mm^3 less; the simulator's `_thicken_corners` was "
+            "derived from the closed reading and would have to become "
+            "conditional. Anything else means the layer is not area times "
+            "thickness per face, which is the one part of this that is "
+            "arithmetic.")
 
     # 2. The side. Asserted, because the table makes a definite claim and the
     #    two ways of being wrong are different numbers.
@@ -1113,7 +1118,9 @@ def check_thicken(session: Session, report: Report) -> None:
             "solid, so there was nothing to cut and THICKEN_SHARE has the side "
             "inverted; a positive figure means something else again. Fix the "
             "table in backend/base.py rather than the tolerance -- being wrong "
-            "about a side is what defect 5 was.")
+            "about a side is what defect 5 was. 2027.1 measured -0.2400 on "
+            "2026-09-07, so a different answer here is a change in Inventor or "
+            "in the selector, not an open question.")
 
 
 def _thicken_fixture(session: Session, report: Report, stem: str) -> float | None:
@@ -1144,14 +1151,73 @@ def _thicken_fixture(session: Session, report: Report, stem: str) -> float | Non
             session.forget(context.doc_id)
 
 
+def _seed_is_counted(session: Session, report: Report) -> bool | None:
+    """Whether the collection `describe_feature` reads includes the seed.
+
+    The calibration the sketch-driven count needs, and it cannot come from the
+    sketch-driven pattern itself: there, "four" is the seed plus three copies
+    *or* four copies with one landing on the reference, and those are opposite
+    answers to the question the fixture asks.
+
+    A **rectangular** pattern has no such ambiguity. `x_count: 3` puts three
+    pockets on the part, one of them the seed, and this reads what the
+    collection then says: 3 means it counts the seed, 2 means it counts only
+    the copies. Returns None where it could not be read at all -- an unmeasured
+    property name and a release that keeps them elsewhere, which is a reason to
+    conclude nothing rather than to guess.
+
+    One extra part built and closed, which is cheap against the alternative of
+    interpreting a number nobody has calibrated.
+    """
+    recipe = PartRecipe.model_validate({
+        "name": "PatternElementBaseline", "units": "mm", "operations": [
+            {"op": "sketch", "name": "S", "plane": "xy", "entities": [
+                {"type": "rectangle", "center": [0, 0], "width": 60, "height": 20}]},
+            {"op": "extrude", "name": "Plate", "sketch": "S", "distance": 6},
+            {"op": "sketch", "name": "P", "plane": "xy", "entities": [
+                {"type": "rectangle", "center": [-20, 0], "width": 4, "height": 4}]},
+            {"op": "extrude", "name": "Pocket", "sketch": "P", "distance": 3,
+             "operation": "cut"},
+            {"op": "rectangular_pattern", "name": "Row", "features": ["Pocket"],
+             "axis1": "x", "count1": 3, "spacing1": 20},
+        ]})
+    context, broken = build(session, recipe)
+    if broken or context is None:
+        report.note("the PatternElements calibration part did not build: "
+                    + (broken[0][:200] if broken else "no document"))
+        if context:
+            session.backend.close_document(context.doc_id, save=False)
+            session.forget(context.doc_id)
+        return None
+    try:
+        described = session.backend.describe_feature(context.doc_id, "Row")
+        count = described.get("pattern_elements")
+        read_from = described.get("pattern_elements_from")
+        if count == 3:
+            report.note(f"{read_from} counts the seed: a 3-instance "
+                        "rectangular pattern reads 3")
+            return True
+        if count == 2:
+            report.note(f"{read_from} counts only the copies: a 3-instance "
+                        "rectangular pattern reads 2")
+            return False
+        report.note(f"the calibration read {count!r} from {read_from!r} on a "
+                    "3-instance rectangular pattern, which is neither 3 nor 2 "
+                    "-- so what that collection counts is still unknown")
+        return None
+    finally:
+        session.backend.close_document(context.doc_id, save=False)
+        session.forget(context.doc_id)
+
+
 def check_sketch_driven_pattern(session: Session, report: Report) -> None:
     """`sketch_driven_pattern`, and the question a volume cannot answer.
 
-    The third COM call in this project that has never executed, after
-    `move_face` and `thicken`. Unlike those two its *arithmetic* is not new: an
-    occurrence does whatever its seed did, which is the rule the other two
-    patterns use and which the pulley and the threaded boss already confirm at
-    0.02. So this check is not calibrating anything.
+    Built and measured on Inventor 2027.1 on 2026-09-08, at -1.2000 cm^3
+    exactly -- and that is the *less* interesting half. Its arithmetic was never
+    new: an occurrence does whatever its seed did, which is the rule the other
+    two patterns use and which the pulley and the threaded boss already confirm
+    at 0.02. So this check is not calibrating anything, and never was.
 
     What it is for is a semantic question: **does Inventor put an occurrence on
     the reference point as well?** `examples/calibration/spread_pockets.json`
@@ -1167,8 +1233,16 @@ def check_sketch_driven_pattern(session: Session, report: Report) -> None:
     So this counts the features on the finished part as well as measuring it.
     A duplicate sitting exactly on its seed is invisible to a volume, and it
     would ship as a part with a redundant feature in its browser.
+
+    **The 2026-09-08 run answered the volume and not the question**, exactly as
+    the shape of the fixture predicted: the finished part is `Plate`, `Slot`,
+    `Spread`. A sketch-driven pattern is *one* feature holding its occurrences,
+    so counting features cannot count occurrences -- which is a limitation of
+    this check rather than a finding, and the note it prints says where the
+    answer actually is. Reading `feature.Occurrences.Count` off the pattern is
+    what would settle it, and that property has not been read here.
     """
-    print("\n--- sketch_driven_pattern: the COM half, which has never run")
+    print("\n--- sketch_driven_pattern: it builds, and the occurrence count is answered")
     if session.backend.name == "mock":
         report.skip("sketch-driven-pattern: not run",
                     "the simulator places the occurrences itself and would only "
@@ -1206,20 +1280,70 @@ def check_sketch_driven_pattern(session: Session, report: Report) -> None:
         # And the count, which is the reading the volume cannot give.
         features = [info.name for info in session.backend.list_features(context.doc_id)]
         report.note(f"features on the finished part: {features}")
-        report.note(
-            "Four pockets is Plate, Slot and Spread -- the pattern is one feature "
-            "holding three occurrences. If Inventor also patterned the reference "
-            "point, the volume is unchanged and only Inventor's browser shows it: "
-            "open the pattern and count its occurrences. Four means the reference "
-            "was included and docs/INVENTOR_SETUP.md needs correcting, along with "
-            "the mock's `elsewhere` filter.")
+
+        # Asked of the pattern itself, because counting features cannot count
+        # occurrences: a sketch-driven pattern is one feature holding them. The
+        # property name is unmeasured -- `describe_feature` tries `Occurrences`
+        # and then `PatternElements` and reports which answered.
+        pattern = next((name for name in features
+                        if name.lower().startswith("spread")), None)
+        described = (session.backend.describe_feature(context.doc_id, pattern)
+                     if pattern else {})
+        count = described.get("pattern_elements")
+        read_from = described.get("pattern_elements_from")
+        if count is None:
+            report.note(
+                "The pattern's occurrence count could not be read: neither "
+                f"Occurrences nor PatternElements answered on {pattern!r}. The "
+                "question stays open, and Inventor's browser is the fallback -- "
+                "open the pattern and count. `python "
+                "scripts/probe_definitions.py` would name the collection this "
+                "release keeps them in.")
+        else:
+            # **And the number alone does not answer the question**, which the
+            # 2026-09-08 run is what showed: `PatternElements` came back as 4
+            # on a pattern of four points, and 4 is BOTH "the seed plus three
+            # copies" (the assumption holding) and "four copies, one of them
+            # on the reference" (the assumption failing). Which it is depends
+            # on whether that collection counts the seed, and nothing here had
+            # measured that.
+            #
+            # `_seed_is_counted` measures it, on a rectangular pattern whose
+            # total is not in doubt. So the expected number is derived from a
+            # measurement rather than picked, and a release that counts the
+            # other way does not read as a defect.
+            includes_seed = _seed_is_counted(session, report)
+            if includes_seed is None:
+                report.note(
+                    f"The pattern holds {count} (read from {read_from}), and "
+                    "what that collection counts is unmeasured on this "
+                    "release -- the rectangular-pattern calibration above did "
+                    "not answer. 4 is the seed plus three copies OR four "
+                    "copies with one on the reference, and those are opposite "
+                    "answers. Nothing is concluded.")
+            else:
+                wanted = 4 if includes_seed else 3
+                counting = ("counts the seed" if includes_seed
+                            else "counts only the copies")
+                report.check(
+                    count == wanted,
+                    f"sketch-driven-pattern: {count} occurrences, and the "
+                    f"reference point was not patterned onto itself "
+                    f"({read_from} {counting}, so {wanted} is the four pockets "
+                    "the recipe describes)",
+                    f"{count} where {wanted} was expected of a collection that "
+                    f"{counting}: Inventor also patterned the reference point, "
+                    "which the volume cannot show because the duplicate lands "
+                    "on the seed. Then two things change together: "
+                    "docs/INVENTOR_SETUP.md, and the `elsewhere` filter in the "
+                    "mock's sketch_driven_pattern that excludes the reference.")
     finally:
         session.backend.close_document(context.doc_id, save=False)
         session.forget(context.doc_id)
 
 
 def check_drawing(session: Session, report: Report) -> None:
-    """The whole drawing surface, whose COM half has never executed.
+    """The whole drawing surface, measured on 2026-09-09 after four attempts.
 
     Four calls and one fact underneath them. ``docs/INVENTOR_SETUP.md`` has the
     ordered list; the short version is that `new_drawing` is `new_part` with a
@@ -1229,8 +1353,14 @@ def check_drawing(session: Session, report: Report) -> None:
     offers the part's dimension constraints for retrieval and they name their
     parameters** -- `Sheet.GetRetrievableAnnotations2`, the published 2026.1
     route the backend follows since 2026-09-08, which chooses on the model side
-    where `DimensionConstraint.Parameter` is documented. Nothing in this
-    repository has ever held one.
+    where `DimensionConstraint.Parameter` is documented.
+
+    **It does, and five of five retrieved dimensions came back known by their
+    parameters on 2026-09-09.** The parameter each names is a *model* parameter
+    -- `d4` -- and the user parameter a recipe asks for is what that model
+    parameter's expression is, which is the indirection three earlier runs died
+    on. What is left open is one reading Inventor will not give: a projected
+    view's own direction.
 
     Two of the readings here cannot be got from the simulator at all, and they
     are the reason this check exists rather than a test:
@@ -1244,7 +1374,7 @@ def check_drawing(session: Session, report: Report) -> None:
       similarly-named enum. The simulator honours the direction it is given by
       construction, so it can never report this.
     """
-    print("\n--- drawings: the COM half, which has never run")
+    print("\n--- drawings: a sheet, its views, and dimensions that name their parameters")
     if session.backend.name == "mock":
         report.skip("drawing: not run",
                     "the simulator honours every direction by construction and "
@@ -1257,22 +1387,101 @@ def check_drawing(session: Session, report: Report) -> None:
     drawing = DrawingRecipe.model_validate(json.loads(path.read_text(encoding="utf-8")))
     part = PartRecipe.model_validate(json.loads(part_path.read_text(encoding="utf-8")))
 
-    try:
-        outcome = build_drawing(session, drawing, part)
-    except Exception as exc:
-        hint = getattr(exc, "hint", None)
-        report.check(False, "drawing: the sheet was made",
-                     f"{type(exc).__name__}: {exc}"
-                     + (f"\n         hint: {hint}" if hint else ""))
+    # The part goes on disk first, because a drawing view is a reference to a
+    # model FILE. The 2026-09-08 run placed no views at all -- three refusals,
+    # each of them "Exception occurred." and nothing else -- against a part
+    # that had only ever existed in memory. `place_view` says so outright now,
+    # and this is the check taking its own advice.
+    into = ROOT / ".acceptance"
+    into.mkdir(exist_ok=True)
+    part_file = into / "drawn_plate.ipt"
+
+    # A leftover from an earlier run is housekeeping, not a finding. The 
+    # 2026-09-09 sweep failed here and nowhere else: this check had saved the
+    # part and never closed it, so running `--only drawing` and then the whole
+    # sweep hit "drawn_plate.ipt is already open in this Inventor session" --
+    # the save guard working exactly as designed, on a document this check left
+    # behind. It closes both documents in a `finally` now, and a path still
+    # held by a document from a *previous process* gets a numbered name rather
+    # than stopping the run.
+    outcome = None
+    for attempt, path in enumerate(_numbered(part_file), start=1):
+        try:
+            outcome = build_drawing(session, drawing, part, part_path=str(path))
+            if attempt > 1:
+                report.note(f"{part_file.name} was still open from an earlier "
+                            f"run, so the part was saved as {path.name}")
+            break
+        except DocumentError as exc:
+            if attempt >= 3:
+                report.check(False, "drawing: the sheet was made",
+                             f"{type(exc).__name__}: {exc}")
+                return
+            continue
+        except Exception as exc:
+            hint = getattr(exc, "hint", None)
+            report.check(False, "drawing: the sheet was made",
+                         f"{type(exc).__name__}: {exc}"
+                         + (f"\n         hint: {hint}" if hint else ""))
+            return
+    if outcome is None:  # pragma: no cover - the loop returns on failure
         return
+    documents = [outcome.get("document"),
+                 (outcome.get("part") or {}).get("document")]
+    try:
+        _check_the_sheet(session, report, drawing, outcome)
+    finally:
+        for doc_id in documents:
+            if not doc_id:
+                continue
+            try:
+                session.backend.close_document(doc_id, save=False)
+                session.forget(doc_id)
+            except Exception as exc:  # pragma: no cover - Windows only
+                report.note(f"could not close {doc_id}: {exc}")
+
+
+def _numbered(path: Path):
+    """*path*, then the same name with `_2`, `_3` ... appended.
+
+    For a path a document from an earlier process still holds open. Inventor
+    will not write a file it has open and says so by name, which is the right
+    answer to a real conflict and pure obstruction when the holder is a
+    leftover nobody wants.
+    """
+    yield path
+    for index in range(2, 5):
+        yield path.with_name(f"{path.stem}_{index}{path.suffix}")
+
+
+def _check_the_sheet(session: Session, report: Report, drawing: "DrawingRecipe",
+                     outcome: dict) -> None:
+    """Everything the sheet has to answer, once it exists."""
 
     made = report.check(bool(outcome.get("document")), "drawing: a drawing document exists",
                         str(outcome.get("findings"))[:400])
+    report.check(bool((outcome.get("part") or {}).get("path")),
+                 "drawing: the part is on disk to be referenced",
+                 "the part has no path, so every view will be refused: a "
+                 "drawing view references a model file. `part_path` is what "
+                 "puts it somewhere.")
     report.check(len(outcome.get("views") or []) == len(drawing.views),
                  f"drawing: all {len(drawing.views)} views were placed",
                  str(outcome.get("findings"))[:400])
     if not made:
         return
+
+    # Every finding the build recorded, printed before anything is asserted.
+    # The 2026-09-08 run reported "0 of 0 dimensions" three times and the
+    # reason was *already in the outcome* -- `build_drawing` catches each
+    # view's retrieval failure into `findings` and this check was not printing
+    # them, so a diagnosis the backend had gone to some trouble to produce
+    # reached nobody. A check that hides the answer it was given is worse than
+    # one that never asked.
+    for finding in outcome.get("findings") or []:
+        report.note(f"finding at {finding.get('where')}: {finding.get('error')}")
+        if finding.get("hint"):
+            report.note(f"    hint: {finding['hint']}")
 
     # 1. The fact everything rests on. Reported first because a failure here
     #    means the design needs changing rather than the code fixing.
@@ -1292,19 +1501,29 @@ def check_drawing(session: Session, report: Report) -> None:
         "annotations named no parameter. `python scripts/com_signatures.py "
         "Sheet DimensionConstraint FeatureDimension` says which.")
 
-    # 2. Every parameter the recipe asked for, on the sheet.
+    # 2. Every parameter the recipe asked for, on the sheet -- except the one
+    #    that provably cannot be there. `edge_margin` is in the shipped recipe
+    #    as a live demonstration: the model states it only inside
+    #    `plate_w - 2 * edge_margin`, so no model dimension states 12 and no
+    #    retrieval can produce one. Naming it here rather than dropping it from
+    #    the recipe keeps the demonstration and keeps this check honest.
+    UNSTATEABLE = {"edge_margin"}
     asked = sorted({name for view in drawing.views
                     for name in list(view.dimension) + list(view.reference)})
+    wanted = sorted(set(asked) - UNSTATEABLE)
     arrived = sorted({entry["parameter"] for entry in named})
     report.check(
-        arrived == asked,
-        f"drawing: every parameter asked for reached the sheet ({len(arrived)} of "
-        f"{len(asked)})",
-        f"asked for {asked}, and the sheet carries {arrived}. A dimension can "
-        "only be retrieved if the model holds one, so a parameter missing here "
-        "either drives nothing or Inventor does not treat it as a model "
-        "dimension -- and which of those it is decides whether this is a recipe "
-        "fault or a gap in the approach.")
+        arrived == wanted,
+        f"drawing: every parameter that can be stated reached the sheet "
+        f"({len(arrived)} of {len(wanted)}; {', '.join(sorted(UNSTATEABLE))} "
+        "cannot be and is asked for on purpose)",
+        f"asked for {wanted}, and the sheet carries {arrived}. A dimension can "
+        "only be retrieved if the model holds one **and the view shows it**: "
+        "measured 2026-09-08, four parameters went missing because the recipe "
+        "asked for them on the wrong view -- a front view is the XY plan here, "
+        "so `thk` can only be shown on the elevation. The other reason is a "
+        "parameter the model states only inside an expression, which is what "
+        "`edge_margin` is for. The per-view findings above say which.")
 
     # 3. The extent, which is Inventor's own measurement here and is the part's
     #    own arithmetic in the simulator. 120 x 80 x 8 mm plate.
@@ -1314,36 +1533,105 @@ def check_drawing(session: Session, report: Report) -> None:
             f"{placed['name']}: reports facing {placed.get('direction')}, spans "
             f"{placed.get('extent')} cm at scale {placed.get('scale')}, at "
             f"{placed.get('at')}")
-    report.note(
-        "The plate is 120 x 80 x 8 mm. A front view should span 12 x 0.8 cm and a "
-        "top view 12 x 8 -- and a view reporting a direction it was not asked "
-        "for is defect 4 again, on a different API.")
+    # And the reading that made it worth printing them. The plate is
+    # 120 x 80 x 8 mm, so each direction has one extent it can honestly have,
+    # and the three are far enough apart that no tolerance argument is needed:
+    # a front view spans 12 x 0.8 cm, a top view 12 x 8, a side view 8 x 0.8.
+    #
+    # Measured on 2026-09-08, all seven directions in one pass: `front` and
+    # `rear` show XY, `top` and `bottom` show XZ, `left` and `right` show YZ
+    # with Z across. Inventor's view names are Y-up -- its front view looks
+    # down Z -- and the recipe's `direction` follows them by decision rather
+    # than by accident, so these are the sizes a correct sheet has.
+    # `base.VIEW_AXES` is the table and `docs/DECISIONS.md` the choice.
+    spans = {"front": (12.0, 8.0), "rear": (12.0, 8.0),
+             "top": (12.0, 0.8), "bottom": (12.0, 0.8),
+             "left": (0.8, 8.0), "right": (0.8, 8.0)}
+    for view in outcome.get("views") or []:
+        placed = view["view"]
+        wanted = spans.get(placed.get("direction") or "")
+        extent = placed.get("extent")
+        if wanted is None or not extent:
+            continue
+        report.check(
+            all(abs(float(was) - should) < 5e-3
+                for was, should in zip(extent, wanted)),
+            f"drawing: the {placed['direction']} view shows the "
+            f"{placed['direction']} of the part ({wanted[0]:g} x {wanted[1]:g} cm)",
+            f"it spans {[round(float(value), 4) for value in extent]} cm, "
+            "against what the 2026-09-08 measurement says this direction "
+            "shows. Either this release orients a base view differently from "
+            "2027.1 -- run `--only view-directions`, which reports all seven "
+            "and their cameras -- or `base.VIEW_AXES` and this check have "
+            "drifted apart. Defect 16 has the measurement.")
 
     # 3b. And the projection angle, which only a projected view can answer.
     #     This sheet is first angle and TOP is projected from FRONT, so Inventor
     #     was told a position below the front view and nothing about the
     #     direction. What it calls that view is its own answer.
+    # Off the *sheet*, not off the request. `place_view` echoes the direction it
+    # was given -- the caller lays the sheet out by it -- so asserting that
+    # would assert our own input, and this check's whole point is that Inventor
+    # infers a projected view's direction from where it sits. `read_drawing`
+    # asks the view (`ViewOrientationType`), which is the answer.
     placed = {view["view"]["name"]: view["view"] for view in outcome.get("views") or []}
-    if "TOP" in placed and "FRONT" in placed:
-        below = placed["TOP"]["at"][1] < placed["FRONT"]["at"][1]
+    asked = {name: view.get("at") for name, view in placed.items()}
+    inventors = {view.get("name"): view for view in (read_back.get("views") or [])}
+    if "TOP" in asked and "FRONT" in asked:
+        below = asked["TOP"][1] < asked["FRONT"][1]
+        reported = (inventors.get("TOP") or {}).get("direction")
+        # Two claims, and only one of them is ours to make. Where the view sits
+        # is this project's arithmetic and worth asserting. What Inventor calls
+        # it is the measurement -- and on 2026-09-09 it read `unknown`, meaning
+        # the property could not be read at all, which this used to accept as a
+        # pass. A reading that did not happen is not evidence, so it is a note
+        # now and the check is about the position.
         report.check(
-            below and placed["TOP"].get("direction") in ("top", "unknown"),
-            "drawing: a first-angle top view sits below the front view and "
-            f"Inventor calls it {placed['TOP'].get('direction')!r}",
-            "The sheet is first angle, so this project put TOP below FRONT and "
-            "told Inventor nothing about which way it faces -- a projected view "
-            "takes no orientation. If Inventor calls it 'bottom', the two "
-            "conventions are the other way round from what "
-            "`drafting._THIRD_ANGLE_STEP` implements, and negating that table "
-            "is the whole fix. This is the reading a base view cannot give.")
+            below,
+            "drawing: a first-angle top view sits below the front view",
+            "The sheet is first angle, so this project put TOP below FRONT.")
+        if reported in (None, "unknown"):
+            report.note(
+                "Neither the view's camera nor `ViewOrientationType` would say "
+                f"which way that projected view faces: {reported!r}. So the "
+                "projection angle is unverified -- a projected view is told a "
+                "position and nothing about its direction, which makes "
+                "Inventor's own answer the only evidence that "
+                "`drafting._THIRD_ANGLE_STEP` has first and third angle the "
+                "right way round. `scripts/com_signatures.py DrawingView` says "
+                "what a view offers on this release.")
+        else:
+            report.check(
+                reported == "top",
+                f"drawing: the projected view faces {reported!r}, read off its "
+                "own camera",
+                "It should be the top view: this sheet is first angle and TOP "
+                "was placed below FRONT. If Inventor calls it 'bottom' then the "
+                "two conventions are the other way round from what "
+                "`drafting._THIRD_ANGLE_STEP` implements, and negating that "
+                "table is the whole fix. This is the reading a base view cannot "
+                "give.")
 
     # 4. And the whole round trip, which is what the sheet is for.
+    #
+    #    `edge_margin` is expected to be the one number the part states and the
+    #    sheet does not, for the reason the recipe is built to demonstrate: the
+    #    model holds it only inside `plate_w - 2 * edge_margin`, so no
+    #    retrieval can produce a dimension stating 12. Anything *else*
+    #    undimensioned is a real fault, and so is the sheet stating a number
+    #    the part does not have -- which is why the two are counted separately
+    #    rather than the whole round trip being waved through.
     trip = outcome.get("round_trip") or {}
+    unexpected = [entry for entry in (trip.get("undimensioned") or [])
+                  if not any(name in str(entry.get("model", ""))
+                             for name in UNSTATEABLE)]
+    invented = trip.get("states_what_the_part_does_not_have") or []
     report.check(
-        trip.get("ok") is True and not trip.get("undimensioned"),
-        "drawing: the sheet reconciles with the part it was drawn from",
-        f"undimensioned: {trip.get('undimensioned')}; states what the part does "
-        f"not have: {trip.get('states_what_the_part_does_not_have')}")
+        not unexpected and not invented,
+        "drawing: the sheet reconciles with the part it was drawn from "
+        f"({', '.join(sorted(UNSTATEABLE))} aside, which cannot be stated)",
+        f"undimensioned beyond that: {unexpected}; states what the part does "
+        f"not have: {invented}")
     for warning in outcome.get("warnings") or []:
         report.note(f"warning: {warning['warning']}")
 
@@ -1946,6 +2234,13 @@ def check_promotion(session: Session, report: Report) -> None:
         session.backend.rebuild(context.doc_id)
         before = session.backend.mass_properties(context.doc_id)
         promoted = []
+        # Asked for in the *recipe's* words on purpose. `taper` is what a
+        # recipe says and `TaperAngle` is what Inventor's ExtrudeDefinition
+        # calls it, and on 2026-09-08 this line is what found that the two
+        # backends accepted different words: the simulator promoted `taper`
+        # happily and Inventor answered "no drivable property 'taper'".
+        # `PROMOTION_ALIASES` in backend/base.py is the shared vocabulary now,
+        # so this asks the harder way round of both.
         for feature, prop, name in (("Cavity", "thickness", "wall_t"),
                                     ("Block", "taper", "draft_a")):
             try:
@@ -1995,6 +2290,115 @@ def check_promotion(session: Session, report: Report) -> None:
                          f"promotion: {entry['parameter']} is a real parameter "
                          f"afterwards", f"parameters are {sorted(readback)}")
     finally:
+        session.backend.close_document(context.doc_id, save=False)
+        session.forget(context.doc_id)
+
+
+def check_view_directions(session: Session, report: Report) -> None:
+    """What each drawing-view direction actually shows, all seven in one run.
+
+    The measurement `_VIEW_ORIENTATIONS` needs and does not have. On
+    2026-09-08 a three-view sheet showed that `front` returns the plan and
+    `top` returns the elevation -- Inventor's view names are Y-up, this project
+    builds Z-up -- but two readings cannot rewrite a table of seven, and a
+    partly-remapped table would put some views right and leave others wrong
+    with nothing to say which.
+
+    So this places **one base view per direction** on one sheet, of a block
+    whose three dimensions are all different (120 x 80 x 8 mm), and reports the
+    extent of each. Every direction's honest answer is one of three sizes, they
+    are nowhere near each other, and the whole table falls out of a single run.
+
+    **What it still does not answer is which way is up inside that plane.** An
+    extent is a size: a view rotated 180 degrees or mirrored has the same one.
+    So this settles which plane each name shows and not the orientation within
+    it, and a table rewritten from it wants a second reading -- a retrieved
+    dimension's position, or a curve's coordinates -- before a sheet is trusted
+    to be the right way up.
+    """
+    print("\n--- drawing view directions: which plane each name actually shows")
+    if session.backend.name == "mock":
+        report.skip("view-directions: not run",
+                    "the simulator honours the direction it is given by "
+                    "construction, so it can only confirm its own table. Use "
+                    "--backend inventor.")
+        return
+
+    from inventor_mcp.backend.base import ViewRequest
+
+    recipe = PartRecipe.model_validate({
+        "name": "ViewDirectionBlock", "units": "mm", "operations": [
+            {"op": "sketch", "name": "S", "plane": "xy", "entities": [
+                {"type": "rectangle", "center": [0, 0], "width": 120, "height": 80}]},
+            {"op": "extrude", "name": "Block", "sketch": "S", "distance": 8},
+        ]})
+    context, broken = build(session, recipe)
+    if not report.check(not broken and context is not None,
+                        "view-directions: the block builds",
+                        broken[0][:300] if broken else "no document"):
+        return
+
+    into = ROOT / ".acceptance"
+    into.mkdir(exist_ok=True)
+    part_file = into / "view_directions.ipt"
+    drawing = None
+    try:
+        session.backend.save_document(context.doc_id, str(part_file))
+        drawing = session.backend.new_drawing("ViewDirections", sheet="a2", units="mm")
+        # Spread across the sheet so no two views overlap: an A2 is 59.4 x 42.0
+        # cm and these are 12 cm wide at most.
+        places = {"front": (10.0, 34.0), "rear": (30.0, 34.0), "top": (48.0, 34.0),
+                  "bottom": (10.0, 20.0), "left": (30.0, 20.0), "right": (48.0, 20.0),
+                  "iso": (30.0, 8.0)}
+        # The plane each size names, so the report reads as an answer rather
+        # than as three numbers to hold against the part in your head.
+            # Both orders per plane, because which axis is across is exactly what
+        # is in question: measured 2026-09-08, Inventor's `left` came back
+        # (0.8, 8.0) -- Z across, Y up -- where this project's `left` means Y
+        # across and Z up. Printing "no plane of this block" for that was the
+        # table's own expectation showing through, so the report says which
+        # way round it is instead.
+        planes = {(12.0, 0.8): "XZ, the elevation (X across, Z up)",
+                  (0.8, 12.0): "XZ, the elevation, turned (Z across, X up)",
+                  (12.0, 8.0): "XY, the plan (X across, Y up)",
+                  (8.0, 12.0): "XY, the plan, turned (Y across, X up)",
+                  (8.0, 0.8): "YZ, the side (Y across, Z up)",
+                  (0.8, 8.0): "YZ, the side, turned (Z across, Y up)"}
+        for direction, at in places.items():
+            try:
+                placed = session.backend.place_view(drawing.id, ViewRequest(
+                    part_doc_id=context.doc_id, name=direction.upper(),
+                    direction=direction, at=at, scale=1.0))
+            except Exception as exc:
+                report.note(f"{direction}: refused -- {type(exc).__name__}: {exc}")
+                continue
+            extent = [round(float(value), 4) for value in (placed.extent or ())]
+            rounded = tuple(round(float(value), 1) for value in extent[:2])
+            detail = placed.detail or {}
+            camera = detail.get("camera") or {}
+            report.note(
+                f"{direction}: spans {extent} cm -- "
+                f"{planes.get(rounded, 'no plane of this block')}"
+                f", camera says {detail.get('direction_measured')!r}, "
+                f"enum says {detail.get('orientation_reported')!r}"
+                + (f", eye {camera['eye']} up {camera.get('up')}"
+                   if camera.get("eye") else ", camera unreadable"))
+            if detail.get("direction_measured") not in (direction, None):
+                report.note(
+                    f"    ^ asked for {direction!r} and the camera says "
+                    f"{detail.get('direction_measured')!r}: either this release "
+                    "orients a base view differently or `_VIEW_EYE` has drifted")
+        report.note(
+            "What `base.VIEW_AXES` says, measured 2026-09-08: front and rear "
+            "show XY (12 x 8 here), top and bottom XZ (12 x 0.8), left and "
+            "right YZ with Z across (0.8 x 8). Anything above that disagrees "
+            "is either a release that orients a base view differently or a "
+            "table that has drifted -- and the cameras are printed because an "
+            "extent settles which plane a view shows and never which way is "
+            "up inside it.")
+    finally:
+        if drawing is not None:
+            session.backend.close_document(drawing.id, save=False)
         session.backend.close_document(context.doc_id, save=False)
         session.forget(context.doc_id)
 
@@ -2068,8 +2472,11 @@ def check_views(session: Session, report: Report) -> None:
                 path=str(path), orientation=orientation, display_mode="shaded"))
             if path.is_file():
                 report.note(f"views: {orientation} -> {path.stat().st_size} bytes")
-        report.note("views: look at them before trusting the orientation names -- "
-                    "defect 4 says they do not describe what you get")
+        report.note("views: the orientation names are Inventor's, which is "
+                    "Y-up -- `front` is the XY plan of a part modelled Z-up, "
+                    "and `top` puts -Z up the screen. Measured on 2026-09-09 "
+                    "off the drawing cameras, deliberate, and written down in "
+                    "docs/DECISIONS.md.")
         report.note(f"views: delete {into} when you are done")
     finally:
         session.backend.close_document(context.doc_id, save=False)
@@ -2093,8 +2500,40 @@ CHECKS = {
     "thicken": check_thicken,
     "sketch-driven-pattern": check_sketch_driven_pattern,
     "drawing": check_drawing,
+    "view-directions": check_view_directions,
     "views": check_views,
 }
+
+
+#: The groups whose COM half has not built anything yet, in the order to run
+#: them.
+#: `--only unmeasured` expands to this, because a CAD seat is the scarce
+#: resource here and separate runs are separate chances to stop after the first
+#: interesting failure -- which is how the work axis took six sessions.
+#:
+#: The order is by what the next one depends on rather than by size. Nothing in
+#: the drawing group needs the feature groups, but a feature that will not build
+#: is a shorter thing to diagnose than a sheet that will not dimension, so the
+#: cheap answers come first.
+#:
+#: `thicken` left this list on 2026-09-07 and `move_face` and
+#: `sketch_driven_pattern` on 2026-09-08, once the calls both of them needed had
+#: been read off the live objects rather than guessed -- all three then agreed
+#: with Inventor to four decimals on the first run that reached them.
+#:
+#: The drawing surface is what is left, and it has never got past creating the
+#: document: a bare filename for a template, then a template from an older
+#: release wanting migration. Two failures, neither in the call.
+UNMEASURED = ("drawing",)
+
+#: What to read before spending the seat. The feature calls are all measured
+#: now; what is left is the drawing surface, and `GeneralDimension` has no
+#: generated module to read until a drawing document has actually been opened --
+#: so the probe is what answers first, and it also lists the templates that are
+#: really installed.
+READ_FIRST = (
+    "python scripts/probe_definitions.py",
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -2121,8 +2560,21 @@ def main(argv: list[str] | None = None) -> int:
               "Use --backend inventor.")
     print("=" * 70)
 
+    asked = list(args.only)
+    if any(part.lower() == "unmeasured" for part in asked):
+        asked = [part for part in asked if part.lower() != "unmeasured"]
+        asked.extend(UNMEASURED)
+        print("\nThe groups whose COM half has not built anything yet, in order:")
+        print("  " + ", ".join(UNMEASURED))
+        print("\nRun this first -- it lists the drawing templates that are really")
+        print("installed, and GeneralDimension has no generated module to read")
+        print("until a drawing document has actually been opened:")
+        for line in READ_FIRST:
+            print(f"  {line}")
+        print("=" * 70)
+
     def wanted(name: str) -> bool:
-        return not args.only or any(part.lower() in name.lower() for part in args.only)
+        return not asked or any(part.lower() in name.lower() for part in asked)
 
     # An example is selected either by the group name or by its own -- the first
     # version required the group, so `--only pipe_bend` matched nothing at all

@@ -405,3 +405,75 @@ as "fallback" like any other unmeasured entry, and `dump_constants.py` will say
 they are not in 2027.1's type library -- which is true, and is the reason they
 had to come from somewhere else.
 
+
+## A view direction means what Inventor means by it
+
+*Measured 2026-09-08, decided 2026-09-09.*
+
+Place one base view per direction of a 120 x 80 x 8 mm plate and read what each
+spans: `front` and `rear` give 12 x 8 cm, `top` and `bottom` give 12 x 0.8,
+`left` and `right` give 0.8 x 8. **Inventor's view names are Y-up** -- its front
+view looks down Z and shows the XY plane. Every recipe here models Z-up: sketch
+on XY, extrude upward. So the same word named two different views, and the
+project's own tables said the elevation while Inventor drew the plan.
+
+That mismatch had been recorded since `capture_view` was measured -- defect 4,
+"the orientation names do not describe what you get" -- and left, because a
+screenshot in the wrong orientation is a nuisance. A *drawing* in the wrong
+orientation is a wrong drawing that looks like a right one, so the drawing
+surface forced the question.
+
+**It cannot be fixed by picking different enums.** Mapping `front` onto
+`kTopViewOrientation` corrects four of the six; `left` and `right` are already
+on the YZ plane and turned a quarter turn *inside* it, and no orientation enum
+turns a view. The real alternatives were:
+
+* place every view with `kArbitraryViewOrientation` and a camera built from a
+  Z-up convention, so `front` means the elevation as the recipe's own
+  vocabulary says; or
+* let the recipe's words mean what Inventor means by them.
+
+The second was chosen. A recipe asking for `front` now gets exactly what a
+person placing a base view by hand on the same seat gets; `capture_view` and a
+drawing sheet of one part agree with each other; and both directions of the
+round trip measure the same axes, which is what makes the overall-size check
+evidence rather than arithmetic. The cost is stated rather than discovered: a
+plate modelled flat has its plan as its front view, which reads backwards, and
+the schema's field description, the Skill and the guide all say so in those
+words.
+
+The camera route is not wrong -- it is more work resting on an unmeasured
+mechanism, to buy a vocabulary that then disagrees with every sheet Inventor
+draws unaided. Should it ever be built, it should be built for `capture_view`
+in the same pass, because the two surfaces are the same quarter turn.
+
+**One table, and one translation.** `VIEW_AXES` in `backend/base.py` is the
+single copy of which axes a direction shows, above the three places that each
+had their own -- writing a sheet, reading one back, and the simulator measuring
+an extent. Three copies of one fact is how defect 5 survived three runs.
+
+The reading side is the exception, and on purpose. A `DrawingReading`'s `kind`
+is the view *as the sheet labels it*: the ISO drafting vocabulary a person reads
+with, where FRONT is an elevation. Sharing one table would make a supplier's
+FRONT view reconstruct as a plan, so `drafting._VIEW_KINDS` translates at the
+one boundary where the vocabularies meet -- and transposes the extent for
+`left` and `right`, whose planes agree and whose axis order does not. Two
+tables here are two facts, not two copies of one.
+
+**What the decision did not settle, the cameras did.** An extent is a size, so
+it says which plane a view shows and never which way is up inside it. Read the
+views' cameras and both fall out: every one has +Y up the screen except the top
+and bottom pair, which look down and up the Y axis -- where Y cannot be up --
+and put -Z and +Z there. So `capture_view`'s `top` rendering Z inverted, the
+observation defect 4 recorded and could not explain, is Inventor being
+consistently Y-up. The decision to follow that naming is the same decision
+either way; what changed is that the last unexplained part of it has a
+measurement.
+
+It also settled how to *read* a view back. `DrawingView.ViewOrientationType`
+answered nothing on any of the seven views on 2027.1, so a direction read off
+the sheet comes from the camera, with the enum behind it and the detail saying
+which answered. A camera says more than an orientation enum can: an enum names
+a view and a camera says where it looks from and which way is up. That the
+better evidence was also the only readable evidence is luck, and worth
+recording as such.
