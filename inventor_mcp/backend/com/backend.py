@@ -1700,6 +1700,30 @@ class ComBackend(Backend):
                 "not quite meet, or two entities Inventor considers already "
                 "constrained to each other.",
             )
+        # What the refusals cost, asked of the finished sketch rather than
+        # asserted when each one happened. Inventor has no degrees-of-freedom
+        # count for a sketch (see below), so `ConstraintStatus` is the whole of
+        # the evidence: fully constrained means every refusal was redundant.
+        constrained = _fully_constrained(sketch, self._constants)
+        if refused:
+            names = ", ".join(refused)
+            if constrained is True:
+                logger.info(
+                    "Sketch %s: %d constraint(s) refused (%s) and the sketch is "
+                    "fully constrained, so each was redundant.",
+                    sketch.Name, len(refused), names)
+            elif constrained is False:
+                logger.warning(
+                    "Sketch %s: %d constraint(s) refused (%s) and the sketch is "
+                    "NOT fully constrained, so a degree of freedom is left in "
+                    "it. A parameter change can move geometry the recipe did "
+                    "not mean to move.", sketch.Name, len(refused), names)
+            else:
+                logger.warning(
+                    "Sketch %s: %d constraint(s) refused (%s) and this release "
+                    "would not say whether the sketch is fully constrained, so "
+                    "whether that cost a degree of freedom is unknown.",
+                    sketch.Name, len(refused), names)
         return SketchInfo(
             id=self._next("sk"),
             name=str(sketch.Name),
@@ -1718,7 +1742,7 @@ class ComBackend(Backend):
             # docs/INVENTOR_SETUP.md. The simulator's number is an estimate it
             # can make because it does no solving; Inventor will not be asked
             # to guess one.
-            fully_constrained=_fully_constrained(sketch, self._constants),
+            fully_constrained=constrained,
             inferred_constraints=len(inferred),
             refused_constraints=len(refused),
             driving_dimensions=len(driving),
@@ -1996,11 +2020,21 @@ class ComBackend(Backend):
             return ("inferred", f"{where}: Inventor had already applied it")
 
         # Everything else refines a sketch that is already closed. Inventor
-        # sometimes rejects one as dependent on the constraints around it; that
-        # leaves the sketch usable but with a degree of freedom still in it, so
+        # sometimes rejects one as dependent on the constraints around it, so
         # it is reported rather than treated as fatal.
-        logger.warning("Sketch %s: %s was refused (%s); the sketch keeps a degree of "
-                       "freedom.", sketch.Name, where, self._explain(first_error))
+        #
+        # **And nothing is claimed here about what it cost**, which is a
+        # correction. This used to say "the sketch keeps a degree of freedom",
+        # and printed that on every live run of `hex_standoff`: a hexagon's
+        # sixth equal-length pair is redundant once the other five and the
+        # across-flats dimension are in, so Inventor rejects it and the sketch
+        # is fully constrained without it. A refusal *can* leave a freedom
+        # behind and this is not the place to tell the two apart -- the sketch
+        # is still being built, so a reading taken now would be of an
+        # unfinished sketch. `build_sketch` asks the finished one, where the
+        # answer means something.
+        logger.info("Sketch %s: %s was refused (%s).",
+                    sketch.Name, where, self._explain(first_error))
         return ("refused", where)
 
     def _add_dimension(self, sketch: Any, transient: Any, objects: dict[str, Any],

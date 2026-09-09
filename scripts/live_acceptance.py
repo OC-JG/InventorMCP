@@ -1242,7 +1242,7 @@ def check_sketch_driven_pattern(session: Session, report: Report) -> None:
     answer actually is. Reading `feature.Occurrences.Count` off the pattern is
     what would settle it, and that property has not been read here.
     """
-    print("\n--- sketch_driven_pattern: it builds; the occurrence count is the open part")
+    print("\n--- sketch_driven_pattern: it builds, and the occurrence count is answered")
     if session.backend.name == "mock":
         report.skip("sketch-driven-pattern: not run",
                     "the simulator places the occurrences itself and would only "

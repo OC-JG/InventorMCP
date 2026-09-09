@@ -1122,18 +1122,15 @@ The market's 2026 feature, and a gap in the whole open-source field.
       where a *reading*'s ISO vocabulary meets it. `docs/DECISIONS.md` has the
       choice and what it costs.
 
-- [ ] **A projected view's own direction, which is the last evidence the
-      projection angle needs.** *(Opened 2026-09-09.)* `ViewOrientationType`
-      reads as unreadable on a projected view, so the acceptance check asserts
-      where the view *sits* -- this project's own arithmetic -- and reports the
-      projection angle as unverified rather than passing on a reading that
-      never happened, which is what it used to do. Nothing else distinguishes
-      first angle from third: `_THIRD_ANGLE_STEP` is negated for first angle
-      and the negation is reasoning, not a measurement, so a sheet stating ISO
-      first angle while laying out ASME third would be a mirrored drawing that
-      reads as correct. `scripts/com_signatures.py DrawingView` says what a
-      view offers on this release, and a camera read is the other candidate
-      since `place_view` already reports one for a base view.
+- [x] **A projected view's own direction, and with it the projection angle.**
+      *(Measured 2026-09-09.)* `ViewOrientationType` is unreadable on 2027.1,
+      so the direction comes off the view's camera -- and a first-angle sheet
+      with TOP placed *below* FRONT came back as a **top** view by Inventor's
+      own camera. So `_THIRD_ANGLE_STEP` has first and third angle the right
+      way round, and the last drawing table resting on reasoning rests on a
+      measurement. A projected view is told a position and nothing about its
+      direction, which is why this was the one reading a base view could not
+      give.
 
 - [x] **Which way is up inside the plane** -- the open half of defects 4 and
       16, *answered 2026-09-09 off the views' own cameras*. Inventor is

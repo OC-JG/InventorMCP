@@ -1124,3 +1124,24 @@ Each of these was hit while building real parts, and each passed
     demonstration of that, and `live_acceptance.py --only drawing` names it as
     the one parameter expected not to arrive rather than counting it as a
     failure.
+
+20. **A refused sketch constraint claimed a degree of freedom nobody had
+    measured.** *(Corrected 2026-09-09.)* Every live run of `hex_standoff`
+    printed *"equal_length(line1, line6) was refused; the sketch keeps a
+    degree of freedom"* -- and the code's own comment beside it says that
+    refusal is the polygon's redundant closing equality. A hexagon's sixth
+    equal-length pair adds nothing once the other five and the across-flats
+    dimension are in, so Inventor rejects it and the sketch is fully
+    constrained without it. The warning was asserting a consequence of the
+    refusal rather than reading one, on every run, for the one case where it
+    was wrong.
+
+    Inventor has no degrees-of-freedom count for a sketch -- `ConstraintStatus`
+    is the whole of the evidence, and `GetDegreesOfFreedom` belongs to an
+    assembly occurrence -- so the reading has to be "is this sketch fully
+    constrained", and it only means something on a *finished* sketch. The
+    per-refusal line states what happened and nothing more; `build_sketch` asks
+    the finished sketch and says which it was: every refusal redundant, a
+    freedom genuinely left behind (a warning, since a parameter change can then
+    move geometry the recipe did not mean to move), or a release that would not
+    say.

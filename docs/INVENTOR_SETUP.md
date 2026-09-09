@@ -1068,14 +1068,16 @@ that is a version fact rather than a design one.
    its dimensions read with values. Everything the round trip concludes comes
    through here, and it is what reported the five.
 
-**The one reading Inventor would not give** is a projected view's own
-direction: `ViewOrientationType` reads as unreadable on a projected view, so
-the acceptance check asserts the *position* -- which is this project's own
-arithmetic -- and reports the projection angle as unverified rather than
-passing on a reading that never happened. Nothing else distinguishes first
-angle from third, so `_THIRD_ANGLE_STEP` is the one drawing table still resting
-on reasoning alone. `scripts/com_signatures.py DrawingView` is where to look
-next.
+**And the last reading came from the camera.** `ViewOrientationType` is
+unreadable on 2027.1 -- on every view, base and projected -- but
+`DrawingView.Camera` is, and it says more: where the view looks from and which
+way is up. So a direction read back off a sheet is derived from it, and the
+projected view of a **first-angle** sheet, placed *below* its parent, came back
+as a **top** view by Inventor's own camera. `_THIRD_ANGLE_STEP` has the two
+conventions the right way round, which was the last drawing table resting on
+reasoning alone. A projected view is told a position and nothing about its
+direction, which is exactly why this was the one reading a base view could not
+give.
 
     python scripts/live_acceptance.py --only drawing
 

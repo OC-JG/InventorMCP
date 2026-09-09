@@ -481,6 +481,15 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
 ### Measured
 
+- **The projection angle, which was the last drawing table resting on
+  reasoning.** *(2026-09-09.)* A first-angle sheet places its TOP view *below*
+  the FRONT view, and a projected view is told a position and nothing about its
+  direction -- so Inventor's own answer was the only evidence that
+  `drafting._THIRD_ANGLE_STEP` had first and third angle the right way round.
+  It came back a **top** view, read off the view's camera. Every drawing table
+  in the project is now measured, and the full acceptance run is **133 of 133
+  with one skip**.
+
 - **Which way is up inside a view, and Inventor is consistently Y-up.**
   *(2026-09-09, off the drawing views' own cameras.)* Every base view has +Y up
   the screen except the top and bottom pair, which look down and up the Y axis
@@ -577,6 +586,24 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   has the same one.
 
 ### Fixed
+
+- **A refused sketch constraint claimed a degree of freedom nobody had
+  measured.** Every live run of `hex_standoff` printed *"equal_length(line1,
+  line6) was refused; the sketch keeps a degree of freedom"*, and the code's own
+  comment beside it says that refusal is the polygon's redundant closing
+  equality: a hexagon's sixth equal-length pair adds nothing once the other
+  five and the across-flats dimension are in, so the sketch is fully
+  constrained without it. The warning asserted a consequence instead of reading
+  one, on every run, in the one case where it was wrong.
+
+  Inventor has no degrees-of-freedom count for a sketch, so `ConstraintStatus`
+  is the whole of the evidence -- and it only means something on a *finished*
+  sketch, which is why the reading cannot happen where the refusal does. The
+  per-refusal line states what happened and nothing more; `build_sketch` asks
+  the finished sketch and says which it was: every refusal redundant, a freedom
+  genuinely left behind (a warning, since a parameter change can then move
+  geometry the recipe did not mean to move), or a release that would not say.
+  Defect 20.
 
 - **The drawing check left its part open, and the next run could not write
   it.** *(2026-09-09: the full sweep failed on that and nothing else, having
