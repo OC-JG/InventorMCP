@@ -33,6 +33,37 @@ def volume(out):
     return out["operations"][-1]["measured"]["volume_cm3"]
 
 
+#: The same spring wound about a centreline at x = 5 rather than about Z, with
+#: the wire moved out to match: mean coil radius 25 mm either way.
+OFFSET_SPRING = [
+    {"op": "sketch", "name": "Wire", "plane": "xz", "entities": [
+        {"type": "line", "start": [5, -60], "end": [5, 60], "name": "spin",
+         "construction": True, "centerline": True},
+        {"type": "circle", "center": [30, 0], "diameter": 6}]},
+    {"op": "coil", "name": "Spring", "sketch": "Wire", "axis": "spin",
+     "pitch": 10, "height": 100},
+]
+
+
+class TestTheAxisTheHelixIsMeasuredAbout:
+    """The helix radius is the profile's distance from the axis.
+
+    It used to be the profile's own `u`, which is the same number only while
+    the axis runs through `u = 0`. A spring drawn about its own centreline five
+    millimetres off the origin was wound 30 mm out instead of 25.
+    """
+
+    def test_an_offset_centreline_gives_the_radius_it_actually_winds_at(self, session):
+        out = build(session, OFFSET_SPRING)
+        assert out["ok"] is True
+        assert out["operations"][-1]["detail"]["helix_radius"] == pytest.approx(2.5)
+
+    def test_it_is_the_same_spring_as_the_one_wound_about_z(self, session):
+        offset = build(session, OFFSET_SPRING)
+        about_z = build(session, SPRING)
+        assert volume(offset) == pytest.approx(volume(about_z), rel=1e-6)
+
+
 class TestCoil:
     def test_a_spring_measures_its_helix_length(self, session):
         """Inventor built 44.4132 cm^3 from this recipe.

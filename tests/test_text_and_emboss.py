@@ -88,6 +88,15 @@ class TestEmboss:
         assert (abs(bold["operations"][-1]["measured"]["volume_change_cm3"])
                 > abs(plain["operations"][-1]["measured"]["volume_change_cm3"]))
 
+    def test_a_space_lays_down_no_ink(self, session):
+        """`_INK_PER_EM` was calibrated on "OnlyCat", which has no space in it,
+        so charging one the ink of a letter read a two-word mark high by about a
+        character per gap."""
+        spaced = marked(session, [{"type": "text", "text": "ON LY", "height": 8}])
+        joined = marked(session, [{"type": "text", "text": "ONLY", "height": 8}])
+        assert (spaced["operations"][-1]["measured"]["volume_change_cm3"]
+                == pytest.approx(joined["operations"][-1]["measured"]["volume_change_cm3"]))
+
     def test_a_closed_profile_embosses_by_its_real_area(self, session):
         out = marked(session, [{"type": "circle", "center": [0, 0], "diameter": 20}])
         # pi * 1 cm^2 * 0.05 cm

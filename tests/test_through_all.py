@@ -122,6 +122,52 @@ class TestAnLSectionIsWhereItMatters:
         assert volume == pytest.approx(section * 3.0 - 2 * cut, rel=1e-6)
 
 
+class TestEachHoleIsMeasuredWhereItIsDrilled:
+    """A sketch whose hole centres straddle a step.
+
+    The depth used to be measured over the *first* centre and charged to every
+    one of them, so which hole happened to be drawn first decided the volume of
+    all of them. On the L, that is a 40 mm upright and a 6 mm base.
+    """
+
+    def test_two_centres_over_different_thicknesses_drill_their_own(self, session):
+        section = 6.0 * 0.6 + 0.6 * 3.4
+        bore = math.pi * 0.2**2
+        volume = build(session, L_SECTION + [
+            {"op": "sketch", "name": "C", "plane": "xy", "entities": [
+                {"type": "point", "position": [3, 10]},     # over the upright
+                {"type": "point", "position": [30, 10]}]},  # over the base
+            {"op": "hole", "sketch": "C", "diameter": 4, "through_all": True},
+        ])
+        # 4.0 cm through the upright and 0.6 through the base, not 4.6 of either.
+        assert volume == pytest.approx(section * 3.0 - bore * (4.0 + 0.6), rel=1e-6)
+
+    def test_the_order_the_centres_are_drawn_in_does_not_change_it(self, session):
+        """The bug's signature: swapping the two points changed the volume."""
+        section = 6.0 * 0.6 + 0.6 * 3.4
+        bore = math.pi * 0.2**2
+        volume = build(session, L_SECTION + [
+            {"op": "sketch", "name": "C", "plane": "xy", "entities": [
+                {"type": "point", "position": [30, 10]},
+                {"type": "point", "position": [3, 10]}]},
+            {"op": "hole", "sketch": "C", "diameter": 4, "through_all": True},
+        ])
+        assert volume == pytest.approx(section * 3.0 - bore * (4.0 + 0.6), rel=1e-6)
+
+    def test_each_bore_is_recorded_to_its_own_depth(self, session):
+        """So a later feature sees the shallow hole as shallow."""
+        build(session, L_SECTION + [
+            {"op": "sketch", "name": "C", "plane": "xy", "entities": [
+                {"type": "point", "position": [3, 10]},
+                {"type": "point", "position": [30, 10]}]},
+            {"op": "hole", "sketch": "C", "diameter": 4, "through_all": True},
+        ])
+        document = session.backend._doc(session.active)
+        bores = sorted(abs(slab.far - slab.near)
+                       for slab in document.slabs if slab.source == "hole")
+        assert bores == pytest.approx([0.6, 4.0])
+
+
 class TestWhatItRefusesToGuess:
     def test_a_revolved_part_falls_back_to_the_span(self, session):
         """No prism was recorded, so the old answer stands rather than a worse one."""

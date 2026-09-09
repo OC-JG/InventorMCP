@@ -218,6 +218,47 @@ class TestRevolveAndAxes:
         spec = resolve_axis(context, "axis", "Profile")
         assert spec.kind == "sketch_line" and spec.sketch == "Profile"
 
+    #: A ring: the centreline at x = 10, the section 10 mm square from x = 20.
+    #: So the section's centroid is 15 mm from the axis and not 25 from the
+    #: origin, which is the distinction a sketch-line axis exists to make.
+    OFFSET_RING = {
+        "name": "Ring", "units": "mm",
+        "operations": [
+            {"op": "sketch", "name": "Profile", "plane": "xz", "entities": [
+                {"type": "line", "start": [10, -20], "end": [10, 20], "name": "spin",
+                 "construction": True, "centerline": True},
+                {"type": "rectangle", "corner": [20, 0], "width": 10, "height": 10},
+            ]},
+            {"op": "revolve", "name": "Ring", "sketch": "Profile", "axis": "spin"},
+        ],
+    }
+
+    def test_an_offset_sketch_line_is_where_the_radius_is_measured_from(self, session):
+        """Pappus about the line, not about the sketch origin.
+
+        The centroid's own `u` was the radius whatever the axis was, so this
+        ring came out as 2 pi * 2.5 * 1 = 15.7 cm^3 -- the ring it would be if
+        the axis ran through x = 0.
+        """
+        result = build(session, self.OFFSET_RING)
+        assert result["ok"], result["errors"]
+        assert result["operations"][-1]["measured"]["volume_cm3"] == pytest.approx(
+            2 * math.pi * 1.5 * 1.0, rel=1e-6)
+
+    def test_the_bounds_are_the_ring_it_sweeps_and_not_a_cube(self, session):
+        """The outer radius is 20 mm about x = 10, so it reaches -10 to 30 mm.
+
+        Measuring the radius from the origin instead gave 30 mm every way from
+        the origin -- and the bounding box feeds the "does this cut reach the
+        part" check, where too big a box is a warning that never comes.
+        """
+        result = build(session, self.OFFSET_RING)
+        bounds = session.backend._doc(result["document"]).bounds
+        assert bounds[0] == pytest.approx(-1.0)   # cm
+        assert bounds[3] == pytest.approx(3.0)
+        assert bounds[2] == pytest.approx(0.0)    # the section's own z span
+        assert bounds[5] == pytest.approx(1.0)
+
 
 class TestUnitsInRecipes:
     def test_an_imperial_recipe_produces_imperial_expressions(self, session):
