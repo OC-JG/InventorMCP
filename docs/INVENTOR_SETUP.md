@@ -1335,12 +1335,35 @@ None of these affect the mock backend or the recipe format.
 
 ## Exporting
 
-Export goes through `Document.SaveAs` with a corrected extension, rather than
-looking up translator add-in GUIDs, which move between releases. The written file is
-then checked on disk; if Inventor reports success but nothing appears, the format's
-translator add-in is probably disabled (Tools → Add-Ins).
+Export takes one of two routes, and `route` in the result says which.
 
-Formats: `step stl iges sat dwg dxf obj 3mf ipt`.
+Where a translator add-in is recorded for the format,
+`TranslatorAddIn.SaveCopyAs(document, context, options, data)` is used, with
+the add-in fetched by `ApplicationAddIns.ItemById(class_id)`. That is the only
+route that reaches export **options**: `Document.SaveAs` hands the path to
+whichever translator claims the extension, which then uses whatever settings
+were last chosen in its own dialog -- so a STEP file comes out in whichever
+application protocol that was, and nothing says which.
+
+`SaveAs` remains the fallback, with a corrected extension, and the written
+file is checked on disk either way; if Inventor reports success but nothing
+appears, the format's translator add-in is probably disabled (Tools →
+Add-Ins). A translator that cannot be reached falls back **unless options were
+asked for**, which is a hard error: a file written with the wrong settings is
+worse than no file.
+
+**The seven ClassId GUIDs have never been read off an installed Inventor**, so
+`ItemById` raising is what keeps a wrong one loud. `scripts/probe_translators.py`
+prints every add-in's own `ClassIdString` beside its name, and asks each
+translator what its `SaveCopyAs` option names really are -- which is also the
+run that would replace the three-name whitelist in `EXPORT_OPTIONS` with a
+measurement.
+
+Formats: `step stl iges sat dwg dxf dwf obj 3mf ipt pdf`. Translators
+recorded: `step iges sat dwg dxf pdf dwf`. Options offered: STEP's
+`ApplicationProtocolType` (3 is AP 214), PDF's `Sheet_Range` and
+`Vector_Resolution`. A name outside that list is refused rather than passed,
+because a `NameValueMap` ignores an unknown name silently.
 
 ## Performance
 

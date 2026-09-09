@@ -20,7 +20,7 @@ from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, Sequence
 
-from ..errors import DocumentError, FeatureError, SelectionError
+from ..errors import DocumentError, ExportError, FeatureError, SelectionError
 from ..plan import SketchPlan
 
 
@@ -515,6 +515,106 @@ class ThickenRequest:
 
 
 # ---------------------------------------------------------------------------
+# Export
+# ---------------------------------------------------------------------------
+
+#: The file extension each export format is written with.
+EXPORT_EXTENSIONS = {
+    # PDF is here for drawings and not for parts, and the distinction is
+    # Inventor's rather than this table's: a drawing SaveAs to .pdf goes through
+    # the PDF translator add-in, and a *part* has no sheet to print, so the same
+    # call on one either fails or writes something nobody asked for. The
+    # written-but-not-there check below is what catches it either way. Added
+    # 2026-09-07 with the drawing surface, unmeasured like the rest of it, and
+    # it is the format a drawing is actually sent to a factory in -- a drawing
+    # that can only be exported as DWG is a drawing the factory has to own
+    # Inventor to read.
+    "pdf": ".pdf",
+    # DWF joined it on 2026-09-09 with the translator table below: it is the
+    # other format a drawing is sent out in, and Autodesk's own viewer reads
+    # it where a DWG wants a CAD seat.
+    "dwf": ".dwf",
+    "step": ".stp",
+    "stp": ".stp",
+    "iges": ".igs",
+    "igs": ".igs",
+    "stl": ".stl",
+    "sat": ".sat",
+    "dwg": ".dwg",
+    "dxf": ".dxf",
+    "obj": ".obj",
+    "3mf": ".3mf",
+    "ipt": ".ipt",
+}
+
+
+#: The translator add-in that owns each export format, by ClassId GUID.
+#:
+#: `Document.SaveAs` reaches **no options at all**: it hands the path to
+#: whichever translator claims the extension and takes whatever that
+#: translator's last-used settings were. So a STEP file comes out in whichever
+#: application protocol somebody last picked in the dialog, and a PDF at
+#: whatever resolution, and nothing in the result says which. The route that
+#: takes options is `TranslatorAddIn.SaveCopyAs(document, context, options,
+#: data)`, and the add-in is fetched by `ApplicationAddIns.ItemById(guid)`.
+#:
+#: **The GUID is the handle and not the display name**, which is the opposite
+#: of what `ARCHITECTURE.md` assumed when it chose `SaveAs`: an add-in's name
+#: is localised, so matching on "Autodesk STEP Translator" works on an English
+#: install and on no other.
+#:
+#: **These values are long-published and stable across releases, and none has
+#: been read off an installed Inventor from this project.** They are the one
+#: table here that is neither measured nor quoted from a page in the tree, and
+#: the arrangement around them is what makes that safe rather than the values
+#: being trusted: `ItemById` raises on a GUID no add-in has, and `export` then
+#: falls back to `SaveAs` -- the route that works today -- with a note saying
+#: the options were not applied. `scripts/probe_translators.py` prints every
+#: add-in's own `ClassIdString` beside its name, so one run on a seat replaces
+#: this comment with a measurement.
+#:
+#: STL, OBJ and 3MF are deliberately absent. The reference publishes no
+#: `SaveCopyAs` option names for them, so there is nothing an options route
+#: would add, and the DFM loop's STL keeps whatever facet resolution Inventor
+#: defaults to -- worth measuring what that does to a wall-thickness reading
+#: before assuming it is fine, which is a roadmap item and not this table's
+#: business.
+EXPORT_TRANSLATORS: dict[str, str] = {
+    "step": "{90AF7F40-0C01-11D5-8E83-0010B541CD80}",
+    "iges": "{90AF7F30-0C01-11D5-8E83-0010B541CD80}",
+    "sat": "{89162634-02B6-11D5-8E80-0010B541CD80}",
+    "dwg": "{C24E3AC4-122E-11D5-8E91-0010B541CD80}",
+    "dxf": "{C24E3AC2-122E-11D5-8E91-0010B541CD80}",
+    "pdf": "{0AC6FD96-2F4D-42CE-8BE0-8AEA580399E4}",
+    "dwf": "{0AC6FD95-2F4D-42CE-8BE0-8AEA580399E4}",
+}
+
+#: The `SaveCopyAs` option names this server will pass, per format, and what
+#: each one is.
+#:
+#: A `NameValueMap` **silently ignores a name the translator does not know**,
+#: so a misspelled option is a PDF at the wrong resolution and a result that
+#: says it worked. That is the failure this table exists to turn into a
+#: refusal, and it is why the table is a whitelist rather than a pass-through:
+#: only these names have been read, so only these are offered, and anything
+#: else comes back with the list of what this format takes.
+#:
+#: Short on purpose. Each translator publishes more than this; these are the
+#: ones the 2027 reference extraction recorded, and a name is added here when
+#: it has been read rather than when it seems likely.
+EXPORT_OPTIONS: dict[str, dict[str, str]] = {
+    "step": {
+        "ApplicationProtocolType": "Which STEP application protocol: 3 is "
+        "AP 214, which is what most downstream CAD wants.",
+    },
+    "pdf": {
+        "Sheet_Range": "Which sheets to write, as a PrintRangeEnum value.",
+        "Vector_Resolution": "Dots per inch for the vector content.",
+    },
+}
+
+
+# ---------------------------------------------------------------------------
 # Drawings
 # ---------------------------------------------------------------------------
 
@@ -992,6 +1092,44 @@ class Backend(ABC):
                 selector=selector.__dict__,
             )
         return face
+
+    def _checked_export_options(self, fmt: str,
+                                options: dict[str, Any]) -> dict[str, Any]:
+        """*options* if every name is one this format takes, or a refusal.
+
+        Shared rather than written twice for the reason that matters more here
+        than usual: a `NameValueMap` **silently ignores a name the translator
+        does not know**. A misspelled option is a PDF at the wrong resolution
+        and a result that says it worked, which is exactly the kind of quiet
+        success this server exists not to report -- and the simulator has to
+        refuse the same names the live route does or a caller learns it on a
+        seat.
+        """
+        if not options:
+            return {}
+        known = EXPORT_OPTIONS.get(fmt, {})
+        if not known:
+            raise ExportError(
+                f"No export options are known for {fmt!r}, so there is nothing "
+                f"to pass: {', '.join(sorted(options))}.",
+                hint="Formats with options: "
+                + ", ".join(sorted(EXPORT_OPTIONS))
+                + ". A translator publishes more than this server offers; a "
+                "name is added when it has been read rather than when it "
+                "seems likely.",
+            )
+        unknown = sorted(set(options) - set(known))
+        if unknown:
+            raise ExportError(
+                f"{fmt.upper()} export does not take {', '.join(unknown)}.",
+                hint=f"It takes: "
+                + "; ".join(f"{name} -- {why}" for name, why in sorted(known.items()))
+                + ". A name Inventor does not know is ignored rather than "
+                "refused, so it is refused here instead -- an option that "
+                "silently did nothing is a file that came out wrong and a "
+                "result that said it worked.",
+            )
+        return dict(options)
 
     @abstractmethod
     def mass_properties(self, doc_id: str) -> MassProps: ...

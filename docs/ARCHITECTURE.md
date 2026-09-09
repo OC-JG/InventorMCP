@@ -138,14 +138,25 @@ in radians, each driving value carrying its expression.
   profile, a version change — a fallback table is used. `Constants.describe()`
   reports which source each value came from, so a mismatch is diagnosable instead
   of mysterious.
-- *Export.* `Document.SaveAs` is used rather than hunting translator add-in GUIDs,
-  and the result is verified on disk: a missing file is reported as a probable
-  disabled translator rather than as success. The reason given for the choice --
-  that the GUIDs vary between releases -- turned out to be wrong when Autodesk's
-  published reference was read on 2026-09-08: the ClassId GUID is documented as
-  the *stable* handle, the display name being the localised one, and the
-  translator route is the only one that reaches export options (STEP AP 214, a
-  PDF's sheet range). `docs/ROADMAP.md` carries the move as a Phase 2 item.
+- *Export.* Two routes since 2026-09-09, and the result says which ran.
+  `TranslatorAddIn.SaveCopyAs(document, context, options, data)` is the one
+  that reaches export **options** -- STEP AP 214, a PDF's sheet range -- with
+  the add-in fetched by ClassId GUID; `Document.SaveAs` is the fallback, and
+  the written file is verified on disk either way, so a missing file is
+  reported as a probable disabled translator rather than as success.
+
+  The original reason for using only `SaveAs` -- that the GUIDs vary between
+  releases -- turned out to be wrong when Autodesk's published reference was
+  read on 2026-09-08: the ClassId GUID is documented as the *stable* handle,
+  the display name being the localised one. So the choice was inverted rather
+  than defended, and the shape of the inversion is the part worth reading: the
+  GUIDs are the one table in this repository that is **neither measured nor
+  quoted from a page in the tree**, so `SaveAs` stays as the measured
+  fallback, `ItemById` raising on a wrong GUID is what makes the table loud,
+  and `scripts/probe_translators.py` is the run that replaces it with a
+  reading. Options that were asked for and cannot be passed are a hard error
+  rather than a quiet fallback, because a STEP file written in the wrong
+  protocol is one the caller has no reason to doubt.
 
 **`mock/`** keeps an in-memory model. It is honest about being an approximation:
 volumes are analytic estimates, topology is synthesised from the sketch loops that

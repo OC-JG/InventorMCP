@@ -52,6 +52,9 @@ from ...units import from_internal, inventor_symbol, unit_from_inventor
 from ..base import (
     _same_file_key,
     AppInfo,
+    EXPORT_EXTENSIONS,
+    EXPORT_OPTIONS,
+    EXPORT_TRANSLATORS,
     AxisSpec,
     Backend,
     ChamferRequest,
@@ -122,29 +125,6 @@ except Exception as exc:  # pragma: no cover - the common case off Windows
 
 
 #: File extensions Inventor can write directly through ``SaveAs``.
-EXPORT_EXTENSIONS = {
-    # PDF is here for drawings and not for parts, and the distinction is
-    # Inventor's rather than this table's: a drawing SaveAs to .pdf goes through
-    # the PDF translator add-in, and a *part* has no sheet to print, so the same
-    # call on one either fails or writes something nobody asked for. The
-    # written-but-not-there check below is what catches it either way. Added
-    # 2026-09-07 with the drawing surface, unmeasured like the rest of it, and
-    # it is the format a drawing is actually sent to a factory in -- a drawing
-    # that can only be exported as DWG is a drawing the factory has to own
-    # Inventor to read.
-    "pdf": ".pdf",
-    "step": ".stp",
-    "stp": ".stp",
-    "iges": ".igs",
-    "igs": ".igs",
-    "stl": ".stl",
-    "sat": ".sat",
-    "dwg": ".dwg",
-    "dxf": ".dxf",
-    "obj": ".obj",
-    "3mf": ".3mf",
-    "ipt": ".ipt",
-}
 
 
 #: ``HealthStatusEnum`` values meaning "up to date, nothing to report", used only
@@ -5416,6 +5396,28 @@ class ComBackend(Backend):
 
     # -- output ------------------------------------------------------------
     def export(self, doc_id: str, request: ExportRequest) -> dict[str, Any]:  # pragma: no cover
+        """Write the document out, through the translator add-in where there is one.
+
+        Two routes, and which one ran is in the result.
+
+        `TranslatorAddIn.SaveCopyAs(document, context, options, data)` is the
+        one that **takes options**, fetched by `ApplicationAddIns.ItemById` on
+        the ClassId GUID in `EXPORT_TRANSLATORS`. `Document.SaveAs` reaches no
+        options at all: it hands the path to whichever translator claims the
+        extension, which then uses whatever settings somebody last picked in
+        its dialog -- so a STEP file comes out in whichever application
+        protocol that was, and nothing says which.
+
+        `SaveAs` stays as the fallback rather than being replaced, and that is
+        deliberate: it is the route that has been measured, the GUIDs have not
+        been, and a format with nothing to configure has nothing to gain. So a
+        translator that cannot be found or refuses `SaveCopyAs` drops back to
+        it, and the result says the options were not applied. **Options that
+        were asked for and could not be passed are a hard error instead**,
+        because a file quietly written with the wrong settings is worse than no
+        file: the caller asked for AP 214 and would get a STEP file they had no
+        reason to doubt.
+        """
         document = self._doc(doc_id)
         fmt = request.format.lower()
         if fmt not in EXPORT_EXTENSIONS:
@@ -5423,20 +5425,116 @@ class ComBackend(Backend):
                 f"Unsupported export format {request.format!r}.",
                 hint="Supported: " + ", ".join(sorted(set(EXPORT_EXTENSIONS))),
             )
+        options = self._checked_export_options(fmt, request.options)
         path = os.path.abspath(request.path)
         expected = EXPORT_EXTENSIONS[fmt]
         if not path.lower().endswith(expected) and not path.lower().endswith(f".{fmt}"):
             path += expected
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        translator, why_not = self._translator(fmt)
         with self._translate_errors(f"Exporting to {fmt.upper()}", ExportError):
-            document.SaveAs(path, True)
+            if translator is not None:
+                applied = self._save_copy_as(translator, document, path, options)
+                route = "translator"
+            else:
+                if options:
+                    raise ExportError(
+                        f"The {fmt.upper()} translator add-in could not be "
+                        f"reached, so these options cannot be passed: "
+                        f"{', '.join(sorted(options))}.",
+                        hint=f"{why_not} `Document.SaveAs` is the fallback and "
+                        "it reaches no options -- it would write the file with "
+                        "whatever settings were last used in the translator's "
+                        "dialog, which is not what was asked for. Export "
+                        "without options to take that route deliberately, or "
+                        "run scripts/probe_translators.py to see which add-ins "
+                        "this Inventor has and what their ClassIds really are.",
+                    )
+                document.SaveAs(path, True)
+                applied = {}
+                route = "SaveAs"
         if not os.path.exists(path):
             raise ExportError(
                 f"Inventor reported success but {path} was not written.",
                 hint="The translator add-in for this format may be disabled in Inventor.",
             )
-        return {"written": True, "path": path, "format": fmt,
-                "bytes": os.path.getsize(path)}
+        result: dict[str, Any] = {
+            "written": True, "path": path, "format": fmt,
+            "bytes": os.path.getsize(path), "route": route,
+        }
+        if applied:
+            result["options_applied"] = applied
+        if route == "SaveAs" and fmt in EXPORT_TRANSLATORS:
+            result["note"] = (
+                f"{why_not} So this file was written by `Document.SaveAs`, "
+                "which uses whatever settings were last chosen in the "
+                "translator's own dialog. The geometry is right; the settings "
+                "are not this server's.")
+        return result
+
+    def _translator(self, fmt: str) -> tuple[Any, str | None]:  # pragma: no cover
+        """The translator add-in for *fmt*, or ``None`` and why not.
+
+        `ItemById` raises on a GUID no add-in has, which is what makes a wrong
+        entry in `EXPORT_TRANSLATORS` loud rather than silent -- and the reason
+        that table can carry values nobody here has measured. The exception's
+        text goes into the reason, because "no add-in with that ClassId" and
+        "the add-in is present and not activated" are different problems with
+        different fixes and only Inventor can tell them apart.
+        """
+        guid = EXPORT_TRANSLATORS.get(fmt)
+        if guid is None:
+            return None, f"No translator add-in is recorded for {fmt!r}."
+        app = self._require_app()
+        try:
+            translator = app.ApplicationAddIns.ItemById(guid)
+        except Exception as exc:
+            return None, (f"Inventor has no add-in with ClassId {guid}: "
+                          f"{type(exc).__name__}: {exc}.")
+        try:
+            if not bool(translator.Activated):
+                translator.Activate()
+        except Exception as exc:
+            return None, (f"The {fmt.upper()} translator add-in is present and "
+                          f"would not activate: {type(exc).__name__}: {exc}.")
+        return translator, None
+
+    #: `TranslationContext.Type` for a translator writing to a named file, as
+    #: opposed to a stream held in memory. `kFileBrowseIOMechanism`.
+    _FILE_BROWSE = "kFileBrowseIOMechanism"
+
+    def _save_copy_as(self, translator: Any, document: Any, path: str,
+                      options: dict[str, Any]) -> dict[str, Any]:  # pragma: no cover
+        """`SaveCopyAs` through *translator*, with *options* on its NameValueMap.
+
+        The four arguments are all `TransientObjects` creations rather than
+        anything this code invents, which is why they are built here and not
+        cached: a `DataMedium` carries the filename and a `NameValueMap` the
+        settings, and both are per-call.
+
+        `HasSaveCopyAsOptions` is asked first and its answer is *reported*
+        rather than acted on. A translator that says it has no options and then
+        takes them is harmless; one that says it has them and ignores a name is
+        the failure `_checked_export_options` guards, and this is the second
+        half of that guard -- the result names every option that went in, so a
+        file that came out wrong can be read against what was asked for.
+        """
+        app = self._require_app()
+        transient = app.TransientObjects
+        context = transient.CreateTranslationContext()
+        context.Type = self._k(self._FILE_BROWSE)
+        settings = transient.CreateNameValueMap()
+        medium = transient.CreateDataMedium()
+        medium.FileName = path
+        offered = True
+        try:
+            offered = bool(translator.HasSaveCopyAsOptions(document, context, settings))
+        except Exception as exc:  # pragma: no cover - version-specific
+            logger.debug("HasSaveCopyAsOptions declined to answer: %s", exc)
+        for name, value in options.items():
+            _set_option(settings, name, value)
+        translator.SaveCopyAs(document, context, settings, medium)
+        return {"offered_options": offered, **options}
 
     def screenshot(self, doc_id: str, request: ScreenshotRequest) -> dict[str, Any]:  # pragma: no cover
         app = self._require_app()
@@ -6219,6 +6317,26 @@ def _curve_type(edge: Any) -> str:  # pragma: no cover - Windows only
     if "ellipse" in name:
         return "elliptical"
     return "spline"
+
+
+def _set_option(settings: Any, name: str, value: Any) -> None:  # pragma: no cover
+    """Put *name* on a `NameValueMap`, replacing it if it is already there.
+
+    `Value` is a *parameterised* property, and the VBA spelling for setting one
+    -- `map.Value("Name") = 3` -- has no equivalent through late binding in
+    Python: `map.Value(name)` is a call, and a call is not an assignment
+    target. `Add(Name, Value)` is the method, and it refuses a name the map
+    already holds -- which it will, because `HasSaveCopyAsOptions` fills the
+    map with the translator's own defaults before this runs. So a name already
+    present is removed by index and added again.
+
+    `Remove` is 1-based, as every Inventor collection is.
+    """
+    for index in range(1, int(settings.Count) + 1):
+        if str(settings.Name(index)) == name:
+            settings.Remove(index)
+            break
+    settings.Add(name, value)
 
 
 def _surface_type(face: Any) -> str:  # pragma: no cover - Windows only

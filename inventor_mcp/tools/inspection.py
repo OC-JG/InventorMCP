@@ -120,23 +120,40 @@ def register(server: Any, session: Session) -> None:
 
     @server.tool(
         description="Export the part to a neutral CAD or mesh format: STEP for downstream CAD, "
-        "STL or 3MF for printing, IGES or SAT for older tool-chains, DWG/DXF for 2D.",
+        "STL or 3MF for printing, IGES or SAT for older tool-chains, DWG/DXF for 2D, "
+        "PDF or DWF for a drawing.\n\n"
+        "Where a translator add-in owns the format, `options` reaches its "
+        "settings -- `{\"ApplicationProtocolType\": 3}` for STEP AP 214, "
+        "`Sheet_Range` and `Vector_Resolution` for PDF. Without options the "
+        "file is written with whatever settings were last chosen in "
+        "Inventor's own dialog for that translator, and `route` in the result "
+        "says which way it went.",
     )
     @guard
     def export_model(
         path: Annotated[str, Field(description="Output file path. The extension is corrected to match the format.")],
         format: Annotated[
-            Literal["step", "stl", "iges", "sat", "dwg", "dxf", "obj", "3mf",
-                    "ipt", "pdf"],
-            Field(description="Output format. `pdf` is for a drawing document -- "
-                  "it is what a factory is sent -- and a part has no sheet to "
-                  "print, so it will not produce one."),
+            Literal["step", "stl", "iges", "sat", "dwg", "dxf", "dwf", "obj",
+                    "3mf", "ipt", "pdf"],
+            Field(description="Output format. `pdf` and `dwf` are for a drawing "
+                  "document -- they are what a factory is sent -- and a part has "
+                  "no sheet to print, so they will not produce one."),
         ] = "step",
+        options: Annotated[
+            dict[str, Any] | None,
+            Field(description="Translator settings, by the name the translator "
+                  "uses. A name this server has not read is refused with the "
+                  "list of what the format takes, because Inventor ignores an "
+                  "unknown one silently -- which would be a file written with "
+                  "the wrong settings and a result saying it worked."),
+        ] = None,
         document: Annotated[str | None, Field(description="Target part.")] = None,
     ) -> dict[str, Any]:
         context = session.context(document)
         result = session.backend.export(
-            context.doc_id, ExportRequest(path=os.path.abspath(path), format=format)
+            context.doc_id,
+            ExportRequest(path=os.path.abspath(path), format=format,
+                          options=dict(options or {})),
         )
         return {"document": context.doc_id, **result}
 

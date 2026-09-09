@@ -1056,16 +1056,69 @@ actually bitten.
       rebuilds, and today the faces it pointed at are gone.
       `Edge.TangentiallyConnectedEdges` and `Face.TangentiallyConnectedFaces`
       give a `chain: true` on selectors for the same money.
-- [ ] **Export through the translator add-ins, with options.** *(Opened
-      2026-09-08.)* `Document.SaveAs` reaches no options. The reference
-      publishes stable ClassId GUIDs for STEP, IGES, SAT, DWG, DXF, PDF and DWF
-      and their `SaveCopyAs` option names -- `ApplicationProtocolType` 3 for
-      AP 214, `Sheet_Range` and `Vector_Resolution` for PDF -- and says the
-      GUID is the stable handle where the display name is localised, which is
-      the opposite of what `ARCHITECTURE.md` assumed when it chose `SaveAs`.
-      The DFM loop's STL has no published export options, so its facet
-      resolution stays whatever Inventor's default is; worth measuring what
-      that does to a wall-thickness reading before assuming it is fine.
+- [x] **Export through the translator add-ins, with options.** *(Opened
+      2026-09-08, done 2026-09-09.)* `export` takes
+      `TranslatorAddIn.SaveCopyAs(document, context, options, data)` where a
+      translator is recorded, with the add-in fetched by
+      `ApplicationAddIns.ItemById(class_id)`, and `route` in the result says
+      which way it went. `Document.SaveAs` reaches no options at all: it hands
+      the path to whichever translator claims the extension, which then uses
+      whatever settings were last chosen in its own dialog, so a STEP file came
+      out in whichever application protocol that was and nothing said which.
+      `ARCHITECTURE.md`'s note is inverted rather than defended.
+
+      **The interesting part is what to do with a table nobody here has
+      measured.** The seven ClassId GUIDs are the one table in this repository
+      that is neither measured nor quoted from a page in the tree -- they are
+      long-published and stable, and `help.autodesk.com` is unreachable from
+      this environment. So the arrangement carries the risk instead of the
+      values: `ItemById` raises on a GUID no add-in has, `SaveAs` stays as the
+      **measured** fallback with a note saying the settings were Inventor's,
+      and `scripts/probe_translators.py` prints every add-in's own
+      `ClassIdString` beside its name so one run replaces the comment with a
+      reading. Options that were asked for and cannot be passed are a **hard
+      error** rather than a quiet fallback, because a STEP file written in the
+      wrong protocol is one the caller has no reason to doubt.
+
+      **The option names are a whitelist, above both backends**, and that is a
+      rule about the recipe rather than about Inventor: a `NameValueMap`
+      silently ignores a name the translator does not know, so a misspelled
+      option is a PDF at the wrong resolution and a result saying it worked.
+      Three names are offered -- STEP's `ApplicationProtocolType`, PDF's
+      `Sheet_Range` and `Vector_Resolution` -- because three is what the
+      reference extraction recorded, and the probe asks each translator to
+      fill a map with its own defaults so the next run says what the rest
+      really are. `dwf` joined `EXPORT_EXTENSIONS` with the translator table:
+      it is the other format a drawing is sent out in.
+
+      One small find in the writing. `Value` on a `NameValueMap` is a
+      *parameterised* property, and the VBA spelling for setting one --
+      `map.Value("Name") = 3` -- has no Python equivalent through late
+      binding, because a call is not an assignment target. `Add(Name, Value)`
+      is the method, and it refuses a name the map already holds, which it
+      will: `HasSaveCopyAsOptions` fills the map with the translator's own
+      defaults first. So a name already present is removed by index and added
+      again.
+
+      **Still open, and its own item now**: the DFM loop's STL has no published
+      export options, so its facet resolution stays whatever Inventor's default
+      is. Worth measuring what that does to a wall-thickness reading before
+      assuming it is fine -- a coarse mesh reads a wall as thinner than it is,
+      in the direction that would have the loop thicken a wall that did not
+      need it.
+- [ ] **The STL the DFM loop measures, at a known facet resolution.**
+      *(Opened 2026-09-09, split off the export item above.)* The translator
+      route reaches export options and **STL is not one of the formats it
+      does**: the reference publishes no `SaveCopyAs` option names for it, so
+      the loop's mesh comes out at whatever Inventor's default is and nothing
+      here can say what that is. It matters in one direction: a coarse mesh
+      reads a wall as *thinner* than it is, so the loop would thicken a wall
+      that did not need it and report the part improved.
+      `scripts/probe_translators.py` prints what each translator says its
+      options are, and if the STL translator turns out to have any -- it is not
+      in `EXPORT_TRANSLATORS` at all today -- the fix is one table entry and a
+      calibration fixture measuring the same wall at two resolutions.
+
 - [ ] **Rib, one more time, with the published definition.** *(Opened
       2026-09-08.)* Fourteen `E_INVALIDARG`s were recorded against
       `RibFeatures.Add(definition)` without the definition's member list. The

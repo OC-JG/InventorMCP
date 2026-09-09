@@ -26,7 +26,14 @@ from dataclasses import dataclass, field, replace
 from itertools import count
 from typing import Any, Iterable, Sequence
 
-from ...errors import DocumentError, FeatureError, ParameterError, SelectionError, SketchError
+from ...errors import (
+    DocumentError,
+    ExportError,
+    FeatureError,
+    ParameterError,
+    SelectionError,
+    SketchError,
+)
 from ...expressions import UnitContext, evaluate, referenced_parameters
 from ...geometry import (
     clip_to_box,
@@ -42,6 +49,8 @@ from ...geometry import (
 from ...plan import PArc, PCircle, PEllipse, PLine, PPoint, PText, SketchPlan
 from ...units import Dim, Quantity, from_internal, lookup_unit
 from ..base import (
+    EXPORT_EXTENSIONS,
+    EXPORT_TRANSLATORS,
     AppInfo,
     AxisSpec,
     Backend,
@@ -3453,16 +3462,35 @@ class MockBackend(Backend):
 
     # -- output ------------------------------------------------------------
     def export(self, doc_id: str, request: ExportRequest) -> dict[str, Any]:
+        """No file, and the same refusals the live route would give first.
+
+        The format and the option names are checked here even though nothing
+        is written, which is the point of a rehearsal: a recipe that asks a
+        STEP export for a PDF option should hear so before a seat is
+        involved, and `_checked_export_options` is the same code the COM
+        backend runs.
+        """
         document = self._doc(doc_id)
+        fmt = request.format.lower()
+        if fmt not in EXPORT_EXTENSIONS:
+            raise ExportError(
+                f"Unsupported export format {request.format!r}.",
+                hint="Supported: " + ", ".join(sorted(set(EXPORT_EXTENSIONS))),
+            )
+        options = self._checked_export_options(fmt, request.options)
         self._record("export", path=request.path, format=request.format)
-        return {
+        result = {
             "written": False,
             "simulated": True,
             "path": request.path,
-            "format": request.format,
+            "format": fmt,
+            "route": "translator" if fmt in EXPORT_TRANSLATORS else "SaveAs",
             "note": "The mock backend does not write CAD files; connect to Inventor to export.",
             "document": document.name,
         }
+        if options:
+            result["options_applied"] = dict(options)
+        return result
 
     def screenshot(self, doc_id: str, request: ScreenshotRequest) -> dict[str, Any]:
         self._record("screenshot", path=request.path)

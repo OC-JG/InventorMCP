@@ -6,6 +6,50 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
 ### Added
 
+- **Export goes through the translator add-in, so `options` reaches its
+  settings.** *(Roadmap Phase 2.)*
+  `TranslatorAddIn.SaveCopyAs(document, context, options, data)`, with the
+  add-in fetched by `ApplicationAddIns.ItemById(class_id)`, and `route` in the
+  result saying which way an export went. `Document.SaveAs` reaches no options
+  at all: it hands the path to whichever translator claims the extension, which
+  then uses whatever settings were last chosen in its own dialog -- so a STEP
+  file came out in whichever application protocol that was, a PDF at whatever
+  resolution, and nothing said which. `ARCHITECTURE.md`'s note that the GUIDs
+  move between releases is inverted rather than defended: the reference says
+  the ClassId is the *stable* handle and the display name the localised one.
+
+  **The seven GUIDs are the one table here that is neither measured nor quoted
+  from a page in the tree**, and the arrangement carries that risk rather than
+  the values: `ItemById` raises on a GUID no add-in has, `SaveAs` stays as the
+  measured fallback with a note saying the settings were Inventor's, and the
+  new `scripts/probe_translators.py` prints every add-in's own `ClassIdString`
+  beside its name so one run on a seat replaces the comment with a reading.
+  Options that were asked for and **cannot** be passed are a hard error rather
+  than a quiet fallback: a STEP file written in the wrong protocol is one the
+  caller has no reason to doubt.
+
+  **The option names are a whitelist, above both backends.** A `NameValueMap`
+  silently ignores a name the translator does not know, so a misspelled option
+  is a PDF at the wrong resolution and a result saying it worked -- refused
+  instead, with the list of what the format takes, and refused by the
+  simulator too so a rehearsal answers for it. Three names are offered
+  because three is what the reference extraction recorded: STEP's
+  `ApplicationProtocolType` (3 is AP 214), PDF's `Sheet_Range` and
+  `Vector_Resolution`. The probe asks each translator to fill a map with its
+  own defaults, which is what would replace three with a measurement.
+
+  `dwf` joined the extension table with the translators -- it is the other
+  format a drawing is sent out in -- and `EXPORT_EXTENSIONS` moved to
+  `backend/base.py`, so the simulator refuses an unsupported format where
+  before only the live backend did.
+
+  One find in the writing: `Value` on a `NameValueMap` is a *parameterised*
+  property, and the VBA spelling for setting one has no Python equivalent
+  through late binding, a call not being an assignment target. `Add(Name,
+  Value)` is the method, and it refuses a name the map already holds -- which
+  it will, since `HasSaveCopyAsOptions` fills the map with defaults first. So
+  a name already present is removed by index and added again.
+
 - **An inward corner is rounded too, and `chamfers` cuts a corner off.**
   *(Roadmap Phase 2, closing the sketch-fillet gap bullet outright.)* Both
   halves of the item the sketch fillet was split into.
