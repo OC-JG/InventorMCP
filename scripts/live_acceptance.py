@@ -1468,16 +1468,15 @@ def check_drawing(session: Session, report: Report) -> None:
     # and the three are far enough apart that no tolerance argument is needed:
     # a front view spans 12 x 0.8 cm, a top view 12 x 8, a side view 8 x 0.8.
     #
-    # Measured on 2026-09-08: FRONT came back 12 x 8 and TOP came back
-    # 12 x 0.8. They are each other's. Inventor's own view names are Y-up --
-    # its front view looks down Z and shows the XY plane -- and this project
-    # builds Z-up, sketching on XY and extruding upward, so the two vocabularies
-    # disagree by a quarter turn. That is defect 4 exactly, on a second API, and
-    # it is asserted here rather than noted: a sheet whose front view is the plan
-    # is a wrong drawing that looks like a right one.
-    spans = {"front": (12.0, 0.8), "top": (12.0, 8.0),
-             "left": (8.0, 0.8), "right": (8.0, 0.8),
-             "rear": (12.0, 0.8), "bottom": (12.0, 8.0)}
+    # Measured on 2026-09-08, all seven directions in one pass: `front` and
+    # `rear` show XY, `top` and `bottom` show XZ, `left` and `right` show YZ
+    # with Z across. Inventor's view names are Y-up -- its front view looks
+    # down Z -- and the recipe's `direction` follows them by decision rather
+    # than by accident, so these are the sizes a correct sheet has.
+    # `base.VIEW_AXES` is the table and `docs/DECISIONS.md` the choice.
+    spans = {"front": (12.0, 8.0), "rear": (12.0, 8.0),
+             "top": (12.0, 0.8), "bottom": (12.0, 0.8),
+             "left": (0.8, 8.0), "right": (0.8, 8.0)}
     for view in outcome.get("views") or []:
         placed = view["view"]
         wanted = spans.get(placed.get("direction") or "")
@@ -1489,13 +1488,12 @@ def check_drawing(session: Session, report: Report) -> None:
                 for was, should in zip(extent, wanted)),
             f"drawing: the {placed['direction']} view shows the "
             f"{placed['direction']} of the part ({wanted[0]:g} x {wanted[1]:g} cm)",
-            f"it spans {[round(float(value), 4) for value in extent]} cm. "
-            "Inventor's view names are Y-up and this project is Z-up, so its "
-            "'front' shows the XY plane -- the plan -- where this asked for the "
-            "elevation. `_VIEW_ORIENTATIONS` in the COM backend is the table "
-            "that has to translate, and defect 16 in docs/FEATURE_COVERAGE.md "
-            "is why it cannot be rewritten from one reading: the plane is "
-            "measured and which way is up in it is not.")
+            f"it spans {[round(float(value), 4) for value in extent]} cm, "
+            "against what the 2026-09-08 measurement says this direction "
+            "shows. Either this release orients a base view differently from "
+            "2027.1 -- run `--only view-directions`, which reports all seven "
+            "and their cameras -- or `base.VIEW_AXES` and this check have "
+            "drifted apart. Defect 16 has the measurement.")
 
     # 3b. And the projection angle, which only a projected view can answer.
     #     This sheet is first angle and TOP is projected from FRONT, so Inventor
@@ -2281,11 +2279,13 @@ def check_view_directions(session: Session, report: Report) -> None:
                 + (f", camera eye {camera['eye']} up {camera.get('up')}"
                    if camera.get("eye") else ", camera unreadable"))
         report.note(
-            "This project's own meaning, from `_VIEW_AXES` in drafting.py: "
-            "front and rear show XZ, top and bottom show XY, left and right "
-            "show YZ. Anything above that disagrees is a line of "
-            "`_VIEW_ORIENTATIONS` to translate -- and see defect 16: the plane "
-            "is what an extent settles, and which way is up in it is not.")
+            "What `base.VIEW_AXES` says, measured 2026-09-08: front and rear "
+            "show XY (12 x 8 here), top and bottom XZ (12 x 0.8), left and "
+            "right YZ with Z across (0.8 x 8). Anything above that disagrees "
+            "is either a release that orients a base view differently or a "
+            "table that has drifted -- and the cameras are printed because an "
+            "extent settles which plane a view shows and never which way is "
+            "up inside it.")
     finally:
         if drawing is not None:
             session.backend.close_document(drawing.id, save=False)

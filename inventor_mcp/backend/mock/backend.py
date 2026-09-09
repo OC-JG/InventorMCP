@@ -73,6 +73,7 @@ from ..base import (
     ViewInfo,
     ViewRequest,
     THICKEN_SHARE,
+    VIEW_AXES,
     promotion_synonyms,
     EmbossRequest,
     ShellRequest,
@@ -2115,17 +2116,13 @@ class MockBackend(Backend):
         return _feature_info(feature)
 
     # -- drawings ----------------------------------------------------------
-    #: Which of the part's axes a view of each direction shows across and up,
-    #: and which it looks along. The same table `drafting.py` and
-    #: `drawing._overall_from` use -- a view's extent is the part's own extent on
-    #: two axes, so this is the whole of what the simulator needs to know about
-    #: what a direction means. `iso` is absent: it shows all three foreshortened,
-    #: which is not two numbers.
-    _VIEW_SPAN = {
-        "front": (0, 2), "rear": (0, 2),
-        "top": (0, 1), "bottom": (0, 1),
-        "left": (1, 2), "right": (1, 2),
-    }
+    #: Which of the part's axes a view of each direction shows across and up.
+    #: The one shared table rather than a fourth copy: a view's extent is the
+    #: part's own extent on two axes, so this is the whole of what the simulator
+    #: needs to know about what a direction means, and it has to be the same
+    #: answer the COM half gives or the divergence check compares a sheet with
+    #: itself. Inventor's convention, which is Y-up -- see `base.VIEW_AXES`.
+    _VIEW_SPAN = VIEW_AXES
 
     def new_drawing(self, name: str, *, template: str | None = None,
                     sheet: str = "a3", units: str = "mm") -> DocInfo:

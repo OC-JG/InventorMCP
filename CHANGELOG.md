@@ -438,6 +438,47 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   `definition.Extent` is searched too, since an extrude's taper is on its
   definition and its distance is not.
 
+### Changed
+
+- **A view direction means what Inventor means by it, and the naming follows
+  its Y-up convention.** *(Measured 2026-09-08, decided 2026-09-09.)* One base
+  view per direction of a 120 x 80 x 8 mm plate: `front` and `rear` span XY --
+  the plan -- `top` and `bottom` span XZ, `left` and `right` span YZ with Z
+  across. Every recipe here models Z-up, so the same word named two different
+  views, and the project's tables said the elevation while Inventor drew the
+  plan. Recorded as defect 4 since `capture_view` was measured and left there,
+  because a screenshot in the wrong orientation is a nuisance; a *drawing* in
+  the wrong orientation is a wrong drawing that looks like a right one.
+
+  No enum remap reconciles them -- `left` and `right` are on the plane they
+  already agree on, turned a quarter turn inside it, and no orientation enum
+  turns a view. So the choice was Inventor's naming or a camera-built
+  vocabulary of our own, and Inventor's won: a recipe asking for `front` gets
+  what a person placing a base view by hand gets, `capture_view` and a sheet of
+  the same part agree, and both directions of the round trip measure the same
+  axes. The cost is written down rather than discovered, in the schema field,
+  the Skill and the guide: a plate modelled flat has its plan as its front
+  view. `docs/DECISIONS.md` has the reasoning.
+
+  `VIEW_AXES` in `backend/base.py` is now the single copy, above the three
+  places that each had one -- writing a sheet, reading one back, and the
+  simulator measuring an extent. **The reading side deliberately kept its own
+  table**: a `DrawingReading`'s `kind` is the view as the *sheet* labels it,
+  the ISO vocabulary where FRONT is an elevation, and sharing one table would
+  make every supplier's FRONT view reconstruct as a plan.
+  `drafting._VIEW_KINDS` translates at that one boundary and transposes the
+  extent for `left` and `right`, whose planes agree and whose axis order does
+  not. `tests/test_view_axes.py` holds the two tables and the translation
+  against each other, because the failure would be silent: a wrong translation
+  does not raise, it assigns 80 mm to the axis that is 8.
+
+  Still open, and now the shared half of defects 4 and 16: **which way is up
+  inside the plane.** An extent is a size, so a rotated or mirrored view spans
+  the same, and `capture_view`'s `top` renders Z inverted. `place_view` reports
+  each view's camera -- eye, target, up vector -- and `--only view-directions`
+  prints all seven, so the reading exists and nothing has been concluded from
+  it.
+
 ### Measured
 
 - **Inventor does not put an occurrence of a sketch-driven pattern on the

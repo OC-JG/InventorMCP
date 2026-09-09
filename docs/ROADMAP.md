@@ -1083,25 +1083,24 @@ The market's 2026 feature, and a gap in the whole open-source field.
       resolve, from the subfolder search. **Still unverified end to end**: no
       drawing has been built, and it is the first thing the next run reaches.
 
-- [ ] **Translate the view-direction names, once the whole table is
-      measured.** *(Opened 2026-09-08 by defect 16.)* Inventor's view names
-      are Y-up -- its `front` looks down Z and shows the XY plane -- and every
-      recipe here is Z-up, sketching on XY and extruding upward. Measured: a
-      120 x 80 x 8 mm plate's `front` view came back 12 x 8 cm and its `top`
-      12 x 0.8, each other's. `_VIEW_ORIENTATIONS` passes each name through to
-      the enum that spells it the same way, so a sheet's front view is its
-      plan: a wrong drawing that looks like a right one, which is worse than
-      defect 4's wrong screenshot.
+- [x] **Settle what a view direction means.** *(Opened 2026-09-08 by defect
+      16, decided 2026-09-09.)* Measured all seven directions in one pass:
+      Inventor's view names are Y-up, so its `front` shows XY -- the plan of a
+      part modelled Z-up as every recipe here is. No enum remap reconciles the
+      two vocabularies, because `left` and `right` are turned a quarter turn
+      inside the plane they already agree on. **The naming follows Inventor**,
+      in one shared table (`base.VIEW_AXES`) above the three places that had a
+      copy, with `drafting._VIEW_KINDS` translating at the single boundary
+      where a *reading*'s ISO vocabulary meets it. `docs/DECISIONS.md` has the
+      choice and what it costs.
 
-      Two readings cannot rewrite a table of seven, so `--only
-      view-directions` places one base view per direction on one sheet and
-      reports what each shows. One run gives the plane for all seven. **What
-      it cannot give is which way is up inside the plane** -- a view rotated or
-      mirrored has the same extent -- so the remap also wants a retrieved
-      dimension's position or a curve's coordinates before any sheet is
-      trusted the right way up. `capture_view`'s orientations have the same
-      mismatch and should be done in the same pass, since they are the same
-      quarter turn.
+- [ ] **Which way is up inside the plane** -- the open half of defects 4 and
+      16. An extent is a size, so a view rotated or mirrored measures the same,
+      and `capture_view`'s `top` is known to render Z inverted. `place_view`
+      reports each view's camera now (eye, target, up vector) and `--only
+      view-directions` prints all seven, so **the reading exists and nothing
+      has been concluded from it**. One run and a table; the same pass should
+      cover `capture_view`, since both surfaces are the same quarter turn.
 
       `GeneralDimension` and `DrawingDimensions` have no generated module to
       read, which is not the same as their being absent — makepy generates what

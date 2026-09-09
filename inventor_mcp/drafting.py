@@ -35,7 +35,12 @@ from __future__ import annotations
 import math
 from typing import Any, Sequence
 
-from .backend.base import DrawingContents, RetrieveRequest, ViewRequest
+from .backend.base import (
+    DrawingContents,
+    RetrieveRequest,
+    ViewInfo,
+    ViewRequest,
+)
 from .drawing import DrawingDimension, DrawingReading, DrawingView, compare
 from .errors import InventorMCPError, RecipeError
 from .resolve import Resolver
@@ -43,23 +48,61 @@ from .schema import DrawingRecipe, DrawingViewSpec, PartRecipe
 from .session import Session
 from .units import Dim, Quantity, from_internal, to_internal
 
-#: A drawing view's direction mapped onto the kind a `DrawingReading` uses.
-#: `rear` and `iso` are spelled differently on the two sides, which is the whole
-#: of the difference -- and the reading's own `_overall_from` keys off these, so
-#: a wrong mapping there would silently stop the overall-size check working.
-_VIEW_KINDS: dict[str, str] = {
-    "front": "front", "rear": "rear", "top": "top", "bottom": "bottom",
-    "left": "left", "right": "right", "iso": "isometric",
+#: A recipe's view direction, mapped onto how a *reading* would label the same
+#: view, and whether the extent has to be transposed to get there.
+#:
+#: **The one place the two view vocabularies meet, and it used to be an
+#: identity map because nobody had measured that they differ.** A recipe's
+#: `direction` is Inventor's naming, which is Y-up: measured on 2027.1,
+#: 2026-09-08, `front` shows the XY plane -- the plan of a part modelled flat.
+#: A reading's `kind` is the view as the *sheet labels it*, which is the ISO
+#: drafting vocabulary a person reads with, where FRONT is the elevation. So
+#: Inventor's front is a reading's top, Inventor's top is a reading's front,
+#: and the pairs stay pairs.
+#:
+#: `left` and `right` need more than a rename. Both vocabularies put them on
+#: the YZ plane and disagree about which way round it is: Inventor spans Z
+#: across and Y up, a reading has Y across and Z up. So the extent is
+#: transposed for those two and for nothing else.
+#:
+#: Getting this wrong silently stops the overall-size check working, because
+#: `drawing._overall_from` reconstructs the part's bounding box from the kind
+#: and the extent together. `docs/DECISIONS.md` records why the recipe follows
+#: Inventor and the reading does not.
+_VIEW_KINDS: dict[str, tuple[str, bool]] = {
+    "front": ("top", False),
+    "rear": ("bottom", False),
+    "top": ("front", False),
+    "bottom": ("rear", False),
+    "left": ("left", True),
+    "right": ("right", True),
+    "iso": ("isometric", False),
 }
 
-#: Which of the part's axes a view of each direction shows across and up. The
-#: same table `drawing._overall_from` uses, for the same purpose: an `iso` view
-#: shows all three and pins none, so it is absent rather than guessed at.
-_VIEW_AXES: dict[str, tuple[int, int]] = {
-    "front": (0, 2), "rear": (0, 2),
-    "top": (0, 1), "bottom": (0, 1),
-    "left": (1, 2), "right": (1, 2),
-}
+
+def _read_view(view: ViewInfo, per_unit: float
+               ) -> tuple[str, list[float] | None]:
+    """One placed view as a reading would record it: its kind and its extent.
+
+    The scale comes out here too -- a view drawn at 1:2 spans half what the
+    part measures, and the reading is of the *part*.
+    """
+    extent = ([value / per_unit / view.scale for value in view.extent]
+              if view.extent else None)
+    kind, values = _as_read(view.direction, extent)
+    return kind, ([round(value, 4) for value in values] if values else None)
+
+
+def _as_read(direction: str, extent: Sequence[float] | None
+             ) -> tuple[str, list[float] | None]:
+    """How a reading would label this view, and its extent in the reading's order."""
+    kind, transposed = _VIEW_KINDS.get(direction, ("front", False))
+    if extent is None:
+        return kind, None
+    values = list(extent)
+    if transposed and len(values) == 2:
+        values = [values[1], values[0]]
+    return kind, values
 
 
 #: Which way a projected view sits from its parent in **third angle**, as a unit
@@ -222,7 +265,8 @@ def as_reading(recipe: DrawingRecipe, ledger: dict[str, Any]) -> DrawingReading:
         projection=recipe.projection,
         scale=recipe.scale,
         views=[
-            DrawingView(name=view["name"], kind=_VIEW_KINDS[view["direction"]])
+            DrawingView(name=view["name"],
+                        kind=_as_read(view["direction"], None)[0])
             for view in ledger["views"]
         ],
         dimensions=dimensions,
@@ -694,20 +738,21 @@ def reading_of(recipe: DrawingRecipe, contents: DrawingContents) -> DrawingReadi
         projection=recipe.projection,
         scale=recipe.scale,
         views=[
-            DrawingView(name=view.name,
-                        kind=_VIEW_KINDS.get(view.direction, "front"),
-                        # The extent comes off the sheet, so the overall-size
-                        # check has something to compare -- and how much that is
-                        # worth depends on which backend drew it, which is worth
-                        # being exact about. On Inventor the size is Inventor's,
-                        # measured from the view it actually placed, and the
-                        # check is real. On the simulator the extent is computed
-                        # from the part's own bounding box, so there the check
-                        # compares the part with itself and can only fail if the
-                        # scale arithmetic is wrong. `as_reading` supplies no
-                        # extent at all rather than that weaker version.
-                        extent=[round(value / per_unit / view.scale, 4)
-                                for value in view.extent] if view.extent else None)
+            # The extent comes off the sheet, so the overall-size check has
+            # something to compare -- and how much that is worth depends on
+            # which backend drew it, which is worth being exact about. On
+            # Inventor the size is Inventor's, measured from the view it
+            # actually placed, and the check is real. On the simulator the
+            # extent is computed from the part's own bounding box, so there the
+            # check compares the part with itself and can only fail if the
+            # scale arithmetic is wrong. `as_reading` supplies no extent at all
+            # rather than that weaker version.
+            #
+            # Both go through `_as_read` together, because the label and the
+            # order of the two numbers are one answer: a left view's extent
+            # means Y-then-Z to a reading and came off Inventor as Z-then-Y.
+            DrawingView(name=view.name, kind=_read_view(view, per_unit)[0],
+                        extent=_read_view(view, per_unit)[1])
             for view in contents.views
         ],
         dimensions=dimensions,

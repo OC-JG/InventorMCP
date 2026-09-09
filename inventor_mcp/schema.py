@@ -1225,7 +1225,14 @@ class DrawingViewSpec(Base):
 
     name: Name = Field(description="The view's label on the sheet: 'FRONT', 'TOP'.")
     direction: ViewDirection = Field(
-        "front", description="Which way this view looks at the part."
+        "front",
+        description="Which way this view looks at the part, in INVENTOR's own "
+        "naming, which is Y-up: 'front' shows the XY plane, 'top' shows XZ, "
+        "'left' and 'right' show YZ. So a plate sketched on XY and extruded "
+        "upward -- which is how every recipe here models -- has its PLAN as "
+        "its front view and its edge as its top view. Measured on 2027.1; the "
+        "alternative was a vocabulary that disagreed with the sheet Inventor "
+        "actually draws. `capture_view` uses the same names the same way.",
     )
     at: Point2D | None = Field(
         None,

@@ -139,13 +139,18 @@ check in this server:
 
 A render costs one call and catches all five. Nothing else does.
 
-**Ask for `iso`.** The other orientation names do not describe what they
-return. On a part built on `"xy"` and extruded in +Z — which is what this Skill
-tells you to build — `front` and `back` give top and bottom views, and `top`
-gives a side elevation **with Z rendered inverted**. So text that looks
-upside-down in a `top` view is not upside-down, and a part that looks wrong in a
-`front` view may be a part you are looking at from above. That is recorded as
-defect 4 in `docs/FEATURE_COVERAGE.md` and has not been fixed.
+**The orientation names are Inventor's, and Inventor is Y-up.** `front` shows
+the XY plane, `top` shows XZ, `left` and `right` show YZ. On a part built on
+`"xy"` and extruded in +Z — which is what this Skill tells you to build — that
+means **`front` gives you the plan and `top` gives you an elevation**, which
+reads backwards until you know it. Measured on Inventor 2027.1 and kept
+deliberately, so a picture and a drawing sheet of the same part agree with each
+other and with what Inventor draws by hand: `docs/DECISIONS.md` has the choice.
+
+What is *not* settled is which way is up inside the plane — `top` renders Z
+inverted, so text that looks upside-down in one is not upside-down. Defect 16
+in `docs/FEATURE_COVERAGE.md` has that half. **Ask for `iso`** when you want a
+picture you can read without thinking about any of this.
 
 So: read the *shape* off the picture, and measure *coordinates* with
 `measure_part` and `select_topology`. If the picture and the numbers disagree,

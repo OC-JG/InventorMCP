@@ -62,6 +62,25 @@ class DrawingDimension(BaseModel):
     )
 
 
+#: Which of the part's axes a view's [across, up] correspond to, in the
+#: vocabulary a *reading* uses. `kind` is the view **as the sheet labels it**,
+#: so this is the ISO drafting convention a person reads with: a FRONT view is
+#: the elevation and shows width and thickness.
+#:
+#: **Deliberately not `backend.base.VIEW_AXES`**, which is Inventor's Y-up
+#: naming and answers a different question -- what a view this server *places*
+#: spans, where `front` is the plan. Two conventions because there are two
+#: jobs, and `drafting._VIEW_KINDS` is the one place that translates between
+#: them. Sharing a table here would make every supplier's FRONT elevation
+#: reconstruct as a plan; `tests/test_view_axes.py` holds the two against each
+#: other so neither can drift into the other's meaning.
+READING_AXES: dict[str, tuple[int, int]] = {
+    "front": (0, 2), "rear": (0, 2),
+    "top": (0, 1), "bottom": (0, 1),
+    "left": (1, 2), "right": (1, 2),
+}
+
+
 class DrawingView(BaseModel):
     """One view on the sheet."""
 
@@ -323,12 +342,7 @@ def _overall_from(reading: DrawingReading) -> list[float] | None:
     if reading.overall:
         return [reading.in_cm(value) * 10 for value in reading.overall]
 
-    #: Which model axes a view's [across, up] correspond to.
-    axes = {
-        "front": (0, 2), "rear": (0, 2),
-        "top": (0, 1), "bottom": (0, 1),
-        "left": (1, 2), "right": (1, 2),
-    }
+    axes = READING_AXES
     spans: dict[int, float] = {}
     for view in reading.views:
         pair = axes.get(view.kind)

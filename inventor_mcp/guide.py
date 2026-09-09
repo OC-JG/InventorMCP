@@ -261,11 +261,14 @@ Practical notes that save a rebuild:
   a loft whose sections pair up wrongly still lofts, and a feature of the right
   size in the wrong place measures right. A render is the only thing that
   catches those, and it costs one call.
-* Ask for `iso`. The other orientation names do not describe what they return --
-  on a part built on "xy" and extruded in +Z, `front` gives a top view and `top`
-  gives a side elevation with Z rendered inverted, so upside-down text in one of
-  those is not evidence of anything. Measure coordinates with `measure_part` or
-  `select_topology`; use the picture for the shape.
+* The orientation names are Inventor's, which is Y-up: `front` shows XY, `top`
+  shows XZ, `left` and `right` show YZ. On a part built on "xy" and extruded in
+  +Z that means `front` gives the plan and `top` gives an elevation -- measured,
+  and kept so a picture and a drawing of the same part agree. Which way is up
+  inside the plane is not settled: `top` renders Z inverted, so upside-down text
+  there is not evidence of anything. Ask for `iso` when you just want to look at
+  the part. Measure coordinates with `measure_part` or `select_topology`; use
+  the picture for the shape.
 * A failed build leaves the part where it stopped, because that is usually what
   explains the failure. Pass `rollback_on_error` when the part matters more than
   the diagnosis -- and to retry a hole, which consumes its sketch and cannot be

@@ -571,11 +571,25 @@ Each of these was hit while building real parts, and each passed
    session" and tells the caller to close it in Inventor -- rather than offering
    `close_part(document=None)`, which would be worse than saying nothing.
 
-4. **`capture_view` orientation names do not describe what you get.** On a part
+4. ~~**`capture_view` orientation names do not describe what you get.** On a part
    built on XY and extruded in +Z, `front` and `back` return top and bottom views,
-   and `top` returns a side elevation with **Z rendered inverted** -- which reads
-   as upside-down text that is not upside down. Anything checking its own work
-   from a render can be misled; coordinates must be measured instead.
+   and `top` returns a side elevation.~~ *Settled 2026-09-09, by deciding rather
+   than by fixing.* The names are **Inventor's**, and Inventor is Y-up: `front`
+   shows the XY plane, `top` shows XZ, `left` and `right` show YZ. On a part
+   modelled Z-up that means `front` is the plan -- which reads backwards and is
+   exactly what a person placing a base view by hand gets from the same seat.
+
+   The alternative was a vocabulary of our own that disagreed with every sheet
+   Inventor draws, and it could not be reached by picking different orientation
+   enums anyway: `left` needs a quarter turn *within* the YZ plane and no enum
+   does that. So the naming follows Inventor everywhere -- `capture_view`, a
+   drawing recipe's `direction`, and `base.VIEW_AXES` -- and the price is
+   written down instead of being discovered. `docs/DECISIONS.md` has the choice
+   and defect 16 the measurement behind it.
+
+   **One half of this is still open and is now defect 16's**: `top` renders Z
+   inverted, so text that looks upside-down in one is not. An extent settles
+   which plane a view shows and never which way is up inside it.
 
 5. **A `trim` split threw away the opposite side to the one documented.**
    *Fixed and confirmed live, 2026-09-03: all three fixtures now agree with
@@ -987,32 +1001,43 @@ Each of these was hit while building real parts, and each passed
     them, so the drawing surface now reaches its second question -- and found
     two more things, below.
 
-16. **A drawing view's `front` is the plan, not the elevation.** *(Measured
-    2026-09-08 on 2027.1: a 120 x 80 x 8 mm plate, `front` came back spanning
-    12 x 8 cm and `top` 12 x 0.8. They are each other's.)* Inventor's view
-    names are **Y-up**: its front view looks down Z and shows the XY plane.
-    This project is **Z-up** -- every recipe sketches on XY and extrudes
-    upward, and `_VIEW_AXES` in `drafting.py` says front and rear show XZ, top
-    and bottom XY, left and right YZ. So the two vocabularies disagree by a
-    quarter turn, and `_VIEW_ORIENTATIONS` in the COM backend passes each name
-    straight through to the enum that spells it the same way.
+16. ~~**A drawing view's `front` is the plan, not the elevation.**~~ *Measured
+    2026-09-08, settled 2026-09-09 by adopting Inventor's naming.* A 120 x 80 x
+    8 mm plate, one base view per direction, read off the sheet: `front` and
+    `rear` span 12 x 8 cm (**XY**, the plan), `top` and `bottom` span 12 x 0.8
+    (**XZ**, the elevation), `left` and `right` span 0.8 x 8 (**YZ**, with Z
+    across and Y up). Inventor's view names are Y-up -- its front view looks
+    down Z -- and every recipe here models Z-up.
 
-    This is **defect 4 on a second API**. `capture_view`'s orientations have
-    the same mismatch and have had it recorded, unfixed, since they were
-    measured -- and a screenshot in the wrong orientation is a nuisance where a
-    *drawing* in the wrong orientation is a wrong drawing that looks like a
-    right one, so this is the half that has to be fixed.
+    **Two vocabularies, and no enum reconciles them.** Swapping `front` for
+    `kTopViewOrientation` fixes four of the six; `left` and `right` are on the
+    right plane already and turned a quarter turn inside it, which no
+    orientation enum changes. The choice was therefore between Inventor's
+    naming and a camera-built vocabulary of our own, and Inventor's won: a
+    recipe asking for `front` now gets what a person placing a base view by
+    hand gets, `capture_view` and a drawing sheet of the same part agree, and
+    both halves of the round trip measure the same axes.
 
-    **Two readings cannot rewrite a table of seven**, which is why it is not
-    fixed here. A partly-remapped table puts some views right and leaves the
-    rest wrong with nothing to say which. `live_acceptance.py --only
-    view-directions` places one base view per direction on one sheet, of a
-    block whose three dimensions all differ, and reports what each shows: the
-    whole table from a single run. And there is a second question an extent
-    cannot answer at all -- **which way is up inside the plane**, since a view
-    rotated or mirrored has the same extent. A retrieved dimension's position
-    or a curve's coordinates is what would settle that, and no sheet should be
-    trusted the right way up until it is.
+    One table, `base.VIEW_AXES`, above the three places that each had a copy --
+    `drafting.py` writing a sheet, the simulator measuring a view's extent, and
+    the acceptance check's expectations. `docs/DECISIONS.md` records the choice
+    and what it costs.
+
+    **The reading side deliberately did not change.** A `DrawingReading`'s
+    `kind` is the view *as the sheet labels it*, which is the ISO drafting
+    vocabulary a person reads with: a supplier's FRONT view is an elevation.
+    Sharing one table would have made every third-party FRONT elevation
+    reconstruct as a plan. `drafting._VIEW_KINDS` is the single place the two
+    meet, and it transposes the extent for `left` and `right` because their
+    planes agree and their axis order does not.
+
+    **What is still open, and it is the second half of defect 4 as well:**
+    which way is *up* inside the plane. An extent is a size -- a view rotated
+    or mirrored spans the same -- and `capture_view`'s `top` is known to render
+    Z inverted. `place_view` now reports each view's camera (eye, target, up
+    vector) in its result detail, and `live_acceptance.py --only
+    view-directions` prints them for all seven, so the reading exists; nothing
+    has been concluded from it yet.
 
 17. **Retrieval reported "0 of 0 dimensions" three times and the reason was
     already in the result.** *(2026-09-08.)* `build_drawing` catches each
