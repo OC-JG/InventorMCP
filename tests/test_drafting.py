@@ -581,6 +581,24 @@ class TestWhatARetrievedDimensionActuallyStates:
         assert any("rather than the parameter" in warning["warning"]
                    for warning in self.built(session)["warnings"])
 
+    def test_a_number_on_the_sheet_is_not_warned_about(self, session):
+        """Measured on Inventor 2027.1, 2026-09-09: a retrieved dimension
+        answers neither `ModelDimension.Parameter.Expression` nor
+        `Parameter.Expression`, so its expression falls back to the text on the
+        sheet -- `'120,00'` for a 120 mm plate, in the seat's own decimal
+        separator. That is never the parameter's name, so warning on
+        "expression != parameter" alone warned about every dimension on every
+        live sheet, which is the fastest way to make a warning ignored."""
+        from inventor_mcp.drafting import _mentions_a_parameter_other_than as formula
+
+        assert formula("plate_w - 2 * edge_margin", "edge_margin") is True
+        assert formula("plate_w", "plate_w") is False
+        assert formula("120,00", "plate_w") is False, "a number is not a formula"
+        assert formula("6,60 mm", "hole_d") is False
+        assert formula("", "plate_w") is False
+        # A different parameter entirely is still worth saying.
+        assert formula("plate_d", "plate_w") is True
+
     def test_a_parameter_the_model_states_directly_comes_back_as_itself(self, session):
         """Otherwise the warning above would be on everything and mean nothing."""
         stated = self.stated(session)

@@ -1052,3 +1052,51 @@ Each of these was hit while building real parts, and each passed
     route that ran, raised nothing and put no dimension on the sheet -- raises
     instead, naming the route and what it was asked for. `0 of 0` was never a
     measurement of anything.
+
+18. **A retrieved dimension is known by the parameter its model dimension's
+    *expression* names, not by the parameter's own name.** *(Measured
+    2026-09-08 and fixed 2026-09-09; the first run of the whole drawing surface
+    to reach retrieval at all.)* `GetRetrievableAnnotations2` worked, and every
+    annotation it offered named a parameter -- `d0, d1, d4, d5, d6, d7, d8,
+    d9`. A sketch dimension is driven by a **model** parameter, and the user
+    parameter a recipe asks for is what that model parameter's *expression*
+    is. So matching on the name found nothing on any part this server builds,
+    and the design read as unmeasurable when it was one indirection out.
+
+    The match is name first, expression second, and the expression test is
+    narrow on purpose: a dimension states a parameter only when its expression
+    **is** that parameter, so `plate_w` and `plate_w * 1 mm` state 120 and
+    `plate_w - 2 * edge_margin` states 96 and is a statement of neither name in
+    it. **Measured working**: two of two retrieved dimensions came back known
+    by their parameters, which is the fact the whole choose-then-retrieve
+    design rests on and the first evidence for it.
+
+    Two things the same run then showed about what a *retrieved* dimension
+    will and will not say. It answers neither
+    `ModelDimension.Parameter.Expression` nor `Parameter.Expression`, so a
+    dimension's expression falls back to the text on the sheet -- `'120,00'`,
+    in the seat's own decimal separator. Nothing parses that (a dimension's
+    value comes from `ModelValue`, a float), but the warning about a sheet
+    stating something other than the parameter asked for compared the
+    expression against the parameter's name, so it fired for **every**
+    dimension on every live sheet. It now fires only where the expression
+    references parameters and they are not the one asked for; a bare number
+    references none. Under the 2026.1 route it should never fire at all, since
+    an annotation is only chosen when its expression *is* the wanted parameter.
+
+19. **Four parameters did not reach the sheet, and the recipe was asking for
+    them on the wrong views.** *(Measured 2026-09-08, fixed 2026-09-09.)*
+    A retrieval can only offer what the view actually *shows*: `thk` is the
+    extrude's distance along Z and cannot be dimensioned on a view of the XY
+    plane, and `plate_d` and `corner_r` are dimensions of the XY outline and
+    cannot be shown on a 120 x 8 elevation. `examples/drawings/
+    mounting_plate.json` had them the other way round, because it was written
+    when `front` was believed to mean the elevation -- so defect 16's naming
+    decision reaches into the shipped example, and this is what it cost.
+
+    `edge_margin` is the fifth and stays where it is: the model states it only
+    inside `plate_w - 2 * edge_margin`, so no model dimension states 12 and no
+    retrieval can produce one. It is in the recipe deliberately, as the live
+    demonstration of that, and `live_acceptance.py --only drawing` names it as
+    the one parameter expected not to arrive rather than counting it as a
+    failure.

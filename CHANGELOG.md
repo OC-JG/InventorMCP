@@ -481,6 +481,25 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
 ### Measured
 
+- **A drawing's dimensions retrieve, and each one is known by the parameter it
+  came from.** *(2026-09-08, Inventor 2027.1.)* The fact the whole
+  choose-then-retrieve design rests on, and the first evidence for it: two of
+  two retrieved dimensions came back named. What it cost to get there was one
+  indirection -- `GetRetrievableAnnotations2` offers annotations driven by
+  *model* parameters (`d0, d1, d4 ...`), and the user parameter a recipe asks
+  for is what that model parameter's **expression** is, so matching on the name
+  found nothing on any part this server builds.
+
+  Two more things the same run said about a retrieved dimension. It answers
+  neither `ModelDimension.Parameter.Expression` nor `Parameter.Expression`, so
+  its expression is the text on the sheet -- `'120,00'`, in the seat's own
+  decimal separator; nothing parses that, since a value comes from `ModelValue`.
+  And four parameters went missing because the shipped recipe asked for them on
+  the wrong views: a retrieval can only offer what a view *shows*, and `thk` is
+  a distance along Z that no view of the XY plane can dimension. Defect 16's
+  naming decision reaching into the shipped example, which is what it cost.
+  Defects 18 and 19.
+
 - **Inventor does not put an occurrence of a sketch-driven pattern on the
   reference point.** *(2026-09-08, Inventor 2027.1.)* The last unmeasured
   thing about that operation, and it took a calibration rather than another

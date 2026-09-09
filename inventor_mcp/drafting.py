@@ -42,7 +42,7 @@ from .backend.base import (
     ViewRequest,
 )
 from .drawing import DrawingDimension, DrawingReading, DrawingView, compare
-from .errors import InventorMCPError, RecipeError
+from .errors import ExpressionError, InventorMCPError, RecipeError
 from .resolve import Resolver
 from .schema import DrawingRecipe, DrawingViewSpec, PartRecipe
 from .session import Session
@@ -924,6 +924,28 @@ def _parameters_they_feed(absent: Sequence[str],
     return feeds
 
 
+def _mentions_a_parameter_other_than(expression: str, parameter: str) -> bool:
+    """Whether *expression* is a formula naming something other than *parameter*.
+
+    The line between "the sheet states a different number from the one asked
+    for" and "the sheet shows a number, as drawings do". A dimension's text is
+    a number and a locale's decimal separator; an expression is names and
+    operators. Only the second is worth warning about.
+    """
+    from .expressions import referenced_parameters
+
+    try:
+        names = referenced_parameters(expression)
+    except ExpressionError:
+        # Not parseable as an expression, so it is text: a number, a locale's
+        # decimal separator, whatever Inventor put on the sheet. Narrow on
+        # purpose -- the first version caught `Exception`, which swallowed the
+        # `NameError` from this import being missing and turned the whole
+        # warning off. A bare except is how a check stops checking silently.
+        return False
+    return bool(names) and set(names) != {parameter}
+
+
 def _dimensions_that_state_something_else(
         contents: DrawingContents) -> list[dict[str, Any]]:
     """Dimensions retrieved for a parameter whose value is not that parameter's.
@@ -935,12 +957,28 @@ def _dimensions_that_state_something_else(
     dimension the margin gets 96 mm. The sheet is right, the holes are pinned,
     and the number the author named is nowhere on it -- which is exactly the
     thing somebody should be told rather than left to notice.
+
+    **It has to state a formula, not merely a number, and that took a live run
+    to notice.** On Inventor 2027.1 a retrieved dimension answers neither
+    `ModelDimension.Parameter.Expression` nor `Parameter.Expression`, so the
+    expression falls back to the text on the sheet -- `'120,00'` for a 120 mm
+    plate, in whatever decimal separator the seat is set to. That is never the
+    parameter's name, so the first version of this warned about **every**
+    dimension on every live sheet, which is the fastest way to make a warning
+    ignored. It fires only where the expression references parameters and they
+    are not the one asked for; a bare number references none.
+
+    Under the choose-then-retrieve route this should now never fire at all,
+    because an annotation is only chosen when its expression *is* the wanted
+    parameter. It stays for the legacy retrieve-then-filter fallback and for a
+    sheet read back that this session did not place.
     """
     indirect = [
         f"{entry.parameter} is stated as {entry.expression!r}"
         for entry in contents.dimensions
         if entry.parameter and entry.expression
         and entry.expression.strip() != entry.parameter
+        and _mentions_a_parameter_other_than(entry.expression, entry.parameter)
     ]
     if not indirect:
         return []

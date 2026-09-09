@@ -1441,19 +1441,29 @@ def check_drawing(session: Session, report: Report) -> None:
         "annotations named no parameter. `python scripts/com_signatures.py "
         "Sheet DimensionConstraint FeatureDimension` says which.")
 
-    # 2. Every parameter the recipe asked for, on the sheet.
+    # 2. Every parameter the recipe asked for, on the sheet -- except the one
+    #    that provably cannot be there. `edge_margin` is in the shipped recipe
+    #    as a live demonstration: the model states it only inside
+    #    `plate_w - 2 * edge_margin`, so no model dimension states 12 and no
+    #    retrieval can produce one. Naming it here rather than dropping it from
+    #    the recipe keeps the demonstration and keeps this check honest.
+    UNSTATEABLE = {"edge_margin"}
     asked = sorted({name for view in drawing.views
                     for name in list(view.dimension) + list(view.reference)})
+    wanted = sorted(set(asked) - UNSTATEABLE)
     arrived = sorted({entry["parameter"] for entry in named})
     report.check(
-        arrived == asked,
-        f"drawing: every parameter asked for reached the sheet ({len(arrived)} of "
-        f"{len(asked)})",
-        f"asked for {asked}, and the sheet carries {arrived}. A dimension can "
-        "only be retrieved if the model holds one, so a parameter missing here "
-        "either drives nothing or Inventor does not treat it as a model "
-        "dimension -- and which of those it is decides whether this is a recipe "
-        "fault or a gap in the approach.")
+        arrived == wanted,
+        f"drawing: every parameter that can be stated reached the sheet "
+        f"({len(arrived)} of {len(wanted)}; {', '.join(sorted(UNSTATEABLE))} "
+        "cannot be and is asked for on purpose)",
+        f"asked for {wanted}, and the sheet carries {arrived}. A dimension can "
+        "only be retrieved if the model holds one **and the view shows it**: "
+        "measured 2026-09-08, four parameters went missing because the recipe "
+        "asked for them on the wrong view -- a front view is the XY plan here, "
+        "so `thk` can only be shown on the elevation. The other reason is a "
+        "parameter the model states only inside an expression, which is what "
+        "`edge_margin` is for. The per-view findings above say which.")
 
     # 3. The extent, which is Inventor's own measurement here and is the part's
     #    own arithmetic in the simulator. 120 x 80 x 8 mm plate.
@@ -1510,16 +1520,36 @@ def check_drawing(session: Session, report: Report) -> None:
     if "TOP" in asked and "FRONT" in asked:
         below = asked["TOP"][1] < asked["FRONT"][1]
         reported = (inventors.get("TOP") or {}).get("direction")
+        # Two claims, and only one of them is ours to make. Where the view sits
+        # is this project's arithmetic and worth asserting. What Inventor calls
+        # it is the measurement -- and on 2026-09-09 it read `unknown`, meaning
+        # the property could not be read at all, which this used to accept as a
+        # pass. A reading that did not happen is not evidence, so it is a note
+        # now and the check is about the position.
         report.check(
-            below and reported in ("top", "unknown"),
-            "drawing: a first-angle top view sits below the front view and "
-            f"Inventor calls it {reported!r}",
-            "The sheet is first angle, so this project put TOP below FRONT and "
-            "told Inventor nothing about which way it faces -- a projected view "
-            "takes no orientation. If Inventor calls it 'bottom', the two "
-            "conventions are the other way round from what "
-            "`drafting._THIRD_ANGLE_STEP` implements, and negating that table "
-            "is the whole fix. This is the reading a base view cannot give.")
+            below,
+            "drawing: a first-angle top view sits below the front view",
+            "The sheet is first angle, so this project put TOP below FRONT.")
+        if reported in (None, "unknown"):
+            report.note(
+                "Inventor would not say which way that projected view faces: "
+                f"`ViewOrientationType` read as {reported!r}. So the "
+                "projection angle is still unverified -- a projected view is "
+                "told a position and nothing about its direction, which makes "
+                "Inventor's own answer the only evidence that "
+                "`drafting._THIRD_ANGLE_STEP` has first and third angle the "
+                "right way round. `scripts/com_signatures.py DrawingView` says "
+                "what a view offers on this release.")
+        else:
+            report.check(
+                reported == "top",
+                f"drawing: Inventor calls the projected view {reported!r}",
+                "It should be the top view: this sheet is first angle and TOP "
+                "was placed below FRONT. If Inventor calls it 'bottom' then the "
+                "two conventions are the other way round from what "
+                "`drafting._THIRD_ANGLE_STEP` implements, and negating that "
+                "table is the whole fix. This is the reading a base view cannot "
+                "give.")
 
     # 4. And the whole round trip, which is what the sheet is for.
     trip = outcome.get("round_trip") or {}
