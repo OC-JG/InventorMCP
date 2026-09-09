@@ -581,6 +581,8 @@ class TestWhatARetrievedDimensionActuallyStates:
         assert any("rather than the parameter" in warning["warning"]
                    for warning in self.built(session)["warnings"])
 
+    KNOWN = {"plate_w", "plate_d", "thk", "hole_d", "corner_r", "edge_margin"}
+
     def test_a_number_on_the_sheet_is_not_warned_about(self, session):
         """Measured on Inventor 2027.1, 2026-09-09: a retrieved dimension
         answers neither `ModelDimension.Parameter.Expression` nor
@@ -588,16 +590,29 @@ class TestWhatARetrievedDimensionActuallyStates:
         sheet -- `'120,00'` for a 120 mm plate, in the seat's own decimal
         separator. That is never the parameter's name, so warning on
         "expression != parameter" alone warned about every dimension on every
-        live sheet, which is the fastest way to make a warning ignored."""
+        live sheet, which is the fastest way to make a warning ignored.
+
+        **And a number is not always bare**, which took a second run to find:
+        `'R10,00'` for a radius parses as the identifier `R10` and `'n6,60'`
+        for a diameter as `n6`, so sheet decoration read as a formula and the
+        warning came back for every dimension carrying a prefix. Only names the
+        part actually has count."""
         from inventor_mcp.drafting import _mentions_a_parameter_other_than as formula
 
-        assert formula("plate_w - 2 * edge_margin", "edge_margin") is True
-        assert formula("plate_w", "plate_w") is False
-        assert formula("120,00", "plate_w") is False, "a number is not a formula"
-        assert formula("6,60 mm", "hole_d") is False
-        assert formula("", "plate_w") is False
+        assert formula("plate_w - 2 * edge_margin", "edge_margin", self.KNOWN) is True
+        assert formula("plate_w", "plate_w", self.KNOWN) is False
+        assert formula("120,00", "plate_w", self.KNOWN) is False, \
+            "a number is not a formula"
+        assert formula("6,60 mm", "hole_d", self.KNOWN) is False
+        assert formula("R10,00", "corner_r", self.KNOWN) is False, \
+            "the R is Inventor's radius prefix, not a parameter called R10"
+        assert formula("n6,60", "hole_d", self.KNOWN) is False, \
+            "the diameter glyph is not a parameter called n6"
+        assert formula("", "plate_w", self.KNOWN) is False
         # A different parameter entirely is still worth saying.
-        assert formula("plate_d", "plate_w") is True
+        assert formula("plate_d", "plate_w", self.KNOWN) is True
+        # And a name nothing in the part has is decoration, whatever it parses as.
+        assert formula("R10", "corner_r", set()) is False
 
     def test_a_parameter_the_model_states_directly_comes_back_as_itself(self, session):
         """Otherwise the warning above would be on everything and mean nothing."""

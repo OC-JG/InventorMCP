@@ -3666,19 +3666,24 @@ class ComBackend(Backend):
     def place_view(self, doc_id: str, request: ViewRequest) -> ViewInfo:  # pragma: no cover
         """A base view of a part, on this drawing's active sheet.
 
-        **Never executed.** `AddBaseView`'s argument order is Inventor's
-        documented one and is a proposal; `docs/INVENTOR_SETUP.md` says what a
-        run has to settle. The arguments are passed by name through
-        `_call_named` so the positions are readable at the call, and the two
-        enums come from `_k`, so a wrong *name* raises and a wrong *number* is
-        not possible.
+        **Measured on Inventor 2027.1, 2026-09-09**, on the second attempt: the
+        first placed nothing at all, because a drawing view is a *reference to
+        a model file* and the part had only ever existed in memory. That is
+        checked before the call now and refused by name, since Inventor's own
+        answer is "Exception occurred." and nothing else.
 
-        What this cannot rule out is the thing defect 4 is about: that a
-        direction's name describes what you get. `capture_view`'s orientations
-        do not -- `front` returns a top view on a part built on XY -- and a
-        drawing view is a different API reached through a similarly-named enum.
-        So the extent read back off the sheet is the check, and it is why
-        `read_drawing` reports one.
+        `AddBaseView`'s arguments are passed by name through `_call_named` so
+        the positions are readable at the call, and the two enums come from
+        `_k`, so a wrong *name* raises and a wrong *number* is not possible.
+
+        **What a direction's name means was the other measurement.** A view's
+        extent, read back off the sheet, says which plane it shows: `front`
+        spans XY -- Inventor's view names are Y-up -- so a plate modelled Z-up
+        has its plan as its front view. A recipe's `direction` follows
+        Inventor's naming by decision (`docs/DECISIONS.md`), which is why the
+        extent is reported here and asserted in the acceptance check. What an
+        extent cannot say is which way is *up* inside that plane, so the
+        view's camera goes into the result detail beside it.
 
         **A projected view is a different call and does not name a direction at
         all.** `AddProjectedView` is told a position and infers which way the

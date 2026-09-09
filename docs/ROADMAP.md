@@ -996,8 +996,10 @@ The market's 2026 feature, and a gap in the whole open-source field.
       asked for.
 - [x] **Produce the sheet.** *(2026-09-07. Four `Backend` methods —
       `new_drawing`, `place_view`, `retrieve_dimensions`, `read_drawing` — on
-      both backends, with the simulator's half measured and tested and the COM
-      half never executed.)*
+      both backends, and **all four measured against Inventor 2027.1 on
+      2026-09-09**: a sheet from a company template, three views carrying
+      Inventor's own extents, and five of five dimensions retrieved with each
+      one known by the model parameter it came from.)*
 
       **Dimensions are retrieved, not placed**, and that is the design decision
       worth recording. The item above imagined "dimensions placed against the
@@ -1041,6 +1043,19 @@ The market's 2026 feature, and a gap in the whole open-source field.
       from a curve on the sheet back to the model edge, and
       `Sheet.CreateGeometryIntent` plus `GeneralDimensions.AddLinear` place a
       dimension against it.
+
+      **And on 2026-09-09 the route ran and the fact held.** Five of five
+      dimensions retrieved, every one of them named. It took one more
+      correction than the reference gave: the parameter an offered annotation
+      names is a *model* parameter (`d4`), and the user parameter a recipe asks
+      for is what that model parameter's **expression** is, so the match is
+      name first and expression second -- and narrow, since a dimension states
+      a parameter only when its expression *is* that parameter. Defect 18. Two
+      smaller measurements came with it: a retrieved dimension answers neither
+      `ModelDimension.Parameter.Expression` nor `Parameter.Expression`, so its
+      expression is the text on the sheet, and a retrieval can only offer what
+      a view actually *shows* -- which is why the shipped recipe's dimensions
+      had to move views when the direction naming was settled.
 - [x] **Projected views, so the projection angle means something.**
       *(2026-09-07.)* Until this, every view was a base view at a position the
       recipe gave, and `DrawingRecipe.projection` was recorded and applied to
@@ -1058,7 +1073,7 @@ The market's 2026 feature, and a gap in the whole open-source field.
 
       Also here: **PDF export**, which is the format a drawing is actually sent
       in — a sheet exportable only as DWG needs Inventor at the other end.
-- [ ] **Measure the drawing surface against a live Inventor** — attempted
+- [x] **Measure the drawing surface against a live Inventor** — attempted
       2026-09-07 and it stopped at the first call, on the argument nobody had
       checked. `new_drawing` was the one call in the surface said to carry no
       risk: `Documents.Add` is measured and `kDrawingDocumentObject` has been in
@@ -1080,8 +1095,21 @@ The market's 2026 feature, and a gap in the whole open-source field.
       project. On the machine this serves that is a Shared-drive project folder
       holding `Standard.idw` and a house `OCB_Standard.idw`, with `ISO.idw` one
       level down under `Metric\` — so the shipped recipe's `"ISO.idw"` does
-      resolve, from the subfolder search. **Still unverified end to end**: no
-      drawing has been built, and it is the first thing the next run reaches.
+      resolve, from the subfolder search.
+
+      **Measured 2026-09-09, on the fourth attempt, and every reading this item
+      asked for has an answer.** A sheet from that company template, three
+      views carrying Inventor's own extents, and five of five dimensions
+      retrieved with each one known by the model parameter it came from. Two
+      more attempts went between: a template that wanted migrating (opened and
+      saved, then the `Add` retried once), and a part that had never been saved
+      -- a drawing view is a reference to a model *file*, so `build_drawing`
+      takes a `part_path` now and `place_view` refuses an unsaved model by
+      name. Not one of the four failures was in the drawing arithmetic, and
+      none was in the call said to carry no risk. Defects 15, 17, 18 and 19.
+
+      What is left is one reading Inventor will not give -- a projected view's
+      own direction -- and it is its own item below.
 
 - [x] **Settle what a view direction means.** *(Opened 2026-09-08 by defect
       16, decided 2026-09-09.)* Measured all seven directions in one pass:
@@ -1093,6 +1121,19 @@ The market's 2026 feature, and a gap in the whole open-source field.
       copy, with `drafting._VIEW_KINDS` translating at the single boundary
       where a *reading*'s ISO vocabulary meets it. `docs/DECISIONS.md` has the
       choice and what it costs.
+
+- [ ] **A projected view's own direction, which is the last evidence the
+      projection angle needs.** *(Opened 2026-09-09.)* `ViewOrientationType`
+      reads as unreadable on a projected view, so the acceptance check asserts
+      where the view *sits* -- this project's own arithmetic -- and reports the
+      projection angle as unverified rather than passing on a reading that
+      never happened, which is what it used to do. Nothing else distinguishes
+      first angle from third: `_THIRD_ANGLE_STEP` is negated for first angle
+      and the negation is reasoning, not a measurement, so a sheet stating ISO
+      first angle while laying out ASME third would be a mirrored drawing that
+      reads as correct. `scripts/com_signatures.py DrawingView` says what a
+      view offers on this release, and a camera read is the other candidate
+      since `place_view` already reports one for a base view.
 
 - [ ] **Which way is up inside the plane** -- the open half of defects 4 and
       16. An extent is a size, so a view rotated or mirrored measures the same,

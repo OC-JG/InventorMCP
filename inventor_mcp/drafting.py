@@ -686,7 +686,8 @@ def build_drawing(session: Session, recipe: DrawingRecipe, part: PartRecipe, *,
     report["warnings"].extend(_dimensions_that_did_not_reach_the_sheet(
         recipe, contents, rehearsed))
     report["warnings"].extend(_views_that_are_not_what_they_asked_for(recipe, contents))
-    report["warnings"].extend(_dimensions_that_state_something_else(contents))
+    report["warnings"].extend(_dimensions_that_state_something_else(
+        contents, set(rehearsed.get("parameters") or {})))
     reading = reading_of(recipe, contents)
     report["round_trip"] = _translated(
         compare(reading, rehearsed), recipe,
@@ -924,13 +925,22 @@ def _parameters_they_feed(absent: Sequence[str],
     return feeds
 
 
-def _mentions_a_parameter_other_than(expression: str, parameter: str) -> bool:
-    """Whether *expression* is a formula naming something other than *parameter*.
+def _mentions_a_parameter_other_than(expression: str, parameter: str,
+                                     known: set[str]) -> bool:
+    """Whether *expression* is a formula naming a real parameter that is not *parameter*.
 
     The line between "the sheet states a different number from the one asked
     for" and "the sheet shows a number, as drawings do". A dimension's text is
-    a number and a locale's decimal separator; an expression is names and
-    operators. Only the second is worth warning about.
+    a number with the sheet's own decoration; an expression is the part's
+    parameter names and operators. Only the second is worth warning about.
+
+    **`known` is what makes that distinction hold, and two live runs were
+    needed to find out why.** A retrieved dimension will not give its model
+    parameter's expression on 2027.1, so what arrives is the sheet text -- and
+    `'R10,00'` for a radius parses as the identifier `R10`, `'n6,60'` for a
+    diameter as `n6`. Sheet decoration read as a formula, so the warning fired
+    on every dimension that carried a prefix. A name the part does not have is
+    not a parameter, whatever the parser makes of it.
     """
     from .expressions import referenced_parameters
 
@@ -943,11 +953,13 @@ def _mentions_a_parameter_other_than(expression: str, parameter: str) -> bool:
         # `NameError` from this import being missing and turned the whole
         # warning off. A bare except is how a check stops checking silently.
         return False
-    return bool(names) and set(names) != {parameter}
+    real = {name for name in names if name in known}
+    return bool(real) and real != {parameter}
 
 
 def _dimensions_that_state_something_else(
-        contents: DrawingContents) -> list[dict[str, Any]]:
+        contents: DrawingContents,
+        known: set[str] | None = None) -> list[dict[str, Any]]:
     """Dimensions retrieved for a parameter whose value is not that parameter's.
 
     Not a fault, and worth saying anyway. Retrieval can only offer dimensions the
@@ -978,7 +990,8 @@ def _dimensions_that_state_something_else(
         for entry in contents.dimensions
         if entry.parameter and entry.expression
         and entry.expression.strip() != entry.parameter
-        and _mentions_a_parameter_other_than(entry.expression, entry.parameter)
+        and _mentions_a_parameter_other_than(entry.expression, entry.parameter,
+                                             known or set())
     ]
     if not indirect:
         return []

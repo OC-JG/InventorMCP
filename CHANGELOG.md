@@ -481,6 +481,23 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
 ### Measured
 
+- **The whole drawing surface ran, on the fourth attempt.** *(2026-09-09,
+  Inventor 2027.1.)* A sheet from a company template, three views carrying
+  Inventor's own extents, and **five of five dimensions retrieved with each one
+  known by the model parameter it came from** -- the fact the choose-then-
+  retrieve design rests on, now evidence rather than a plan. All four
+  `Backend` drawing methods are measured, so `docs/INVENTOR_SETUP.md` has no
+  unmeasured surface left in it and `thread` is the one operation in the server
+  with no live evidence at all.
+
+  Four failures to get there, in four different layers, and not one of them in
+  the drawing arithmetic or in the call that was said to carry no risk: a
+  template name that was not a path, a template that wanted migrating, a part
+  that had never been saved, and a parameter match that was one indirection
+  short. The fifth reading is the one Inventor would not give -- a projected
+  view's own direction -- and the projection angle stays unverified because of
+  it, rather than being passed on a reading that never happened.
+
 - **A drawing's dimensions retrieve, and each one is known by the parameter it
   came from.** *(2026-09-08, Inventor 2027.1.)* The fact the whole
   choose-then-retrieve design rests on, and the first evidence for it: two of
@@ -499,6 +516,15 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   a distance along Z that no view of the XY plane can dimension. Defect 16's
   naming decision reaching into the shipped example, which is what it cost.
   Defects 18 and 19.
+
+  The warning about a sheet stating something other than the parameter asked
+  for needed two live runs to get right, and both were about reading text as
+  code. It compared the expression against the parameter's name, so it fired on
+  every dimension of every live sheet -- and once it required a formula,
+  `'R10,00'` still parsed as an identifier `R10` and `'n6,60'` as `n6`, so
+  every radius and diameter brought it back. It now warns only where the
+  expression names a parameter **the part actually has** that is not the one
+  asked for.
 
 - **Inventor does not put an occurrence of a sketch-driven pattern on the
   reference point.** *(2026-09-08, Inventor 2027.1.)* The last unmeasured

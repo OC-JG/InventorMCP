@@ -278,8 +278,10 @@ reach, so **three COM calls in `backend/com/backend.py` have never executed**.
 The simulator side is measured and tested; the live side is a proposal.
 
 Those three have since been measured -- see *Running all five*, below, and the
-six runs it took. **The whole drawing surface, added 2026-09-07, is what is left
-of this section.**
+six runs it took. And so, on 2026-09-09, is the drawing surface: **nothing in
+this section is unmeasured any more.** `thread` is the one operation in the
+server with no live evidence at all, and it is refused rather than sitting here
+as a proposal.
 
 The other three that arrived with it have gone: `thicken` on 2026-09-07,
 `move_face` and `sketch_driven_pattern` on 2026-09-08. They started a step worse
@@ -882,13 +884,22 @@ many occurrences there are and where -- and if the count is wrong, everything
 the placement then says is wrong with it.
 
 
-### Drawings, the last unmeasured surface in the project
+### Drawings, measured on the fourth attempt
 
 Added 2026-09-07. Four `Backend` methods -- `new_drawing`, `place_view`,
-`retrieve_dimensions`, `read_drawing` -- implemented on both backends, with the
-simulator's half measured and tested and the COM half never executed. It is the
-only one of the four 2026-09-07 surfaces still here, and what makes it different
-from the three that have gone is not only its size.
+`retrieve_dimensions`, `read_drawing` -- implemented on both backends, and
+**all four ran on Inventor 2027.1 on 2026-09-09**: a sheet from a company
+template, three views with Inventor's own extents on them, and five of five
+dimensions retrieved and each known by the model parameter it came from.
+
+Four attempts, and not one of them failed on the thing that was supposed to be
+risky. The record below is kept in the order the failures came, because each
+one was in a different layer and none was in the drawing code's arithmetic: a
+template name that was not a path, a template that needed migrating, a part
+that had never been saved, a view direction that did not mean what it said, and
+a parameter match that was one indirection short. What is still open is one
+reading Inventor will not give -- a projected view's own direction -- and it is
+the last line of this section.
 
 **One of the four was said to carry no risk at all, and it is what three runs
 have now failed on.** The claim was that `new_drawing` is `new_part` with a
@@ -1035,20 +1046,36 @@ that is a version fact rather than a design one.
    project implements and the one Inventor applies are not the same -- and since
    `_THIRD_ANGLE_STEP` is negated for first angle and nothing else distinguishes
    the two, one run on each convention settles it.
-3. **Whether a direction's name describes what you get.** This is defect 4's
-   drawing-shaped cousin and the reason `read_drawing` reports a view's extent
-   and its orientation *as the sheet has them* rather than as they were
-   requested. `capture_view`'s orientation names do not describe what they
-   return -- `front` gives a top view on a part built on XY -- and a drawing
-   view reaches Inventor through a similarly-named enum. `build_drawing` warns
-   when a view reports facing a way it was not asked to, and that warning can
-   only come from the sheet.
-4. **Retrieval**, per the section above: that `GetRetrievableAnnotations2`
-   offers the part's dimension constraints, that they name their parameters,
-   and that `RetrieveAnnotations2` puts the chosen ones on the view. The
-   legacy names are the fallback and are not expected to exist on 2027.
-5. **`read_drawing`** -- that a sheet can be walked and its dimensions read
-   with values. Everything the round trip concludes comes through here.
+3. ~~**Whether a direction's name describes what you get.**~~ *Answered
+   2026-09-08 and settled by decision on 2026-09-09.* It does not describe what
+   the *recipe* meant, and the recipe changed rather than the call: a 120 x 80 x
+   8 plate's `front` view spans 12 x 8 cm, so Inventor's `front` is the XY plane
+   and its view names are Y-up. All seven directions were read in one pass
+   (`--only view-directions`), the naming now follows Inventor, and
+   `base.VIEW_AXES` is the table. `docs/DECISIONS.md` has the choice; defect 16
+   the measurement. Still open: which way is *up* inside the plane, which an
+   extent cannot say and a camera can.
+4. ~~**Retrieval**~~, per the section above. *Answered 2026-09-09:*
+   `GetRetrievableAnnotations2` offers the part's dimension constraints, they
+   do name their parameters, and `RetrieveAnnotations2` puts the chosen ones on
+   the view -- **five of five, each known by the parameter that went in.** The
+   parameter an annotation names is a *model* parameter, though, and the user
+   parameter a recipe asks for is what its expression is: matching on the name
+   alone found nothing, which is defect 18 and was the last thing between this
+   design and evidence. The legacy names are the fallback and are measured
+   absent on 2027.
+5. ~~**`read_drawing`**~~ -- *answered 2026-09-09:* a sheet can be walked and
+   its dimensions read with values. Everything the round trip concludes comes
+   through here, and it is what reported the five.
+
+**The one reading Inventor would not give** is a projected view's own
+direction: `ViewOrientationType` reads as unreadable on a projected view, so
+the acceptance check asserts the *position* -- which is this project's own
+arithmetic -- and reports the projection angle as unverified rather than
+passing on a reading that never happened. Nothing else distinguishes first
+angle from third, so `_THIRD_ANGLE_STEP` is the one drawing table still resting
+on reasoning alone. `scripts/com_signatures.py DrawingView` is where to look
+next.
 
     python scripts/live_acceptance.py --only drawing
 
