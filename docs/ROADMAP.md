@@ -341,6 +341,26 @@ Each is one request type, one abstract method, two implementations, roughly
 350 lines across the same five files. Ordered by how often the lack of it has
 actually bitten.
 
+**Where it stands, 2026-09-09.** Everything in this phase that could be built
+without a CAD seat is built. What is left divides cleanly in two, and the
+division is worth stating because somebody reading a list of open items will
+otherwise assume they are all the same kind of work:
+
+* **Five are runs, not code.** `thread`, the body's convexity collections,
+  `split` on `TrimSolid`, `rib` on the published definition, and `Update2`'s
+  verdict are each written and waiting for one run on a seat. Three of them
+  have a probe or a fixture that answers them in a single go; none can be
+  closed from a session with no Inventor to reach, and closing one from here
+  would be exactly the claim this file exists not to make -- the `work_axis`
+  item above records what it cost to learn that.
+* **Three are code, and were split out of items that had them as asides.**
+  Project cut edges and the sketch offset, `chain: true` on a selector, and
+  the STL's facet resolution. Each was described in its parent item as coming
+  "for the same money" or similar, and each turned out to need something the
+  ledger does not hold -- a section through signed prisms, an edge's parent
+  primitive, an option name nobody has read. Splitting them out is the honest
+  answer rather than leaving a done item carrying an undone half.
+
 - [x] **Work axis and work point.** *(2026-09-03. Simulator measured and
       tested; the three COM calls are unmeasured -- see below.)* `AxisSpec`
       already accepted `work_axis` and nothing created one.
