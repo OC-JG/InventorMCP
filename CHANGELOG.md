@@ -6,6 +6,46 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
 ### Added
 
+- **A tangent work plane, with a `face` selector.** *(Roadmap Phase 2, and the
+  half of defect 12 that a schema field had to close.)* `work_plane` with
+  `kind: "tangent"` now builds: `WorkPlaneOp` has a `face`, a `Selector`
+  resolved the way a fillet's edges are, and the COM backend calls the
+  published `WorkPlanes.AddByPlaneAndTangent(plane, face)` positionally --
+  the argument order is documented and the parameter names are not. It is
+  **required for `tangent` and refused on every other kind**, the arrangement
+  `axis` got the day before, because a field silently ignored is how somebody
+  learns the wrong lesson about their own recipe. All four work-plane kinds
+  build now, `_KNOWN_BROKEN_VALUES` is gone with the last thing it described,
+  and the gap bullet is struck through.
+
+  **The rule about what a tangent plane is lives above both backends.**
+  Exactly one cylindrical face: a selector matching none, several, or a flat
+  face describes no plane at all. So `Backend._one_cylindrical_face` refuses
+  it in the recipe's own vocabulary -- naming the geometry it did match, and
+  the faces it found where there were several -- and the rehearsal therefore
+  refuses precisely what a live build would, which is the whole reason for
+  rehearsing. The COM backend needs it a second time over: given a planar
+  face, `AddByPlaneAndTangent` answers "Exception occurred", which tells a
+  caller nothing about their own recipe.
+
+  **One thing about the call is not published in any form this project could
+  read**, and the code is arranged around not knowing it: whether the plane
+  returned is *parallel* to the plane given or *perpendicular* to it.
+  Inventor's UI offers both as separate commands and the signature has one
+  plane argument, so the name settles the arguments and not the meaning. The
+  simulator's refusal is written to be right either way -- a tangent plane's
+  position depends on the cylinder it touches, and a face in that ledger is a
+  midpoint and an area, so the offset is not something it can work out under
+  either reading. Resting it on the more likely reading of an unread page is
+  how defect 5 survived three runs.
+
+  `scripts/live_acceptance.py --only tangent-plane` settles it in one run, and
+  the reading is a sign rather than a derivation: a boss on the Z axis with
+  `base: "xz"` puts the parallel answer at `y = +/-r` and the perpendicular
+  one at `x = +/-r`, ninety degrees apart, so a lug built on whichever comes
+  back moves the centre of mass along exactly one axis of a part that was
+  symmetric about both.
+
 - **A sketch fillet: `corners` on a rectangle or a polyline.** *(Roadmap Phase
   2, and the oldest bullet in `FEATURE_COVERAGE.md`'s gap list.)* A radius
   expression that rounds every corner of the **profile** -- so the rounding is
@@ -123,6 +163,16 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   `AddByPlaneAndTangent` wants a cylindrical face and the recipe has no field
   naming one. It is its own roadmap item now.
 
+
+### Changed
+
+- **The simulator's "tilted plane" is now "a plane it cannot locate", because
+  a tangency is the second way to get there and it is not a tilt.** `_Tilt`
+  became `_Unplaceable` and carries prose rather than only numbers: an angled
+  plane is somewhere known and not axis-aligned, where a tangent plane's
+  position is not derivable at all. Two rehearsal warnings were reworded with
+  it (`this feature is on a work plane the simulator cannot locate...`), and
+  the Skill's list of them in lockstep, as its drift test requires.
 
 ### Measured
 

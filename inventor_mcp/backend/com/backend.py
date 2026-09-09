@@ -4618,23 +4618,31 @@ class ComBackend(Backend):
                 feature.Name = request.name
         return _feature_info(feature, "mirror", {"plane": request.plane})
 
-    #: The work-plane kinds this backend can build. `tangent` is the one the
-    #: schema accepts and this cannot: Inventor's `AddByPlaneAndTangent` wants a
-    #: cylindrical *face* as well as a plane, and the recipe has no field naming
-    #: one. `angle` was in this position until 2026-09-09 -- and before
-    #: 2026-09-08 it was worse than refused, because a recipe asking for an
-    #: angled plane got an *offset* one and an `ok`, which is defect 12.
-    _WORK_PLANE_KINDS = ("offset", "midplane", "angle")
+    #: The work-plane kinds this backend can build -- all four of them since
+    #: 2026-09-09. `angle` was refused until that day and before 2026-09-08 it
+    #: was worse than refused, because a recipe asking for an angled plane got
+    #: an *offset* one and an `ok`, which is defect 12; `tangent` was refused
+    #: for want of a schema field naming the cylinder, which `face` now is.
+    _WORK_PLANE_KINDS = ("offset", "midplane", "angle", "tangent")
 
     def work_plane(self, doc_id: str, request: WorkPlaneRequest) -> FeatureInfo:  # pragma: no cover
         """A datum plane: offset from another, between two, or turned about an axis.
 
         The angled one is `WorkPlanes.AddByLinePlaneAndAngle(axis, plane,
-        angle)`, published and **unmeasured** -- the whole surface is, since no
-        run has built a work plane of any kind except through a sketch. It is
-        called positionally on purpose: the argument *order* is documented and
-        the parameter *names* are not, so naming them would be inventing the
-        one part nobody has read.
+        angle)` and the tangent one `WorkPlanes.AddByPlaneAndTangent(plane,
+        face)`, both published and **unmeasured** -- the whole surface is,
+        since no run has built a work plane of any kind except through a
+        sketch. Both are called positionally on purpose: the argument *order*
+        is documented and the parameter *names* are not, so naming them would
+        be inventing the one part nobody has read.
+
+        The tangent one takes the face this server resolved rather than one
+        Inventor picked, and refuses anything but a single cylindrical face
+        *before* the call. That is worth a sentence, because the alternative is
+        the failure mode this whole file is arranged against: a planar face
+        would go into `AddByPlaneAndTangent` and come back as "Exception
+        occurred", which says nothing about what the recipe got wrong, where
+        "the selector matched a planar face" says it exactly.
 
         The angle goes in as the resolved value and then again as the
         expression, which is the pattern the offset already uses: the value
@@ -4645,19 +4653,21 @@ class ComBackend(Backend):
         """
         document = self._doc(doc_id)
         component = document.ComponentDefinition
-        if request.kind not in self._WORK_PLANE_KINDS:
+        if request.kind not in self._WORK_PLANE_KINDS:  # pragma: no cover - all four build
             raise FeatureError(
                 f"A {request.kind!r} work plane cannot be built on Inventor by this "
                 "server yet.",
-                hint="'offset', 'midplane' and 'angle' are implemented. Inventor's "
-                "call for a tangent plane is WorkPlanes.AddByPlaneAndTangent(plane, "
-                "face), and the recipe schema has no field naming the cylindrical "
-                "face to touch -- the roadmap carries it. An angled plane about a "
-                "work axis is the nearest thing this can build.",
+                hint="'offset', 'midplane', 'angle' and 'tangent' are implemented.",
             )
         base = self._resolve_plane(document, request.base, None)
+        touched = (self._one_cylindrical_face(doc_id, request.face, "A tangent work plane")
+                   if request.kind == "tangent" else None)
         with self._batch(document), self._translate_errors("Work plane"):
-            if request.kind == "angle":
+            if request.kind == "tangent":
+                assert touched is not None
+                plane = component.WorkPlanes.AddByPlaneAndTangent(
+                    base, self._topology[touched.id]["object"])
+            elif request.kind == "angle":
                 if request.axis is None:  # pragma: no cover - the schema refuses it
                     raise FeatureError(
                         "An angled work plane needs an axis to turn about.",
@@ -4690,6 +4700,9 @@ class ComBackend(Backend):
         if request.kind == "angle" and request.axis is not None:
             detail["axis"] = request.axis.value
             detail["angle"] = request.angle.as_dict() if request.angle else None
+        if touched is not None:
+            detail["face"] = touched.id
+            detail["face_description"] = touched.description
         return FeatureInfo(id=f"wp:{plane.Name}", name=str(plane.Name), kind="work_plane",
                            detail=detail)
 

@@ -226,6 +226,54 @@ class _Topo:
         )
 
 
+@dataclass(frozen=True)
+class _Unplaceable:
+    """A work plane this ledger cannot say where is, and why not.
+
+    Two things get a plane here and they are different failures, which is why
+    this carries prose rather than numbers. An **angled** plane is somewhere
+    known and not axis-aligned: the ledger holds axis-aligned prisms, so a
+    sweep from a sketch on it is not a shape it can record. A **tangent**
+    plane's position depends on the cylinder it touches, and a face in this
+    ledger is a midpoint and an area -- so its offset is not something that
+    can be worked out, whichever of the plane's two possible orientations
+    Inventor picks. **That last clause is deliberate**: the published call is
+    `AddByPlaneAndTangent(plane, face)` and nothing here has read whether the
+    result is parallel to that plane or perpendicular to it, so the refusal is
+    written to be right either way rather than resting on the reading that
+    happens to be more likely.
+
+    What the two share is the only thing the three readers of this need: the
+    ledger must decline to place what is built on the plane, and must say so
+    in a sentence a caller can act on.
+
+    `phrase` says what the plane is, as a fragment each reader supplies a verb
+    for -- "turned 30 degrees about z". `because` is a whole sentence, so a
+    reader can end its own sentence and then hand over the reason. `axis` and
+    `angle` are kept where they exist, for the feature detail.
+    """
+
+    phrase: str
+    because: str
+    axis: str | None = None
+    angle: float | None = None
+
+    @classmethod
+    def at_an_angle(cls, axis: str, angle: float) -> "_Unplaceable":
+        return cls(phrase=f"turned {math.degrees(angle):.4g} degrees about {axis}",
+                   because="This ledger holds axis-aligned prisms.",
+                   axis=axis, angle=angle)
+
+    @classmethod
+    def tangent_to(cls, description: str) -> "_Unplaceable":
+        return cls(
+            phrase=f"tangent to {description}",
+            because="This ledger holds a face as a midpoint and an area, so "
+                    "where a plane tangent to that face lies is not something "
+                    "it can work out.",
+        )
+
+
 @dataclass
 class _Sketch:
     id: str
@@ -239,13 +287,13 @@ class _Sketch:
     #: z=0 rather than from the top of its flange, and came out 12 mm short.
     base_plane: str = "xy"
     offset: float = 0.0
-    #: The tilt of the work plane this sketch sits on, as (axis, radians), or
-    #: None for a plane parallel to an origin plane -- which is every plane
-    #: this simulator could represent before 2026-09-09. It is carried rather
-    #: than resolved away because it decides what the ledger may claim: a
-    #: prism swept from a tilted sketch is not axis-aligned, and axis-aligned
-    #: prisms are the whole of what the ledger holds.
-    tilt: tuple[str, float] | None = None
+    #: Why the work plane this sketch sits on cannot be located, or None for
+    #: a plane parallel to an origin plane at a known offset -- which is every
+    #: plane this simulator could represent before 2026-09-09. It is carried
+    #: rather than resolved away because it decides what the ledger may claim:
+    #: a prism swept from a sketch whose plane is unlocated is not a prism the
+    #: ledger can hold, and holding prisms is the whole of what it does.
+    unplaceable: "_Unplaceable | None" = None
 
 
 @dataclass
@@ -425,13 +473,12 @@ class _Document:
     sketches: list[_Sketch] = field(default_factory=list)
     features: list[_Feature] = field(default_factory=list)
     work_planes: dict[str, tuple[str, float]] = field(default_factory=dict)
-    #: The work planes that are *not* parallel to their base, by name, as the
-    #: axis they turn about and the angle in radians. Kept beside
-    #: `work_planes` rather than inside it so that every reader of that mapping
-    #: -- there are six -- keeps working unchanged, and the readers that must
-    #: care look here. Defect 7's note was that a plane's tilt was not recorded
-    #: at all; this is where it is recorded.
-    tilted_planes: dict[str, tuple[str, float]] = field(default_factory=dict)
+    #: The work planes that are *not* parallel to their base, by name. Kept
+    #: beside `work_planes` rather than inside it so that every reader of that
+    #: mapping -- there are six -- keeps working unchanged, and the readers
+    #: that must care look here. Defect 7's note was that a plane's tilt was
+    #: not recorded at all; this is where that, and a tangency, are recorded.
+    unplaceable_planes: dict[str, "_Unplaceable"] = field(default_factory=dict)
     #: Work points by name, as a model-space position in cm.
     work_points: dict[str, tuple[float, float, float]] = field(default_factory=dict)
     #: Work axes by name, as a model-space point on the axis and a unit
@@ -922,7 +969,7 @@ class MockBackend(Backend):
         base, offset = self._plane_and_offset(document, plan)
         sketch = _Sketch(id=self._next("sk"), name=name, plan=plan, loops=loops,
                          base_plane=base, offset=offset,
-                         tilt=document.tilted_planes.get(plan.plane))
+                         unplaceable=document.unplaceable_planes.get(plan.plane))
         document.sketches.append(sketch)
         document.modified = True
         self._record("build_sketch", name=name, plane=plan.plane, **plan.summary())
@@ -1037,7 +1084,7 @@ class MockBackend(Backend):
                 "profiles": len(loops),
                 "profile_area_cm2": round(area, 6),
                 "volume_from": how,
-                "placement": self._tilt_note(sketch),
+                "placement": self._placement_note(sketch),
                 # The same two keys the COM half reports, so a feature read
                 # back says what it was aimed at whichever backend built it.
                 "to": request.to,
@@ -1051,23 +1098,21 @@ class MockBackend(Backend):
         return _feature_info(feature)
 
     @staticmethod
-    def _tilt_note(sketch: _Sketch) -> str | None:
+    def _placement_note(sketch: _Sketch) -> str | None:
         """Why a feature on this sketch has no placement recorded, or None.
 
-        On every feature built from a tilted sketch, so a caller reading the
+        On every feature built on an unlocated plane, so a caller reading the
         part back is told once per feature rather than having to know that a
         plane it never asked about is at an angle. The volume is still the
         feature's own arithmetic; what is missing is where the material went.
         """
-        if sketch.tilt is None:
+        if sketch.unplaceable is None:
             return None
-        axis, angle = sketch.tilt
         return (
-            f"not recorded: sketch {sketch.name!r} is on a plane turned "
-            f"{math.degrees(angle):.4g} degrees about {axis}, and this ledger "
-            "holds axis-aligned prisms. The volume is predicted; where the "
-            "material sits, and so what a later cut through it would meet, is "
-            "not."
+            f"not recorded: sketch {sketch.name!r} is on a plane "
+            f"{sketch.unplaceable.phrase}. {sketch.unplaceable.because} The "
+            "volume is predicted; where the material sits, and so what a later "
+            "cut through it would meet, is not."
         )
 
     def _extent_to_target(self, document: _Document, sketch: _Sketch,
@@ -1106,13 +1151,12 @@ class MockBackend(Backend):
                         "says where a face is, not which way it faces, so the "
                         "distance to it is not something this can measure")
             base, offset = self._base_plane_of(document, reference, f"an extrude's {label}")
-            if reference in document.tilted_planes:
-                axis, angle = document.tilted_planes[reference]
+            if reference in document.unplaceable_planes:
+                unplaceable = document.unplaceable_planes[reference]
                 return (0.0, None,
                         f"not predicted: the {label} target {reference!r} is "
-                        f"turned {math.degrees(angle):.4g} degrees about {axis}, "
-                        "so it is not parallel to the sketch plane and the "
-                        "distance to it varies across the profile")
+                        f"{unplaceable.phrase}, so how far it is from the sketch "
+                        f"plane is not something this can say. {unplaceable.because}")
             if base != sketch.base_plane:
                 return (0.0, None,
                         f"not predicted: the {label} target {reference!r} lies on "
@@ -1149,7 +1193,7 @@ class MockBackend(Backend):
         `placement` note says. `sketch_driven_pattern` already declines the same
         way for a revolved seed.
         """
-        if sketch.tilt is not None:
+        if sketch.unplaceable is not None:
             return
         near, far = span
         for loop in loops:
@@ -1218,7 +1262,7 @@ class MockBackend(Backend):
         volume that is obviously off, where too little looks like a cut that
         worked.
         """
-        if sketch.tilt is not None:
+        if sketch.unplaceable is not None:
             # The sweep is not axis-aligned, so the ledger cannot say what it
             # meets: `_material_spans` walks one axis and every prism in it is
             # square to the origin planes. Charging the whole sweep is the
@@ -1226,12 +1270,11 @@ class MockBackend(Backend):
             # reads as a volume that is obviously off, where too little reads as
             # a cut that worked. Saying which of the two this is matters more
             # than the number.
-            axis, angle = sketch.tilt
             return (distance,
-                    f"the whole swept prism: the sketch plane is turned "
-                    f"{math.degrees(angle):.4g} degrees about {axis}, and the "
-                    "ledger holds axis-aligned prisms, so how much material "
-                    "the cut meets is not something this can measure",
+                    f"the whole swept prism: the sketch plane is "
+                    f"{sketch.unplaceable.phrase}, so how much material the cut "
+                    f"meets is not something this can measure. "
+                    f"{sketch.unplaceable.because}",
                     span)
         normal = plane_normal(plane)
         axis = max(range(3), key=lambda index: abs(normal[index]))
@@ -2972,7 +3015,7 @@ class MockBackend(Backend):
                     self._expand_bounds(document, [tuple(point)])
 
     def work_plane(self, doc_id: str, request: WorkPlaneRequest) -> FeatureInfo:
-        """A datum plane, and for an angled one the fact that it is angled.
+        """A datum plane, and for one this ledger cannot locate, the fact of it.
 
         **The tilt is recorded rather than flattened**, which it was not until
         2026-09-09: every plane went into `work_planes` as an origin plane and
@@ -2987,11 +3030,27 @@ class MockBackend(Backend):
         the simulator the ability to *say so* -- see `_record_slabs`, which
         records nothing for a tilted sketch, and `_cut_reach`, which charges the
         whole sweep and says why.
+
+        A `tangent` plane arrives at the same refusal by a different route,
+        and it is the sharper case: an angled plane is somewhere known and not
+        axis-aligned, where a tangent plane's position depends on the cylinder
+        it touches -- and a face here is a midpoint and an area. So it is
+        recorded with no angle in it at all, which is also what makes the
+        refusal right whichever plane Inventor's call actually returns; see
+        `_Unplaceable`, which says why that matters.
+
+        **The face is still resolved**, through the same
+        `_one_cylindrical_face` the COM backend uses, because refusing the
+        recipes the live build refuses is what a rehearsal is for: a selector
+        matching two bosses is a recipe that does not describe a plane, and
+        there is no reason to spend a CAD seat learning that.
         """
         document = self._doc(doc_id)
         base = request.base.split(":")[0]
         if base not in _PLANES and request.base not in document.work_planes:
             raise FeatureError(f"Unknown base plane {request.base!r}.")
+        touched = (self._one_cylindrical_face(doc_id, request.face, "A tangent work plane")
+                   if request.kind == "tangent" else None)
         name = self._feature_name(document, request.name, "workplane")
         offset = request.offset.value if request.offset else 0.0
         resolved = base if base in _PLANES else document.work_planes[request.base][0]
@@ -3000,24 +3059,31 @@ class MockBackend(Backend):
             "kind": request.kind, "base": request.base,
             "offset": request.offset.as_dict() if request.offset else None,
         }
+        unlocated = (
+            "recorded as unlocated: the simulator predicts volumes on this "
+            "plane and does not place the material, because its ledger holds "
+            "axis-aligned prisms at known offsets and this is not one"
+        )
         if request.kind == "angle" and request.axis is not None and request.angle:
             # A plane turned about its base's own axis. The angle is in radians
             # here, as every angle in this backend is.
-            document.tilted_planes[name] = (request.axis.value, request.angle.value)
-            # Inherited from the base plane where that is itself tilted, so a
-            # plane offset from a tilted one is not silently flattened.
+            document.unplaceable_planes[name] = _Unplaceable.at_an_angle(
+                request.axis.value, request.angle.value)
             detail["axis"] = request.axis.value
             detail["angle"] = request.angle.as_dict()
+            detail["placement"] = unlocated
+        elif touched is not None:
+            document.unplaceable_planes[name] = _Unplaceable.tangent_to(touched.description)
+            detail["face"] = touched.id
+            detail["face_description"] = touched.description
+            detail["placement"] = unlocated
+        elif request.base in document.unplaceable_planes:
+            # Inherited from the base plane where that is itself tilted, so a
+            # plane offset from a tilted one is not silently flattened.
+            document.unplaceable_planes[name] = document.unplaceable_planes[request.base]
             detail["placement"] = (
-                "recorded as tilted: the simulator predicts volumes on this "
-                "plane and does not place the material, because its ledger "
-                "holds axis-aligned prisms"
-            )
-        elif request.base in document.tilted_planes:
-            document.tilted_planes[name] = document.tilted_planes[request.base]
-            detail["placement"] = (
-                f"recorded as tilted: it is offset from {request.base!r}, "
-                "which is tilted"
+                f"recorded as unlocated: it is offset from {request.base!r}, "
+                "which this ledger cannot locate either"
             )
         feature = _Feature(
             id=self._next("feat"),

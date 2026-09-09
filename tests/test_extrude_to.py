@@ -141,7 +141,7 @@ class TestWhatItDeclines:
             "axis": "x", "angle": "30 deg"})
         assert why.startswith("not predicted:")
         assert "30 degrees about x" in why
-        assert "varies across the profile" in why
+        assert "axis-aligned prisms" in why
 
     def test_a_face_handle(self, session):
         """A face in this ledger is a midpoint and an area. That says where a

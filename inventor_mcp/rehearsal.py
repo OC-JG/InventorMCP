@@ -374,24 +374,17 @@ _KNOWN_BROKEN_FIELDS = {
         "carrying `bodies`, which is measured and works, or `combine` with "
         "operation 'cut'."
     ),
-    ("work_plane", "kind"): (
-        "The COM backend cannot build a 'tangent' work plane. Inventor's call is "
-        "WorkPlanes.AddByPlaneAndTangent(plane, face) and it wants a cylindrical "
-        "face, which the recipe has no field to name; it is refused rather than "
-        "quietly built as an offset plane, which is what it was until 2026-09-08 "
-        "-- defect 12 in docs/FEATURE_COVERAGE.md. An 'angle' plane about a work "
-        "axis is buildable since 2026-09-09 and is the nearest thing; failing "
-        "that, an offset plane with the angle drawn into the sketch on it."
-    ),
 }
 
-#: For a broken *field*, the values that are broken. A field absent from here
-#: is broken whenever it is set; `work_plane.kind` is set on every work plane
-#: (it defaults to 'offset') and is only broken for one of its four values --
-#: two, until `angle` was implemented on 2026-09-09.
-_KNOWN_BROKEN_VALUES: dict[tuple[str, str], set[str]] = {
-    ("work_plane", "kind"): {"tangent"},
-}
+# There was a `_KNOWN_BROKEN_VALUES` beside this from 2026-09-08 to
+# 2026-09-09, for a field broken only at some of its values: `work_plane.kind`
+# is set on every work plane because it has a default, so reporting it as
+# broken merely for being present would have warned about every offset plane
+# in every recipe. Both the kinds it named -- 'angle', then 'tangent' -- are
+# built now, which left the mapping empty, and an empty mapping meant a
+# warning branch that could not fire and a Skill bullet describing nothing.
+# Both are gone. If a field is ever broken at some values and not others, this
+# is the shape that answered it, and its bullet has to come back with it.
 
 
 #: Simulator gaps, so a rehearsal does not report them as recipe faults. A
@@ -466,23 +459,14 @@ def rehearse(recipe: PartRecipe) -> dict[str, Any]:
             })
         for (broken_op, field), why in _KNOWN_BROKEN_FIELDS.items():
             value = getattr(op, field, None) if op.op == broken_op else None
-            broken_values = _KNOWN_BROKEN_VALUES.get((broken_op, field))
-            if not value or (broken_values is not None and value not in broken_values):
+            if not value:
                 continue
-            if broken_values is None:
-                report["warnings"].append({
-                    "where": where,
-                    "warning": f"`{broken_op}.{field}` does not work on the "
-                               "Inventor this was measured against",
-                    "why": why,
-                })
-            else:
-                report["warnings"].append({
-                    "where": where,
-                    "warning": f"`{broken_op}.{field}` set to {value!r} does not "
-                               "work on the Inventor this was measured against",
-                    "why": why,
-                })
+            report["warnings"].append({
+                "where": where,
+                "warning": f"`{broken_op}.{field}` does not work on the "
+                           "Inventor this was measured against",
+                "why": why,
+            })
         # Where the part was before this operation: a cut has to be judged
         # against what it was aimed at, not against what it left behind.
         was = measure(session, context) or {}
@@ -714,30 +698,34 @@ def _warn_about(warnings: list[dict[str, Any]], where: str, op: Operation,
                    "rehearsal to check the arithmetic too.",
         })
 
-    # A feature on a tilted work plane. The volume is the feature's own
+    # A feature on a work plane the ledger cannot locate: one turned about an
+    # axis, or one tangent to a cylinder. The volume is the feature's own
     # arithmetic and stands; what the simulator cannot do is say where the
-    # material went, because a sweep from a plane turned about an axis is not
-    # one of the axis-aligned prisms its ledger holds. Worth a warning rather
-    # than a silence for the two things that then go unchecked, and worth
-    # saying which they are: a *cut* there is charged its whole sweep rather
-    # than the material it meets, and no later feature can be checked against
-    # this one's material at all.
+    # material went, because a sweep from such a plane is not one of the
+    # axis-aligned prisms its ledger holds. Worth a warning rather than a
+    # silence for the two things that then go unchecked, and worth saying which
+    # they are: a *cut* there is charged its whole sweep rather than the
+    # material it meets, and no later feature can be checked against this
+    # one's material at all. The plane's own `placement` note carries which of
+    # the two reasons it is, so the warning does not have to guess.
     placement = (outcome.get("detail") or {}).get("placement") or ""
     if isinstance(placement, str) and placement.startswith("not recorded:"):
         cut_here = getattr(op, "operation", None) == "cut" or op.op in _SUBTRACTIVE
         if cut_here:
             warnings.append({
                 "where": where,
-                "warning": "this cut is on a tilted work plane, so it is charged "
-                           "its whole swept prism rather than the material it meets",
+                "warning": "this cut is on a work plane the simulator cannot "
+                           "locate, so it is charged its whole swept prism "
+                           "rather than the material it meets",
                 "why": placement + " So this step's own volume is an upper bound "
                        "rather than a prediction, and a divergence here is expected.",
             })
         else:
             warnings.append({
                 "where": where,
-                "warning": "this feature is on a tilted work plane, so the "
-                           "simulator predicts its volume and not its placement",
+                "warning": "this feature is on a work plane the simulator "
+                           "cannot locate, so its volume is predicted and its "
+                           "placement is not",
                 "why": placement + " The volume is exact; a later cut or hole "
                        "aimed through this material cannot be checked against it.",
             })

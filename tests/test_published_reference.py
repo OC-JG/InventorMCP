@@ -213,22 +213,25 @@ class TestWorkPlaneKindsAgree:
     two of them built an *offset* plane and reported success. Three places say
     which are buildable and they have to agree.
 
-    `angle` came off the unbuildable list on 2026-09-09 -- it has an `axis`
-    field now and `AddByLinePlaneAndAngle` to call -- leaving `tangent`, which
-    wants a cylindrical face the recipe cannot name."""
+    Both came off the unbuildable list on 2026-09-09 -- `angle` gained an
+    `axis` field and `AddByLinePlaneAndAngle` to call, `tangent` a `face`
+    selector and `AddByPlaneAndTangent` -- so the list is empty now and this
+    class checks that it stays empty *and* that nothing warns about a kind the
+    backend builds."""
 
     def schema_kinds(self) -> set[str]:
         from inventor_mcp.schema import WorkPlaneOp
 
         return set(WorkPlaneOp.model_fields["kind"].annotation.__args__)
 
-    def test_the_backend_refuses_exactly_what_the_rehearsal_warns_about(self):
-        from inventor_mcp.rehearsal import _KNOWN_BROKEN_FIELDS, _KNOWN_BROKEN_VALUES
+    def test_the_backend_builds_every_kind_the_schema_accepts(self):
+        from inventor_mcp.rehearsal import _KNOWN_BROKEN_FIELDS
 
         unbuildable = self.schema_kinds() - set(com.ComBackend._WORK_PLANE_KINDS)
-        assert unbuildable == {"tangent"}
-        assert ("work_plane", "kind") in _KNOWN_BROKEN_FIELDS
-        assert _KNOWN_BROKEN_VALUES[("work_plane", "kind")] == unbuildable
+        assert unbuildable == set()
+        assert ("work_plane", "kind") not in _KNOWN_BROKEN_FIELDS, (
+            "nothing about `kind` is broken now, and `kind` has a default -- so "
+            "an entry here would warn about every offset plane in every recipe.")
 
     def _rehearsed(self, plane: dict) -> list[str]:
         from inventor_mcp.builder import rehearse
@@ -242,33 +245,36 @@ class TestWorkPlaneKindsAgree:
                 plane]}))
         return [w["warning"] for w in report["warnings"]]
 
-    def test_a_rehearsal_warns_about_an_unbuildable_kind(self):
-        warnings = self._rehearsed(
-            {"op": "work_plane", "name": "Round", "kind": "tangent", "base": "xy"})
-        assert any("`work_plane.kind` set to 'tangent' does not work" in w
-                   for w in warnings), warnings
-
-    def test_an_angled_plane_no_longer_warns_because_it_works(self):
-        """It was on the same list until 2026-09-09. A warning about a kind the
-        backend builds is worse than no warning: it teaches a caller to avoid
-        the thing that would have worked."""
-        warnings = self._rehearsed(
+    def test_no_kind_warns_because_the_backend_builds_all_four(self):
+        """A warning about a kind the backend builds is worse than no warning:
+        it teaches a caller to avoid the thing that would have worked. `angle`
+        and `tangent` were both on the list until 2026-09-09."""
+        for plane in (
             {"op": "work_plane", "name": "Tilt", "kind": "angle", "base": "xy",
-             "axis": "x", "angle": "30 deg"})
-        assert [w for w in warnings if "work_plane" in w] == [], warnings
+             "axis": "x", "angle": "30 deg"},
+            {"op": "work_plane", "name": "Flat", "kind": "offset", "base": "xy",
+             "offset": 5},
+        ):
+            warnings = self._rehearsed(plane)
+            assert [w for w in warnings if "does not work" in w] == [], (plane, warnings)
 
-    def test_an_angled_plane_without_an_axis_is_refused_by_the_schema(self):
-        """There is nothing to default to: a plane turned about one of its own
-        directions is a different plane from the same plane turned about the
-        other. Defaulting one would be defect 12 again with a tilt."""
+    def test_each_kind_is_refused_without_the_reference_it_needs(self):
+        """There is nothing to default to in either case: a plane turned about
+        one of its own directions is a different plane from the same plane
+        turned about the other, and a tangent plane is *defined* by the
+        cylinder it touches. Defaulting either would be defect 12 again."""
         import pydantic
 
         from inventor_mcp.schema import WorkPlaneOp
 
         with pytest.raises(pydantic.ValidationError, match="needs `axis`"):
             WorkPlaneOp(kind="angle", base="xy", angle="30 deg")
+        with pytest.raises(pydantic.ValidationError, match="needs `face`"):
+            WorkPlaneOp(kind="tangent", base="xy")
         with pytest.raises(pydantic.ValidationError, match="means nothing"):
             WorkPlaneOp(kind="offset", base="xy", axis="x")
+        with pytest.raises(pydantic.ValidationError, match="means nothing"):
+            WorkPlaneOp(kind="angle", base="xy", axis="x", face={"kind": "face"})
 
     def test_an_offset_plane_does_not_warn(self):
         from inventor_mcp.builder import rehearse

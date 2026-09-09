@@ -444,17 +444,31 @@ Found by using the server rather than by reading its API surface:
   back with `Reference = True` and bounds no material until that flag is
   cleared, which is the detail a `project` entity has to get right. Also in the
   roadmap's Phase 2.
-* **`work_plane` builds only `offset` and `midplane` on Inventor.** *Found
-  2026-09-08 by reading the COM backend against the schema.* `WorkPlaneOp`
-  accepts `kind: "angle"` and `"tangent"`, the simulator files both against
-  their base plane like any other, and the COM backend built an **offset**
-  plane for either and returned `ok: true` -- defect 12 below. It refuses both
-  now, and `rehearse` warns (`_KNOWN_BROKEN_FIELDS`, keyed by value through
-  `_KNOWN_BROKEN_VALUES`). The published call for the angled case is
-  `WorkPlanes.AddByLinePlaneAndAngle(WorkAxis, WorkPlane, Angle, Boolean)`,
-  which needs an axis the schema has no field for, so closing this is a schema
-  change and not a backend fix. The schema keeps both kinds so a recipe written
-  for the day it lands still validates.
+* ~~**`work_plane` builds only `offset` and `midplane` on Inventor.**~~
+  **Closed 2026-09-09: all four kinds build.** *Found 2026-09-08 by reading
+  the COM backend against the schema.* `WorkPlaneOp` accepted `kind: "angle"`
+  and `"tangent"`, the simulator filed both against their base plane like any
+  other, and the COM backend built an **offset** plane for either and returned
+  `ok: true` -- defect 12 below. Both were refused for a day, `rehearse`
+  warned, and then both got the field they were missing, which is what this
+  bullet had said the fix would be: **a schema change and not a backend fix**.
+  `angle` gained `axis`, resolved the way a pattern's is, and calls the
+  published `AddByLinePlaneAndAngle(axis, plane, angle)`; `tangent` gained
+  `face`, a selector resolved the way a fillet's edges are, and calls the
+  published `AddByPlaneAndTangent(plane, face)`. Each field is **required for
+  its own kind and refused on every other**, because a plane turned about one
+  of its own directions is a different plane from the same plane turned about
+  the other, and a tangent plane is defined by nothing but the cylinder it
+  touches. `_KNOWN_BROKEN_VALUES` is empty as a result.
+
+  Two things stayed with the simulator rather than being closed by the schema.
+  It records the tilt and **declines to place** what is built on a tilted
+  plane, because the ledger holds axis-aligned prisms -- the volume is
+  predicted, the placement is not, and every feature says so. And a tangent
+  plane's tilt has **no angle in it at all**: where it lies depends on where
+  the cylinder is, and a face in this ledger is a midpoint and an area. Both
+  COM calls remain unmeasured; `scripts/live_acceptance.py --only work-planes`
+  and `--only tangent-plane` are the runs.
 * **`hole` still only drills the primary body — on Inventor.** *Measured
   2026-09-07 and the answer is no.* The simulator honours `bodies` on a `hole`
   exactly as on an `extrude`, and it was written on 2026-09-03 expecting the COM
@@ -941,13 +955,31 @@ Each of these was hit while building real parts, and each passed
     every later cut, hole and pattern reads that ledger, so one tilted prism in
     the wrong place makes every feature after it wrong too, quietly.
 
-    `tangent` is still refused and still in `_KNOWN_BROKEN_VALUES`:
-    `AddByPlaneAndTangent` wants a cylindrical face and the recipe has no field
-    naming one. `tests/test_angled_work_plane.py` and
+    `tangent` followed the same day, and by the same route: the refusal named
+    the missing schema field and `face` is it -- a `Selector` resolved the way
+    a fillet's edges are, required for that kind and refused on every other.
+    `_KNOWN_BROKEN_VALUES` is gone with it, because nothing is broken by value
+    any more and `kind` has a default, so an entry there would have warned
+    about every offset plane in every recipe.
+
+    Two things about the tangent half are worth keeping. **What a tangent
+    plane *is*** turned out to be a rule about the recipe rather than about
+    Inventor -- exactly one cylindrical face, since the plane tangent to two
+    cylinders is not a plane -- so it lives on `Backend` above both
+    implementations and the rehearsal refuses precisely what a live build
+    would. And **one thing about the call could not be read at all**: whether
+    the plane returned is parallel to the plane given or perpendicular to it.
+    Inventor's UI offers both as separate commands, the signature has one
+    plane argument, and `help.autodesk.com` is unreachable from the
+    environment this landed in. So the simulator's refusal is written to be
+    right either way, and `--only tangent-plane` settles it in one run off the
+    axis a lug moves the centre of mass along.
+
+    `tests/test_angled_work_plane.py`, `tests/test_tangent_work_plane.py` and
     `tests/test_published_reference.py` hold schema, backend and rehearsal to
-    the same one remaining kind. **The COM half is unmeasured**: no run has
-    built a work plane of any kind directly, which is what
-    `--only work-planes` is for.
+    all four kinds. **The COM half is unmeasured for every one of them**: no
+    run has built a work plane directly, which is what `--only work-planes`
+    and `--only tangent-plane` are for.
 
 13. **A promotion the simulator performed happily failed on Inventor, on the
     word.** *Measured on Inventor 2027.1, 2026-09-08, by

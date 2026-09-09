@@ -958,16 +958,60 @@ actually bitten.
       moves the geometry, which is defect 11's lesson on the one operation
       whose whole point is a driven angle.
 
-      `tangent` stays refused: `AddByPlaneAndTangent` wants a cylindrical face
-      and the recipe has no field naming one, so it keeps its rehearsal warning
-      and its own line in this list.
+      `tangent` stayed refused for the rest of that day, for want of a field
+      naming the cylindrical face `AddByPlaneAndTangent` wants -- and then got
+      one, in the item below.
 
-- [ ] **A tangent work plane.** *(Opened 2026-09-09, split off the item above.)*
-      `WorkPlanes.AddByPlaneAndTangent(plane, face)` wants a cylindrical face,
-      and `WorkPlaneOp` has no field naming one -- a `Selector` would do it,
-      the way `fillet` and `shell` take theirs. The simulator's half is the
-      same declining-to-place as the angled plane, so the work is the schema
-      field and the face resolution rather than the ledger.
+- [x] **A tangent work plane.** *(Opened 2026-09-09, done the same day, split
+      off the item above.)* `WorkPlaneOp` has a `face` -- a `Selector`,
+      resolved the way `fillet` and `shell` resolve theirs -- **required** for
+      `kind: "tangent"` and refused on every other kind, the arrangement
+      `axis` got. The COM call is the published
+      `AddByPlaneAndTangent(plane, face)`, positional for the same reason:
+      the argument order is documented and the parameter names are not. All
+      four work-plane kinds build now, `_KNOWN_BROKEN_VALUES` is gone with the
+      last thing it described, and the gap bullet in `FEATURE_COVERAGE.md` is
+      struck through.
+
+      **What a tangent plane *is* turned out to be the interesting half**, and
+      it is a rule about the recipe rather than about Inventor: exactly one
+      cylindrical face. A selector matching none, several, or a flat face
+      describes no plane at all -- the plane tangent to two cylinders is not a
+      plane. So the rule lives on `Backend`, above both implementations, and
+      the rehearsal refuses precisely what a live build would, which is the
+      whole reason for rehearsing. It also does the COM backend a second
+      favour: `AddByPlaneAndTangent` given a planar face answers "Exception
+      occurred", where "the selector matched a planar face" says what the
+      recipe got wrong.
+
+      **One thing about the call could not be read at all**, and the code is
+      arranged around not knowing it: whether the plane returned is *parallel*
+      to the plane given or *perpendicular* to it. Inventor's UI offers both as
+      separate commands and this signature has one plane argument, so the name
+      settles the arguments and not the meaning -- and `help.autodesk.com` is
+      unreachable from the environment this landed in, as the audit already
+      recorded. The simulator's refusal is written to be right either way: a
+      tangent plane's position depends on the cylinder it touches, and a face
+      in that ledger is a midpoint and an area, so the offset is not derivable
+      under either reading. Resting it on the more likely reading of an unread
+      page is how defect 5 survived three runs.
+
+      That also made the simulator's word wrong: `_Tilt` is `_Unplaceable`
+      now, because a tangency is the second way to get there and it is not a
+      tilt. An angled plane is somewhere known and not axis-aligned; a tangent
+      plane's position is not derivable at all, and the note it records says
+      which of the two it is rather than inventing an angle.
+
+      **`--only tangent-plane` settles the parallel-or-perpendicular question
+      in one run, and the reading is a sign rather than a derivation.** A boss
+      on the Z axis with `base: "xz"` puts the parallel answer at `y = +/-r`
+      and the perpendicular one at `x = +/-r`, ninety degrees apart. A lug
+      built on whichever plane comes back moves the centre of mass along
+      exactly one axis of a part that was symmetric about both, so the axis
+      that moves is the answer. The run also reads whether the plane is
+      tangent rather than through the axis, and whether growing the boss moves
+      it -- defect 11's lesson on the one operation whose position is another
+      feature's geometry.
 
 - [ ] **Durable topology handles and a `feature:` selector.** *(Opened
       2026-09-08.)* Handles from `select_topology` expire on any rebuild and

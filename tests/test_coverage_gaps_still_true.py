@@ -43,6 +43,11 @@ COVERAGE = (ROOT / "docs/FEATURE_COVERAGE.md").read_text(encoding="utf-8")
 GAP_OPERATIONS = {
     "No work axis or work point": {"work_axis", "work_point"},
     "`hole` still only drills the primary body — on Inventor": {"hole:bodies"},
+    # Struck through on 2026-09-09, so what this checks is the reverse: the two
+    # fields the closure rests on had better exist. A tick with nothing under
+    # it is the same mistake as an open gap that has been closed.
+    "`work_plane` builds only `offset` and `midplane` on Inventor":
+        {"work_plane:axis", "work_plane:face"},
 }
 
 #: A gap the *schema* closed and Inventor did not. `hole` + `bodies` is the
@@ -54,10 +59,12 @@ GAP_OPERATIONS = {
 #: here while the code agrees Inventor cannot do it.
 LIVE_ONLY_GAPS = {
     "`hole` still only drills the primary body — on Inventor": ("hole", "bodies"),
-    # The second: `WorkPlaneOp.kind` offers `angle` and `tangent`, the simulator
-    # accepts both, and the COM backend refuses both since 2026-09-08 -- it
-    # built an offset plane before that. Defect 12.
-    "`work_plane` builds only `offset` and `midplane` on Inventor": ("work_plane", "kind"),
+    # `work_plane` was the second, from 2026-09-08 to 2026-09-09: `kind`
+    # offered `angle` and `tangent`, the simulator accepted both and the COM
+    # backend refused both -- it built an offset plane before that, defect 12.
+    # It is gone from here because it is *closed* rather than because it was
+    # reworded: both kinds build, so the bullet is struck through and
+    # `GAP_OPERATIONS` below carries the fields the tick has to have behind it.
 }
 
 

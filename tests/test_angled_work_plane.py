@@ -97,7 +97,8 @@ class TestTheSimulatorRecordsTheTilt:
         assert out["ok"]
         higher = next(f for f in session.backend.list_features(out["document"])
                       if f.name == "Higher")
-        assert "tilted" in higher.detail["placement"]
+        assert "unlocated" in higher.detail["placement"]
+        assert "Tilt" in higher.detail["placement"]
 
     def test_an_untilted_plane_says_nothing_about_placement(self, session):
         out = build_part(session, recipe(
@@ -172,7 +173,7 @@ class TestTheRehearsalSaysWhichHalfIsTrusted:
                 {"type": "rectangle", "center": [0, 0], "width": 10, "height": 10}]},
             {"op": "extrude", "name": "Pad", "sketch": "OnTilt", "distance": 5}))
         assert report["ok"]
-        assert any("predicts its volume and not its placement" in w["warning"]
+        assert any("its volume is predicted and its placement is not" in w["warning"]
                    for w in report["warnings"]), report["warnings"]
 
     def test_a_cut_there_gets_the_sharper_one(self):
@@ -192,11 +193,14 @@ class TestTheRehearsalSaysWhichHalfIsTrusted:
         assert [w for w in report["warnings"]
                 if "work_plane.kind" in w["warning"]] == []
 
-    def test_tangent_still_is(self):
+    def test_and_neither_is_tangent_since_it_builds_too(self):
+        """It was on the same list until 2026-09-09, when `face` gave the
+        recipe a way to name the cylinder `AddByPlaneAndTangent` wants."""
         report = rehearse(recipe(
-            {"op": "work_plane", "name": "Round", "kind": "tangent", "base": "xy"}))
-        assert any("`work_plane.kind` set to 'tangent' does not work" in w["warning"]
-                   for w in report["warnings"]), report["warnings"]
+            {"op": "work_plane", "name": "Round", "kind": "tangent", "base": "xy",
+             "face": {"kind": "face", "filter": "cylindrical", "limit": 1}}))
+        assert [w for w in report["warnings"]
+                if "work_plane.kind" in w["warning"]] == []
 
 
 class TestTheComCallIsThePublishedOne:
@@ -219,9 +223,11 @@ class TestTheComCallIsThePublishedOne:
         assert "axis, base, request.angle.value)" in source
         assert "plane.Definition.Angle.Expression = request.angle.expression" in source
 
-    def test_tangent_is_refused_with_the_call_it_would_need(self):
+    def test_tangent_calls_the_published_add_by_plane_and_tangent(self):
+        """Positional for the same reason the angled one is: the argument
+        order is documented and the parameter names are not."""
         import inspect
 
         source = inspect.getsource(com.ComBackend.work_plane)
-        assert "AddByPlaneAndTangent" in source
-        assert "tangent" not in com.ComBackend._WORK_PLANE_KINDS
+        assert "WorkPlanes.AddByPlaneAndTangent(" in source
+        assert "tangent" in com.ComBackend._WORK_PLANE_KINDS

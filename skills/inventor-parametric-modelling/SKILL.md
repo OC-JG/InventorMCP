@@ -63,15 +63,17 @@ still build the wrong part, and these are the ways it does:
   plane. This is the one pattern the simulator places rather than counts, which
   is why it can tell you at all.
 - **`this step's volume is not predicted, so the running total is short by whatever it adds`** — an `extent` of `to` or `from_to` aimed at something the simulator cannot measure against: a target on a perpendicular origin plane, a tilted plane, or a `face:` handle, since a face here is a midpoint and an area and says nothing about which way it faces. Inventor builds it; the rehearsal has no number for it, and every volume after it is short by that much. Give a `distance` if you want the arithmetic checked as well.
-- **`this feature is on a tilted work plane, so the simulator predicts its volume and not its placement`** — a `work_plane` with `kind: "angle"` is
-  built for real on Inventor, and the simulator's ledger holds axis-aligned
-  prisms, so a sweep from a plane turned about an axis is not one it can place.
-  The volume is exact; what goes unchecked is where the material sits, and so
-  whether a *later* cut or hole through it meets anything.
-- **`this cut is on a tilted work plane, so it is charged its whole swept prism rather than the material it meets`** — the same limit, on the step that pays
-  for it: a cut there is billed its entire sweep, which is an upper bound
-  rather than a prediction, so expect that step to diverge. The part is
-  probably right; the number is the thing to distrust.
+- **`this feature is on a work plane the simulator cannot locate, so its volume is predicted and its placement is not`** — a `work_plane` with
+  `kind: "angle"` or `kind: "tangent"` is built for real on Inventor, and the
+  simulator's ledger holds axis-aligned prisms at known offsets, so neither a
+  plane turned about an axis nor one tangent to a cylinder is a plane it can
+  place a sweep from. The volume is exact; what goes unchecked is where the
+  material sits, and so whether a *later* cut or hole through it meets
+  anything. The plane's own `placement` note says which of the two it is.
+- **`this cut is on a work plane the simulator cannot locate, so it is charged its whole swept prism rather than the material it meets`** — the same limit,
+  on the step that pays for it: a cut there is billed its entire sweep, which
+  is an upper bound rather than a prediction, so expect that step to diverge.
+  The part is probably right; the number is the thing to distrust.
 - **`this layer changes nothing: ...`** — a `thicken` whose `direction` and
   `operation` cancel: the layer lies where the material already is, or already
   is not, so the boolean has nothing to do. `positive` + `join` grows the part,
@@ -85,12 +87,6 @@ still build the wrong part, and these are the ways it does:
   honours it, so the volumes will agree and the part will be wrong. Cut the
   second body with an `extrude` carrying `bodies`, or `combine` with
   `operation: "cut"`.
-- **``` `work_plane.kind` set to 'angle' does not work on the Inventor this was measured against ```**
-  — and the same for `'tangent'`. The COM backend builds only `offset` and
-  `midplane` planes and now refuses the other two; until 2026-09-08 it built an
-  offset plane instead and reported success. The simulator files every work
-  plane against its base whatever the kind, so the volumes will agree there
-  too. Use an offset plane and draw the angle into the sketch on it.
 
 Then read `steps` and check each `volume_change_cm3` against what you meant. A
 9 mm hole 6 mm deep removes π×4.5²×6 = 0.382 cm³. If the rehearsal says

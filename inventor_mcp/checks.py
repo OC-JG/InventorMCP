@@ -207,11 +207,15 @@ def _parallel_origin_plane(reference: str, recipe: PartRecipe) -> str | None:
     * ``face:<handle>`` names geometry that does not exist until something is
       built, so no static answer exists.
 
-    Note that the *simulator* is looser than this -- ``mock.work_plane`` records
-    every work plane against an origin base whatever its ``kind``, so an angled
-    plane is treated as parallel to its base there. That is an existing
-    approximation in the mock and not one to inherit here: a check that assumed
-    it would report a correct angled-plane recipe as a fault.
+    Note that the *simulator's own table* is looser than this.
+    ``mock.work_plane`` files every work plane in ``work_planes`` against an
+    origin base whatever its ``kind``, so reading that mapping alone would
+    treat an angled or tangent plane as parallel to its base -- and a check
+    that did would report a correct angled-plane recipe as a fault. Since
+    2026-09-09 the mock also records *why* such a plane cannot be located, in
+    ``unplaceable_planes`` beside it, so the information is there; this still
+    walks the recipe rather than the simulator, because a static check has to
+    answer before anything has been rehearsed.
     """
     seen: set[str] = set()
     current = reference

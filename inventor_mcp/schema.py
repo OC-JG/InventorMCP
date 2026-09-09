@@ -12,7 +12,7 @@ precise validation error the model can fix, not be silently ignored.
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal, Union
+from typing import Annotated, Any, ClassVar, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -711,9 +711,12 @@ class WorkPlaneOp(OpBase):
       and they are different planes. Until 2026-09-09 this operation quietly
       built an *offset* plane for an angled request -- defect 12 -- which is
       why the field is required rather than defaulted;
-    * `tangent` -- not implemented, and refused with the reason. Inventor's
-      call wants a cylindrical face as well as a plane, and this schema has no
-      field naming one; the roadmap carries it.
+    * `tangent` -- `base` and `face`: perpendicular to the base plane and
+      touching a cylindrical face along one line. **`face` has to be given**
+      and has to match exactly one *cylindrical* face, because that is what
+      Inventor's `WorkPlanes.AddByPlaneAndTangent(plane, face)` takes; a
+      planar face has no tangent plane to find and is refused with the
+      geometry it turned out to be.
     """
 
     op: Literal["work_plane"] = "work_plane"
@@ -730,18 +733,50 @@ class WorkPlaneOp(OpBase):
         "directions is a different plane from the same plane turned about the "
         "other, so there is nothing to default to.",
     )
+    face: Selector | None = Field(
+        None,
+        description="The cylindrical face a tangent plane touches, picked the "
+        "way a fillet picks its edges. Required for kind 'tangent' and "
+        "meaningless for the others. It has to resolve to exactly one face: "
+        "'the plane tangent to these two bosses' is not a plane.",
+    )
+
+    #: The field each kind needs and no other kind may carry. `offset`,
+    #: `second` and `angle` are not in here because they have defaults that are
+    #: harmless when ignored; `axis` and `face` name *geometry*, and a
+    #: reference silently thrown away is how somebody learns the wrong lesson
+    #: about their own recipe.
+    _REQUIRED_REFERENCE: ClassVar[dict[str, str]] = {
+        "angle": "axis", "tangent": "face",
+    }
 
     @model_validator(mode="after")
-    def _the_angle_needs_its_axis(self) -> "WorkPlaneOp":
-        if self.kind == "angle" and not self.axis:
+    def _each_kind_carries_its_own_reference(self) -> "WorkPlaneOp":
+        wanted = self._REQUIRED_REFERENCE.get(self.kind)
+        # What is *there* and means nothing is reported before what is absent.
+        # A recipe carrying both faults -- `kind: "tangent"` with an `axis` --
+        # has almost certainly named the wrong kind, and "axis means nothing to
+        # a tangent plane" says that where "a tangent plane needs a face" reads
+        # as though the axis were fine.
+        if self.axis and wanted != "axis":
+            raise ValueError(
+                f"`axis` means nothing to a {self.kind!r} work plane; only an "
+                "'angle' plane turns about one."
+            )
+        if self.face and wanted != "face":
+            raise ValueError(
+                f"`face` means nothing to a {self.kind!r} work plane; only a "
+                "'tangent' plane touches one."
+            )
+        if wanted == "axis" and not self.axis:
             raise ValueError(
                 "An 'angle' work plane needs `axis`: which axis to turn the base "
                 "plane about. Use 'x', 'y' or 'z', a work axis, or a sketch line."
             )
-        if self.kind != "angle" and self.axis:
+        if wanted == "face" and not self.face:
             raise ValueError(
-                f"`axis` means nothing to a {self.kind!r} work plane; only an "
-                "'angle' plane turns about one."
+                "A 'tangent' work plane needs `face`: the cylindrical face it "
+                "touches. Give a selector, the way a fillet names its edges."
             )
         return self
 

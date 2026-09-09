@@ -495,6 +495,12 @@ def _apply_one(session: Session, context: DocumentContext, op: Operation) -> dic
             # the recipe's own vocabulary in the message, rather than inside a
             # COM call.
             axis=resolve_axis(context, op.axis) if op.axis else None,
+            # `kind="face"` rather than the selector's own default, for the
+            # reason `shell` does the same: a tangent plane touches a face and
+            # nothing else, so a selector left at the `edge` default would go
+            # looking for edges and come back with nothing to explain why.
+            face=(resolve_selector(op.face, resolver, kind="face")
+                  if op.face is not None else None),
             name=op.name,
         )
         return _record(context, backend.work_plane(context.doc_id, request), "work_plane")

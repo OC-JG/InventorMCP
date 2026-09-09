@@ -2398,6 +2398,145 @@ def check_work_planes(session: Session, report: Report) -> None:
         session.forget(context.doc_id)
 
 
+def check_tangent_plane(session: Session, report: Report) -> None:
+    """A tangent work plane, and **which** plane Inventor's call returns.
+
+    `WorkPlanes.AddByPlaneAndTangent(plane, face)` is published and unmeasured,
+    and one thing about it is not published in any form this project has been
+    able to read: whether the plane it makes is *parallel* to the plane given
+    or *perpendicular* to it. Inventor's UI offers both as separate commands
+    and this signature has one plane argument, so the name settles the
+    arguments and not the meaning.
+
+    That is not a detail. The simulator declines to place anything built on a
+    tangent plane, and the refusal was deliberately written to be right under
+    either reading -- but a caller who wants a plane down one side of a boss
+    needs to know which they are getting, and no amount of reading the schema
+    answers it.
+
+    **The geometry answers it in one run.** A cylindrical boss on the Z axis,
+    radius 10, and the base plane `xz`:
+
+    * *parallel to XZ* and tangent to that cylinder is the plane `y = +/-10`;
+    * *perpendicular to XZ* and tangent to it is the plane `x = +/-10`.
+
+    Both are determined, both exist, and they are ninety degrees apart. So a
+    lug built on whichever plane comes back moves the centre of mass along
+    exactly one axis -- and the part is symmetric about both before it, so the
+    axis that moves *is* the answer. No derivation to get wrong: the reading is
+    a sign.
+
+    Two more things fall out of the same run. The distance says the plane
+    really is tangent rather than through the axis (the lug's own centroid sits
+    beyond the radius, not at zero), and the third check moves the boss
+    diameter to see whether the plane follows it, which is defect 11's lesson
+    on the operation whose whole position is another feature's.
+    """
+    print("\n--- tangent work plane: parallel to the base plane, or perpendicular?")
+    if session.backend.name == "mock":
+        report.skip("tangent-plane: not run",
+                    "the simulator declines to place a tangent plane on "
+                    "purpose -- the answer this check is after is the one it "
+                    "does not have. Use --backend inventor.")
+        return
+
+    recipe = PartRecipe.model_validate({
+        "name": "TangentPlane", "units": "mm",
+        "parameters": [{"name": "boss_d", "value": 20}],
+        "operations": [
+            {"op": "sketch", "name": "S", "plane": "xy", "entities": [
+                {"type": "rectangle", "center": [0, 0], "width": 60, "height": 60}]},
+            {"op": "extrude", "name": "Plate", "sketch": "S", "distance": 10},
+            {"op": "sketch", "name": "Round", "plane": "xy", "entities": [
+                {"type": "circle", "center": [0, 0], "diameter": "boss_d"}]},
+            {"op": "extrude", "name": "Boss", "sketch": "Round", "distance": 40},
+            # A square plate, so the part is symmetric about both horizontal
+            # axes and the centre of mass starts on the Z axis. That is what
+            # makes the axis the lug moves it along a clean reading.
+            {"op": "work_plane", "name": "Touch", "kind": "tangent", "base": "xz",
+             "face": {"kind": "face", "filter": "cylindrical", "limit": 1}},
+            {"op": "sketch", "name": "Pad", "plane": "Touch", "entities": [
+                {"type": "rectangle", "center": [0, 0], "width": 12, "height": 12}]},
+            {"op": "extrude", "name": "Lug", "sketch": "Pad", "distance": 6},
+        ]})
+    context, broken = build(session, recipe)
+    if not report.check(not broken and context is not None,
+                        "tangent-plane: the plane builds and takes a sketch",
+                        broken[0][:400] if broken else "no document"):
+        if context:
+            session.backend.close_document(context.doc_id, save=False)
+            session.forget(context.doc_id)
+        return
+
+    try:
+        planes = session.backend.list_work_geometry(context.doc_id)["work_planes"]
+        report.check("Touch" in planes,
+                     "tangent-plane: it is in WorkPlanes by the recipe's name",
+                     f"the part holds {planes}")
+
+        props = session.backend.mass_properties(context.doc_id)
+        centre = props.center_of_mass
+        report.note(f"tangent-plane: centre of mass {centre}")
+        if centre is None:
+            report.skip("tangent-plane: which plane it returned",
+                        "no centre of mass was reported, and the reading is a "
+                        "displacement of it")
+        else:
+            moved_x, moved_y = abs(centre[0]), abs(centre[1])
+            # One of the two is a real displacement and the other is zero to
+            # within arithmetic noise. Which, is the measurement.
+            answer = ("parallel to the base plane" if moved_y > moved_x
+                      else "perpendicular to the base plane")
+            report.note(
+                f"tangent-plane: **AddByPlaneAndTangent returns a plane "
+                f"{answer}** -- the lug moved the centre of mass "
+                f"{moved_x:.5f} cm in x and {moved_y:.5f} in y, and the part "
+                f"was symmetric about both before it")
+            report.check(
+                max(moved_x, moved_y) > 1e-4
+                and min(moved_x, moved_y) < max(moved_x, moved_y) / 10,
+                "tangent-plane: the lug moved the centre of mass along one "
+                "axis, so which plane the call returns is now measured",
+                f"x moved {moved_x:.5f} cm and y {moved_y:.5f}. Two comparable "
+                "figures mean the plane is at neither of the two orientations "
+                "this check can tell apart, and the note above is not an "
+                "answer -- read the part before recording anything from it.")
+
+        # Tangent rather than through the axis. The lug sits on a plane 10 mm
+        # off the boss's own axis, so the whole part's centroid is pulled that
+        # way by the lug's mass alone -- a plane through the axis would leave
+        # it on zero, which is the other way this call could disappoint.
+        report.check(
+            centre is not None and max(abs(centre[0]), abs(centre[1])) > 1e-4,
+            "tangent-plane: the plane is off the boss's axis, so it is "
+            "tangent to the face and not through it",
+            f"the centre of mass is {centre}, which is where it would be if "
+            "the lug straddled the axis")
+
+        # And that the plane follows the face. Defect 11's lesson on the one
+        # operation whose position is another feature's geometry: grow the boss
+        # and the plane, and so the lug, has to move outward with it.
+        before = centre
+        session.backend.set_parameter(context.doc_id, "boss_d", "30 mm")
+        session.backend.rebuild(context.doc_id)
+        after = session.backend.mass_properties(context.doc_id).center_of_mass
+        report.note(f"tangent-plane: centre of mass at boss_d 30 -- {after}")
+        report.check(
+            before is not None and after is not None
+            and abs(max(abs(after[0]), abs(after[1]))
+                    - max(abs(before[0]), abs(before[1]))) > 1e-4,
+            "tangent-plane: growing the boss moved the plane, so the tangency "
+            "is a live reference rather than a position copied once",
+            f"the offset axis read {max(abs(before[0]), abs(before[1])):.5f} cm "
+            f"at boss_d 20 and "
+            f"{max(abs(after[0]), abs(after[1])):.5f} at 30. The same figure "
+            "twice means the plane was placed where the face happened to be "
+            "and stayed there.")
+    finally:
+        session.backend.close_document(context.doc_id, save=False)
+        session.forget(context.doc_id)
+
+
 def check_view_directions(session: Session, report: Report) -> None:
     """What each drawing-view direction actually shows, all seven in one run.
 
@@ -2606,6 +2745,7 @@ CHECKS = {
     "drawing": check_drawing,
     "view-directions": check_view_directions,
     "work-planes": check_work_planes,
+    "tangent-plane": check_tangent_plane,
     "views": check_views,
 }
 

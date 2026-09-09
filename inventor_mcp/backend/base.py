@@ -20,7 +20,7 @@ from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, Sequence
 
-from ..errors import DocumentError
+from ..errors import DocumentError, FeatureError, SelectionError
 from ..plan import SketchPlan
 
 
@@ -696,8 +696,10 @@ class WorkPlaneRequest:
 
     `axis` is present for `kind == "angle"` and absent otherwise: a plane
     turned about one of its own directions is a different plane from the same
-    plane turned about the other, so there is nothing to default to. The schema
-    refuses the combinations that say neither.
+    plane turned about the other, so there is nothing to default to. `face` is
+    the same arrangement for `kind == "tangent"`, whose whole definition is the
+    cylinder it touches. The schema refuses the combinations that say neither,
+    so a backend can trust the pairing.
     """
 
     kind: str = "offset"
@@ -708,6 +710,11 @@ class WorkPlaneRequest:
     #: An `AxisSpec` for an angled plane's axis, resolved the way a pattern's
     #: is -- an origin axis, a named work axis, or a sketch line.
     axis: "AxisSpec | None" = None
+    #: The cylindrical face a tangent plane touches, selected the way a
+    #: fillet's edges are. It has to match exactly one face: both backends
+    #: refuse a selector that matched several, because the plane tangent to two
+    #: cylinders is not a plane.
+    face: ResolvedSelector | None = None
     name: str | None = None
 
 
@@ -934,6 +941,57 @@ class Backend(ABC):
 
     @abstractmethod
     def select(self, doc_id: str, selector: ResolvedSelector) -> list[TopoInfo]: ...
+
+    def _one_cylindrical_face(self, doc_id: str, selector: ResolvedSelector | None,
+                              what: str) -> TopoInfo:
+        """The single cylindrical face *selector* names, or a refusal saying why.
+
+        Shared rather than written twice because it is a rule about the recipe
+        and not about Inventor: a tangent work plane is *defined* by one
+        cylinder, so a selector matching none, several, or a flat face is a
+        recipe that does not describe a plane. Putting it on `Backend` means
+        the rehearsal refuses the same recipes the live build does -- which is
+        the whole point of rehearsing, and the thing a copy in each backend
+        stops being true about the day one copy is edited.
+
+        The COM backend needs this before its call for a second reason:
+        `AddByPlaneAndTangent` given a planar face answers "Exception
+        occurred", which tells a caller nothing about their own recipe.
+        """
+        if selector is None:  # pragma: no cover - the schema requires it
+            raise FeatureError(
+                f"{what} needs a face to touch.",
+                hint="Give `face` on the operation: a selector naming one "
+                "cylindrical face, the way a fillet names its edges.",
+            )
+        matches = self.select(doc_id, selector)
+        if not matches:
+            raise SelectionError(
+                f"{what} matched no faces.",
+                hint="Call `select_topology` with the same selector to see what "
+                "the part actually offers.",
+                selector=selector.__dict__,
+            )
+        if len(matches) > 1:
+            raise SelectionError(
+                f"{what} matched {len(matches)} faces, and the plane tangent to "
+                "two cylinders is not a plane.",
+                hint="Narrow the selector -- `near` and `limit: 1` are the usual "
+                "pair -- so it names exactly one face. Matched: "
+                + ", ".join(f"{m.id} ({m.description})" for m in matches[:6]),
+                selector=selector.__dict__,
+            )
+        face = matches[0]
+        if face.geometry != "cylindrical":
+            raise SelectionError(
+                f"{what} matched {face.geometry or 'an unidentified'} face "
+                f"{face.id}, and only a cylindrical face has a tangent plane.",
+                hint="Inventor's call is WorkPlanes.AddByPlaneAndTangent(plane, "
+                "face) and it wants a cylinder: the outside of a boss, or a "
+                "bore's wall. `filter: 'cylindrical'` on the selector picks one.",
+                selector=selector.__dict__,
+            )
+        return face
 
     @abstractmethod
     def mass_properties(self, doc_id: str) -> MassProps: ...
