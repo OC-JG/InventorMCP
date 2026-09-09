@@ -1352,18 +1352,63 @@ Add-Ins). A translator that cannot be reached falls back **unless options were
 asked for**, which is a hard error: a file written with the wrong settings is
 worse than no file.
 
-**The seven ClassId GUIDs have never been read off an installed Inventor**, so
-`ItemById` raising is what keeps a wrong one loud. `scripts/probe_translators.py`
-prints every add-in's own `ClassIdString` beside its name, and asks each
-translator what its `SaveCopyAs` option names really are -- which is also the
-run that would replace the three-name whitelist in `EXPORT_OPTIONS` with a
-measurement.
+**The ClassId GUIDs were measured on 2027.1, 2026-09-09, by
+`scripts/probe_translators.py`, and three of the seven were wrong.** `iges`
+held `{90AF7F30-...}`, which no add-in on this release has -- the real one is
+`{90AF7F44-...}` -- and **`dwg` and `dxf` held each other's**:
+`{C24E3AC4-...}` is DXF and `{C24E3AC2-...}` is DWG, the other way round from
+what had been written.
 
-Formats: `step stl iges sat dwg dxf dwf obj 3mf ipt pdf`. Translators
-recorded: `step iges sat dwg dxf pdf dwf`. Options offered: STEP's
-`ApplicationProtocolType` (3 is AP 214), PDF's `Sheet_Range` and
-`Vector_Resolution`. A name outside that list is refused rather than passed,
-because a `NameValueMap` ignores an unknown name silently.
+The swap is the one to remember. A GUID matching nothing is caught by the
+fallback -- `ItemById` raises and `SaveAs` runs with a note. Two valid GUIDs in
+each other's slots resolve happily and write a DWG where a DXF was asked for,
+with a success on it. Only a listing catches that, which is why the probe stays
+rather than being deleted after one good run.
+
+**And `HasSaveCopyAsOptions` was not on the object.** All seven translators
+answered `AttributeError: ... has no attribute 'HasSaveCopyAsOptions'`, which
+reads as "this release has no options" and is nothing of the kind:
+`ApplicationAddIns.ItemById` is *declared* as returning an `ApplicationAddIn`,
+so the makepy wrapper is that class and carries none of `TranslatorAddIn`'s
+members. The object is a translator; the declared type is not. It goes through
+`_dynamic` now -- the same trap that function's own docstring records for
+`Features.Item`, and the reason this file argues for late binding at all.
+
+Formats: `step stl iges sat dwg dxf dwf dwfx obj 3mf ipt pdf`. Translators
+recorded (all measured): `step iges sat dwg dxf pdf dwf dwfx stl obj`. **3MF
+is the one format with no translator**, because nothing in the 2027.1 listing
+exports it. Options offered: STEP's `ApplicationProtocolType` (3 is AP 214),
+PDF's `Sheet_Range` and `Vector_Resolution`. A name outside that list is
+refused rather than passed, because a `NameValueMap` ignores an unknown name
+silently -- and the option *names* are still unmeasured, because the
+`AttributeError` above is where the first run stopped.
+
+Other translator GUIDs the same listing gave, unused here but recorded because
+the listing cost a seat: DWFx `{0AC6FD97-2F4D-42CE-8BE0-8AEA580399E4}`, OBJ
+Export `{F539FB09-FC01-4260-A429-1818B14D6BAC}`, STL Export
+`{533E9A98-FC3B-11D4-8E7E-0010B541CD80}`, STL Import
+`{81CA7D27-2DBE-4058-8188-9136F85FC859}`, OBJ Import
+`{C420F7E4-98FD-4A57-BC1E-04D1D683EFDF}`, IFC
+`{49FFE2F7-315F-4305-95E9-1B9272B50D3C}`, glTF
+`{856E3C5D-A1F4-4B86-A6C0-8B849C0C8BE0}`, USDz
+`{2F08D88C-E86A-490E-9059-DD97A44020AC}`, JT
+`{16625A0E-F58C-4488-A969-E7EC4F99CACD}`, QIF
+`{C824374A-92F0-4053-9AC0-E567A96E1BBE}`, SMT
+`{B4ECC5EB-9507-46E5-87FB-EBB9479CE1DF}`, RVT
+`{2058EF4F-37A3-4B57-A322-B4E79E7D53E4}`, SVF
+`{C200B99B-B7DD-4114-A5E9-6557AB5ED8EC}`, Fusion
+`{C6B37B88-3CFA-4521-9873-E087B8626C44}`, Parasolid Binary
+`{A8F8F8E5-BBAB-4F74-8B1B-AC011251F8AC}` and Text
+`{8F9D3571-3CB8-42F7-8AFF-2DB2779C8465}`, SolidWorks
+`{402BE503-725D-41CB-B746-D557AB83BAF1}`, Solid Edge
+`{E2548DAF-D56B-4809-82B9-5F670E6D518B}`, NX
+`{93D506C4-8355-4E28-9C4E-C2B5F1EDC6AE}`, Creo
+`{46D96B7A-CF8A-49C9-8703-2F40CFBDF547}`, Rhino
+`{2CB23BF0-E2AC-4B32-B0A1-1CC292AF6623}`, Alias
+`{DC5CD10A-F6D1-4CA3-A6E3-42A6D646B03E}`, CATIA V5 Import
+`{8D1717FA-EB24-473C-8B0F-0F810C4FC5A8}` and Part Export
+`{2FEE4AE5-36D3-4392-89C7-58A9CD14D305}`. Seventy add-ins were loaded in
+total; only the translators are listed.
 
 ## Performance
 

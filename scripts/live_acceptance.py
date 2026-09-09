@@ -2329,7 +2329,10 @@ def check_work_planes(session: Session, report: Report) -> None:
 
     recipe = PartRecipe.model_validate({
         "name": "WorkPlaneKinds", "units": "mm",
-        "parameters": [{"name": "tilt", "value": 30, "units": "deg"}],
+        # `unit`, not `units`: `ParameterSpec` forbids unknown fields, so the
+        # plural spelling failed the whole check before it reached Inventor on
+        # the 2026-09-09 run.
+        "parameters": [{"name": "tilt", "value": 30, "unit": "deg"}],
         "operations": [
             {"op": "sketch", "name": "S", "plane": "xy", "entities": [
                 {"type": "rectangle", "center": [0, 0], "width": 60, "height": 40}]},

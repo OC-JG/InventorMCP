@@ -200,5 +200,8 @@ class TestTheComRouteIsTheDocumentedOne:
         table, so a rehearsal says which way a live export would go."""
         assert session.backend.export(
             part, ExportRequest(path="out.stp", format="step"))["route"] == "translator"
+        # 3MF is the one format left with no translator: nothing in the
+        # 2027.1 add-in listing exports it, where `stl` and `obj` both do and
+        # joined the table off that listing on 2026-09-09.
         assert session.backend.export(
-            part, ExportRequest(path="out.stl", format="stl"))["route"] == "SaveAs"
+            part, ExportRequest(path="out.3mf", format="3mf"))["route"] == "SaveAs"

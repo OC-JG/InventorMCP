@@ -1112,6 +1112,30 @@ otherwise assume they are all the same kind of work:
       it -- defect 11's lesson on the one operation whose position is another
       feature's geometry.
 
+      **The first run, 2026-09-09, got no further than the call**, and what it
+      found is not in this item's reasoning: **"Parameter not optional"** --
+      COM's message for a required argument nobody passed. So
+      `AddByPlaneAndTangent` takes more than the two the published page was
+      read as giving, and every question above is still open behind that.
+      Nothing is guessed in its place: a third argument invented to make the
+      call go through is defect 12's shape, and `scripts/probe_work_planes.py`
+      lists the collection's own type information -- argument names, counts,
+      how many optional -- which is what the fixed call gets written from. The
+      schema half, the one-cylindrical-face rule and the simulator's refusal
+      are unaffected and stay as they are, which is the split working: the
+      recipe-level work was right and one COM line is short an argument. It is
+      its own item now.
+
+- [ ] **`AddByPlaneAndTangent`, with the argument it actually wants.**
+      *(Opened 2026-09-09 by the run above.)* One line, once
+      `scripts/probe_work_planes.py` says what the third argument is. The
+      probe lists `WorkAxes` and `WorkPoints` too, because those three calls
+      were measured as *working* in 2026-09-07's run without anybody reading
+      their argument lists -- and it lists `AddByLinePlaneAndAngle`, which the
+      angled plane calls positionally on the grounds that the order is
+      documented and the names are not. If the names are in the type info that
+      reasoning was wrong, and naming them is strictly safer.
+
 - [x] **Durable topology handles and a `feature:` selector.** *(Opened
       2026-09-08, done 2026-09-09. The `chain` half is split off below; the
       rebinding is written and needs one run.)*
@@ -1179,18 +1203,31 @@ otherwise assume they are all the same kind of work:
       out in whichever application protocol that was and nothing said which.
       `ARCHITECTURE.md`'s note is inverted rather than defended.
 
-      **The interesting part is what to do with a table nobody here has
-      measured.** The seven ClassId GUIDs are the one table in this repository
-      that is neither measured nor quoted from a page in the tree -- they are
-      long-published and stable, and `help.autodesk.com` is unreachable from
-      this environment. So the arrangement carries the risk instead of the
-      values: `ItemById` raises on a GUID no add-in has, `SaveAs` stays as the
-      **measured** fallback with a note saying the settings were Inventor's,
-      and `scripts/probe_translators.py` prints every add-in's own
-      `ClassIdString` beside its name so one run replaces the comment with a
-      reading. Options that were asked for and cannot be passed are a **hard
-      error** rather than a quiet fallback, because a STEP file written in the
-      wrong protocol is one the caller has no reason to doubt.
+      **The table was measured the same day, and three of its seven
+      entries were wrong.** It was written as published-and-unverified with
+      the arrangement carrying the risk -- `ItemById` raises on a GUID no
+      add-in has, `SaveAs` stays as the measured fallback with a note, and
+      options that cannot be passed are a hard error -- and
+      `scripts/probe_translators.py` then listed every add-in's own
+      `ClassIdString`. `iges` held a GUID nothing on 2027.1 has; **`dwg` and
+      `dxf` held each other's**.
+
+      That swap is the finding worth keeping, because it is the failure the
+      arrangement was *not* built to catch. A GUID matching nothing falls back
+      loudly. Two valid GUIDs in each other's slots resolve happily and write
+      a DWG where a DXF was asked for, with an `ok` on it -- so a run was the
+      only thing that could have found it, and the probe stays for the next
+      release rather than being deleted after one good answer. `stl`, `obj`
+      and `dwfx` joined the table off the same listing; 3MF is the one format
+      left with no translator, because nothing in the listing exports it.
+
+      **And `HasSaveCopyAsOptions` did not exist on the object at all** --
+      `AttributeError` for all seven translators, which reads as "this release
+      has no options" and is nothing of the kind. `ItemById` is *declared* as
+      returning an `ApplicationAddIn`, so the makepy wrapper is that class and
+      has none of `TranslatorAddIn`'s members; the object is a translator and
+      the declared type is not. It goes through `_dynamic` now, which is the
+      same trap that module's own docstring records for `Features.Item`.
 
       **The option names are a whitelist, above both backends**, and that is a
       rule about the recipe rather than about Inventor: a `NameValueMap`

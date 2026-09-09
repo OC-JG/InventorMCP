@@ -4,6 +4,76 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
 ## Unreleased
 
+### Measured
+
+- **Three of the seven export ClassId GUIDs were wrong, and two of them were
+  each other's.** *(Inventor 2027.1, 2026-09-09, by
+  `scripts/probe_translators.py` on the day the table shipped.)* `iges` held
+  `{90AF7F30-...}`, which no add-in on this release has; the real one is
+  `{90AF7F44-...}`. And **`dwg` and `dxf` held each other's GUIDs**.
+
+  The swap is the finding worth keeping, because it is the failure the
+  arrangement around the table was *not* built to catch. A GUID matching
+  nothing raises from `ItemById`, and `export` falls back to `SaveAs` with a
+  note. Two valid GUIDs in each other's slots resolve happily and write a DWG
+  where a DXF was asked for, with a success on it. Only a listing catches
+  that, so the probe stays rather than being deleted after one good run.
+  `stl`, `obj` and `dwfx` joined the table off the same listing; 3MF is the
+  one format left with no translator, because nothing on 2027.1 exports it.
+
+- **`HasSaveCopyAsOptions` was not on the object at all**, for all seven
+  translators: `AttributeError: ... has no attribute
+  'HasSaveCopyAsOptions'`. That reads as "this release has no export options"
+  and is nothing of the kind. `ApplicationAddIns.ItemById` is *declared* as
+  returning an `ApplicationAddIn`, so the makepy wrapper is that class and
+  carries none of `TranslatorAddIn`'s members -- the object is a translator
+  and the declared type is not. It goes through `_dynamic` now, the same trap
+  that function's own docstring records for `Features.Item`. The option names
+  are therefore still unmeasured: the first run stopped here.
+
+- **`WorkPlanes.AddByPlaneAndTangent` takes more than two arguments.** *(First
+  live run of the tangent plane, 2026-09-09: "Work plane failed: **Parameter
+  not optional**".)* COM's message for a required argument nobody passed, so
+  the two the published page was read as giving are not all of them. Nothing
+  is guessed in its place -- a third argument invented to make the call go
+  through is defect 12's shape again -- and the new
+  `scripts/probe_work_planes.py` lists the collection's own type information
+  so the fixed call can be written from a reading. The schema half, the
+  one-cylindrical-face rule and the simulator's refusal are unaffected: the
+  recipe-level work was right and one COM line is short an argument.
+
+- **Rib: sixteen of sixteen combinations refused, and the member list was
+  worth more than the attempts.** *(`scripts/probe_rib.py` on 2027.1,
+  2026-09-09.)* Both `IsRib` values, both thickness planes and "never set",
+  both profile geometries, and a draft with an extended profile -- every one
+  answered the same `E_INVALIDARG` the original fourteen got, wrapped as
+  `Exception occurred`. So all four things the published page opened are
+  eliminated.
+
+  What the listing gave: `kRibThicknessAtSketchPlane` = 93953,
+  `kRibThicknessAtRoot` = 93954, `ExtentType` = 93698, `ThicknessDirection` =
+  20995, `ExtendProfile` True and `AffectedBody` None by default, and the
+  definition's full member set. Two new leads came out of it, and neither was
+  reachable before: **`DraftProfileEnds` and `BossSets` raise `com_error` when
+  read** on a fresh definition -- an object whose members throw is plausibly
+  the invalid state `Add` objects to -- and **`SetThicknessPlane` takes
+  `(HoldThicknessAt, NeutralGeometry)`**, two arguments with one optional,
+  where the page was read as giving one. The matrix used the optional-second
+  form throughout. The probe's second section chases both.
+
+### Fixed
+
+- **Two of my own scripts, and neither had ever run.**
+  `probe_reference_keys.py` declared its parameter through
+  `backend.set_parameter`, which writes it into Inventor and leaves the
+  *resolver* not knowing about it -- so the sketch failed with "Unknown
+  parameter 'plate_w'" before the probe asked a single question. It goes
+  through `apply_parameter` now, which is the distinction the builder draws
+  everywhere: the recipe's parameter table and Inventor's are two things.
+  And `live_acceptance.py`'s work-plane check wrote `"units": "deg"` on a
+  `ParameterSpec`, which forbids unknown fields -- the field is `unit`, and
+  the plural spelling failed the whole check before it reached Inventor.
+
 ### Added
 
 - **A topology handle says whether it survives a rebuild, and every face says

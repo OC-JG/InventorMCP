@@ -556,6 +556,10 @@ EXPORT_EXTENSIONS = {
     "dxf": ".dxf",
     "obj": ".obj",
     "3mf": ".3mf",
+    # DWFx joined on 2026-09-09 off the same add-in listing that corrected
+    # three of the translator GUIDs: it is DWF in an XPS container, and
+    # Inventor ships a separate translator for it.
+    "dwfx": ".dwfx",
     "ipt": ".ipt",
 }
 
@@ -575,30 +579,41 @@ EXPORT_EXTENSIONS = {
 #: is localised, so matching on "Autodesk STEP Translator" works on an English
 #: install and on no other.
 #:
-#: **These values are long-published and stable across releases, and none has
-#: been read off an installed Inventor from this project.** They are the one
-#: table here that is neither measured nor quoted from a page in the tree, and
-#: the arrangement around them is what makes that safe rather than the values
-#: being trusted: `ItemById` raises on a GUID no add-in has, and `export` then
-#: falls back to `SaveAs` -- the route that works today -- with a note saying
-#: the options were not applied. `scripts/probe_translators.py` prints every
-#: add-in's own `ClassIdString` beside its name, so one run on a seat replaces
-#: this comment with a measurement.
+#: **Measured on Inventor 2027.1, 2026-09-09**, by
+#: `scripts/probe_translators.py`, which prints every add-in's own
+#: `ClassIdString` beside its name. That run is why this comment says
+#: "measured" and not "published": it was published-and-unverified for
+#: exactly one day, and **three of the seven entries were wrong**.
 #:
-#: STL, OBJ and 3MF are deliberately absent. The reference publishes no
-#: `SaveCopyAs` option names for them, so there is nothing an options route
-#: would add, and the DFM loop's STL keeps whatever facet resolution Inventor
-#: defaults to -- worth measuring what that does to a wall-thickness reading
-#: before assuming it is fine, which is a roadmap item and not this table's
-#: business.
+#: `dwg` and `dxf` were **swapped** -- `{C24E3AC4-...}` is the DXF translator
+#: and `{C24E3AC2-...}` is DWG, the other way round from what was written --
+#: and `iges` was `{90AF7F30-...}`, which no add-in on this release has at
+#: all; the real one is `{90AF7F44-...}`. The swap is the one worth dwelling
+#: on, because it is the failure the arrangement below was *not* built to
+#: catch: `ItemById` raises on a GUID nothing has, so the wrong IGES entry
+#: would have fallen back to `SaveAs` with a note, but two valid GUIDs in each
+#: other's slots resolve happily and write a DWG where a DXF was asked for.
+#: A run was the only thing that could have found it.
+#:
+#: `stl`, `obj` and `dwfx` were added from the same listing. STL matters
+#: beyond tidiness: the DFM loop measures a mesh, and its facet resolution was
+#: whatever Inventor's dialog last held. There is a translator to ask now.
+#: 3MF is still absent -- nothing in the listing exports it.
+#:
+#: The arrangement around these values stays as it was: `ItemById` raising is
+#: what makes a wrong GUID loud, `export` falls back to `SaveAs` with a note,
+#: and options that were asked for and cannot be passed are a hard error.
 EXPORT_TRANSLATORS: dict[str, str] = {
     "step": "{90AF7F40-0C01-11D5-8E83-0010B541CD80}",
-    "iges": "{90AF7F30-0C01-11D5-8E83-0010B541CD80}",
+    "iges": "{90AF7F44-0C01-11D5-8E83-0010B541CD80}",
     "sat": "{89162634-02B6-11D5-8E80-0010B541CD80}",
-    "dwg": "{C24E3AC4-122E-11D5-8E91-0010B541CD80}",
-    "dxf": "{C24E3AC2-122E-11D5-8E91-0010B541CD80}",
+    "dwg": "{C24E3AC2-122E-11D5-8E91-0010B541CD80}",
+    "dxf": "{C24E3AC4-122E-11D5-8E91-0010B541CD80}",
     "pdf": "{0AC6FD96-2F4D-42CE-8BE0-8AEA580399E4}",
     "dwf": "{0AC6FD95-2F4D-42CE-8BE0-8AEA580399E4}",
+    "dwfx": "{0AC6FD97-2F4D-42CE-8BE0-8AEA580399E4}",
+    "stl": "{533E9A98-FC3B-11D4-8E7E-0010B541CD80}",
+    "obj": "{F539FB09-FC01-4260-A429-1818B14D6BAC}",
 }
 
 #: The `SaveCopyAs` option names this server will pass, per format, and what

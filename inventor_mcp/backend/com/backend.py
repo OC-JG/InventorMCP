@@ -4704,6 +4704,19 @@ class ComBackend(Backend):
         with self._batch(document), self._translate_errors("Work plane"):
             if request.kind == "tangent":
                 assert touched is not None
+                # **This refuses on 2027.1 and the reason is not in the
+                # argument values.** The first live run, 2026-09-09, answered
+                # "Parameter not optional" -- COM's message for a *required*
+                # argument nobody passed -- so `AddByPlaneAndTangent` takes
+                # more than the two the published page was read as giving.
+                #
+                # Nothing is guessed here on purpose. A third argument
+                # invented to make the call go through is defect 12's shape
+                # again: a work plane that builds and is not the one asked
+                # for, with an `ok: true` on it. `scripts/probe_work_planes.py`
+                # lists the collection's own type information -- argument
+                # names, count, how many optional -- and that reading is what
+                # the next version of this line should be written from.
                 plane = component.WorkPlanes.AddByPlaneAndTangent(
                     base, self._live(doc_id, touched.id))
             elif request.kind == "angle":
@@ -5644,6 +5657,16 @@ class ComBackend(Backend):
         except Exception as exc:
             return None, (f"Inventor has no add-in with ClassId {guid}: "
                           f"{type(exc).__name__}: {exc}.")
+        # **Through dynamic dispatch, measured 2026-09-09.** `ItemById` is
+        # declared as returning an `ApplicationAddIn`, so the makepy wrapper
+        # is that class -- and `HasSaveCopyAsOptions` and `SaveCopyAs` are
+        # `TranslatorAddIn` members, which it does not have. Early-bound, the
+        # object answered `AttributeError: ... has no attribute
+        # 'HasSaveCopyAsOptions'` for all seven translators, which reads as
+        # "this release has no options" and is nothing of the kind: the object
+        # *is* a translator, the wrapper's declared type is not. This is the
+        # same trap `_dynamic`'s own docstring records for `Features.Item`.
+        translator = _dynamic(translator)
         try:
             if not bool(translator.Activated):
                 translator.Activate()

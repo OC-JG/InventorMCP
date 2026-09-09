@@ -1,12 +1,17 @@
 r"""Ask Inventor which translator add-ins it has, and what their ClassIds are.
 
-`EXPORT_TRANSLATORS` in `inventor_mcp/backend/base.py` is the one table in this
-project that is **neither measured nor quoted from a page in the tree**: seven
-ClassId GUIDs, long-published and stable across releases, and none of them read
-off an installed Inventor from here. The arrangement around them is what makes
-that safe rather than the values being trusted -- `ItemById` raises on a GUID no
-add-in has, and `export` then falls back to `Document.SaveAs` with a note --
-but "safe" is not "measured", and this is the run that closes the gap.
+`EXPORT_TRANSLATORS` in `inventor_mcp/backend/base.py` was the one table in
+this project that was **neither measured nor quoted from a page in the tree**.
+This is the run that measured it, and **three of its seven entries were
+wrong**: `dwg` and `dxf` held each other's GUIDs, and `iges` held one no add-in
+on 2027.1 has at all.
+
+The swap is why this file is kept rather than deleted after one good run. A
+wrong GUID that matches nothing is caught by the arrangement around the
+table -- `ItemById` raises, and `export` falls back to `Document.SaveAs` with
+a note. **Two valid GUIDs in each other's slots are not**: they resolve
+happily and write a DWG where a DXF was asked for. Only a listing catches
+that, and only a listing catches it again after a release changes something.
 
 It prints, for every add-in Inventor has loaded:
 
@@ -120,7 +125,7 @@ def check_the_table(inner: Any, index: dict[str, str]) -> None:
                       "right one from the listing above.")
 
 
-def probe_options(inner: Any, doc_id: str) -> None:
+def probe_options(inner: Any, doc_id: str, dynamic: Any) -> None:
     """What each translator puts in a `NameValueMap` when asked for its options.
 
     The reading `EXPORT_OPTIONS` needs: it holds three names off a page, and
@@ -142,6 +147,12 @@ def probe_options(inner: Any, doc_id: str) -> None:
         except Exception as exc:
             print(f"        not reachable: {type(exc).__name__}: {exc}")
             continue
+        # Through dynamic dispatch: `ItemById` is declared as returning an
+        # `ApplicationAddIn`, so the makepy wrapper has none of
+        # `TranslatorAddIn`'s members and the 2026-09-09 run answered
+        # `AttributeError: ... has no attribute 'HasSaveCopyAsOptions'` for
+        # all seven. The object is a translator; the declared type is not.
+        translator = dynamic(translator)
         try:
             if not bool(translator.Activated):
                 translator.Activate()
@@ -188,6 +199,8 @@ def main(argv: list[str] | None = None) -> int:
 
     def everything() -> None:
         """All of it on the apartment. Nothing live leaves this function."""
+        from inventor_mcp.backend.com.backend import _dynamic
+
         inner = raw(backend)
         # Each section separately, so one exception does not throw away what
         # the others already learned -- the lesson `probe_definitions.py`
@@ -197,7 +210,8 @@ def main(argv: list[str] | None = None) -> int:
         for label, work in (
                 ("the add-in listing", lambda: index.update(list_add_ins(inner))),
                 ("the GUID table", lambda: check_the_table(inner, index)),
-                ("the option names", lambda: probe_options(inner, context.doc_id))):
+                ("the option names",
+                 lambda: probe_options(inner, context.doc_id, _dynamic))):
             try:
                 work()
             except Exception:

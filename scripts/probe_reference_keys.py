@@ -52,8 +52,8 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from apartment import on_thread, raw  # noqa: E402
-from inventor_mcp.builder import apply_operation  # noqa: E402
-from inventor_mcp.schema import Operation  # noqa: E402
+from inventor_mcp.builder import apply_operation, apply_parameter  # noqa: E402
+from inventor_mcp.schema import Operation, ParameterSpec  # noqa: E402
 from inventor_mcp.session import Session  # noqa: E402
 from pydantic import TypeAdapter  # noqa: E402
 
@@ -215,7 +215,14 @@ def main(argv: list[str] | None = None) -> int:
 
     document = backend.new_part("KeyProbe", units="mm")
     context = session.register(document, "mm", "deg")
-    backend.set_parameter(context.doc_id, "plate_w", "60 mm")
+    # Through `apply_parameter` and not `backend.set_parameter`: the latter
+    # writes the parameter into Inventor and leaves the *resolver* not knowing
+    # about it, so the sketch below then fails with "Unknown parameter
+    # 'plate_w'". That is how the 2026-09-09 run of this probe died before it
+    # reached a single question, and it is the same distinction the builder
+    # draws everywhere -- the recipe's parameter table and Inventor's are two
+    # things, and `apply_parameter` is what keeps them in step.
+    apply_parameter(session, context, ParameterSpec(name="plate_w", value=60))
     for op in PLATE:
         apply_operation(session, context, op)
 

@@ -32,6 +32,48 @@ what Inventor said, and a successful one is **measured and then undone**, so
 the run answers "does it build" and "what does it build" together and leaves
 the part as it was.
 
+## What the 2026-09-09 run said, and what it changed
+
+**Sixteen of sixteen refused, all with the same `E_INVALIDARG`** (as
+`Exception occurred` wrapping HRESULT 0x80070057). So it is not `IsRib`, it is
+not the thickness plane, it is not the profile being on a perpendicular plane
+rather than a flat one, and it is not the draft. Those were the four things
+the published page opened and all four are now eliminated.
+
+**The member list was the payoff, and it is worth more than the attempts.**
+`RibDefinition` on 2027.1 holds:
+
+    AffectedBody get/put            DirectionReversed get/put
+    DraftAngle get/put              DraftProfileEnds get/put
+    ExtendProfile get/put           ExtentDistance get
+    ExtentType get                  IsRib get/put
+    ProfileCurves get/put           Thickness get/put
+    ThicknessDirection get/put      BossSets get
+    Copy()                          SetFiniteExtent(Distance)
+    SetToNextExtent()               GetThicknessPlane(HoldThicknessAt, NeutralGeometry)
+    SetThicknessPlane(HoldThicknessAt, NeutralGeometry)   -- 1 optional
+
+with `kRibThicknessAtSketchPlane` = 93953 and `kRibThicknessAtRoot` = 93954,
+`ExtentType` = 93698, `ThicknessDirection` = 20995, `ExtendProfile` = True and
+`AffectedBody` = None by default.
+
+**Two of those properties raise on read**: `DraftProfileEnds` and `BossSets`
+both answer `com_error` on a definition straight out of `CreateDefinition`.
+That is the sharpest lead this run produced, and it is a new one -- a
+definition with members that throw is plausibly the "invalid" state `Add` is
+objecting to, and nothing before this had a member list to notice it with.
+
+**And `SetThicknessPlane` takes two arguments, not one.** The published page
+was read as `SetThicknessPlane(RibThicknessPlaneEnum)`; the type library says
+`(HoldThicknessAt, NeutralGeometry)` with one optional. The one-argument form
+the matrix used is therefore the *optional-second* call, which may be exactly
+what leaves the definition incomplete.
+
+So the second pass below reads `GetThicknessPlane` back, calls
+`SetThicknessPlane` **with** a `NeutralGeometry`, and re-reads the two
+throwing properties after each step -- the question being whether any of that
+makes them answer.
+
 The composite rib stays whatever this says. It is measured and exact -- 20.88000
 cm^3 for a 60 x 14 mm silhouette 2 mm thick -- and moving a measured route onto
 an unmeasured one is what `docs/DECISIONS.md` refuses. What a success here buys
@@ -226,6 +268,107 @@ def walk_the_matrix(inner: Any, document: Any, component: Any,
                     draft=0.0349, extend=True)
 
 
+#: The two properties that answer `com_error` on a fresh definition, measured
+#: 2026-09-09. Read again after each step below: a definition whose members
+#: throw is plausibly the state `Add` calls invalid, and if one of these starts
+#: answering, whatever step made it answer is the lead.
+THROWING = ("DraftProfileEnds", "BossSets")
+
+
+def _reads(definition: Any, label: str) -> None:
+    """Whether the two throwing properties answer now, and what they say."""
+    parts = []
+    for name in THROWING:
+        try:
+            parts.append(f"{name}={getattr(definition, name)!r}")
+        except Exception as exc:
+            parts.append(f"{name} raises {type(exc).__name__}")
+    print(f"        {label:34s} {', '.join(parts)}")
+
+
+def chase_the_thickness_plane(inner: Any, document: Any, component: Any,
+                              transients: Any) -> None:
+    """The lead the member list opened: `SetThicknessPlane`'s second argument.
+
+    Two facts from the 2026-09-09 run drive this. `SetThicknessPlane` takes
+    `(HoldThicknessAt, NeutralGeometry)` with one optional, and the matrix
+    called the one-argument form throughout; and `DraftProfileEnds` and
+    `BossSets` both raise on a fresh definition, which is the shape of an
+    object something has not finished setting up.
+
+    So: read `GetThicknessPlane` back, try the two-argument form with each
+    plausible `NeutralGeometry` -- an origin plane, the plate's own top face --
+    and print the two throwing properties after every step. If one of them
+    starts answering, that step is the lead; if `Add` then takes the
+    definition, the item is closed.
+    """
+    print("\n" + "=" * 70)
+    print("THE LEAD: SetThicknessPlane's SECOND ARGUMENT")
+    print("=" * 70)
+    ribs = component.Features.RibFeatures
+    body = component.SurfaceBodies.Item(1)
+
+    def top_face() -> Any:
+        faces = [body.Faces.Item(i) for i in range(1, int(body.Faces.Count) + 1)]
+
+        def height(face: Any) -> float:
+            try:
+                return float(face.Evaluator.RangeBox.MaxPoint.Z)
+            except Exception:
+                return -1.0
+
+        return max(faces, key=height)
+
+    neutrals: list[tuple[str, Any]] = [("nothing (the one-argument form)", None)]
+    try:
+        neutrals.append(("the XY origin plane", component.WorkPlanes.Item(3)))
+    except Exception as exc:
+        print(f"    no XY origin plane to offer: {exc}")
+    try:
+        neutrals.append(("the plate's top face", top_face()))
+    except Exception as exc:
+        print(f"    no top face to offer: {exc}")
+
+    for hold in ("kRibThicknessAtSketchPlane", "kRibThicknessAtRoot"):
+        for label, neutral in neutrals:
+            print(f"\n    {hold} with {label}")
+            try:
+                definition = ribs.CreateDefinition(
+                    _curves(component, transients, "Upright"), True, False, 0.2)
+            except Exception as exc:
+                print(f"        CreateDefinition raises: {exc}")
+                continue
+            _reads(definition, "fresh")
+            try:
+                current = definition.GetThicknessPlane()
+                print(f"        GetThicknessPlane() -> {current!r}")
+            except Exception as exc:
+                print(f"        GetThicknessPlane() raises: {type(exc).__name__}: {exc}")
+            try:
+                if neutral is None:
+                    definition.SetThicknessPlane(inner._k(hold))
+                else:
+                    definition.SetThicknessPlane(inner._k(hold), neutral)
+            except Exception as exc:
+                print(f"        SetThicknessPlane raises: {type(exc).__name__}: {exc}")
+                continue
+            _reads(definition, "after SetThicknessPlane")
+            before = _volume(document)
+            try:
+                feature = ribs.Add(definition)
+            except Exception as exc:
+                print(f"        Add raises: {exc}")
+                continue
+            after = _volume(document)
+            print(f"        *** BUILT *** volume {before:.5f} -> {after:.5f} "
+                  f"(+{after - before:.5f} cm^3)")
+            try:
+                feature.Delete()
+                print("        ...deleted again")
+            except Exception as exc:
+                print(f"        !!! could not delete it: {exc}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--keep-open", action="store_true")
@@ -258,7 +401,10 @@ def main(argv: list[str] | None = None) -> int:
                 ("the definition's members",
                  lambda: read_the_definition(inner, component, transients, _dynamic)),
                 ("the matrix",
-                 lambda: walk_the_matrix(inner, live, component, transients))):
+                 lambda: walk_the_matrix(inner, live, component, transients)),
+                ("the thickness-plane lead",
+                 lambda: chase_the_thickness_plane(
+                     inner, live, component, transients))):
             try:
                 work()
             except Exception:
@@ -276,9 +422,10 @@ def main(argv: list[str] | None = None) -> int:
         print("Left open, as asked.")
     print("Paste all of the above back. If any line says *** BUILT ***, gap 2 "
           "in docs/FEATURE_COVERAGE.md has an answer and the volume beside it "
-          "says what a real Rib does that the composite does not. If every "
-          "line refuses, the member listing above is still the thing fourteen "
-          "attempts were missing, and it says what is left to try.")
+          "says what a real Rib does that the composite does not. Failing "
+          "that, the two lines to read are `DraftProfileEnds` and `BossSets` "
+          "in the last section: if either stops raising after a step, that "
+          "step is what the definition was missing.")
     return 0
 
 
