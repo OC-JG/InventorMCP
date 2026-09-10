@@ -198,7 +198,8 @@ class TestTheRehearsalSaysWhichHalfIsTrusted:
         recipe a way to name the cylinder `AddByPlaneAndTangent` wants."""
         report = rehearse(recipe(
             {"op": "work_plane", "name": "Round", "kind": "tangent", "base": "xy",
-             "face": {"kind": "face", "filter": "cylindrical", "limit": 1}}))
+             "face": {"kind": "face", "filter": "cylindrical", "limit": 1,
+                      "near": [30, 0, 5]}}))
         assert [w for w in report["warnings"]
                 if "work_plane.kind" in w["warning"]] == []
 
@@ -220,7 +221,7 @@ class TestTheComCallIsThePublishedOne:
         import inspect
 
         source = inspect.getsource(com.ComBackend.work_plane)
-        assert "axis, base, request.angle.value)" in source
+        assert "axis, base, request.angle.value, False)" in source
         assert "plane.Definition.Angle.Expression = request.angle.expression" in source
 
     def test_tangent_calls_the_published_add_by_plane_and_tangent(self):

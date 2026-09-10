@@ -4704,21 +4704,26 @@ class ComBackend(Backend):
         with self._batch(document), self._translate_errors("Work plane"):
             if request.kind == "tangent":
                 assert touched is not None
-                # **This refuses on 2027.1 and the reason is not in the
-                # argument values.** The first live run, 2026-09-09, answered
-                # "Parameter not optional" -- COM's message for a *required*
-                # argument nobody passed -- so `AddByPlaneAndTangent` takes
-                # more than the two the published page was read as giving.
+                assert request.face is not None and request.face.near is not None
+                # **Four arguments, none optional**, read off the collection's
+                # own type information on 2026-09-10 after the two-argument
+                # call answered "Parameter not optional":
                 #
-                # Nothing is guessed here on purpose. A third argument
-                # invented to make the call go through is defect 12's shape
-                # again: a work plane that builds and is not the one asked
-                # for, with an `ok: true` on it. `scripts/probe_work_planes.py`
-                # lists the collection's own type information -- argument
-                # names, count, how many optional -- and that reading is what
-                # the next version of this line should be written from.
+                #     AddByPlaneAndTangent(Plane, Face, ProximityPoint,
+                #                          Construction)
+                #
+                # And `ProximityPoint` is not ceremony -- it is the answer to
+                # the question this operation could not previously ask. A
+                # cylinder has **two** tangent planes parallel to any given
+                # plane, and Autodesk's own signature settles which by taking
+                # a point near the wanted one. So the ambiguity the simulator
+                # was written to be honest about is one Inventor makes the
+                # caller resolve, and `face.near` -- required by the schema
+                # for this kind -- is where the recipe resolves it.
+                near = self._require_app().TransientGeometry.CreatePoint(
+                    *request.face.near)
                 plane = component.WorkPlanes.AddByPlaneAndTangent(
-                    base, self._live(doc_id, touched.id))
+                    base, self._live(doc_id, touched.id), near, False)
             elif request.kind == "angle":
                 if request.axis is None:  # pragma: no cover - the schema refuses it
                     raise FeatureError(
@@ -4728,8 +4733,16 @@ class ComBackend(Backend):
                     )
                 axis = self._resolve_axis(doc_id, request.axis)
                 assert request.angle is not None
+                # `AddByLinePlaneAndAngle(Line, Plane, Angle, Construction)`,
+                # four arguments and none optional -- read off the type
+                # information on 2026-09-10, which also settled that the
+                # parameter *names* are published after all. The three-argument
+                # form built correctly on 2026-09-09 (pywin32 supplies a
+                # missing variant for the trailing one and Inventor takes it),
+                # so this change is safety rather than a fix: a trailing
+                # argument left to a marshalling default is one nobody chose.
                 plane = component.WorkPlanes.AddByLinePlaneAndAngle(
-                    axis, base, request.angle.value)
+                    axis, base, request.angle.value, False)
                 try:
                     plane.Definition.Angle.Expression = request.angle.expression
                 except Exception:  # pragma: no cover - version-specific
@@ -5083,13 +5096,26 @@ class ComBackend(Backend):
         to be bound back, so a context created and thrown away is a key that
         can never be used.
 
-        **Unmeasured, and the uncertainty is in the marshalling rather than in
-        the call.** `GetReferenceKey` takes the key as a byte-array `[out]`
-        parameter in the type library, and pywin32 usually turns one of those
-        into the return value -- usually. So this tries and returns `None` on
-        any failure, which costs nothing: a handle with no key behaves exactly
-        as every handle behaved before this existed.
-        `scripts/probe_reference_keys.py` is what settles it.
+        **The manager exists and the marshalling is still unsettled**, which
+        the 2026-09-09 run narrowed rather than answered. `ReferenceKeyManager`
+        is there on 2027.1 with `CreateKeyContext` (returning 1),
+        `BindKeyToObject`, `CanBindKeyToObject`, `KeyToString` and
+        `StringToKey`. What would not go through was getting the key out of
+        the face -- and the error named the reason:
+
+            GetReferenceKey(context) -> TypeError: Objects for SAFEARRAYS must
+                                        be sequences (of sequences), or a
+                                        buffer object
+
+        pywin32 had tried to marshal the integer context **as the byte
+        array**, so the key is the *first* parameter and the context the
+        second. That is what the two calls below try, in that order, and the
+        second is the form the type library implies. Both are wrapped, because
+        `None` here costs nothing: a handle with no key behaves exactly as
+        every handle behaved before this existed, and `_live` still refuses a
+        stale one rather than handing back a dead object.
+        `scripts/probe_reference_keys.py` carries four spellings of the array
+        argument and the `KeyToString` route, which is the run that settles it.
         """
         context = self._key_contexts.get(doc_id)
         if context is None:
@@ -5102,11 +5128,13 @@ class ComBackend(Backend):
             self._key_contexts[doc_id] = context
         if context is False:
             return None
-        try:
-            return entity.GetReferenceKey(context)
-        except Exception as exc:
-            logger.debug("GetReferenceKey declined: %s", exc)
-            return None
+        for attempt in (lambda: entity.GetReferenceKey(b"", context),
+                        lambda: entity.GetReferenceKey(bytearray(), context)):
+            try:
+                return attempt()
+            except Exception as exc:
+                logger.debug("GetReferenceKey declined: %s", exc)
+        return None
 
     def _live(self, doc_id: str, handle: str) -> Any:  # pragma: no cover
         """The entity *handle* names, rebound if the model has moved under it.

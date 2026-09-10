@@ -9,15 +9,28 @@ object, rebinds it from a reference key if it has one, and refuses if neither
 works -- and this probe is what says whether the *rebinding* half actually
 functions on an installed Inventor.
 
-**The call is published and the marshalling is not.** `Document.
-ReferenceKeyManager` has `CreateKeyContext()`, and an entity has
-`GetReferenceKey(KeyContext)` -- where the key is a byte-array `[out]`
-parameter in the type library, which pywin32 usually turns into the return
-value. Usually. Then `BindKeyToObject(key, context)` takes it back. The
-published rule that shapes the backend is that **a B-Rep key needs the context
-it was made with**, which is why the context is kept per document rather than
-made per call: a context created and thrown away is a key that can never be
-used.
+**The call is published and the marshalling is not**, and the 2026-09-09 run
+got exactly that far. `Document.ReferenceKeyManager` exists on 2027.1 with
+`CreateKeyContext` (which returned 1), `BindKeyToObject`,
+`CanBindKeyToObject`, `KeyToString`, `StringToKey`, `SaveContextToArray`,
+`LoadContextFromArray` and `ReleaseKeyContext`. What failed was getting a key
+out of a face -- and the *error* gave the answer the docs had not:
+
+    GetReferenceKey(context)  ->  TypeError: Objects for SAFEARRAYS must be
+                                  sequences (of sequences), or a buffer object
+
+pywin32 had tried to marshal the integer context **as the byte array**, which
+says the key is the **first** parameter and the context the second:
+`GetReferenceKey(ReferenceKey() As Byte, [KeyContext])`. And the no-argument
+form answered "Type mismatch" rather than "parameter not optional", which
+agrees. So this pass tries the array first with four plausible spellings of
+"something for pywin32 to fill", and then the `KeyToString` route, because a
+string is a far better thing for a handle to hold than a SAFEARRAY.
+
+The published rule that shapes the backend is that **a B-Rep key needs the
+context it was made with**, which is why the context is kept per document
+rather than made per call: a context created and thrown away is a key that can
+never be used.
 
 So this run answers four things in order, and stops being interesting as soon
 as one fails:
@@ -140,10 +153,28 @@ def probe(inner: Any, doc_id: str, dynamic: Any) -> None:
 
     target = max(faces, key=height)
     print(f"\n    picked the top face at Z = {height(target):.4f} cm")
+    # **The argument order came out of the 2026-09-09 run, from the error
+    # rather than from the docs.** `GetReferenceKey(context)` answered
+    # "Objects for SAFEARRAYS must be sequences (of sequences), or a buffer
+    # object" -- it had tried to marshal the integer context *as the byte
+    # array*, which says the key is the **first** parameter and the context
+    # the second: `GetReferenceKey(ReferenceKey() As Byte, [KeyContext])`.
+    # And `GetReferenceKey()` with nothing answered "Type mismatch", not
+    # "parameter not optional", which agrees: the first argument is required
+    # and typed.
+    #
+    # It is an in/out SAFEARRAY, so pywin32 wants something passed in and
+    # hands the filled version back. Which *something* it will take is the
+    # part still unknown, so all four plausible spellings are tried.
     key = None
     for label, call in (
-            ("GetReferenceKey(context)", lambda: target.GetReferenceKey(context)),
-            ("GetReferenceKey()", lambda: target.GetReferenceKey()),
+            ("GetReferenceKey(b'', context)",
+             lambda: target.GetReferenceKey(b"", context)),
+            ("GetReferenceKey([], context)",
+             lambda: target.GetReferenceKey([], context)),
+            ("GetReferenceKey(bytearray(), context)",
+             lambda: target.GetReferenceKey(bytearray(), context)),
+            ("GetReferenceKey(b'')", lambda: target.GetReferenceKey(b"")),
     ):
         try:
             key = call()
@@ -157,6 +188,34 @@ def probe(inner: Any, doc_id: str, dynamic: Any) -> None:
               "None is then the honest answer and handles stay "
               "valid-until-rebuild -- which is what the docs have always said.")
         return
+
+    # `KeyToString` and `StringToKey` are on the manager too, and a string is
+    # a far better thing to store than a SAFEARRAY -- it survives being put in
+    # a dict, logged, or written to a sidecar. If the round trip works, the
+    # backend should keep the string and not the array.
+    print("\n    the string form, which is what a handle would rather hold:")
+    for label, call in (
+            ("KeyToString(key)", lambda: manager.KeyToString(key)),
+    ):
+        try:
+            text = call()
+        except Exception as exc:
+            print(f"      {label} raises: {type(exc).__name__}: {exc}")
+            continue
+        print(f"      {label} -> {type(text).__name__}, {len(str(text))} chars")
+        try:
+            back = manager.StringToKey(text)
+            print(f"      StringToKey(...) -> {_shape(back)}")
+        except Exception as exc:
+            print(f"      StringToKey(...) raises: {type(exc).__name__}: {exc}")
+
+    # And whether the manager thinks the key is bindable, which is a cheaper
+    # question than binding and the one `_live` should ask first.
+    try:
+        print(f"\n    CanBindKeyToObject(key, context) -> "
+              f"{manager.CanBindKeyToObject(key, context)}")
+    except Exception as exc:
+        print(f"\n    CanBindKeyToObject raises: {type(exc).__name__}: {exc}")
 
     print("\n" + "=" * 70)
     print("3. BIND IT BACK, WITH NOTHING CHANGED")

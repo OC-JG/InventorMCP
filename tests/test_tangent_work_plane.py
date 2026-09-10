@@ -45,7 +45,11 @@ PLATE_AND_BOSS = [
     {"op": "extrude", "name": "Boss", "sketch": "Round", "distance": 25},
 ]
 
-CYLINDER = {"kind": "face", "filter": "cylindrical", "limit": 1}
+#: `near` is required for a tangent plane, and it is the proximity
+#: point Inventor's own call takes: the boss is on the Z axis with a
+#: 10 mm radius, so this is the +X side of it.
+CYLINDER = {"kind": "face", "filter": "cylindrical", "limit": 1,
+            "near": [10, 0, 20]}
 
 TOUCH = {"op": "work_plane", "name": "Touch", "kind": "tangent", "base": "xy",
          "face": CYLINDER}
@@ -108,7 +112,8 @@ class TestOneCylindricalFaceOrARefusal:
                     {"type": "circle", "center": [20, 0], "diameter": 8}]},
                 {"op": "extrude", "name": "Pin", "sketch": "Second", "distance": 15},
                 {"op": "work_plane", "name": "Touch", "kind": "tangent",
-                 "base": "xy", "face": {"kind": "face", "filter": "cylindrical"}}]}))
+                 "base": "xy", "face": {"kind": "face", "filter": "cylindrical",
+                                        "near": [0, 0, 20]}}]}))
         assert out["ok"] is False
         assert any("not a plane" in str(e) for e in out["errors"]), out["errors"]
 
@@ -119,7 +124,8 @@ class TestOneCylindricalFaceOrARefusal:
         rather than at the COM call."""
         out = build_part(session, recipe(
             {"op": "work_plane", "name": "Touch", "kind": "tangent", "base": "xy",
-             "face": {"kind": "face", "filter": "top", "limit": 1}}))
+             "face": {"kind": "face", "filter": "top", "limit": 1,
+                      "near": [0, 0, 10]}}))
         assert out["ok"] is False
         assert any("planar face" in str(e) and "cylindrical" in str(e)
                    for e in out["errors"]), out["errors"]

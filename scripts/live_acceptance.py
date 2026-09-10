@@ -2364,21 +2364,34 @@ def check_work_planes(session: Session, report: Report) -> None:
             "work-planes: each one is in WorkPlanes by the name the recipe gave",
             f"the part holds {planes}")
 
-        # The reading that tells an angled plane from an offset one. A 20 mm
-        # square on a plane through the origin turned `tilt` about X, extruded
-        # 4 mm, reaches above the plate by however much the tilt lifts its far
-        # corner. Flat against XY it would reach the plate's own 10 mm and no
-        # further, which is exactly what defect 12 built.
+        # The reading that tells an angled plane from an offset one, and it
+        # is a **prediction** rather than an inequality since 2026-09-10. The
+        # first run asserted the wrong side and failed on a correct part: a
+        # 20 mm square on a plane through the origin turned 30 degrees about
+        # X reaches *down* to -sin(30) = -0.5 cm, not up, because the plate
+        # occupies 0 to 1.0 and the fin's own extrude only lifts its top to
+        # 0.846. So the check said "not parallel" was unproven while the run
+        # had in fact proven it twice over.
+        #
+        # The derivation, for a square of half-width h on a plane through the
+        # origin tilted `t` about X and extruded `d` along that plane's own
+        # normal: the low corner sits at `-h * sin(t)` and the high one at
+        # `h * sin(t) + d * cos(t)`. Flat against XY both would be 0 and `d`,
+        # entirely inside the plate -- which is exactly what defect 12 built.
+        half, depth = 1.0, 0.4
         first = session.backend.mass_properties(context.doc_id).bounding_box
-        report.note(f"work-planes: box with a {30} degree fin -- {first}")
+        report.note(f"work-planes: box with a 30 degree fin -- {first}")
+        low = -half * math.sin(math.radians(30))
+        high = half * math.sin(math.radians(30)) + depth * math.cos(math.radians(30))
         report.check(
-            first is not None and first[5] > 1.0 + 1e-6,
-            "work-planes: the angled plane is not parallel to its base "
-            f"(the part reaches {first[5] if first else 0:.4f} cm, past the "
-            "plate's 1.0)",
-            "a fin on a genuinely angled plane reaches above the plate; one on "
-            "an offset plane parallel to XY would stop at the plate's own "
-            "height, which is what defect 12 built and reported as success.")
+            first is not None and abs(first[2] - low) < 1e-4,
+            f"work-planes: the angled plane is at 30 degrees, measured -- the "
+            f"fin's low corner is at {first[2] if first else 0:.4f} cm against "
+            f"{low:.4f} derived",
+            f"a 20 mm square on a plane through the origin tilted 30 degrees "
+            f"reaches down to -sin(30) = {low:.4f} cm and up to {high:.4f}; "
+            "flat against XY it would span 0 to 0.4 and sit entirely inside "
+            "the plate, which is what defect 12 built and called success.")
 
         # And that the angle is the parameter's, not a number that reached
         # Inventor once. Defect 11's lesson, on the one operation whose whole
@@ -2387,15 +2400,22 @@ def check_work_planes(session: Session, report: Report) -> None:
         session.backend.rebuild(context.doc_id)
         second = session.backend.mass_properties(context.doc_id).bounding_box
         report.note(f"work-planes: box at 60 degrees -- {second}")
+        # Predicted too, from the same arithmetic, which is a stronger reading
+        # than "it moved": a plane that took the number rather than the
+        # parameter gives the *same* figure twice, and one that took the
+        # parameter and applied it wrongly gives a different figure that is
+        # not this one. Only the derived value distinguishes all three.
+        low_60 = -half * math.sin(math.radians(60))
         report.check(
-            first is not None and second is not None
-            and abs(second[5] - first[5]) > 1e-4,
-            "work-planes: doubling `tilt` moved the geometry, so the angle "
-            "reached Inventor as an expression",
-            f"the part reached {first[5] if first else 0:.4f} cm at 30 degrees "
-            f"and {second[5] if second else 0:.4f} at 60. The same figure twice "
-            "means the plane took a number and not the parameter -- the plane "
-            "is right once and never moves, which is defect 11's shape.")
+            second is not None and abs(second[2] - low_60) < 1e-4,
+            "work-planes: doubling `tilt` moved the geometry to where 60 "
+            f"degrees puts it -- {second[2] if second else 0:.4f} cm against "
+            f"{low_60:.4f} derived",
+            f"the fin's low corner read {first[2] if first else 0:.4f} cm at 30 "
+            f"degrees and {second[2] if second else 0:.4f} at 60, against "
+            f"{low:.4f} and {low_60:.4f} derived. The same figure twice means "
+            "the plane took a number and not the parameter -- right once and "
+            "never moving, which is defect 11's shape.")
     finally:
         session.backend.close_document(context.doc_id, save=False)
         session.forget(context.doc_id)
@@ -2429,6 +2449,16 @@ def check_tangent_plane(session: Session, report: Report) -> None:
     axis that moves *is* the answer. No derivation to get wrong: the reading is
     a sign.
 
+    **The `near` point makes the reading sharper, not blunter.** The first
+    attempt at this check, 2026-09-09, never reached Inventor -- the call
+    answered "Parameter not optional", and the type information then showed
+    `AddByPlaneAndTangent(Plane, Face, ProximityPoint, Construction)` with a
+    required proximity point. That point is how the *two* tangent planes
+    parallel to any given plane are told apart, which the recipe now has to
+    say. So a `near` on the +X side of the boss asks for a specific plane, and
+    the centre of mass moving in +x rather than -x is a second reading on top
+    of the axis: it says Inventor honoured the point as well as the plane.
+
     Two more things fall out of the same run. The distance says the plane
     really is tangent rather than through the axis (the lug's own centroid sits
     beyond the radius, not at zero), and the third check moves the boss
@@ -2457,7 +2487,13 @@ def check_tangent_plane(session: Session, report: Report) -> None:
             # axes and the centre of mass starts on the Z axis. That is what
             # makes the axis the lug moves it along a clean reading.
             {"op": "work_plane", "name": "Touch", "kind": "tangent", "base": "xz",
-             "face": {"kind": "face", "filter": "cylindrical", "limit": 1}},
+             # `near` is required for a tangent plane and is the proximity
+             # point `AddByPlaneAndTangent` takes: the boss is on the Z axis
+             # with a 10 mm radius, so this is its +X side, 20 mm up. That
+             # also settles which of the two tangent planes to expect, which
+             # this check's whole reading depends on.
+             "face": {"kind": "face", "filter": "cylindrical", "limit": 1,
+                      "near": [10, 0, 20]}},
             {"op": "sketch", "name": "Pad", "plane": "Touch", "entities": [
                 {"type": "rectangle", "center": [0, 0], "width": 12, "height": 12}]},
             {"op": "extrude", "name": "Lug", "sketch": "Pad", "distance": 6},

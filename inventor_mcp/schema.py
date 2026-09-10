@@ -808,8 +808,11 @@ class WorkPlaneOp(OpBase):
         None,
         description="The cylindrical face a tangent plane touches, picked the "
         "way a fillet picks its edges. Required for kind 'tangent' and "
-        "meaningless for the others. It has to resolve to exactly one face: "
-        "'the plane tangent to these two bosses' is not a plane.",
+        "meaningless for the others. It has to resolve to exactly one face -- "
+        "'the plane tangent to these two bosses' is not a plane -- and it has "
+        "to carry `near`, a model-space point on the side of the cylinder you "
+        "want: a cylinder has two tangent planes parallel to any given plane, "
+        "and Inventor's own call takes a proximity point to say which.",
     )
 
     #: The field each kind needs and no other kind may carry. `offset`,
@@ -848,6 +851,23 @@ class WorkPlaneOp(OpBase):
             raise ValueError(
                 "A 'tangent' work plane needs `face`: the cylindrical face it "
                 "touches. Give a selector, the way a fillet names its edges."
+            )
+        if wanted == "face" and self.face is not None and self.face.near is None:
+            # Measured on 2027.1, 2026-09-10: `AddByPlaneAndTangent(Plane,
+            # Face, ProximityPoint, Construction)` takes four arguments and
+            # none is optional. The proximity point is not ceremony -- a
+            # cylinder has *two* tangent planes parallel to any given plane,
+            # and it is how Inventor is told which. So the recipe has to say,
+            # and `near` is where it says it: the same point already narrows
+            # the selector, so one field answers both questions.
+            raise ValueError(
+                "A 'tangent' work plane needs `near` on its `face` selector: a "
+                "point on the side of the cylinder the plane should touch. A "
+                "cylinder has two tangent planes parallel to any given plane, "
+                "and Inventor's own call takes a proximity point to choose "
+                "between them -- so there is nothing to default to. Give the "
+                "point in the recipe's units, e.g. `near: [12, 0, 10]` for the "
+                "+X side of a boss on the Z axis."
             )
         return self
 

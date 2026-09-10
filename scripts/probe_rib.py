@@ -69,10 +69,27 @@ was read as `SetThicknessPlane(RibThicknessPlaneEnum)`; the type library says
 the matrix used is therefore the *optional-second* call, which may be exactly
 what leaves the definition incomplete.
 
-So the second pass below reads `GetThicknessPlane` back, calls
-`SetThicknessPlane` **with** a `NeutralGeometry`, and re-reads the two
-throwing properties after each step -- the question being whether any of that
-makes them answer.
+## And what the second pass said, 2026-09-10
+
+**Both leads are dead, and one of them died informatively.** Six more
+combinations -- each thickness plane with no neutral geometry, with the XY
+origin plane, and with the plate's own top face -- all refused, and:
+
+* `DraftProfileEnds` and `BossSets` **raise before and after every step**.
+  Whatever they are, they are not a state the caller can complete.
+* `GetThicknessPlane()` answers **`(93954, None)` every time** -- that is
+  `kRibThicknessAtRoot` and no neutral geometry -- *including* straight after
+  `SetThicknessPlane(kRibThicknessAtSketchPlane, ...)`. So the setter does not
+  take. That is the informative half: nothing settable on this definition
+  changes what it reports, which is evidence the definition is not the thing
+  `Add` is objecting to.
+
+**So the route left is the one `docs/FEATURE_COVERAGE.md` named before any of
+this: make a rib in the UI and read its definition back.** With the member
+list in hand that is now a diff rather than a fishing trip, and `--read` does
+it: point this at a part containing a hand-made rib and it prints every member
+of that feature's own definition, next to the same members on one
+`CreateDefinition` produces. Whatever differs is the answer.
 
 The composite rib stays whatever this says. It is measured and exact -- 20.88000
 cm^3 for a 60 x 14 mm silhouette 2 mm thick -- and moving a measured route onto
@@ -369,9 +386,77 @@ def chase_the_thickness_plane(inner: Any, document: Any, component: Any,
                 print(f"        !!! could not delete it: {exc}")
 
 
+def read_a_real_one(inner: Any, path: str, dynamic: Any) -> None:
+    """Every member of a hand-made rib's definition, so it can be diffed.
+
+    The route `docs/FEATURE_COVERAGE.md` named before any of the API guessing
+    started, and the one the two probe passes have now argued round to: if
+    `Add` refuses every definition this code can build, read one Inventor
+    itself built and see what is different about it.
+
+    That was a fishing trip while nobody had the member list. It is a diff
+    now: the same twenty-odd names are printed for the real feature's
+    definition and for a fresh `CreateDefinition`, side by side.
+    """
+    print("=" * 70)
+    print(f"A RIB INVENTOR MADE: {path}")
+    print("=" * 70)
+    app = inner._require_app()
+    document = app.Documents.Open(path, True)
+    try:
+        component = document.ComponentDefinition
+        ribs = [f for f in _iter_features(component)
+                if "rib" in str(type(f).__name__).lower()
+                or _kind_of(f) == "rib"]
+        if not ribs:
+            names = ", ".join(_name_of(f) for f in _iter_features(component))
+            print(f"    no rib feature in this part. It holds: {names}")
+            print("    Make one with Inventor's own Rib command, save, and "
+                  "point this at the file again.")
+            return
+        print(f"    found {len(ribs)} rib feature(s)")
+        for feature in ribs:
+            print(f"\n    --- {_name_of(feature)}")
+            try:
+                definition = dynamic(feature).Definition
+            except Exception as exc:
+                print(f"        no readable Definition: {type(exc).__name__}: {exc}")
+                continue
+            members(definition, f"{_name_of(feature)}.Definition (real)", dynamic)
+    finally:
+        try:
+            document.Close(True)
+        except Exception:
+            pass
+
+
+def _iter_features(component: Any) -> list[Any]:
+    features = component.Features
+    return [features.Item(index) for index in range(1, int(features.Count) + 1)]
+
+
+def _name_of(feature: Any) -> str:
+    try:
+        return str(feature.Name)
+    except Exception:
+        return "<unnamed>"
+
+
+def _kind_of(feature: Any) -> str:
+    try:
+        return str(feature.Type)
+    except Exception:
+        return ""
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--keep-open", action="store_true")
+    parser.add_argument(
+        "--read", metavar="PART.ipt",
+        help="Skip the matrix and read the definition of a rib Inventor made "
+             "by hand in this part, so it can be diffed against one this code "
+             "builds. The route left after both probe passes refused.")
     args = parser.parse_args(argv)
 
     session = Session(backend_kind="inventor")
@@ -380,6 +465,19 @@ def main(argv: list[str] | None = None) -> int:
     print("=" * 70)
     print(f"Inventor {info.version} -- rib, with the definition members read")
     print("=" * 70)
+
+    if args.read:
+        def just_read() -> None:
+            from inventor_mcp.backend.com.backend import _dynamic
+
+            read_a_real_one(raw(backend), args.read, _dynamic)
+
+        on_thread(backend, just_read)
+        print("\n" + "=" * 70)
+        print("Paste the listing back. Every member that differs from the "
+              "fresh-definition listing further up this file's docstring is a "
+              "candidate for what `Add` is objecting to.")
+        return 0
 
     document = backend.new_part("RibProbe", units="mm")
     context = session.register(document, "mm", "deg")
@@ -422,10 +520,13 @@ def main(argv: list[str] | None = None) -> int:
         print("Left open, as asked.")
     print("Paste all of the above back. If any line says *** BUILT ***, gap 2 "
           "in docs/FEATURE_COVERAGE.md has an answer and the volume beside it "
-          "says what a real Rib does that the composite does not. Failing "
-          "that, the two lines to read are `DraftProfileEnds` and `BossSets` "
-          "in the last section: if either stops raising after a step, that "
-          "step is what the definition was missing.")
+          "says what a real Rib does that the composite does not.\n\n"
+          "If everything refused again, the remaining route is `--read`: make "
+          "a rib by hand in Inventor, save the part, and run\n"
+          "    python scripts/probe_rib.py --read C:\\path\\to\\that.ipt\n"
+          "which prints every member of the real feature's definition beside "
+          "the same members on one this code builds. With the member list "
+          "already in hand that is a diff, not a fishing trip.")
     return 0
 
 

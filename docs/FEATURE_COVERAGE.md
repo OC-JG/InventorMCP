@@ -100,18 +100,31 @@ appears across all of Inventor.
    `ExtentType` = 93698, `ThicknessDirection` = 20995, `ExtendProfile` True
    and `AffectedBody` None by default.
 
-   **Two leads came out of that listing, and both are new.**
-   `DraftProfileEnds` and `BossSets` **raise `com_error` when read** on a
-   definition straight out of `CreateDefinition` -- a definition whose members
-   throw is plausibly the invalid state `Add` is objecting to, and nothing
-   before this had a member list to notice it with. And
-   **`SetThicknessPlane` takes two arguments**, `(HoldThicknessAt,
-   NeutralGeometry)` with one optional, where the page was read as giving one:
-   the matrix used the optional-second form throughout, which may be exactly
-   what leaves the definition incomplete. The probe's second section chases
-   both -- `GetThicknessPlane` read back, the two-argument form with an origin
-   plane and with the plate's own face, and the two throwing properties
-   re-read after every step.
+   Two leads came out of that listing and **both were chased and both are
+   dead**, measured 2026-09-10. `DraftProfileEnds` and `BossSets` raise
+   `com_error` when read on a fresh definition -- and they still raise after
+   every step, so they are not a state a caller can complete. And
+   `SetThicknessPlane` takes `(HoldThicknessAt, NeutralGeometry)`, two
+   arguments with one optional, where the page was read as giving one -- so
+   six more combinations went through it with no neutral geometry, with the XY
+   origin plane and with the plate's own top face, on both thickness planes.
+   All six refused.
+
+   **One of those deaths is informative.** `GetThicknessPlane()` answers
+   `(93954, None)` every single time -- `kRibThicknessAtRoot`, no neutral
+   geometry -- *including* immediately after
+   `SetThicknessPlane(kRibThicknessAtSketchPlane, ...)`. The setter does not
+   take. Nothing settable on this definition changes what it reports, which is
+   evidence that **the definition is not what `Add` is objecting to**, and
+   twenty-two refusals across two passes now say the same.
+
+   So the route left is the one this bullet named before any of the API
+   guessing started: **read back a rib the UI made.** With the member list in
+   hand that is a diff rather than a fishing trip, and
+   `probe_rib.py --read <part.ipt>` does it -- point it at a part containing a
+   hand-made rib and it prints every member of that feature's own definition
+   against the same members on one `CreateDefinition` produces. Whatever
+   differs is the answer.
 
    So `{"op":"rib",...}` is built by hand instead: the rib's silhouette -- its top
    edge from `start` to `end`, dropped to `root` -- as a closed profile, extruded
@@ -543,17 +556,31 @@ Found by using the server rather than by reading its API surface:
   the other, and a tangent plane is defined by nothing but the cylinder it
   touches. `_KNOWN_BROKEN_VALUES` is empty as a result.
 
-  **`AddByPlaneAndTangent` takes more than two arguments.** *Measured on
-  Inventor 2027.1, 2026-09-09, on the first live run of the tangent plane:*
-  "Work plane failed: **Parameter not optional**." That is COM's message for
-  a required argument nobody passed, so the two the published page was read as
-  giving are not all of them. Nothing is guessed in its place -- a third
-  argument invented to make the call go through is this defect's own shape
-  again -- and `scripts/probe_work_planes.py` lists the collection's type
-  information, argument names included, which is what the next version of that
-  line gets written from. The schema, the selector, the refusals and the
-  simulator's half are all unaffected and stay as they are; it is the one COM
-  call that is short an argument.
+  **`AddByPlaneAndTangent` takes four arguments, and the third one settles a
+  question this operation could not previously ask.** *Measured on Inventor
+  2027.1: the two-argument call answered "Parameter not optional" on
+  2026-09-09, and `scripts/probe_work_planes.py` read the collection's own
+  type information on 2026-09-10.*
+
+      AddByPlaneAndTangent(Plane, Face, ProximityPoint, Construction)
+
+  None of the four is optional. And the `ProximityPoint` is not ceremony: a
+  cylinder has **two** tangent planes parallel to any given plane, which is
+  precisely the ambiguity the simulator's refusal was written to be honest
+  about -- and Autodesk's own signature makes the caller resolve it. So
+  `face.near` is **required** for `kind: "tangent"` now, and it does both
+  jobs: the same point narrows the selector and chooses the side. The schema's
+  refusal names it, because a point silently defaulted would pick one of two
+  planes for somebody who had not said which.
+
+  The same reading settled `AddByLinePlaneAndAngle(Line, Plane, Angle,
+  Construction)` -- four arguments, none optional, and its parameter *names*
+  are published after all, where the angled plane's positional call was
+  justified on the grounds that they were not. The three-argument form had
+  built correctly (pywin32 supplies a missing variant for a trailing argument
+  and Inventor takes it), so passing `Construction` explicitly is safety
+  rather than a fix: a trailing argument left to a marshalling default is one
+  nobody chose.
 
   Two things stayed with the simulator rather than being closed by the schema.
   It records the tilt and **declines to place** what is built on a tilted

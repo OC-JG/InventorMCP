@@ -39,6 +39,62 @@ demonstrably valid:
 
 * `Documents.Add` handed back the generic `Document` interface, so
   `ComponentDefinition` raised `AttributeError`
+* **The work-geometry `Add...` signatures, read off the collections
+  themselves** *(2026-09-10, `scripts/probe_work_planes.py`)*. Recorded in
+  full because the seat is the scarce resource and several of these are
+  operations a recipe would plausibly want, none of which was known to exist:
+
+      WorkPlanes  AddByThreePoints(Point1, Point2, Point3, Construction)
+                  AddByTwoLines(Line1, Line2, Construction)
+                  AddByLineAndPoint(Line, Point, Construction)
+                  AddByPlaneAndPoint(Plane, Point, Construction)
+                  AddByLinePlaneAndAngle(Line, Plane, Angle, Construction)
+                  AddByPlaneAndOffset(Plane, Offset, Construction)
+                  AddByPointAndTangent(Point, Face, Construction)
+                  AddByLineAndTangent(Line, Face, ProximityPoint, Construction)
+                  AddByPlaneAndTangent(Plane, Face, ProximityPoint, Construction)
+                  AddByNormalToCurve(CurveEntity, Point, Construction)
+                  AddByTwoPlanes(Plane1, Plane2, QuadrantPoint, Construction)
+                  AddFixed(OriginPoint, XAxis, YAxis, Construction)
+                  AddByTorusMidPlane(Face, Construction)
+      WorkAxes    AddByLine(Line, Construction)
+                  AddByTwoPlanes(Plane1, Plane2, Construction)
+                  AddByTwoPoints(Point1, Point2, Construction)
+                  AddByRevolvedFace(Face, Construction)
+                  AddByPointAndPlane(Point, Plane, Construction)
+                  AddByLineAndPlane(Line, Plane, Construction)
+                  AddByAnalyticEdge(Edge, Construction)
+                  AddByLineAndPoint(Line, Point, Construction)
+                  AddByNormalToSurface(Surface, Point, Construction)
+                  AddFixed(Point, Axis, Construction)
+      WorkPoints  AddByThreePlanes(Plane1, Plane2, Plane3, Construction)
+                  AddByTwoLines(Line1, Line2, Construction)
+                  AddByCurveAndEntity(Curve, Entity, ProximityPoint, Construction)
+                  AddByPoint(Point, Construction)
+                  AddByMidPoint(Edge, Construction)
+                  AddByTorusCenterPoint(Face, Construction)
+                  AddBySphereCenterPoint(Face, Construction)
+                  AddAtCentroid(Entities, Construction)
+                  AddFixed(Point, Construction)
+
+  **None of these arguments is optional**, and two lessons come out of that.
+  `AddByPlaneAndTangent` had been called with two of its four and answered
+  "Parameter not optional" -- the `ProximityPoint` is how a cylinder's *two*
+  parallel tangent planes are told apart, so it is a fact the recipe has to
+  supply and `face.near` is where it does. And `AddByPlaneAndOffset` and
+  `AddByLinePlaneAndAngle` have been called one argument short for a year and
+  work anyway: pywin32 sends a missing variant for a trailing argument and
+  Inventor accepts it. That is worth knowing in both directions -- it is why
+  the shortfall went unnoticed, and why passing `Construction` explicitly is
+  strictly better than relying on it.
+
+  There is also a `_AddByTwoPlanes(Plane1, Plane2, Construction)` beside the
+  public `AddByTwoPlanes(Plane1, Plane2, QuadrantPoint, Construction)`. The
+  underscored three-argument form is what this server has always called, and
+  the midplane it builds is right, so it stays -- noted here because an
+  underscore in a COM member name usually means the wrapper is reaching for
+  something Autodesk did not mean to be public.
+
 * `GeometricConstraints.AddCoincident` and `AddMidpoint` returned `E_INVALIDARG`
   on ordinary sketch points
 * `Profiles.AddForSolid` returned `E_INVALIDARG` on a sketch that extruded
@@ -1377,11 +1433,44 @@ members. The object is a translator; the declared type is not. It goes through
 Formats: `step stl iges sat dwg dxf dwf dwfx obj 3mf ipt pdf`. Translators
 recorded (all measured): `step iges sat dwg dxf pdf dwf dwfx stl obj`. **3MF
 is the one format with no translator**, because nothing in the 2027.1 listing
-exports it. Options offered: STEP's `ApplicationProtocolType` (3 is AP 214),
-PDF's `Sheet_Range` and `Vector_Resolution`. A name outside that list is
-refused rather than passed, because a `NameValueMap` ignores an unknown name
-silently -- and the option *names* are still unmeasured, because the
-`AttributeError` above is where the first run stopped.
+exports it.
+
+### The option names each translator really takes
+
+*Measured 2026-09-10, once the late-binding fix above let
+`HasSaveCopyAsOptions` be called at all. Every translator was asked to fill a
+`NameValueMap` with its own defaults, so these are the names **and** what a
+file exported with no options comes out as.*
+
+Two of the three names this server had offered before that were **on the wrong
+format**: `Sheet_Range` and `Vector_Resolution` belong to DWF and DWFx, and
+**the PDF translator answered `HasSaveCopyAsOptions -> False` with no options
+at all** for a part document. A part has no sheets to range over. Its options
+were never asked of a *drawing*, which is the document a PDF is really wanted
+from, so that run is still worth doing.
+
+| format | options |
+| --- | --- |
+| `step` | `ApplicationProtocolType` **3**, `IncludeSketches` True, `ExportUCS` True, `export_fit_tolerance` 0.001, and free text in `Author` / `Organization` / `Authorization` / `Description` |
+| `iges` | `IncludeSketches` True, `GeometryType` 1, `SurfaceType` 0, `SolidFaceType` 0, `export_fit_tolerance` 0.001 |
+| `sat` | `IncludeSketches` True, `Version` 7, `OutputFileType` 1, `ExportBodyNames` False, `InternalVersion` 0 |
+| `dwg`, `dxf` | `Solid` True, `Surface` True, `Sketch` True, `DwgVersion` 33 -- identical listings, which is a second check on the two GUIDs having been un-swapped |
+| `stl` | `Resolution` 4, `SurfaceDeviation` 16.0, `NormalDeviation` 1500.0, `MaxEdgeLength` 100000.0, `AspectRatio` 2150.0, `ExportUnits` 5, `OutputFileType` 0, `ExportColor` True, `ExportFileStructure` 0, `AllowMoveMeshNode` False |
+| `obj` | the same tessellation five, plus `ExportUnits` 0 and `ExportFileStructure` 0 |
+| `dwf`, `dwfx` | **forty-two apiece and the same forty-two** -- they differ in the container, not the settings. Including `Sheet_Range` 14081, `Custom_Begin_Sheet` / `Custom_End_Sheet` 1, `Vector_Resolution` 400, `Facet_Quality` 69379, `Facet_Recompute_Tolerance` 0.001, `Launch_Viewer` 1, `Enable_Measure` / `Enable_Printing` / `Enable_Markups` 1, `Password`, `All_Color_AS_Black` 0, `Remove_Line_Weights` 0 |
+| `pdf` | none, for a part. See above. |
+
+`EXPORT_OPTIONS` carries the ones a caller plausibly wants -- all of STEP,
+IGES, SAT, DWG/DXF, STL and OBJ, and sixteen of DWF's forty-two. It stays a
+**whitelist** even now the names are measured: a name outside it is a typo or
+a release difference, and a `NameValueMap` ignores an unknown name silently,
+so both are better refused than passed.
+
+**The STL row closes a roadmap item.** The DFM loop measures a mesh, and its
+facet resolution was whatever Inventor's dialog last held; `Resolution` and
+the four deviations are reachable now, so it can be pinned. What it *should*
+be pinned to is its own item, because that wants a fixture measuring one wall
+at two resolutions before a number goes in.
 
 Other translator GUIDs the same listing gave, unused here but recorded because
 the listing cost a seat: DWFx `{0AC6FD97-2F4D-42CE-8BE0-8AEA580399E4}`, OBJ

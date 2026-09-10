@@ -6,6 +6,89 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
 ### Measured
 
+- **Every translator's real option table, and two of the three names this
+  server offered were on the wrong format.** *(Inventor 2027.1, 2026-09-10,
+  once the late-binding fix let `HasSaveCopyAsOptions` be called at all.)*
+  Each translator was asked to fill a `NameValueMap` with its own defaults, so
+  the measurement is the names **and** what a file exported with no options
+  comes out as. `EXPORT_OPTIONS` is those readings now instead of three names
+  off a page.
+
+  `Sheet_Range` and `Vector_Resolution` belong to **DWF and DWFx** -- and the
+  PDF translator answered `HasSaveCopyAsOptions -> False`, **no options at
+  all**, for a part document. A part has no sheets to range over, which is
+  obvious in hindsight and was not obvious enough to stop the entry being
+  written. A PDF option is refused with that reason rather than a flat "none
+  known", because PDF's options have never been asked of a *drawing*, which is
+  the document a PDF is really wanted from.
+
+  What the rest take: STEP `ApplicationProtocolType` (3, AP 214),
+  `IncludeSketches`, `ExportUCS`, `export_fit_tolerance` and four free-text
+  header fields; IGES five; SAT five; DWG and DXF the same four, which is a
+  second check on their GUIDs having been un-swapped; DWF and DWFx forty-two
+  apiece and the same forty-two. **And STL ten, five of them the tessellation
+  controls** -- `Resolution`, `SurfaceDeviation`, `NormalDeviation`,
+  `MaxEdgeLength`, `AspectRatio` -- which closes the roadmap item that opened
+  for the DFM loop's mesh. It can pin its resolution now; what to pin it
+  *to* is its own item, because that wants one wall measured at two
+  resolutions before a number goes in.
+
+- **`WorkPlanes.AddByPlaneAndTangent` takes four arguments, and the third
+  answers a question the operation could not previously ask.** *(2026-09-10,
+  `scripts/probe_work_planes.py`.)*
+  `AddByPlaneAndTangent(Plane, Face, ProximityPoint, Construction)`, none
+  optional. The `ProximityPoint` is not ceremony: a cylinder has **two**
+  tangent planes parallel to any given plane -- exactly the ambiguity the
+  simulator's refusal was written to be honest about -- and Autodesk's own
+  signature makes the caller resolve it. So `face.near` is **required** for
+  `kind: "tangent"` and does both jobs, narrowing the selector and choosing
+  the side, with the schema refusing its absence rather than picking one of
+  two planes for somebody who never said which.
+
+  The same reading settled `AddByLinePlaneAndAngle(Line, Plane, Angle,
+  Construction)` -- four arguments, and its parameter *names are published
+  after all*, where the angled plane's positional call rested on their not
+  being. That call had worked on three arguments, because pywin32 sends a
+  missing variant for a trailing one and Inventor accepts it; naming
+  `Construction` is safety rather than a fix, and knowing about the
+  missing-variant behaviour is why the shortfall went unnoticed for a year.
+  Thirty-two work-geometry signatures went into `INVENTOR_SETUP.md` off the
+  same listing, several of them plane kinds a recipe would want and none of
+  which was known to exist.
+
+- **The angled work plane is measured exact, and the check that failed was
+  the check.** *(`--only work-planes`, 2026-09-10: 3 of 4.)* The failing
+  assertion looked for the fin *above* the plate; a 20 mm square on a plane
+  through the origin tilted 30 degrees reaches **down** to `-sin(30)` = -0.5
+  cm, because the plate occupies 0 to 1.0 and the fin's own extrude only
+  lifts its top to 0.846. The run had proven the plane genuinely angled twice
+  over while the check said it was unproven.
+
+  Both readings match a derivation **to four decimals**: the low corner at
+  `-h·sin(t)` measured -0.5000 at 30 degrees and -0.8660 at 60, against
+  -0.5000 and -0.8660 derived. So the check asserts the prediction now rather
+  than an inequality, which is a stronger reading in three ways at once: a
+  plane that took the number rather than the parameter gives the same figure
+  twice, one that took the parameter and applied it wrongly gives a figure
+  that is neither, and only the derived value tells all three apart.
+
+- **Rib: both new leads chased, both dead, and one died informatively.**
+  *(2026-09-10, twenty-two refusals across two passes.)* Six more
+  combinations through `SetThicknessPlane`'s measured two-argument form -- no
+  neutral geometry, the XY origin plane, the plate's own top face, on both
+  thickness planes -- all `E_INVALIDARG`. `DraftProfileEnds` and `BossSets`
+  raise before and after every step, so they are not a state a caller can
+  complete. And `GetThicknessPlane()` answers `(93954, None)` **every time**,
+  including straight after setting the other thickness plane: the setter does
+  not take.
+
+  That last one is the informative death. Nothing settable on this definition
+  changes what it reports, which is evidence **the definition is not what
+  `Add` is objecting to** -- and it argues the remaining route is the one
+  `FEATURE_COVERAGE.md` named before any of the API guessing started: read
+  back a rib the UI made. With the member list in hand that is a diff rather
+  than a fishing trip, and `probe_rib.py --read <part.ipt>` does it.
+
 - **Three of the seven export ClassId GUIDs were wrong, and two of them were
   each other's.** *(Inventor 2027.1, 2026-09-09, by
   `scripts/probe_translators.py` on the day the table shipped.)* `iges` held
@@ -62,6 +145,19 @@ Notable changes, newest first. Dates are when the work landed, not a release.
   form throughout. The probe's second section chases both.
 
 ### Fixed
+
+- **The reference-key argument order, from the error rather than the docs.**
+  `GetReferenceKey(context)` answered *"Objects for SAFEARRAYS must be
+  sequences (of sequences), or a buffer object"* -- pywin32 had tried to
+  marshal the integer context **as the byte array**, which says the key is the
+  *first* parameter and the context the second. The no-argument form answered
+  "Type mismatch" rather than "parameter not optional", which agrees. Both
+  spellings of the array argument are tried now, and the probe adds two more
+  plus the `KeyToString` / `StringToKey` round trip -- a string being a far
+  better thing for a handle to hold than a SAFEARRAY. `ReferenceKeyManager`
+  itself is confirmed present on 2027.1 with `CreateKeyContext` (returning 1),
+  `BindKeyToObject`, `CanBindKeyToObject`, `KeyToString`, `StringToKey`,
+  `SaveContextToArray`, `LoadContextFromArray` and `ReleaseKeyContext`.
 
 - **Two of my own scripts, and neither had ever run.**
   `probe_reference_keys.py` declared its parameter through

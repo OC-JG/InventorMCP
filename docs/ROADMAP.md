@@ -1126,15 +1126,38 @@ otherwise assume they are all the same kind of work:
       recipe-level work was right and one COM line is short an argument. It is
       its own item now.
 
-- [ ] **`AddByPlaneAndTangent`, with the argument it actually wants.**
-      *(Opened 2026-09-09 by the run above.)* One line, once
-      `scripts/probe_work_planes.py` says what the third argument is. The
-      probe lists `WorkAxes` and `WorkPoints` too, because those three calls
-      were measured as *working* in 2026-09-07's run without anybody reading
-      their argument lists -- and it lists `AddByLinePlaneAndAngle`, which the
-      angled plane calls positionally on the grounds that the order is
-      documented and the names are not. If the names are in the type info that
-      reasoning was wrong, and naming them is strictly safer.
+- [x] **`AddByPlaneAndTangent`, with the argument it actually wants.**
+      *(Opened 2026-09-09 by the run above, closed 2026-09-10 by
+      `scripts/probe_work_planes.py`.)*
+
+          AddByPlaneAndTangent(Plane, Face, ProximityPoint, Construction)
+
+      Four arguments, none optional -- and **the third one answers a question
+      this operation could not previously ask.** A cylinder has two tangent
+      planes parallel to any given plane; that is exactly the ambiguity the
+      simulator's refusal was written to be honest about, and Autodesk's own
+      signature makes the caller resolve it with a point near the wanted one.
+      So `face.near` is required for `kind: "tangent"` now and does both jobs
+      -- the same point narrows the selector and chooses the side -- and the
+      schema refuses its absence, because a point silently defaulted picks one
+      of two planes for somebody who never said which.
+
+      The same reading settled `AddByLinePlaneAndAngle(Line, Plane, Angle,
+      Construction)`: four arguments, none optional, and its parameter
+      **names are published after all**, where the angled plane's positional
+      call was justified on the grounds that they were not. That call had
+      built correctly on three arguments -- pywin32 supplies a missing variant
+      for a trailing one and Inventor takes it -- so naming `Construction` is
+      safety rather than a fix. A trailing argument left to a marshalling
+      default is one nobody chose.
+
+      Worth the seat twice over for what else the listing gave, all of it
+      recorded in `INVENTOR_SETUP.md`: `AddByPointAndTangent`,
+      `AddByLineAndTangent`, `AddByTorusMidPlane`, `AddByNormalToCurve` and
+      `AddFixed` on `WorkPlanes`; `AddByRevolvedFace`, `AddByAnalyticEdge` and
+      `AddByNormalToSurface` on `WorkAxes`; `AddAtCentroid`, `AddByMidPoint`
+      and `AddBySphereCenterPoint` on `WorkPoints`. Several are work-plane
+      kinds a recipe would plausibly want, and none was known to exist.
 
 - [x] **Durable topology handles and a `feature:` selector.** *(Opened
       2026-09-08, done 2026-09-09. The `chain` half is split off below; the
@@ -1255,18 +1278,33 @@ otherwise assume they are all the same kind of work:
       assuming it is fine -- a coarse mesh reads a wall as thinner than it is,
       in the direction that would have the loop thicken a wall that did not
       need it.
-- [ ] **The STL the DFM loop measures, at a known facet resolution.**
-      *(Opened 2026-09-09, split off the export item above.)* The translator
-      route reaches export options and **STL is not one of the formats it
-      does**: the reference publishes no `SaveCopyAs` option names for it, so
-      the loop's mesh comes out at whatever Inventor's default is and nothing
-      here can say what that is. It matters in one direction: a coarse mesh
-      reads a wall as *thinner* than it is, so the loop would thicken a wall
-      that did not need it and report the part improved.
-      `scripts/probe_translators.py` prints what each translator says its
-      options are, and if the STL translator turns out to have any -- it is not
-      in `EXPORT_TRANSLATORS` at all today -- the fix is one table entry and a
-      calibration fixture measuring the same wall at two resolutions.
+- [x] **The STL the DFM loop measures, at a known facet resolution.**
+      *(Opened 2026-09-09, the options measured 2026-09-10.)* The STL
+      translator does have a ClassId and it does have options -- ten of them,
+      and five are the tessellation controls this item was after:
+      `Resolution` (default 4), `SurfaceDeviation` (16.0), `NormalDeviation`
+      (1500.0), `MaxEdgeLength` (100000.0) and `AspectRatio` (2150.0), plus
+      `ExportUnits`, `OutputFileType`, `ExportColor`, `ExportFileStructure`
+      and `AllowMoveMeshNode`. All in `EXPORT_OPTIONS`, so a caller can pin
+      the mesh rather than inheriting whatever the dialog last held.
+
+      **The direction of the risk is why this mattered**: a coarse mesh reads
+      a wall as *thinner* than it is, so the DFM loop would thicken a wall
+      that did not need it and report the part improved. The loop can now ask
+      for a resolution; what it should *ask for* is a separate question and a
+      separate item, because it wants a fixture measuring one wall at two
+      resolutions before a number goes in.
+
+- [ ] **What resolution the DFM loop's mesh should be.** *(Opened 2026-09-10,
+      split off the item above once the options were measured.)* The five
+      tessellation controls are reachable now and the loop still asks for
+      none of them, so its mesh is Inventor's default -- which is at least a
+      *known* default now rather than an unknown one. Setting a number wants
+      the same treatment every calibrated tolerance here got: a fixture with a
+      wall of known thickness, exported at the default and at the finest
+      setting, and the wall-thickness reading compared. If the two agree the
+      default stands and this closes with a measurement behind it; if they
+      differ, the difference is how wrong every DFM reading has been.
 
 - [ ] **Rib, one more time, with the published definition.** *(Opened
       2026-09-08. `scripts/probe_rib.py` written 2026-09-09; **this needs one

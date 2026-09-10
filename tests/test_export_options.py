@@ -81,14 +81,28 @@ class TestTheOptionNamesAreAWhitelist:
         assert "ApplicationProtocolType" in str(raised.value.hint)
 
     def test_a_format_with_no_options_at_all_says_so(self, session, part):
-        """STL is deliberately not in the options table: the reference
-        publishes no option names for it, so there is nothing to pass and
-        pretending otherwise would be inventing them."""
+        """PDF is the one, and the message names *why* rather than stopping at
+        "none known": its translator answered `HasSaveCopyAsOptions -> False`
+        for a part document, because a part has no sheets. A drawing is the
+        document a PDF is really wanted from and its options have never been
+        asked of one."""
         with pytest.raises(ExportError) as raised:
             session.backend.export(part, ExportRequest(
-                path="out.stl", format="stl", options={"Resolution": "high"}))
-        assert "No export options are known for 'stl'" in str(raised.value)
+                path="out.pdf", format="pdf", options={"Sheet_Range": 1}))
+        assert "No export options are known for 'pdf'" in str(raised.value)
+        assert "a part has no sheets" in str(raised.value.hint)
         assert "step" in str(raised.value.hint)
+
+    def test_stl_takes_the_tessellation_options_it_was_measured_with(
+            self, session, part):
+        """The roadmap item that opened for this: the DFM loop measures a mesh
+        and its facet resolution was whatever Inventor's dialog last held. A
+        coarse mesh reads a wall as *thinner* than it is, so the loop would
+        thicken a wall that did not need it and report the part improved."""
+        result = session.backend.export(part, ExportRequest(
+            path="out.stl", format="stl",
+            options={"Resolution": 0, "SurfaceDeviation": 1.0}))
+        assert result["options_applied"]["Resolution"] == 0
 
     def test_no_options_is_never_refused(self, session, part):
         """Every format still exports with nothing said about settings, which

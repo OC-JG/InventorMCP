@@ -616,28 +616,137 @@ EXPORT_TRANSLATORS: dict[str, str] = {
     "obj": "{F539FB09-FC01-4260-A429-1818B14D6BAC}",
 }
 
-#: The `SaveCopyAs` option names this server will pass, per format, and what
-#: each one is.
+#: The `SaveCopyAs` option names each translator really takes, per format,
+#: with what each one is and what Inventor's own default for it was.
+#:
+#: **Measured on Inventor 2027.1, 2026-09-10**, by
+#: `scripts/probe_translators.py`, which asks each translator to fill a
+#: `NameValueMap` with its own defaults and prints what comes back. The three
+#: names this table held before that were read off the reference extraction,
+#: and **two of the three were on the wrong format**: `Sheet_Range` and
+#: `Vector_Resolution` belong to DWF and DWFx, and the PDF translator answered
+#: `HasSaveCopyAsOptions -> False` with **no options at all** for a part
+#: document. A part has no sheets to range over, which is obvious in hindsight
+#: and was not obvious enough to stop the entry being written.
 #:
 #: A `NameValueMap` **silently ignores a name the translator does not know**,
-#: so a misspelled option is a PDF at the wrong resolution and a result that
-#: says it worked. That is the failure this table exists to turn into a
-#: refusal, and it is why the table is a whitelist rather than a pass-through:
-#: only these names have been read, so only these are offered, and anything
-#: else comes back with the list of what this format takes.
+#: so a misspelled option is a file written with the wrong settings and a
+#: result that says it worked. That is the failure this table turns into a
+#: refusal, and it is why it stays a whitelist even now that the names are
+#: measured: a name outside it is a typo or a release difference, and both are
+#: better refused than passed.
 #:
-#: Short on purpose. Each translator publishes more than this; these are the
-#: ones the 2027 reference extraction recorded, and a name is added here when
-#: it has been read rather than when it seems likely.
+#: The defaults are recorded beside each name because they say what a file
+#: exported *without* options comes out as -- which is the question
+#: `ARCHITECTURE.md` could not answer while `SaveAs` was the only route.
 EXPORT_OPTIONS: dict[str, dict[str, str]] = {
     "step": {
-        "ApplicationProtocolType": "Which STEP application protocol: 3 is "
-        "AP 214, which is what most downstream CAD wants.",
+        "ApplicationProtocolType": "Which STEP application protocol. Default "
+        "3, which is AP 214 -- what most downstream CAD wants.",
+        "IncludeSketches": "Write sketch geometry as well as solids. Default True.",
+        "ExportUCS": "Write the user coordinate systems. Default True.",
+        "export_fit_tolerance": "Curve-fitting tolerance in cm. Default 0.001.",
+        "Author": "Free text in the file header. Default empty.",
+        "Organization": "Free text in the file header. Default empty.",
+        "Authorization": "Free text in the file header. Default empty.",
+        "Description": "Free text in the file header. Default empty.",
     },
-    "pdf": {
-        "Sheet_Range": "Which sheets to write, as a PrintRangeEnum value.",
-        "Vector_Resolution": "Dots per inch for the vector content.",
+    "iges": {
+        "IncludeSketches": "Write sketch geometry as well as solids. Default True.",
+        "GeometryType": "What kind of geometry to write. Default 1.",
+        "SurfaceType": "How surfaces are represented. Default 0.",
+        "SolidFaceType": "How a solid's faces are represented. Default 0.",
+        "export_fit_tolerance": "Curve-fitting tolerance in cm. Default 0.001.",
     },
+    "sat": {
+        "IncludeSketches": "Write sketch geometry as well as solids. Default True.",
+        "Version": "ACIS version to write. Default 7.",
+        "OutputFileType": "Text or binary. Default 1.",
+        "ExportBodyNames": "Carry each body's name into the file. Default False.",
+        "InternalVersion": "Default 0.",
+    },
+    # DWG and DXF are one translator's worth of options under two names, which
+    # is what their identical listings say -- and a useful check on the GUIDs
+    # having been un-swapped, since the two now resolve to different add-ins
+    # offering the same four settings.
+    "dwg": {
+        "Solid": "Write solid bodies. Default True.",
+        "Surface": "Write surfaces. Default True.",
+        "Sketch": "Write sketch geometry. Default True.",
+        "DwgVersion": "AutoCAD file version. Default 33.",
+    },
+    "dxf": {
+        "Solid": "Write solid bodies. Default True.",
+        "Surface": "Write surfaces. Default True.",
+        "Sketch": "Write sketch geometry. Default True.",
+        "DwgVersion": "AutoCAD file version. Default 33.",
+    },
+    # The mesh formats, and the five that matter are the tessellation ones.
+    # `Resolution` is the named quality level; the four deviations are what a
+    # custom level is made of. This is what the DFM loop's mesh was coming out
+    # at all along, unasked -- see the roadmap item that opened for it.
+    "stl": {
+        "Resolution": "Tessellation quality as a named level. Default 4.",
+        "SurfaceDeviation": "Maximum chordal deviation. Default 16.0.",
+        "NormalDeviation": "Maximum angle between facet normals. Default 1500.0.",
+        "MaxEdgeLength": "Longest facet edge. Default 100000.0.",
+        "AspectRatio": "Facet aspect-ratio limit. Default 2150.0.",
+        "ExportUnits": "Units the file is written in. Default 5.",
+        "OutputFileType": "Text or binary. Default 0.",
+        "ExportColor": "Carry face colour into the file. Default True.",
+        "ExportFileStructure": "One file or one per body. Default 0.",
+        "AllowMoveMeshNode": "Default False.",
+    },
+    "obj": {
+        "Resolution": "Tessellation quality as a named level. Default 4.",
+        "SurfaceDeviation": "Maximum chordal deviation. Default 16.0.",
+        "NormalDeviation": "Maximum angle between facet normals. Default 1500.0.",
+        "MaxEdgeLength": "Longest facet edge. Default 100000.0.",
+        "AspectRatio": "Facet aspect-ratio limit. Default 2150.0.",
+        "ExportUnits": "Units the file is written in. Default 0.",
+        "ExportFileStructure": "One file or one per body. Default 0.",
+    },
+    # Forty-two apiece, and the same forty-two: DWF and DWFx differ in the
+    # container and not the settings. Only the ones a caller plausibly wants
+    # are listed -- adding the other thirty would be transcription rather than
+    # a decision, and each name here is one somebody could need.
+    "dwf": {
+        "Sheet_Range": "Which sheets to write, as a PrintRangeEnum. Default 14081.",
+        "Custom_Begin_Sheet": "First sheet of a custom range. Default 1.",
+        "Custom_End_Sheet": "Last sheet of a custom range. Default 1.",
+        "Vector_Resolution": "Dots per inch for vector content. Default 400.",
+        "Publish_All_Sheets": "Every sheet rather than the range. Default 0.",
+        "Publish_3D_Models": "Include the 3D model. Default 0.",
+        "Launch_Viewer": "Open the result when it is written. Default 1.",
+        "Password": "Open-password for the file. Default empty.",
+        "Enable_Measure": "Let a viewer measure. Default 1.",
+        "Enable_Printing": "Let a viewer print. Default 1.",
+        "Enable_Markups": "Let a viewer mark up. Default 1.",
+        "Facet_Quality": "Tessellation quality for 3D content. Default 69379.",
+        "Facet_Recompute_Tolerance": "Default 0.001.",
+        "All_Color_AS_Black": "Write every colour as black. Default 0.",
+        "Remove_Line_Weights": "Ignore line weights. Default 0.",
+        "Publish_Mass_Props": "Include mass properties. Default 1.",
+    },
+}
+#: DWFx takes exactly what DWF does -- forty-two names, identical defaults,
+#: measured side by side. Shared rather than copied for the reason every table
+#: in this file is shared: two copies of one fact are one fact until the day
+#: somebody edits one of them.
+EXPORT_OPTIONS["dwfx"] = EXPORT_OPTIONS["dwf"]
+
+#: Formats whose translator exists and offers **nothing** for a part document.
+#: PDF is the only one, and it is worth naming rather than leaving as an empty
+#: entry: `HasSaveCopyAsOptions` answered False, because a part has no sheets
+#: to range over. A *drawing* is the document a PDF is really wanted from and
+#: this has not been asked of one -- so a PDF option is refused today with a
+#: message that says which, rather than a flat "no options are known".
+EXPORT_OPTIONS_BY_DOCUMENT: dict[str, str] = {
+    "pdf": "The PDF translator answered `HasSaveCopyAsOptions -> False` for a "
+           "part document on 2027.1: a part has no sheets. Its options were "
+           "never asked of a *drawing*, which is the document a PDF is "
+           "normally wanted from, and `scripts/probe_translators.py` run "
+           "against one would say what they are.",
 }
 
 
@@ -1136,14 +1245,21 @@ class Backend(ABC):
             return {}
         known = EXPORT_OPTIONS.get(fmt, {})
         if not known:
+            special = EXPORT_OPTIONS_BY_DOCUMENT.get(fmt)
             raise ExportError(
                 f"No export options are known for {fmt!r}, so there is nothing "
                 f"to pass: {', '.join(sorted(options))}.",
-                hint="Formats with options: "
+                # Parenthesised: without it the conditional swallows the
+                # concatenation and a format with a special note loses the
+                # list of formats that do take options.
+                hint=((special + " ") if special else "")
+                + "Formats with options: "
                 + ", ".join(sorted(EXPORT_OPTIONS))
-                + ". A translator publishes more than this server offers; a "
-                "name is added when it has been read rather than when it "
-                "seems likely.",
+                + ". Every one of those was measured off a translator's own "
+                "defaults rather than read off a page, and a name outside the "
+                "list is a typo or a release difference -- both better refused "
+                "than passed, since a NameValueMap ignores an unknown name "
+                "silently.",
             )
         unknown = sorted(set(options) - set(known))
         if unknown:
