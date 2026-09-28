@@ -4948,7 +4948,7 @@ class ComBackend(Backend):
         info: TopoInfo
         if kind == "edge":
             length = _edge_length(entity)
-            geometry = _curve_type(entity)
+            geometry = _curve_type(entity, self._constants)
             direction = _edge_direction(entity)
             convexity, decided_by = _edge_convexity(entity, convexity_index)
             info = TopoInfo(
@@ -4967,7 +4967,7 @@ class ComBackend(Backend):
                 area = float(evaluator.Area)
             except Exception:
                 area = None  # type: ignore[assignment]
-            geometry = _surface_type(entity)
+            geometry = _surface_type(entity, self._constants)
             normal = _face_normal(entity)
             info = TopoInfo(
                 id=handle,
@@ -6049,29 +6049,62 @@ def _sketch_plane_name(sketch: Any) -> str:  # pragma: no cover - Windows only
         return "unknown"
 
 
-def _curve_type(edge: Any) -> str:  # pragma: no cover - Windows only
+_CURVE_TYPES: dict[str, str] = {
+    "kLineCurve": "linear",
+    "kLineSegmentCurve": "linear",
+    "kCircleCurve": "circular",
+    "kCircularArcCurve": "circular",
+    "kEllipseFullCurve": "elliptical",
+    "kEllipticalArcCurve": "elliptical",
+}
+
+_SURFACE_TYPES: dict[str, str] = {
+    "kPlaneSurface": "planar",
+    "kCylinderSurface": "cylindrical",
+    "kConeSurface": "cone",
+    "kSphereSurface": "sphere",
+    "kTorusSurface": "torus",
+}
+
+
+def _geometry_kind(value: Any, table: dict[str, str], constants: Any) -> str:
+    """The selector word for a ``CurveTypeEnum`` or ``SurfaceTypeEnum`` value.
+
+    These used to read ``type(edge.Geometry).__name__``, the way
+    :func:`_feature_kind` once did, and failed the same way: under late
+    binding every object is a ``CDispatch``, so every edge and face on a live
+    part came back ``spline`` and ``circular``, ``linear``, ``planar`` and
+    ``cylindrical`` matched nothing. Measured on 2027.1: a chamfer on an
+    extruded cylinder's end edge found no edges. ``GeometryType`` and
+    ``SurfaceType`` are documented properties and answer under either binding.
+    """
     try:
-        name = str(type(edge.Geometry).__name__).lower()
+        actual = int(value)
     except Exception:
         return "unknown"
-    if "line" in name:
-        return "linear"
-    if "circle" in name or "arc" in name:
-        return "circular"
-    if "ellipse" in name:
-        return "elliptical"
+    for name, short in table.items():
+        try:
+            if constants.resolve(name) == actual:
+                return short
+        except Exception:
+            continue
     return "spline"
 
 
-def _surface_type(face: Any) -> str:  # pragma: no cover - Windows only
+def _curve_type(edge: Any, constants: Any) -> str:
     try:
-        name = str(type(face.Geometry).__name__).lower()
+        value = edge.GeometryType
     except Exception:
         return "unknown"
-    for key in ("plane", "cylinder", "cone", "sphere", "torus"):
-        if key in name:
-            return {"plane": "planar", "cylinder": "cylindrical"}.get(key, key)
-    return "spline"
+    return _geometry_kind(value, _CURVE_TYPES, constants)
+
+
+def _surface_type(face: Any, constants: Any) -> str:
+    try:
+        value = face.SurfaceType
+    except Exception:
+        return "unknown"
+    return _geometry_kind(value, _SURFACE_TYPES, constants)
 
 
 def _face_normal(face: Any) -> tuple[float, float, float] | None:  # pragma: no cover
