@@ -20,6 +20,18 @@ Notable changes, newest first. Dates are when the work landed, not a release.
 
 ### Fixed
 
+- **`circular`, `linear`, `planar` and `cylindrical` match something on a live
+  part again.** *(2026-09-28.)* `_curve_type` and `_surface_type` read
+  `type(edge.Geometry).__name__`, which under late binding -- this project's
+  default -- is `CDispatch` for everything, so every edge and face came back
+  `spline` and those four filters matched nothing. Found building a pogo pin: a
+  tip fillet selected with `"filter": "circular"` on an extruded cylinder
+  reported "The selector matched no edges" while six circular edges sat there.
+  They read `GeometryType` and `SurfaceType` now, the way `_feature_kind` was
+  fixed to read `Object.Type`. `kLineCurve` (5122) joins the fallback table,
+  read from 2027.1's type library with the rest of both enums, which were
+  already right.
+
 - **Three of the simulator's eighteen `ponytail:` approximations were cheaper to
   fix than to keep.** *(2026-09-09.)* Each was marked as a known ceiling; each
   turned out to need no booleans and no ledger work, only the measurement the

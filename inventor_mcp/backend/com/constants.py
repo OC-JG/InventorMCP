@@ -74,6 +74,7 @@ FALLBACK: dict[str, int] = {
     "kPartFaceFilter": 15877,
     "kPartEdgeFilter": 15873,
     # CurveTypeEnum
+    "kLineCurve": 5122,
     "kLineSegmentCurve": 5123,
     "kCircularArcCurve": 5125,
     "kCircleCurve": 5124,

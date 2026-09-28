@@ -212,6 +212,44 @@ class TestConstraintStatus:
         assert com._fully_constrained(sketch, Constants(None)) is None
 
 
+class TestGeometryKind:
+    """Edges and faces are classified by their enum, not their wrapper class.
+
+    Under late binding every object is a `CDispatch`, so reading the class name
+    made every edge `spline` and `circular` matched nothing on a live part.
+    Values measured on 2027.1 from the type library.
+    """
+
+    class CDispatch:
+        """What late binding hands back: the wrapper's name says nothing."""
+
+        def __init__(self, **members):
+            self.Geometry = object()
+            self.__dict__.update(members)
+
+    @pytest.mark.parametrize("enum, kind", [
+        ("kCircleCurve", "circular"), ("kCircularArcCurve", "circular"),
+        ("kLineSegmentCurve", "linear"), ("kLineCurve", "linear"),
+        ("kEllipticalArcCurve", "elliptical"), ("kBSplineCurve", "spline"),
+    ])
+    def test_an_edge_is_what_its_geometry_type_says(self, enum, kind):
+        edge = self.CDispatch(GeometryType=FALLBACK[enum])
+        assert com._curve_type(edge, Constants(None)) == kind
+
+    @pytest.mark.parametrize("enum, kind", [
+        ("kPlaneSurface", "planar"), ("kCylinderSurface", "cylindrical"),
+        ("kConeSurface", "cone"), ("kTorusSurface", "torus"),
+        ("kSphereSurface", "sphere"),
+    ])
+    def test_a_face_is_what_its_surface_type_says(self, enum, kind):
+        face = self.CDispatch(SurfaceType=FALLBACK[enum])
+        assert com._surface_type(face, Constants(None)) == kind
+
+    def test_an_unreadable_type_is_unknown_not_a_guess(self):
+        assert com._curve_type(self.CDispatch(), Constants(None)) == "unknown"
+        assert com._surface_type(self.CDispatch(), Constants(None)) == "unknown"
+
+
 class TestContract:
     def test_both_backends_implement_the_whole_interface(self):
         from inventor_mcp.backend.base import Backend
